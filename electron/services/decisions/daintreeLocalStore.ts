@@ -950,7 +950,12 @@ export class DaintreeLocalStore implements LocalStore {
     const writes = runnable.some((i) => ops[i].kind === "write");
     try {
       const { results, fault } = this.withCommitLevel(writes, () =>
-        withDiskRecovery(this.sqlite, () => this.runTransaction(runnable.map((i) => ops[i])))
+        withDiskRecovery(this.sqlite, () =>
+          this.runTransaction(
+            runnable.map((i) => ops[i]),
+            writes
+          )
+        )
       );
       runnable.forEach((opIndex, j) => {
         outcomes[opIndex] = results[j];
@@ -965,8 +970,15 @@ export class DaintreeLocalStore implements LocalStore {
     return outcomes;
   }
 
-  private runTransaction(ops: Op[]): { results: Outcome[]; fault: unknown } {
-    return this.sqlite.transaction(() => {
+  /**
+   * A batch with writes in it takes the write lock as it begins (`BEGIN
+   * IMMEDIATE`), so another connection holding it is waited out for the
+   * connection's busy timeout. Begun deferred, a call that reads before it
+   * writes would hold a read snapshot by then, and SQLite refuses that upgrade
+   * at once with `SQLITE_BUSY` rather than wait (#16840).
+   */
+  private runTransaction(ops: Op[], writes: boolean): { results: Outcome[]; fault: unknown } {
+    const batch = this.sqlite.transaction(() => {
       let fault: unknown = null;
       const results = ops.map((op): Outcome => {
         // A write after a storage error in the same batch must not commit
@@ -986,7 +998,8 @@ export class DaintreeLocalStore implements LocalStore {
         }
       });
       return { results, fault };
-    })();
+    });
+    return writes ? batch.immediate() : batch();
   }
 
   private withCommitLevel<T>(writes: boolean, fn: () => T): T {

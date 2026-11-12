@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import Database from "better-sqlite3";
 import {
   parseAnswers,
@@ -1212,5 +1214,81 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
 
     expect(heard).toEqual([]);
     expect(await store.deletedQuestionIds()).toEqual(new Set());
+  });
+});
+
+/**
+ * Another connection holding the database's write lock, as the maintenance
+ * worker's audit-ring write does (#16840). It holds it until `release()`,
+ * then commits after `holdMs` more on its own thread, so the store's thread
+ * can be waiting on the lock meanwhile.
+ */
+async function holdWriteLock(file: string, holdMs: number) {
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const Database = require(workerData.module);
+      const db = new Database(workerData.file);
+      db.pragma("busy_timeout = 5000");
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare(
+        "INSERT INTO decisions_meta (key, value) VALUES ('held', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).run();
+      parentPort.postMessage("locked");
+      parentPort.once("message", () => {
+        setTimeout(() => {
+          db.exec("COMMIT");
+          db.close();
+          parentPort.postMessage("released");
+        }, workerData.holdMs);
+      });
+    `,
+    {
+      eval: true,
+      workerData: { module: createRequire(import.meta.url).resolve("better-sqlite3"), file, holdMs },
+    }
+  );
+  workers.push(worker);
+  const messages: string[] = [];
+  const next = () =>
+    new Promise<string>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("message", (message: string) => {
+        worker.off("error", reject);
+        messages.push(message);
+        resolve(message);
+      });
+    });
+  expect(await next()).toBe("locked");
+  const released = next();
+  return {
+    release: () => worker.postMessage("release"),
+    released,
+  };
+}
+
+const workers: Worker[] = [];
+
+afterEach(async () => {
+  await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
+});
+
+describe("DaintreeLocalStore under write-lock contention (#16840)", () => {
+  it("waits out another connection's write lock in a batch that reads before it writes", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    store.onFault((reason) => faults.push(reason));
+    const lock = await holdWriteLock(dbPath, 300);
+
+    // nextAlias reads the last alias, then writes the next one.
+    const alias = store.nextAlias();
+    lock.release();
+
+    await expect(alias).resolves.toBe(1);
+    expect(await lock.released).toBe("released");
+    expect(faults).toEqual([]);
+    expect(store.isFaulted()).toBe(false);
+    expect(await store.getMeta("held")).toBe("1");
+    expect(await store.getMeta("alias")).toBe("1");
   });
 });
