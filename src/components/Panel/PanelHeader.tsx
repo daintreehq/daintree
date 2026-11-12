@@ -157,7 +157,6 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
-import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -230,6 +229,74 @@ function useReadoutClearance(
     };
   }, [active, readoutRef]);
   return clear;
+}
+
+/**
+ * Priority+ for the metadata row: whatever cannot fit leaves whole rather than
+ * being clipped mid-number by the row's edge. Items leave in attention order,
+ * not position: lowest `data-fit-priority` first (unmarked items, the ambient
+ * readings, count as 0), and among equals the later one first, so a waiting
+ * decision outlasts a queue count and the telemetry goes before either. Items
+ * are hidden with the `hidden` attribute, which takes them out of the tab order
+ * too, and all are tried again whenever the bar, the row or the status beside
+ * it changes, so a widening bar or a status clearing brings them back.
+ */
+function useWholeItemFit(rowRef: React.RefObject<HTMLDivElement | null>): void {
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    const region = row?.parentElement?.parentElement;
+    if (!row || !region || typeof ResizeObserver === "undefined") return;
+    const overflows = () => row.scrollWidth > row.clientWidth + 0.5;
+    const fit = () => {
+      const items = Array.from(row.children) as HTMLElement[];
+      for (const item of items) item.removeAttribute("hidden");
+      if (!overflows()) return;
+      const leaving = items
+        .map((item, index) => ({ item, index, priority: Number(item.dataset.fitPriority ?? 0) }))
+        .sort((a, b) => a.priority - b.priority || b.index - a.index);
+      for (const { item } of leaving) {
+        if (!overflows()) break;
+        // Never pulled out from under the keyboard: a reading or chip being
+        // read stays until focus leaves it, and the clip covers the rest.
+        if (item.contains(document.activeElement)) continue;
+        item.setAttribute("hidden", "");
+      }
+    };
+    const resizes = new ResizeObserver(fit);
+    // The row's room depends on its siblings too: a title renamed shorter or a
+    // mark leaving the identity group frees width without the bar resizing.
+    const observeAll = () => {
+      resizes.disconnect();
+      resizes.observe(region);
+      resizes.observe(row);
+      for (const child of Array.from(region.children)) resizes.observe(child);
+    };
+    observeAll();
+    const regionChildren = new MutationObserver(observeAll);
+    regionChildren.observe(region, { childList: true });
+    // Chips arrive and leave with the pane's state, text inside them changes,
+    // and the status beside the row takes and gives back room. The `hidden`
+    // the fit itself sets is an attribute, which is not observed.
+    // A chip whose priority rises (a subagent now waiting) is re-weighed too.
+    const mutations = new MutationObserver(fit);
+    mutations.observe(row.parentElement!, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributeFilter: ["data-fit-priority"],
+    });
+    // An item kept because it held focus is weighed again once focus leaves.
+    const onFocusOut = (event: FocusEvent) => {
+      if (!row.contains(event.relatedTarget as Node | null)) queueMicrotask(fit);
+    };
+    row.addEventListener("focusout", onFocusOut);
+    return () => {
+      resizes.disconnect();
+      mutations.disconnect();
+      regionChildren.disconnect();
+      row.removeEventListener("focusout", onFocusOut);
+    };
+  }, [rowRef]);
 }
 
 export interface PanelHeaderProps {
@@ -306,12 +373,12 @@ export interface PanelHeaderProps {
   isFleetPreviewed?: boolean;
 
   // Slots for kind-specific content. Neither renders inside the window
-  // controls (#12374): `headerContent` is variable-width metadata that follows
-  // the title and clips before it can reach them, and `headerStatus` is
-  // transient status in a fixed box reserved just ahead of them — so nothing
-  // appearing or disappearing can move close or maximize. For the two boxed
-  // slots `undefined` means no box at all and `null` means an empty box, so a
-  // mixed tab group can keep its boxes while a non-terminal tab is active.
+  // controls (#12374): `headerContent` is variable-width metadata and
+  // `headerStatus` transient status, both at the right end of the region that
+  // absorbs width, so nothing appearing or disappearing can move close or
+  // maximize. For the status slot `undefined` means no box at all and `null`
+  // an empty one, so a mixed tab group keeps its box while a non-terminal tab
+  // is active.
   headerContent?: ReactNode;
   headerStatus?: ReactNode;
   headerActions?: ReactNode;
@@ -418,6 +485,8 @@ function PanelHeaderComponent({
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
   const readoutRef = useRef<HTMLDivElement | null>(null);
+  const metadataRowRef = useRef<HTMLDivElement | null>(null);
+  useWholeItemFit(metadataRowRef);
   const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
@@ -795,13 +864,14 @@ function PanelHeaderComponent({
   // A truncated badge, or one hidden by the compact query, still has to give
   // the branch back somewhere — the title tooltip carries it.
   const worktreeChipLabel = `Belongs to the worktree on ${worktreeBranch ?? ""}`;
+  const worktreeBranchLeaf = worktreeBranch?.split("/").filter(Boolean).pop() ?? worktreeBranch;
   const titleTooltip = [title, worktreeBranch && worktreeAccentColor ? worktreeBranch : null]
     .filter(Boolean)
     .join(" · ");
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (target.closest("button, input, [role='button']")) {
+    if (target.closest("button, input, [role='button'], [role='tab']")) {
       return;
     }
     if (location === "dock") {
@@ -1131,6 +1201,8 @@ function PanelHeaderComponent({
       }}
       tabIndex={headerHasDrag ? 0 : undefined}
       role={headerHasDrag ? "group" : undefined}
+      // A group takes no name from its content, so it names the pane it picks up.
+      aria-label={headerHasDrag ? title : undefined}
       aria-roledescription={
         headerHasDrag
           ? "Draggable panel header — press Space or Enter to pick up, arrows to move, Escape to cancel"
@@ -1170,8 +1242,8 @@ function PanelHeaderComponent({
       onDoubleClick={handleHeaderDoubleClick}
     >
       {/* The only region that absorbs width changes: title or tabs, then
-          kind-specific metadata. The status box and controls after it never
-          shrink, so their position depends on the header width alone. */}
+          kind-specific metadata and transient status. The controls after it
+          never shrink, so their position depends on the header width alone. */}
       <div className="flex min-w-0 flex-1 items-center gap-2 self-stretch">
         {/* Tab bar - shown when there are multiple tabs */}
         {hasTabs && tabs ? (
@@ -1269,9 +1341,13 @@ function PanelHeaderComponent({
           // px-1 -mx-1 reserves 4px inside the clip on both sides: the rename
           // field extends that far past the title's box, and without the room its
           // own edge is what gets clipped when the title is the last item.
+          // Half the region each, the identity and the metadata, when both
+          // want more than that, and 60/40 for the title in a grid-width pane;
+          // a side that needs less (a "zsh" title, one reading) stops at its
+          // own width and the other side takes the rest.
           <div
             data-readout-obstacle=""
-            className="-mx-1 flex min-w-0 items-center gap-2 self-stretch overflow-hidden px-1"
+            className="-mx-1 flex min-w-0 max-w-max flex-[1_1_50%] items-center gap-2 self-stretch overflow-hidden px-1 @max-[640px]/header:flex-[1_1_60%]"
           >
             {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
@@ -1486,37 +1562,37 @@ function PanelHeaderComponent({
             {/* Attributed, colourless plugin status chips (host.setTerminalStatus) */}
             <TerminalPluginStatusChips terminalId={id} worktreeId={currentWorktreeId} />
 
-            {/* Worktree branch badge — shown when multiple worktrees are active */}
+            {/* Worktree branch — shown when multiple worktrees are active. The
+                worktree's colour is a dot, its identity and nothing more; the
+                name is plain mono secondary ink, a step under the title it
+                follows. Only the last segment paints ("auth-refresh", not
+                "feature/auth…"), since that is the part that tells branches
+                apart; the label and tooltip carry the full ref. The name never
+                shrinks: the title absorbs the squeeze, and below 760px the
+                name goes whole and the dot alone still says which worktree. */}
             {worktreeBranch && worktreeAccentColor && (
-              // The worktree colour carries identity through the wash and the
-              // edge; the text itself stays on the readable token — the palette
-              // measures under 4.5:1 as ink on either light or dark headers.
-              // min-w-[7ch] with truncate: the badge yields before the title
-              // does but never to a single letter; the tooltip has the rest.
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className={cn(
-                      HEADER_CHIP_CLASS,
-                      // Mono like every other branch in the app, and never
-                      // uppercased: refs are case-sensitive. Yields three times
-                      // faster than the title, which is what names the pane.
-                      "min-w-[7ch] max-w-[120px] shrink-[3] font-mono text-text-primary select-none @max-[420px]/header:hidden"
-                    )}
-                    style={
-                      {
-                        backgroundColor:
-                          "color-mix(in oklab, var(--worktree-color) 18%, transparent)",
-                        borderColor: "color-mix(in oklab, var(--worktree-color) 45%, transparent)",
-                        "--worktree-color": worktreeAccentColor,
-                      } as React.CSSProperties
-                    }
+                    // -m-1 p-1: a dot alone still has a pointer target for its tooltip.
+                    className="-m-1 inline-flex max-w-[140px] shrink-0 select-none items-center gap-1.5 overflow-hidden p-1 font-mono text-2xs leading-4 text-text-secondary"
+                    role="img"
                     aria-label={worktreeChipLabel}
                   >
-                    <span className="truncate">{worktreeBranch}</span>
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full bg-[var(--worktree-color)] forced-colors:bg-[CanvasText]"
+                      style={{ "--worktree-color": worktreeAccentColor } as React.CSSProperties}
+                    />
+                    <span
+                      className="min-w-0 truncate @max-[760px]/header:hidden"
+                      aria-hidden="true"
+                    >
+                      {worktreeBranchLeaf}
+                    </span>
                   </span>
                 </TooltipTrigger>
-                {/* Says what the chip is, not just the branch again: a bare ref
+                {/* Says what the mark is, not just the branch again: a bare ref
                     in a pane's header read as an unexplained label. */}
                 <TooltipContent side="bottom">{worktreeChipLabel}</TooltipContent>
               </Tooltip>
@@ -1547,7 +1623,9 @@ function PanelHeaderComponent({
                     tabIndex={isEditingTitle ? -1 : undefined}
                     className={cn(
                       CONTROL_ICON,
-                      "-mx-1 shrink-0 @max-[420px]/header:hidden",
+                      // Gone below 640px, where its held slot would come out
+                      // of the title; Duplicate stays in the menu and its chord.
+                      "-mx-1 shrink-0 @max-[640px]/header:hidden",
                       isEditingTitle
                         ? "invisible pointer-events-none"
                         : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
@@ -1581,17 +1659,43 @@ function PanelHeaderComponent({
           </div>
         )}
 
-        {headerContent != null && (
-          // Keeps its full width until it would take more than half the region,
-          // then clips from the telemetry end instead of squeezing the title to
-          // nothing. px-1 keeps edge items' focus rings inside the clip; -mr-1
-          // gives that padding back so the spacing to the controls is unchanged.
+        {(headerContent != null || headerStatus !== undefined) && (
+          // The metadata and the transient status share the right end of the
+          // region that absorbs width: a status arriving pushes the metadata
+          // left and the title shorter, never the controls (#12374), and an
+          // idle status takes no room at all. Half the region at most when the
+          // title wants the rest; a third beside a tab strip, which is the
+          // pane's identity there.
           <div
-            data-testid="panel-header-content"
             data-readout-obstacle=""
-            className="-mr-1 ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1 empty:hidden"
+            className={cn(
+              "ml-auto flex min-w-0 max-w-max items-center justify-end self-stretch",
+              hasTabs ? "pl-1 flex-[1_1_35%]" : "flex-[1_1_50%] @max-[640px]/header:flex-[1_1_40%]"
+            )}
           >
-            {headerContent}
+            {headerStatus !== undefined && (
+              // Leads the readings rather than trailing into the controls, so
+              // a held stream reads as the pane's condition, not a fifth button.
+              <div
+                data-testid="panel-header-status"
+                className="flex shrink-0 items-center empty:hidden"
+              >
+                {headerStatus}
+              </div>
+            )}
+            {headerContent != null && (
+              // Whatever does not fit leaves whole, from the telemetry end
+              // (useWholeItemFit); the clip is only a backstop. px-1 keeps edge
+              // items' focus rings inside it; -mr-1 gives that padding back so
+              // the spacing to what follows is unchanged.
+              <div
+                ref={metadataRowRef}
+                data-testid="panel-header-content"
+                className="-mr-1 flex min-w-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1 empty:hidden"
+              >
+                {headerContent}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1650,18 +1754,6 @@ function PanelHeaderComponent({
 
       {headerToolbar}
 
-      {headerStatus !== undefined && (
-        // Reserved whether or not a status is showing: the box never changes
-        // size, so a status coming or going cannot move the controls.
-        <div
-          data-testid="panel-header-status"
-          data-readout-obstacle=""
-          className="ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
-        >
-          {headerStatus}
-        </div>
-      )}
-
       <div
         ref={controlsRef}
         role="toolbar"
@@ -1670,12 +1762,10 @@ function PanelHeaderComponent({
         onKeyDown={handleControlsKeyDown}
         data-testid="panel-header-controls"
         data-readout-obstacle=""
-        // A status beside the controls sits a step further out than their own
-        // rhythm, as the agent glyph does, so it never reads as a fifth button.
-        className={cn(
-          "flex shrink-0 items-center gap-1",
-          headerStatus !== undefined ? "ml-2.5" : "ml-1.5"
-        )}
+        // One structural gap between whatever the bar reads out and what it
+        // does, on every pane, so the metadata never looks stranded short of
+        // the controls or jammed against them.
+        className="ml-3 flex shrink-0 items-center gap-1"
       >
         {/* Marks a terminal that has notes and toggles them (#12835). Only a
             scratchpad with notes collapses, so an empty one never shows it. */}
@@ -2106,11 +2196,11 @@ function PanelHeaderComponent({
       {agentIndicator !== undefined && (
         // The agent state glyph's home: the far right, past close. It never
         // moves, and nothing else goes after it.
-        // ml-2 against the controls' 4px rhythm: the glyph is a signal, not a
+        // ml-3 against the controls' 4px rhythm: the glyph is a signal, not a
         // fifth button, and the extra step is what keeps it from reading as one.
         <div
           data-testid="panel-header-agent-indicator"
-          className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center"
+          className="ml-3 flex h-5 w-5 shrink-0 items-center justify-center"
         >
           {agentIndicator}
         </div>

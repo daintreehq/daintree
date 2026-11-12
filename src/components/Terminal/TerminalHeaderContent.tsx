@@ -19,6 +19,7 @@ import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
+  HEADER_FACT_CLASS,
 } from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
@@ -300,51 +301,50 @@ export function TerminalHeaderContent({
       .filter(Boolean)
       .join("; ");
 
+    // Each part joins or leaves the row whole as the header narrows: the
+    // phrase first, then the token count, then the whole trace. The cost is
+    // the part that stays. Each separator travels with the part after or
+    // before it, so a hidden part never leaves a stray dot, and the trace
+    // itself goes once nothing in it would still show.
+    const phraseSeparated = hasSummary;
+    const traceHidden =
+      sessionCost == null && sessionTokens != null
+        ? "@max-[640px]/header:not-focus-within:hidden"
+        : "@max-[520px]/header:not-focus-within:hidden";
+
     return (
       <Tooltip autoDismiss={false} disableHoverableContent={false}>
         <TooltipTrigger asChild>
           <span
-            className={cn(
-              HEADER_CHIP_CLASS,
-              HEADER_CHIP_SURFACE,
-              HEADER_CHIP_FOCUS_CLASS,
-              "min-w-0 max-w-[20rem] shrink tabular-nums"
-            )}
+            className={cn(HEADER_FACT_CLASS, HEADER_CHIP_FOCUS_CLASS, traceHidden)}
             role="status"
             aria-live="off"
             aria-label={label.charAt(0).toUpperCase() + label.slice(1)}
             tabIndex={0}
+            data-header-fact=""
             data-testid="terminal-settled-trace"
           >
-            {/* Under width pressure the token count goes first, as a unit, then
-                the worktree phrase truncates; the cost never clips. The label
-                and tooltip carry every part in full. */}
             {noChanges && (
-              <span className="min-w-0 truncate" aria-hidden="true">
+              <span
+                className={cn("whitespace-pre", hasSummary && "@max-[760px]/header:hidden")}
+                aria-hidden="true"
+              >
                 Nothing to commit
-              </span>
-            )}
-            {sessionCost != null && (
-              <span className="shrink-0 whitespace-pre" aria-hidden="true">
-                {noChanges && (
-                  <span className="mr-1">
+                {phraseSeparated && (
+                  <span className="ml-1">
                     <FactSeparator />
                   </span>
                 )}
+              </span>
+            )}
+            {sessionCost != null && (
+              <span className="whitespace-pre" aria-hidden="true">
                 {formatSessionCost(sessionCost)}
               </span>
             )}
             {sessionTokens != null && (
-              <span
-                className={cn(
-                  "shrink-0 whitespace-pre",
-                  (noChanges || isExited) && sessionCost != null && "@max-[640px]/header:hidden"
-                )}
-                aria-hidden="true"
-              >
-                {/* The chip's gap sits before the dot and mr-1 after it, so the
-                    dot is centred rather than clinging to the value. */}
-                {(noChanges || sessionCost != null) && (
+              <span className="whitespace-pre @max-[640px]/header:hidden" aria-hidden="true">
+                {sessionCost != null && (
                   <span className="mr-1">
                     <FactSeparator />
                   </span>
@@ -378,27 +378,26 @@ export function TerminalHeaderContent({
 
   return (
     <>
-      {/* Settled-agent trace leads the row per the runtime-signals tier table:
-          macro state → pane-local error → diagnostic text → ambient state →
-          telemetry last. Transient flow and submit status sit outside this row,
-          in TerminalStatusSlot's reserved box ahead of the window controls
-          (#12374). */}
-      {renderSettledTrace()}
-
+      {/* Exceptions and controls first, each in the shared chip box; then the
+          ambient readings as plain text (context, the settled trace, CPU and
+          memory), which a narrowing header gives up whole, from the end, before
+          the title loses its words. Transient flow and submit status follow
+          this row in TerminalStatusSlot (#12374). */}
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
           live regions across a multi-pane fleet (#9204). In the row's shared
-          chip box, so the ended session's cost and exit read as one kind of
-          fact; a failure is marked in shape ahead of the reading, which keeps
+          chip box, as an ended session is out of the ordinary; a failure is
+          marked in shape ahead of the reading, which keeps
           secondary ink because the error hue on 11px text falls under 4.5:1 on
           several light headers. */}
       {exitStatus && (
         <span
-          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "font-mono tabular-nums")}
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "tabular-nums")}
           role="status"
           aria-live="off"
           aria-label={exitStatus.failed ? `${exitStatus.badge}, failed` : undefined}
+          data-fit-priority="90"
         >
           {exitStatus.failed && (
             <ExitMark
@@ -425,14 +424,24 @@ export function TerminalHeaderContent({
       {showCommandPill && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
+            {/* Focusable, as the tooltip holds the part the pill cuts off. It
+                keeps 12 characters or goes whole: telemetry yields before it. */}
             <span
               className={cn(
                 HEADER_CHIP_CLASS,
                 HEADER_CHIP_SURFACE,
-                "min-w-0 max-w-[20rem] shrink font-mono"
+                HEADER_CHIP_FOCUS_CLASS,
+                "min-w-[12ch] max-w-[20rem] shrink font-mono @max-[400px]/header:not-focus-within:hidden"
               )}
+              role="status"
+              aria-live="off"
+              aria-label={`Running ${lastCommand}`}
+              tabIndex={0}
+              data-fit-priority="30"
             >
-              <span className="truncate">{lastCommand}</span>
+              <span className="truncate" aria-hidden="true">
+                {lastCommand}
+              </span>
             </span>
           </TooltipTrigger>
           <TooltipContent side="bottom">{lastCommand}</TooltipContent>
@@ -441,16 +450,24 @@ export function TerminalHeaderContent({
 
       {/* Queue count badge */}
       {queueCount > 0 && (
-        <Tooltip>
+        <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             {/* One run of text like every other count in the bar, not a mono
                 digit a flex gap away from its noun. */}
             <div
-              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "tabular-nums")}
+              className={cn(
+                HEADER_CHIP_CLASS,
+                HEADER_CHIP_SURFACE,
+                HEADER_CHIP_FOCUS_CLASS,
+                "tabular-nums"
+              )}
               role="status"
               aria-live="off"
+              aria-label={`${pluralize(queueCount, "command")} queued`}
+              tabIndex={0}
+              data-fit-priority="60"
             >
-              {queueCount} queued
+              <span aria-hidden="true">{queueCount} queued</span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -475,23 +492,22 @@ export function TerminalHeaderContent({
           user can stop them. */}
       {hasPtyKind && <TerminalNotifyChip terminalId={id} />}
 
-      {/* Input locked indicator — bare ambient glyph. */}
+      {/* Input locked — an exception, so it takes the chip box and its word
+          rather than sitting bare beside the readings, where it read as part
+          of them. */}
       {isInputLocked && (
-        <Tooltip>
+        <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            {/* Focusable like the row's other tooltip-bearing marks, so the
-                reason the pane ignores keystrokes reaches the keyboard too. */}
             <div
-              className={cn(
-                "flex shrink-0 items-center rounded-sm p-0.5 text-text-secondary",
-                HEADER_CHIP_FOCUS_CLASS
-              )}
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, HEADER_CHIP_FOCUS_CLASS)}
               role="status"
               aria-live="off"
               aria-label="Input locked (read-only monitor mode)"
               tabIndex={0}
+              data-fit-priority="70"
             >
-              <Lock className="w-3 h-3" aria-hidden="true" />
+              <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <span aria-hidden="true">Locked</span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
@@ -499,11 +515,15 @@ export function TerminalHeaderContent({
       )}
 
       {/* Context of a Claude Code or Codex pane, from the session file its
-          CLI writes — self-gating. Ambient telemetry like the resource readout
-          after it, so it sits behind the chips a narrow pane should keep longest. */}
+          CLI writes — self-gating. The first of the ambient readings, and the
+          last to go. */}
       {hasPtyKind && <AgentContextUsageChip terminalId={id} />}
 
-      {/* Resource monitoring badge — ambient telemetry, last. CPU and memory
+      {/* What the settled agent left behind, beside the context it ran with. */}
+      {renderSettledTrace()}
+
+      {/* Resource readout — ambient telemetry, last, and the first to go as
+          the header narrows. CPU and memory
           each carry their own band, marked in shape beside the reading it is
           about, so a hot badge says which one is high and survives forced
           colours; the CPU line takes the CPU band's hue. Focusable so the
@@ -515,9 +535,11 @@ export function TerminalHeaderContent({
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "inline-flex items-center gap-1.5 px-1 py-0.5 text-2xs font-mono shrink-0 rounded-sm tabular-nums",
-                HEADER_CHIP_FOCUS_CLASS
+                HEADER_FACT_CLASS,
+                HEADER_CHIP_FOCUS_CLASS,
+                "@max-[760px]/header:not-focus-within:hidden"
               )}
+              data-header-fact=""
               role="status"
               aria-live="off"
               tabIndex={0}
@@ -539,14 +561,14 @@ export function TerminalHeaderContent({
                   SEVERITY_TONE[cpuSeverity]
                 )}
               />
-              {/* One block reserved at the width of "10.5 cores · 10.0G" plus any marks
-                  showing, slack at its trailing end: the line holds still as
-                  digits come and go, and the reading stays tight against the
-                  line's end dot. */}
+              {/* One block reserved at the width of "9.9 cores · 999M" in the
+                  row's tabular sans figures, plus any marks showing, slack at
+                  its trailing end: the line holds still as digits come and go,
+                  and the reading stays tight against the line's end dot. */}
               <span
-                className="flex items-center text-text-secondary"
+                className="ml-0.5 flex items-center text-text-secondary"
                 style={{
-                  minWidth: `calc(16ch + 0.5rem + ${
+                  minWidth: `calc(10.5ch + 0.5rem + ${
                     [cpuSeverity, memorySeverity].filter((b) => b !== "muted").length
                   } * ${SEVERITY_MARK_WIDTH})`,
                 }}

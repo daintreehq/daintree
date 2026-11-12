@@ -9,11 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { cn } from "@/lib/utils";
-import {
-  HEADER_CHIP_CLASS,
-  HEADER_CHIP_FOCUS_CLASS,
-  HEADER_CHIP_SURFACE,
-} from "./terminalHeaderChip";
+import { HEADER_CHIP_FOCUS_CLASS, HEADER_FACT_CLASS } from "./terminalHeaderChip";
 
 function contextProvider(agentId: string | undefined): AgentContextUsageProvider | null {
   return agentId === "claude" || agentId === "codex" ? agentId : null;
@@ -73,24 +69,28 @@ export function AgentContextUsageChip({ terminalId }: { terminalId: string }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
+          // A reading, not a control: plain text in the row's run of facts.
+          // The last of them to go as the header narrows, whole, never clipped.
           className={cn(
-            HEADER_CHIP_CLASS,
-            HEADER_CHIP_SURFACE,
+            HEADER_FACT_CLASS,
             HEADER_CHIP_FOCUS_CLASS,
-            "whitespace-nowrap tabular-nums"
+            "@max-[400px]/header:not-focus-within:hidden"
           )}
           role="status"
           aria-live="off"
           aria-label={label}
           tabIndex={0}
+          data-header-fact=""
           data-testid="terminal-context-usage"
         >
           <span aria-hidden="true">
             {formatTokenCount(reading.contextTokens)} context
             {percent !== null && (
               <>
-                {" "}
-                <FactSeparator /> {percent}%
+                <span className="px-1">
+                  <FactSeparator />
+                </span>
+                {percent}%
               </>
             )}
           </span>

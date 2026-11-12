@@ -752,7 +752,13 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       }}
     >
       {/* Selecting the pane would close the popover this opens. */}
-      <span className="contents" onClick={holdPaneSelection}>
+      {/* A child waiting on the user, or failed, outranks a queue count in a
+          narrow header; a plain count of children goes before it. */}
+      <span
+        className="contents"
+        onClick={holdPaneSelection}
+        data-fit-priority={waiting > 0 || failed > 0 ? "85" : "40"}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
@@ -762,22 +768,25 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
                   HEADER_CHIP_CLASS,
                   HEADER_CHIP_SURFACE,
                   HEADER_CHIP_TRIGGER_CLASS,
-                  // The chip borrows the waiting hue only while a child is
-                  // blocked on the user — the one thing worth seeing from the
-                  // header without opening anything — and keeps it under the
-                  // pointer, where hover lifts the fill instead.
-                  // A failure with nothing waiting takes the error hue the same
-                  // way; waiting outranks it because it is the one the user can act on.
-                  waiting > 0
-                    ? "text-state-waiting"
-                    : failed > 0
-                      ? "text-status-error"
-                      : "text-text-secondary hover:text-text-primary",
+                  "text-text-secondary hover:text-text-primary",
                   CHIP_FOCUS_CLASS
                 )}
                 aria-label={attentionNote ? `${summary}, ${attentionNote}` : summary}
               >
-                <Network className="w-3 h-3" aria-hidden="true" />
+                {/* The glyph borrows the waiting hue only while a child is
+                    blocked on the user — the one thing worth seeing from the
+                    header without opening anything — and a failure with
+                    nothing waiting takes the error hue the same way; waiting
+                    outranks it because it is the one the user can act on. The
+                    count stays in the row's neutral ink: a state hue on 11px
+                    figures falls under 4.5:1 on several headers. */}
+                <Network
+                  className={cn(
+                    "w-3 h-3",
+                    waiting > 0 ? "text-state-waiting" : failed > 0 && "text-status-error"
+                  )}
+                  aria-hidden="true"
+                />
                 {count !== null && <span className="tabular-nums">{count}</span>}
               </button>
             </PopoverTrigger>

@@ -130,7 +130,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       {/* Selecting the pane would close the popover this opens. */}
-      <span className="contents" onClick={holdPaneSelection}>
+      <span className="contents" onClick={holdPaneSelection} data-fit-priority="80">
         {/* Several questions make a sentence too long to read in the usual
             2.5 s, so this one stays while hovered or focused. */}
         <Tooltip autoDismiss={false} disableHoverableContent={false}>

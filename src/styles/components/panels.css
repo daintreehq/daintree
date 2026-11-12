@@ -95,3 +95,19 @@
     opacity: 1;
   }
 }
+
+/* A run of pane-header facts (context, cost and tokens, CPU and memory) reads
+ * as one line of readings: a dimmed dot between each pair, the same dot
+ * FactSeparator draws inside a fact, with the same 4px either side — the row's
+ * 6px gap less 2px before it, the fact's own 4px gap after it. Only facts the
+ * header's fitter left showing count, so a hidden one never leaves a stray dot.
+ * The facts carry their own accessible names, so the dot never reaches
+ * assistive tech. */
+[data-header-fact]:not([hidden]) ~ [data-header-fact]:not([hidden]) {
+  margin-inline-start: -2px;
+}
+
+[data-header-fact]:not([hidden]) ~ [data-header-fact]:not([hidden])::before {
+  content: "·";
+  color: var(--color-text-muted);
+}
