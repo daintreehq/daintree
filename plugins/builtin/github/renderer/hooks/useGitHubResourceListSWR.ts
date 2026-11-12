@@ -139,7 +139,7 @@ interface UseGitHubResourceListSWRParams {
   sortOrder: GitHubSortOrder;
   githubConfig: { hasToken: boolean } | null;
   onFreshFetch?: () => void;
-  onCountUpdate?: (count: number, hasMore: boolean) => void;
+  onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
 
 export interface UseGitHubResourceListSWRReturn {
@@ -368,6 +368,9 @@ export function useGitHubResourceListSWR({
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
+            // Taken before the read, so the list's total is never dated after
+            // a count read that started later than it did.
+            const requestedAt = Date.now();
             const result =
               type === "issue"
                 ? await forgeClient.listIssues(projectPath, fetchOptions)
@@ -429,40 +432,35 @@ export function useGitHubResourceListSWR({
               // first-page length with a "+" suffix ("20+", issue #9717). The
               // `totalCount` comes from the same GraphQL response as the items,
               // so it never claims more than is actually open (issue #9693).
-              // The second arg to `onCountUpdate` is the "count is approximate"
-              // flag that drives the badge's "+" suffix — when `totalCount` is
-              // known the count is exact, so it is `false`. Search results and
-              // cache hits carry no `totalCount`, so they fall back to the
+              // The second arg is the "count is approximate" flag behind the
+              // badge's "+" suffix; a list with no total falls back to its
               // loaded length plus the real `hasNextPage`.
               //
-              // Fires on cold-mount AND revalidation (NOT gated on
-              // `isRevalidate`) so the badge reconciles the moment the dropdown
-              // first loads, not just on a later background refresh.
-              //
-              // Gated to the `open` filter: the badge represents the OPEN
-              // issue/PR count (its aria-label and tooltip say "open"). The
-              // hook is kept mounted across filter tabs, so without this gate
-              // switching the dropdown to Closed/Merged would fire
-              // `onCountUpdate` with the closed/merged count and poison the
-              // open badge. The last known open count stays correct while the
-              // user browses other states.
-              if (filterState === "open") {
+              // Only an open list read from the forge for this request speaks
+              // for the open count (#16866). The hook stays mounted across
+              // filter tabs, so a closed/merged list must not reach the badge;
+              // a page the provider served from its cache carries a total it
+              // read earlier; and a total that isn't a count says nothing.
+              // `source` is optional on the contract, so a provider that
+              // doesn't report it keeps the request's own bypass as the sign
+              // that the read reached the forge.
+              const total = result.totalCount;
+              const countable =
+                filterState === "open" &&
+                result.source !== "cache" &&
+                (total === undefined || (Number.isSafeInteger(total) && total >= 0));
+              if (countable) {
                 onCountUpdate?.(
-                  result.totalCount ?? result.items.length,
-                  result.totalCount == null ? result.hasMore : false
+                  total ?? result.items.length,
+                  total === undefined ? result.hasMore : false,
+                  requestedAt
                 );
-              }
-              // Notify parent (toolbar count badge) that fresh first-page data
-              // landed. Gated on the request actually having sent
-              // `bypassCache: true` — the main process's
-              // `updateRepoStatsCount` runs on the GraphQL path that follows a
-              // bypass, so the toolbar's `refresh()` call is guaranteed to see
-              // an updated `repoStatsCache` entry. Cold-mount and downgraded
-              // revalidate fetches (`bypassCache: false`) may hit the
-              // main-process cache and skip the count update entirely; firing
-              // onFreshFetch there would be a wasted IPC round-trip.
-              if (usedBypass) {
-                onFreshFetch?.();
+                // The provider has already held this total, so the toolbar's
+                // stats refresh reads it back, and with shared counts on it
+                // reaches every view of the repository.
+                const reachedForge =
+                  result.source === undefined ? usedBypass : result.source === "network";
+                if (reachedForge) onFreshFetch?.();
               }
             }
             lastError = null;

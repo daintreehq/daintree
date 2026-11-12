@@ -259,7 +259,7 @@ interface GitHubResourceListProps {
    * `20+` when paginated) instead of the stats query's full `totalCount`,
    * which can be higher than the loaded page (issue #9693).
    */
-  onCountUpdate?: (count: number, hasMore: boolean) => void;
+  onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
 
 export function GitHubResourceList({

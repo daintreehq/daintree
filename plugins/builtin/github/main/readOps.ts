@@ -280,6 +280,11 @@ async function searchIssuesImpl(
   });
 }
 
+/** A connection total fit to stand as the repository's open count. */
+function isOpenTotal(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
   const searchTerm = opts.search?.trim();
   if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
@@ -311,7 +316,8 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
 
   if (!bypass) {
     const cached = forgeIssueListCache.get(cacheKey);
-    if (cached) return cached;
+    // Read earlier: its total is an older observation, not a fresh one.
+    if (cached) return { ...cached, source: "cache" };
   }
 
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
@@ -320,6 +326,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
+    const readAt = Date.now();
 
     const response = await runQuery(
       LIST_ISSUES_QUERY,
@@ -352,6 +359,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
       nextCursor: issues?.pageInfo?.endCursor ?? null,
       hasMore: issues?.pageInfo?.hasNextPage ?? false,
       ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
+      source: "network",
     };
 
     // Skip the shared-cache write when a newer bypass call has superseded us
@@ -362,8 +370,9 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // back to its pre-change total under a fresh `lastUpdated`.
     if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof issues?.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
+      const openTotal = state === "open" && !cursor ? issues?.totalCount : undefined;
+      if (isOpenTotal(openTotal)) {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", openTotal, readAt);
       }
     }
     return page;
@@ -569,13 +578,15 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
 
   if (!bypass) {
     const cached = forgePRListCache.get(cacheKey);
-    if (cached) return cached;
+    // Read earlier: its total is an older observation, not a fresh one.
+    if (cached) return { ...cached, source: "cache" };
   }
 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
+    const readAt = Date.now();
 
     const response = await runQuery(
       LIST_PRS_QUERY,
@@ -611,12 +622,14 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       nextCursor: prs?.pageInfo?.endCursor ?? null,
       hasMore: prs?.pageInfo?.hasNextPage ?? false,
       ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
+      source: "network",
     };
 
     if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof prs?.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
+      const openTotal = state === "open" && !cursor ? prs?.totalCount : undefined;
+      if (isOpenTotal(openTotal)) {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", openTotal, readAt);
       }
     }
     return page;

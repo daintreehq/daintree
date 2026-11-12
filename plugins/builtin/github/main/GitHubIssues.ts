@@ -11,13 +11,11 @@ import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
-  repoStatsCache,
   issueListCache,
   issueTooltipCache,
   issueTooltipWrittenAt,
   getRepoListEpoch,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE, updateRepoStatsCount } from "./GitHubPRs.js";
 import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
@@ -499,6 +497,7 @@ export async function listIssues(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+    const readAt = Date.now();
 
     try {
       let result: GitHubListResponse<GitHubIssue>;
@@ -581,20 +580,7 @@ export async function listIssues(
             totalCount !== undefined
           ) {
             const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "issue", totalCount);
-
-            const memoryStats = repoStatsCache.get(statsCacheKey);
-            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-              const persistentCache = GitHubStatsCache.getInstance();
-              persistentCache.set(
-                statsCacheKey,
-                {
-                  issueCount: memoryStats.issueCount,
-                  prCount: memoryStats.prCount,
-                },
-                options.cwd
-              );
-            }
+            updateRepoStatsCount(statsCacheKey, "issue", totalCount, readAt);
           }
         }
       }

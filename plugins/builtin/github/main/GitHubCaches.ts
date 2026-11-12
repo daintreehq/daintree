@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { Cache } from "../../../../electron/utils/cache.js";
 import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import { clearHeldCounts } from "./GitHubCountLedger.js";
 import type {
   GitHubIssue,
   GitHubPR,
@@ -188,16 +189,6 @@ export function getETagCacheVersion(): number {
   return etagCacheVersion;
 }
 
-/**
- * Invalidate the ETag baselines of any in-flight conditional fetch. Bumped by
- * the cache-clear paths below and by `updateRepoStatsCount` when a list
- * query's observed total disagrees with a stored count baseline — without the
- * bump, a `fetchRestCounts` already past its cache read could 304-recommit
- * the just-invalidated counts and resurrect the stale value.
- */
-export function bumpETagCacheVersion(): void {
-  etagCacheVersion++;
-}
 
 /**
  * Per-repo, per-type list-cache epochs for the count-as-cache-buster
@@ -477,6 +468,7 @@ export function clearGitHubCaches(): void {
   velocityCache.clear();
   repoStatsAndPageSnapshotCache.clear();
   restCountsCache.clear();
+  clearHeldCounts();
   repoEventsETagCache.clear();
   repoEventsPollIntervalCache.clear();
   repoEventsNoChangeCount.clear();
