@@ -87,6 +87,24 @@ export const REPO_STATS_AND_PAGE_QUERY = `
   }
 `;
 
+// The open issue and PR totals alone (#16866): confirms a REST count pair that
+// disagrees with the counts already in hand, from the same `totalCount` the
+// dropdown lists read, without the stats query's first pages.
+export const REPO_OPEN_COUNTS_QUERY = `
+  query GetRepoOpenCounts($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      issues(states: OPEN) { totalCount }
+      pullRequests(states: OPEN) { totalCount }
+    }
+    rateLimit {
+      cost
+      remaining
+      resetAt
+      limit
+    }
+  }
+`;
+
 // Fast-changing project health: CI status, latest release, security alerts.
 // The open issue/PR counts are NOT fetched here — they are already retrieved
 // (and cached) by REPO_STATS_AND_PAGE_QUERY, so `getProjectHealth` reads them

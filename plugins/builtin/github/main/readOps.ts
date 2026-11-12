@@ -311,7 +311,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
 
   if (!bypass) {
     const cached = forgeIssueListCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) return { ...cached, source: "cache" };
   }
 
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
@@ -320,6 +320,8 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
+    // When the read was sent, so its total can't overwrite a count read after it.
+    const requestedAt = Date.now();
 
     const response = await runQuery(
       LIST_ISSUES_QUERY,
@@ -346,12 +348,17 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
           totalCount?: number;
         }
       | undefined;
-    const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
+    // A response without the connection is a failed read, not an empty list:
+    // read as one, it would report zero open issues.
+    if (!issues || !Array.isArray(issues.nodes)) {
+      throw new Error("Repository not found or token lacks access.");
+    }
+    const nodes = issues.nodes as Array<Record<string, unknown>>;
     const page: Page<Issue> = {
       items: nodes.filter(Boolean).map(toForgeIssue),
-      nextCursor: issues?.pageInfo?.endCursor ?? null,
-      hasMore: issues?.pageInfo?.hasNextPage ?? false,
-      ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
+      nextCursor: issues.pageInfo?.endCursor ?? null,
+      hasMore: issues.pageInfo?.hasNextPage ?? false,
+      ...(typeof issues.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
     };
 
     // Skip the shared-cache write when a newer bypass call has superseded us
@@ -362,11 +369,11 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // back to its pre-change total under a fresh `lastUpdated`.
     if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof issues?.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
+      if (state === "open" && !cursor && typeof issues.totalCount === "number") {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount, requestedAt);
       }
     }
-    return page;
+    return { ...page, source: "network" };
   });
 }
 
@@ -569,13 +576,15 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
 
   if (!bypass) {
     const cached = forgePRListCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) return { ...cached, source: "cache" };
   }
 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
+    // Taken before the query, not after the enrichment pass that follows it.
+    const requestedAt = Date.now();
 
     const response = await runQuery(
       LIST_PRS_QUERY,
@@ -602,24 +611,28 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
           totalCount?: number;
         }
       | undefined;
-    const nodes = (prs?.nodes ?? []) as Array<Record<string, unknown>>;
+    // A response without the connection is a failed read, not an empty list.
+    if (!prs || !Array.isArray(prs.nodes)) {
+      throw new Error("Repository not found or token lacks access.");
+    }
+    const nodes = prs.nodes as Array<Record<string, unknown>>;
     // Enrich before the guard below so the value written to `forgePRListCache`
     // is the required-check-aware one — a warm cache hit returns early and
     // never reaches this enrichment pass.
     const page: Page<PR> = {
       items: await enrichPRPageWithRequiredStatus(repo, nodes.filter(Boolean).map(toForgePR)),
-      nextCursor: prs?.pageInfo?.endCursor ?? null,
-      hasMore: prs?.pageInfo?.hasNextPage ?? false,
-      ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
+      nextCursor: prs.pageInfo?.endCursor ?? null,
+      hasMore: prs.pageInfo?.hasNextPage ?? false,
+      ...(typeof prs.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
     };
 
     if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      if (state === "open" && !cursor && typeof prs?.totalCount === "number") {
-        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
+      if (state === "open" && !cursor && typeof prs.totalCount === "number") {
+        updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount, requestedAt);
       }
     }
-    return page;
+    return { ...page, source: "network" };
   });
 }
 

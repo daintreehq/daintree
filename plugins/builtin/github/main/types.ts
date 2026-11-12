@@ -26,6 +26,21 @@ export interface RepoStats {
   prCountRefreshedAt?: number;
 }
 
+/** An open count main stands behind, and when the read that produced it was sent. */
+export interface CountObservation {
+  value: number;
+  observedAt: number;
+}
+
+/**
+ * The open issue and PR counts main last accepted for a repository. Every
+ * served count comes from here once it holds that kind; see `repoCountState.ts`.
+ */
+export interface RepoCountState {
+  issue?: CountObservation;
+  pr?: CountObservation;
+}
+
 /** One connection page (issues or PRs) as returned by `getRepoStatsAndPage`. */
 export interface RepoConnectionPage<TItem> {
   items: TItem[];

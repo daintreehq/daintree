@@ -11,6 +11,7 @@ import type {
 } from "../shared/types.js";
 import type {
   RepoContext,
+  RepoCountState,
   RepoStats,
   RepoStatsAndPageSnapshot,
   RestCountsSnapshot,
@@ -142,6 +143,20 @@ export const openPRListETagCache = new Cache<string, string>({
  * the other ETag caches; on expiry both legs simply refetch unconditionally.
  */
 export const restCountsCache = new Cache<string, RestCountsSnapshot>({
+  maxSize: ETAG_CACHE_MAX_SIZE,
+  defaultTTL: ETAG_CACHE_TTL,
+});
+
+/**
+ * The open counts main stands behind per repo (#16866), keyed by `owner/repo`:
+ * GraphQL totals (a list's first page, the explicit-refresh query, a
+ * verification read) and REST counts that agreed with them. Every count the
+ * stats path serves comes from here once it holds that kind, so a lagging REST
+ * pair, a probe replay or a disk fallback can't put back a count a newer read
+ * disproved. Same 1-hour TTL as {@link restCountsCache}: it is the probe's
+ * "reuse the cached count" baseline too, and an idle repo still re-reads past it.
+ */
+export const repoCountStateCache = new Cache<string, RepoCountState>({
   maxSize: ETAG_CACHE_MAX_SIZE,
   defaultTTL: ETAG_CACHE_TTL,
 });
@@ -477,6 +492,7 @@ export function clearGitHubCaches(): void {
   velocityCache.clear();
   repoStatsAndPageSnapshotCache.clear();
   restCountsCache.clear();
+  repoCountStateCache.clear();
   repoEventsETagCache.clear();
   repoEventsPollIntervalCache.clear();
   repoEventsNoChangeCount.clear();

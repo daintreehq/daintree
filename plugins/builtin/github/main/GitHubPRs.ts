@@ -31,6 +31,7 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import { getRepoCountState, observeRepoCount } from "./repoCountState.js";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
@@ -106,7 +107,19 @@ export function buildListCacheKey(params: {
   return `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${direction}:${perPage}:${cursor}`;
 }
 
-export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", count: number): void {
+/**
+ * Take a fresh unfiltered open list's total as the repo's open count of `type`
+ * (#16866). `observedAt` is when the list request was sent: a response older
+ * than the count main already holds, or a total that isn't a count, changes
+ * nothing. Returns whether the count was taken.
+ */
+export function updateRepoStatsCount(
+  cacheKey: string,
+  type: "issue" | "pr",
+  count: number,
+  observedAt: number = Date.now()
+): boolean {
+  if (!observeRepoCount(cacheKey, type, count, observedAt)) return false;
   const now = Date.now();
   const cached = repoStatsCache.get(cacheKey);
   // Stamp only the updated kind's refreshed-at: a PR list write-back says
@@ -120,25 +133,26 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
     };
     if (type === "issue") {
       updated.issueCount = count;
-      updated.issueCountRefreshedAt = now;
+      updated.issueCountRefreshedAt = observedAt;
     } else {
       updated.prCount = count;
-      updated.prCountRefreshedAt = now;
+      updated.prCountRefreshedAt = observedAt;
     }
     repoStatsCache.set(cacheKey, updated);
   } else {
     const persistentCache = GitHubStatsCache.getInstance();
     const diskCached = persistentCache.get(cacheKey);
+    const state = getRepoCountState(cacheKey);
 
     const newStats: RepoStats = {
-      issueCount: type === "issue" ? count : (diskCached?.issueCount ?? 0),
-      prCount: type === "pr" ? count : (diskCached?.prCount ?? 0),
+      issueCount: type === "issue" ? count : (state?.issue?.value ?? diskCached?.issueCount ?? 0),
+      prCount: type === "pr" ? count : (state?.pr?.value ?? diskCached?.prCount ?? 0),
       lastUpdated: now,
     };
     if (type === "issue") {
-      newStats.issueCountRefreshedAt = now;
+      newStats.issueCountRefreshedAt = observedAt;
     } else {
-      newStats.prCountRefreshedAt = now;
+      newStats.prCountRefreshedAt = observedAt;
     }
     repoStatsCache.set(cacheKey, newStats);
   }
@@ -177,6 +191,7 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
   if (droppedBaseline) {
     bumpETagCacheVersion();
   }
+  return true;
 }
 
 export function parsePRNode(node: Record<string, unknown>): GitHubPR {
@@ -559,6 +574,8 @@ export async function listPullRequests(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+    // When the read was sent, so its total can't overwrite a count read after it.
+    const requestedAt = Date.now();
 
     try {
       let result: GitHubListResponse<GitHubPR>;
@@ -660,10 +677,10 @@ export async function listPullRequests(
             totalCount !== undefined
           ) {
             const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "pr", totalCount);
+            const taken = updateRepoStatsCount(statsCacheKey, "pr", totalCount, requestedAt);
 
             const memoryStats = repoStatsCache.get(statsCacheKey);
-            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+            if (taken && memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
               const persistentCache = GitHubStatsCache.getInstance();
               persistentCache.set(
                 statsCacheKey,

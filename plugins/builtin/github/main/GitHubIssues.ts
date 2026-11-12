@@ -499,6 +499,8 @@ export async function listIssues(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+    // When the read was sent, so its total can't overwrite a count read after it.
+    const requestedAt = Date.now();
 
     try {
       let result: GitHubListResponse<GitHubIssue>;
@@ -581,10 +583,10 @@ export async function listIssues(
             totalCount !== undefined
           ) {
             const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "issue", totalCount);
+            const taken = updateRepoStatsCount(statsCacheKey, "issue", totalCount, requestedAt);
 
             const memoryStats = repoStatsCache.get(statsCacheKey);
-            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+            if (taken && memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
               const persistentCache = GitHubStatsCache.getInstance();
               persistentCache.set(
                 statsCacheKey,

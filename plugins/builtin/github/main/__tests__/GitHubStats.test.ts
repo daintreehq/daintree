@@ -66,6 +66,7 @@ vi.mock("../GitHubFirstPageCache.js", () => ({
 }));
 
 import { fetchRestCounts, getRepoStatsAndPage, parseLinkLastPage } from "../GitHubStats.js";
+import { updateRepoStatsCount } from "../GitHubPRs.js";
 import {
   repoStatsCache,
   issueListCache,
@@ -74,6 +75,7 @@ import {
   forgePRListCache,
   repoStatsAndPageSnapshotCache,
   restCountsCache,
+  repoCountStateCache,
   repoEventsETagCache,
   repoEventsPollIntervalCache,
   repoEventsNoChangeCount,
@@ -101,6 +103,39 @@ function statsResponse(issueCount = 5, prCount = 3): Record<string, unknown> {
     },
     rateLimit: {},
   };
+}
+
+/** `GetRepoOpenCounts` — the GraphQL totals that confirm a disagreeing REST pair (#16866). */
+function openCountsResponse(issueCount: number, prCount: number): Record<string, unknown> {
+  return {
+    repository: {
+      issues: { totalCount: issueCount },
+      pullRequests: { totalCount: prCount },
+    },
+    rateLimit: {},
+  };
+}
+
+/** Answer the explicit-refresh stats query and the open-counts query separately. */
+function routeGraphQL(routes: {
+  stats?: Record<string, unknown>;
+  openCounts?: Record<string, unknown>;
+}): void {
+  mockClient.mockImplementation((query: unknown) => {
+    const text = String(query);
+    const response = text.includes("GetRepoOpenCounts")
+      ? routes.openCounts
+      : text.includes("GetRepoStatsAndPage")
+        ? routes.stats
+        : undefined;
+    return response
+      ? Promise.resolve(response)
+      : Promise.reject(new Error(`unexpected query: ${text.slice(0, 60)}`));
+  });
+}
+
+function openCountsQueryCount(): number {
+  return mockClient.mock.calls.filter((c) => String(c[0]).includes("GetRepoOpenCounts")).length;
 }
 
 interface FakeResponse {
@@ -263,6 +298,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     prListCache.clear();
     repoStatsAndPageSnapshotCache.clear();
     restCountsCache.clear();
+    repoCountStateCache.clear();
     repoEventsETagCache.clear();
     repoEventsPollIntervalCache.clear();
     repoEventsNoChangeCount.clear();
@@ -344,6 +380,8 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       repo: [repoOk(8, '"r1"'), repoOk(9, '"r2"')],
       pulls: [pullsOk(3, '"p1"'), restResponse(304)],
     });
+    // The moved pair disagrees with the counts in hand, so GraphQL confirms it.
+    routeGraphQL({ openCounts: openCountsResponse(6, 3) });
 
     await getRepoStatsAndPage("/test", false);
     expireMemoryCaches();
@@ -372,6 +410,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     expireMemoryCaches();
     expireBackoffWindow();
     restCountsCache.clear();
+    repoCountStateCache.clear();
     routeFetch({
       events: [eventsResponse(200, { etag: '"e1"' })],
       repo: [repoOk(4)],
@@ -668,7 +707,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
 
     it("serves REST-fresher counts with the snapshot pages on an unchanged probe", async () => {
       // Explicit refresh writes the snapshot (5 issues / 3 PRs)…
-      mockClient.mockResolvedValue(statsResponse(5, 3));
+      routeGraphQL({ stats: statsResponse(5, 3), openCounts: openCountsResponse(10, 2) });
       routeFetch({
         events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(304)],
         repo: [repoOk(12)],
@@ -707,6 +746,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         repo: [repoOk(9, '"r2"')],
         pulls: [pullsOk(4, '"p2"')],
       });
+      routeGraphQL({ openCounts: openCountsResponse(5, 4) });
       const result = await getRepoStatsAndPage("/test", false);
 
       expect(result.stats?.issueCount).toBe(5);
@@ -803,7 +843,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       mockFetch.mockImplementation((input: unknown) => {
         const url = String(input);
         if (url.includes("/events")) {
-          repoStatsAndPageSnapshotCache.invalidate(CACHE_KEY);
+          updateRepoStatsCount(CACHE_KEY, "pr", 2);
           return Promise.resolve(eventsResponse(304));
         }
         if (url.includes("/pulls")) return Promise.resolve(pullsOk(2));
@@ -813,7 +853,8 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       const result = await getRepoStatsAndPage("/test", false);
 
       // Fell through to a fresh REST count read instead of resurrecting the
-      // captured snapshot's stale PR count.
+      // captured snapshot's stale PR count; the read agrees with the list.
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
       expect(result.stats?.prCount).toBe(2);
       expect(result.stats?.issueCount).toBe(5);
     });
@@ -975,6 +1016,7 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         repo: [repoOk(9, '"r2"')],
         pulls: [restResponse(304)],
       });
+      routeGraphQL({ openCounts: openCountsResponse(6, 3) });
       const result = await getRepoStatsAndPage("/test", false);
       expect(result.stats?.issueCount).toBe(6);
       expect(result.stats?.prCount).toBe(3);

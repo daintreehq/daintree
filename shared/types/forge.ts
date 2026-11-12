@@ -394,6 +394,13 @@ export interface Page<T> {
    * `items` may be empty in this case.
    */
   notModified?: boolean;
+  /**
+   * Where this page came from: `network` when this call read it from the
+   * forge, `cache` when the provider served a page an earlier call read.
+   * Absent when the provider doesn't say. The host treats only a `network`
+   * page's `totalCount` as a fresh observation of the repository's open count.
+   */
+  source?: "network" | "cache";
 }
 
 /** Minimal actor projection. */
