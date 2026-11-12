@@ -214,13 +214,19 @@ describe("cannotBeNew", () => {
   it("skips a packaged name at or below the newest entry", () => {
     expect(cannotBeNew(asset("acme.widget-1.0.0.dntr"), watched, newest)).toBe(true);
     expect(cannotBeNew(asset("acme.widget-0.9.9.dntr"), watched, newest)).toBe(true);
-    expect(cannotBeNew(asset("acme.widget-1.0.0-rc.1.dntr"), watched, newest)).toBe(true);
     expect(cannotBeNew(asset("acme.widget-1.0.1.dntr"), watched, newest)).toBe(false);
   });
 
-  it("downloads a name that only looks like a prerelease, since the packager drops `+`", () => {
+  it("downloads any name that reads as a prerelease, since the packager drops `+`", () => {
     // 1.1.1+1-linux is packaged as acme.widget-1.1.11-linux.dntr.
     expect(cannotBeNew(asset("acme.widget-1.1.11-linux.dntr"), watched, newest)).toBe(false);
+    expect(cannotBeNew(asset("acme.widget-0.9.0-rc.1.dntr"), watched, newest)).toBe(false);
+    // 1.1.1+-linux is packaged as acme.widget-1.1.1-linux.dntr, which sorts
+    // below a listed 1.1.1-rc.1 although the release itself is newer.
+    const rc = listed("1.1.1-rc.1");
+    const [rcWatched] = watchedRepositories([rc]);
+    const rcNewest = new Map([[rc.id, rc]]);
+    expect(cannotBeNew(asset("acme.widget-1.1.1-linux.dntr"), rcWatched, rcNewest)).toBe(false);
   });
 
   it("matches a name to the right plugin when one id begins another", () => {

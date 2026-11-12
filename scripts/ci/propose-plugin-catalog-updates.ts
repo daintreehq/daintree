@@ -233,9 +233,10 @@ export function watchedRepositories(entries: readonly PluginCatalogEntry[]): Wat
  * Whether an asset's file name, as `daintree-plugin package` writes it
  * (`{id}-{version}.dntr`), says its version is no newer than the plugin's
  * newest entry. Only ever used to skip a download; the manifest decides the
- * rest. The packager drops `+` from the version, so `1.1.1+1-linux` is named
- * as if it were the prerelease `1.1.11-linux`: a name can't rule out a
- * release by looking like a prerelease, only by being too old.
+ * rest. The packager drops `+` from the version, so build metadata can make
+ * a name read as a prerelease that sorts below the real version (`1.1.1+-x`
+ * is named `1.1.1-x`). Only a name with no prerelease part is trusted: one
+ * spelled from build metadata reads at or above the real version.
  */
 export function cannotBeNew(
   asset: ReleaseAsset,
@@ -247,7 +248,7 @@ export function cannotBeNew(
     const prefix = `${id}-`;
     if (!listed || !asset.name.startsWith(prefix)) continue;
     const version = asset.name.slice(prefix.length, -".dntr".length);
-    if (!isCanonicalSemver(version)) continue;
+    if (!isCanonicalSemver(version) || semver.prerelease(version)) continue;
     return !semver.gt(version, listed.version);
   }
   return false;
