@@ -125,7 +125,11 @@ class FakeGitHub implements CatalogGitHub {
     if (this.failOpening.has(request.branch)) throw new Error("HTTP 502");
     this.opened.push(request);
     const number = 100 + this.opened.length;
-    return { number, html_url: `https://github.com/daintreehq/daintree/pull/${number}`, state: "open" };
+    return {
+      number,
+      html_url: `https://github.com/daintreehq/daintree/pull/${number}`,
+      state: "open",
+    };
   });
 }
 
@@ -165,7 +169,11 @@ beforeAll(async () => {
   archives.set("2.0.0-beta.1", await widget("2.0.0-beta.1"));
   archives.set(
     "1.1.0-rebuilt",
-    await pack("widget-rebuilt", { name: "acme.widget", version: "1.1.0", capabilities: CAPS }, "1;\n")
+    await pack(
+      "widget-rebuilt",
+      { name: "acme.widget", version: "1.1.0", capabilities: CAPS },
+      "1;\n"
+    )
   );
   archives.set("other", await pack("other", { name: "acme.other", version: "1.0.0" }));
   archives.set("gadget", await pack("gadget", { name: "acme.gadget", version: "5.0.0" }));
@@ -183,7 +191,11 @@ describe("watchedRepositories", () => {
       id: "acme.gadget",
       repo: REPO.replace("acme/widget-plugin", "Acme/Widget-Plugin"),
     });
-    const watched = watchedRepositories([listed("1.0.0"), listed("2.0.0", { repo: moved }), gadget]);
+    const watched = watchedRepositories([
+      listed("1.0.0"),
+      listed("2.0.0", { repo: moved }),
+      gadget,
+    ]);
     expect(watched.map((w) => [`${w.owner}/${w.name}`, [...w.ids].sort()])).toEqual([
       ["acme/widget-plugin", ["acme.gadget", "acme.widget"]],
       ["acme/widget-next", ["acme.widget"]],
@@ -361,7 +373,10 @@ describe("proposeCatalogUpdates", () => {
       { number: 5, html_url: "https://github.com/x/pull/5", state: "closed", merged_at: null },
     ]);
     const authorsOwn = { number: 7, html_url: "https://github.com/x/pull/7", state: "open" };
-    github.open = [{ number: 6, html_url: "https://github.com/x/pull/6", state: "open" }, authorsOwn];
+    github.open = [
+      { number: 6, html_url: "https://github.com/x/pull/6", state: "open" },
+      authorsOwn,
+    ];
     github.catalogs.set("refs/pull/7/head", await catalogText([listed("1.0.0"), listed("1.2.0")]));
     const { result } = await run(github);
 
@@ -406,7 +421,9 @@ describe("proposeCatalogUpdates", () => {
     const { result } = await run(github);
 
     expect(github.opened).toEqual([]);
-    expect(result.skipped.map((s) => s.reason)).toEqual(["0.9.0 isn't newer than the listed 1.0.0"]);
+    expect(result.skipped.map((s) => s.reason)).toEqual([
+      "0.9.0 isn't newer than the listed 1.0.0",
+    ]);
   });
 
   it("names the new repository of a plugin whose repository moved, and wants a person for it", async () => {
@@ -430,7 +447,9 @@ describe("proposeCatalogUpdates", () => {
     const elsewhere = release("v1.1.0", [["acme.widget-1.1.0.dntr", "1.1.0"]], {
       repo: "https://github.com/mallory/widget-plugin",
     });
-    github.releases.set("acme/widget-plugin", [{ ...elsewhere, html_url: `${REPO}/releases/tag/v1.1.0` }]);
+    github.releases.set("acme/widget-plugin", [
+      { ...elsewhere, html_url: `${REPO}/releases/tag/v1.1.0` },
+    ]);
     const { result, fetch } = await run(github);
 
     expect(fetch).not.toHaveBeenCalled();
@@ -461,7 +480,9 @@ describe("proposeCatalogUpdates", () => {
     expect(result.errors).toEqual([]);
     expect(result.warnings).toHaveLength(2);
     expect(result.warnings[0]).toBe("acme/gadget: its releases couldn't be read: HTTP 404");
-    expect(result.warnings[1]).toMatch(/^acme\/widget-plugin v1\.2\.0 widget-1\.2\.0\.dntr: it isn't an installable \.dntr/);
+    expect(result.warnings[1]).toMatch(
+      /^acme\/widget-plugin v1\.2\.0 widget-1\.2\.0\.dntr: it isn't an installable \.dntr/
+    );
     expect(github.opened.map((pr) => pr.branch)).toEqual(["plugin-catalog/acme.widget-1.1.0"]);
   });
 
@@ -560,12 +581,17 @@ describe("RestCatalogGitHub", () => {
         headers: init?.headers as Record<string, string>,
       });
       const route = routes.find(([match]) => `${method} ${url}`.startsWith(match));
-      return route ? route[1]() : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      return route
+        ? route[1]()
+        : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
     });
     return { calls, fetch };
   }
 
-  const json = (data: unknown, status = 200) => () => new Response(JSON.stringify(data), { status });
+  const json =
+    (data: unknown, status = 200) =>
+    () =>
+      new Response(JSON.stringify(data), { status });
   const API = "https://api.github.com/repos/daintreehq/daintree";
   const request: OpenPullRequestRequest = {
     branch: "plugin-catalog/acme.widget-1.1.0",
@@ -578,7 +604,11 @@ describe("RestCatalogGitHub", () => {
     body: "body",
     labels: [LABELS.catalog, LABELS.quickMerge],
   };
-  const pr = { number: 9, html_url: "https://github.com/daintreehq/daintree/pull/9", state: "open" };
+  const pr = {
+    number: 9,
+    html_url: "https://github.com/daintreehq/daintree/pull/9",
+    state: "open",
+  };
 
   it("creates the branch, commits the catalog, opens the pull request and labels it", async () => {
     const { calls, fetch } = fakeApi([
@@ -654,7 +684,10 @@ describe("RestCatalogGitHub", () => {
 
   it("reads a catalog raw at a ref, and a missing one as none", async () => {
     const { calls, fetch } = fakeApi([
-      [`GET ${API}/contents/plugins/catalog.json?ref=refs%2Fpull%2F7%2Fhead`, () => new Response("{}")],
+      [
+        `GET ${API}/contents/plugins/catalog.json?ref=refs%2Fpull%2F7%2Fhead`,
+        () => new Response("{}"),
+      ],
     ]);
     const github = new RestCatalogGitHub("daintreehq/daintree", undefined, fetch);
     expect(await github.catalogAt("refs/pull/7/head")).toBe("{}");

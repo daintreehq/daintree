@@ -341,7 +341,11 @@ export function describeProposal(
   if (removed.length > 0) {
     lines.push("", `Capabilities no longer declared: ${capabilityList(removed)}.`);
   }
-  if (added.length === 0 && removed.length === 0 && entry.capabilities.join() !== previous.capabilities.join()) {
+  if (
+    added.length === 0 &&
+    removed.length === 0 &&
+    entry.capabilities.join() !== previous.capabilities.join()
+  ) {
     lines.push("", "The same capabilities, in a different order.");
   }
   lines.push(
@@ -350,7 +354,10 @@ export function describeProposal(
     "",
     "A person merges this either way: a quick merge means the release matches what was reviewed before, not that anyone has looked at it. Review confirms the source and the bytes, never that the code is safe."
   );
-  const labels = [LABELS.catalog, needsPerson.length === 0 ? LABELS.quickMerge : LABELS.needsPerson];
+  const labels = [
+    LABELS.catalog,
+    needsPerson.length === 0 ? LABELS.quickMerge : LABELS.needsPerson,
+  ];
   return { title, body: `${lines.join("\n")}\n`, labels };
 }
 
@@ -472,7 +479,9 @@ export async function proposeCatalogUpdates({
             continue;
           }
           if (!isCanonicalSemver(inspected.version)) {
-            warnings.push(`${what}: its manifest version "${inspected.version}" isn't canonical semver`);
+            warnings.push(
+              `${what}: its manifest version "${inspected.version}" isn't canonical semver`
+            );
             continue;
           }
           if (semver.prerelease(inspected.version)) {
@@ -539,7 +548,9 @@ export async function proposeCatalogUpdates({
     const distinct = new Map(group.map((c) => [`${c.entry.url} ${c.entry.sha256}`, c]));
     if (distinct.size > 1) {
       const urls = [...distinct.values()].map((c) => c.entry.url).join(", ");
-      warnings.push(`${key}: ${distinct.size} different assets claim it (${urls}), so none is proposed`);
+      warnings.push(
+        `${key}: ${distinct.size} different assets claim it (${urls}), so none is proposed`
+      );
       continue;
     }
     const { entry, release, what } = group[0];
@@ -568,7 +579,10 @@ export async function proposeCatalogUpdates({
     }
     if (existing) {
       const state = existing.merged_at ? "merged" : existing.state;
-      skipped.push({ what, reason: `pull request #${existing.number} (${state}) already proposed ${key}` });
+      skipped.push({
+        what,
+        reason: `pull request #${existing.number} (${state}) already proposed ${key}`,
+      });
       continue;
     }
 
