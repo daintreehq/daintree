@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/daintreehq/daintree/blob/develop/plugins/catalog.schema.json",
+  "title": "Daintree community plugin catalog",
+  "description": "plugins/catalog.json, published to https://updates.daintree.org/plugins/catalog.json. Each entry pins one reviewed release of a community plugin. This schema describes the shape; Daintree's own parser (electron/services/plugin/pluginCatalogSchema.ts) is what the app enforces, and it also requires that url sits in the entry's repo, matching owner and name without regard to case.",
+  "type": "object",
+  "required": ["entries"],
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "description": "Every reviewed release, not just the latest. (id, version) is unique.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["id", "repo", "version", "url", "sha256", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The archive's manifest.name: a scoped publisher.name, outside the daintree.* namespace reserved for builtins.",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(?!daintree\\.)[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "repo": {
+          "description": "The GitHub repository the release comes from, https://github.com/{owner}/{repo}.",
+          "type": "string",
+          "pattern": "^https://github\\.com/(?!\\.\\.?/)[A-Za-z0-9._-]+/(?!\\.\\.?$)[A-Za-z0-9._-]+$"
+        },
+        "version": {
+          "description": "The archive's manifest.version, as canonical semver with no leading v.",
+          "type": "string",
+          "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?$"
+        },
+        "url": {
+          "description": "A versioned .dntr asset of a release in repo: https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}.dntr. Never releases/latest/download, and never a tag named latest.",
+          "type": "string",
+          "pattern": "^https://github\\.com/(?!\\.\\.?/)[A-Za-z0-9._-]+/(?!\\.\\.?/)[A-Za-z0-9._-]+/releases/download/(?![Ll][Aa][Tt][Ee][Ss][Tt]/)(?!\\.\\.?/)[A-Za-z0-9._~!$&'()*+,;=:@-]+/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})+\\.dntr$"
+        },
+        "sha256": {
+          "description": "The SHA-256 of the bytes at url when the entry was reviewed, as 64 lowercase hex digits.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capabilities": {
+          "description": "The archive manifest's capabilities at review time, in the manifest's order. Shown to users, never granted.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "maxLength": 128, "pattern": "^\\P{Cc}+$" }
+        }
+      }
+    }
+  }
+}
