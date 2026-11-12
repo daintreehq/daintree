@@ -67,7 +67,7 @@ Each entry is one reviewed release:
 
 ### Reading the catalog
 
-**Shipped** in the app, ahead of the catalog itself.
+**Shipped** in the app.
 
 - The file is `{ "entries": [ ... ] }`. Unknown fields are ignored, and so are capability names the reading build doesn't know: the list is shown, never granted.
 - An entry is valid when `id` is a scoped plugin name outside `daintree.*`, `version` is canonical semver, `repo` is `https://github.com/{owner}/{repo}`, `url` is a `.dntr` asset under that repository's `releases/download/{tag}/` (never `releases/latest/download`, never a tag named `latest`), and `sha256` is 64 hex digits.

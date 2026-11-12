@@ -73,6 +73,6 @@ Report a listed plugin by opening an issue on [`daintreehq/daintree`](https://gi
 
 ### Delisting and the blocklist
 
-Removing an entry stops new installs and new updates of that release through the catalog, and an update check of a catalog install says it was delisted. It does nothing to copies already installed: they keep running.
+Removing an entry stops new installs and new updates of that release through the catalog. An update check of a catalog install offers a newer listed release if there is one, and otherwise says the plugin was delisted. Either way, removing an entry does nothing to copies already installed: they keep running.
 
 The blocklist is what reaches installed copies. A compromised or malicious release is removed from the catalog and also added to `blocklist.json` by name and version range, which makes Daintree refuse to load it and unload running copies when a refreshed list arrives. [Architecture → Signing and kill-switch](../docs/plugins/architecture.md#signing-and-kill-switch) has the entry format and when a new entry takes effect.

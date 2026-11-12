@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import Ajv2020 from "ajv/dist/2020.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
 
 import { PLUGIN_CATALOG_MAX_BYTES } from "../../../../shared/config/pluginCatalog.js";
 import { parsePluginCatalog } from "../pluginCatalogSchema.js";
@@ -48,6 +48,11 @@ const AGREEMENT: Array<[string, Record<string, unknown>, boolean]> = [
   ["a hyphenated id", { ...ENTRY, id: "acme-labs.widget-pro" }, true],
   ["a tag with an @", { ...ENTRY, url: `${RELEASES}/download/widget@1.2.3/widget.dntr` }, true],
   ["a percent-escaped tag", { ...ENTRY, url: `${RELEASES}/download/widget%401.2.3/w.dntr` }, true],
+  [
+    "brackets in the asset name",
+    { ...ENTRY, url: `${RELEASES}/download/v1/widget[linux].dntr` },
+    true,
+  ],
   ["a dot-dot tag", { ...ENTRY, url: `${RELEASES}/download/../widget.dntr` }, false],
   ["an escaped dot-dot tag", { ...ENTRY, url: `${RELEASES}/download/%2e%2E/widget.dntr` }, false],
   ["an unscoped id", { ...ENTRY, id: "widget" }, false],
@@ -57,6 +62,7 @@ const AGREEMENT: Array<[string, Record<string, unknown>, boolean]> = [
   ["a leading v", { ...ENTRY, version: "v1.2.3" }, false],
   ["a two-part version", { ...ENTRY, version: "1.2" }, false],
   ["a zero-padded version", { ...ENTRY, version: "01.2.3" }, false],
+  ["a version over 256 characters", { ...ENTRY, version: `1.2.3+${"a".repeat(251)}` }, false],
   ["a repo that isn't GitHub", { ...ENTRY, repo: "https://gitlab.com/acme/widget-plugin" }, false],
   ["a repo with a trailing slash", { ...ENTRY, repo: `${ENTRY.repo}/` }, false],
   ["a repo over plain http", { ...ENTRY, repo: "http://github.com/acme/widget-plugin" }, false],
@@ -114,12 +120,15 @@ describe("catalog JSON Schema", () => {
     expect(parsesExactly({ entries: [{ ...ENTRY, url: sameRepoOtherCase }] })).toBe(true);
   });
 
-  it("leaves a percent-escaped latest tag and repeated releases to the production parser", () => {
+  it("leaves an escaped latest tag, an unsafe number and repeats to the production parser", () => {
     const escapedLatest = { ...ENTRY, url: `${RELEASES}/download/%6catest/widget.dntr` };
     expect(validateSchema({ entries: [escapedLatest] })).toBe(true);
     expect(parsePluginCatalog({ entries: [escapedLatest] }).ok).toBe(false);
     expect(validateSchema({ entries: [ENTRY, ENTRY] })).toBe(true);
     expect(parsePluginCatalog({ entries: [ENTRY, ENTRY] }).ok).toBe(false);
+    const unsafeNumber = { ...ENTRY, version: "9007199254740992.0.0" };
+    expect(validateSchema({ entries: [unsafeNumber] })).toBe(true);
+    expect(parsePluginCatalog({ entries: [unsafeNumber] }).ok).toBe(false);
   });
 
   it("compares documents by structure, not key order", () => {

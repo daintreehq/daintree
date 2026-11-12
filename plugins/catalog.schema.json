@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/daintreehq/daintree/blob/develop/plugins/catalog.schema.json",
   "title": "Daintree community plugin catalog",
-  "description": "plugins/catalog.json, published to https://updates.daintree.org/plugins/catalog.json. Each entry pins one reviewed release of a community plugin. This schema describes the shape; Daintree's own parser (electron/services/plugin/pluginCatalogSchema.ts) is what the app enforces, and it also requires what JSON Schema can't express: url sits in the entry's repo (owner and name compared without regard to case), a percent-escaped tag doesn't decode to latest, every URL is spelled the way a WHATWG URL parser prints it, and (id, version) is unique.",
+  "description": "plugins/catalog.json, published to https://updates.daintree.org/plugins/catalog.json. Each entry pins one reviewed release of a community plugin. This schema describes the shape; Daintree's own parser (electron/services/plugin/pluginCatalogSchema.ts) is what the app enforces, and it also requires what JSON Schema can't express: url sits in the entry's repo (owner and name compared without regard to case), a percent-escaped tag doesn't decode to latest, every URL is spelled the way a WHATWG URL parser prints it, no version number is above 2^53 - 1, and (id, version) is unique.",
   "type": "object",
   "required": ["entries"],
   "additionalProperties": false,
@@ -33,12 +33,13 @@
         "version": {
           "description": "The archive's manifest.version, as canonical semver with no leading v.",
           "type": "string",
+          "maxLength": 256,
           "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?$"
         },
         "url": {
           "description": "A versioned .dntr asset of a release in repo: https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}.dntr. Never releases/latest/download, and never a tag named latest.",
           "type": "string",
-          "pattern": "^https://github\\.com/(?!\\.\\.?/)[A-Za-z0-9._-]+/(?!\\.\\.?/)[A-Za-z0-9._-]+/releases/download/(?![Ll][Aa][Tt][Ee][Ss][Tt]/)(?!(?:\\.|%2[Ee]){1,2}/)(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})+/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})+\\.dntr$"
+          "pattern": "^https://github\\.com/(?!\\.\\.?/)[A-Za-z0-9._-]+/(?!\\.\\.?/)[A-Za-z0-9._-]+/releases/download/(?![Ll][Aa][Tt][Ee][Ss][Tt]/)(?!(?:\\.|%2[Ee]){1,2}/)(?:[A-Za-z0-9._~!$&'()*+,;=:@|\\[\\]-]|%[0-9A-Fa-f]{2})+/(?:[A-Za-z0-9._~!$&'()*+,;=:@|\\[\\]-]|%[0-9A-Fa-f]{2})+\\.dntr$"
         },
         "sha256": {
           "description": "The SHA-256 of the bytes at url when the entry was reviewed, as 64 lowercase hex digits.",

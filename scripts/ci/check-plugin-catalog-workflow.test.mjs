@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { load } from "js-yaml";
@@ -46,7 +48,51 @@ describe("ci.yml plugin-catalog job", () => {
     expect(check.run).toBe('npx tsx scripts/ci/check-plugin-catalog.ts --base "${BASE_SHA}"');
   });
 
-  it("can't pass on a failed check, and holds no secrets", () => {
+  it("sets its outputs from the diff it runs", () => {
+    // Runs the step's own script in a repository whose HEAD has the base as its
+    // first parent, the shape of a pull request's merge commit.
+    const outputs = (changeCatalog) => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "plugin-catalog-job-"));
+      try {
+        const git = (...args) =>
+          execFileSync("git", ["-c", "user.email=ci@example.test", "-c", "user.name=CI", ...args], {
+            cwd: dir,
+            encoding: "utf8",
+          }).trim();
+        git("init", "-q");
+        mkdirSync(path.join(dir, "plugins"));
+        writeFileSync(path.join(dir, CATALOG_FILE), '{ "entries": [] }\n');
+        git("add", "-A");
+        git("commit", "-q", "-m", "base");
+        const base = git("rev-parse", "HEAD");
+        const changed = changeCatalog ? CATALOG_FILE : "README.md";
+        writeFileSync(path.join(dir, changed), '{ "entries": [], "x": 1 }\n');
+        git("add", "-A");
+        git("commit", "-q", "-m", "change");
+        const outputFile = path.join(dir, "github-output");
+        writeFileSync(outputFile, "");
+        execFileSync("bash", ["-c", step("Find catalog changes").run], {
+          cwd: dir,
+          env: { ...process.env, GITHUB_OUTPUT: outputFile },
+          stdio: "ignore",
+        });
+        const lines = readFileSync(outputFile, "utf8").trim().split("\n");
+        return { base, values: Object.fromEntries(lines.map((line) => line.split("="))) };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    const changed = outputs(true);
+    expect(changed.values).toEqual({ base: changed.base, changed: "true" });
+    const unchanged = outputs(false);
+    expect(unchanged.values).toEqual({ base: unchanged.base, changed: "false" });
+  });
+
+  it("can't skip the diff or pass on a failed check, and holds no secrets", () => {
+    expect(steps.find((s) => s.uses?.startsWith("actions/checkout@")).if).toBeUndefined();
+    expect(step("Find catalog changes").if).toBeUndefined();
+    expect(job["continue-on-error"]).toBeUndefined();
     for (const s of steps) expect(s["continue-on-error"], s.name).toBeUndefined();
     expect(JSON.stringify(job)).not.toContain("secrets.");
     expect(workflow.permissions).toEqual({ contents: "read" });

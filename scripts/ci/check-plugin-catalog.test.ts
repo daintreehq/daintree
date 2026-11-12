@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -12,6 +13,7 @@ import { MAX_DNTR_BYTES } from "../../electron/utils/pluginArchiveConstants.js";
 import {
   changedEntries,
   checkCatalog,
+  checkEntry,
   entriesNeedingPerson,
   escapeAnnotation,
 } from "./check-plugin-catalog.js";
@@ -90,6 +92,7 @@ describe("changedEntries", () => {
 
   it("ignores reordering and removals", () => {
     const base = [entry("1.0.0"), entry("1.1.0")];
+    expect(changedEntries(base, [base[1], base[0]])).toEqual([]);
     expect(changedEntries(base, [base[1]])).toEqual([]);
   });
 });
@@ -157,6 +160,30 @@ describe("checkCatalog", () => {
       []
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("downloads a listed release again when its listing changed in place", async () => {
+    const real = entry("1.0.0");
+    const unchanged = entry("1.1.0");
+    const stale = { ...real, sha256: "a".repeat(64) };
+
+    const fetch = servingFetch();
+    const repaired = await checkCatalog(
+      { entries: [real, unchanged] },
+      { entries: [stale, unchanged] },
+      { fetch }
+    );
+    expect(repaired.errors).toEqual([]);
+    expect(repaired.checked).toEqual(["acme.widget@1.0.0"]);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([assetUrl("1.0.0")]);
+
+    const swapped = await checkCatalog(
+      { entries: [stale, unchanged] },
+      { entries: [real, unchanged] },
+      { fetch: servingFetch() }
+    );
+    expect(swapped.errors).toHaveLength(1);
+    expect(swapped.errors[0]).toMatch(/^acme\.widget@1\.0\.0: the asset's SHA-256 is /);
   });
 
   it("downloads every entry when there is no base", async () => {
@@ -254,7 +281,7 @@ describe("checkCatalog", () => {
       .mockResolvedValueOnce(new Response("", { status: 429 }))
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce(new Response(new Uint8Array(bytes)));
-    const sleep = vi.fn(noSleep);
+    const sleep = vi.fn((_ms: number) => Promise.resolve());
     const { errors } = await checkCatalog({ entries: [entry("1.0.0")] }, undefined, {
       fetch,
       sleep,
@@ -290,45 +317,72 @@ describe("checkCatalog", () => {
     expect(errors[0]).toMatch(/timeout|aborted/i);
   });
 
-  it("refuses an asset over the installer's size cap, declared or streamed", async () => {
+  it("times out a download whose body stalls after its headers", async () => {
+    const stalled = () =>
+      new Response(new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => {}) }));
+    const fetch = servingFetch({ [assetUrl("1.0.0")]: stalled });
+    const { errors } = await checkCatalog({ entries: [entry("1.0.0")] }, undefined, {
+      fetch,
+      timeoutMs: 20,
+      attempts: 1,
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/: timed out: /);
+  });
+
+  it("refuses an asset over the installer's size cap, declared, streamed or misdeclared", async () => {
     const declared = () =>
       new Response("x", { headers: { "content-length": String(MAX_DNTR_BYTES + 1) } });
     const chunk = new Uint8Array(1024 * 1024);
-    let sent = 0;
-    const streamed = () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            sent += chunk.byteLength;
-            controller.enqueue(chunk);
-            if (sent > MAX_DNTR_BYTES + chunk.byteLength) controller.close();
-          },
-        })
-      );
-    const fetch = servingFetch({ [assetUrl("1.0.0")]: declared, [assetUrl("1.1.0")]: streamed });
+    const oversizedStream = () => {
+      let sent = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          sent += chunk.byteLength;
+          controller.enqueue(chunk);
+          if (sent > MAX_DNTR_BYTES + chunk.byteLength) controller.close();
+        },
+      });
+    };
+    const streamed = () => new Response(oversizedStream());
+    const misdeclared = () =>
+      new Response(oversizedStream(), { headers: { "content-length": "1" } });
+    const fetch = servingFetch({
+      [assetUrl("1.0.0")]: declared,
+      [assetUrl("1.1.0")]: streamed,
+      [assetUrl("2.0.0")]: misdeclared,
+    });
     const { errors } = await checkCatalog(
-      { entries: [entry("1.0.0"), entry("1.1.0")] },
+      { entries: [entry("1.0.0"), entry("1.1.0"), entry("2.0.0")] },
       undefined,
-      {
-        fetch,
-        sleep: noSleep,
-      }
+      { fetch, sleep: noSleep }
     );
-    expect(errors).toHaveLength(2);
+    expect(errors).toHaveLength(3);
     expect(errors[0]).toMatch(/over the \d+ byte limit$/);
     expect(errors[1]).toMatch(/exceeds the \d+ byte limit$/);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(errors[2]).toMatch(/exceeds the \d+ byte limit$/);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("leaves no download behind", async () => {
-    const before = (await readdir(os.tmpdir())).filter((name) =>
-      name.startsWith("plugin-catalog-")
-    );
+    const tmpRoot = await mkdtemp(path.join(tmpDir, "root-"));
     await checkCatalog({ entries: [entry("1.0.0"), entry("4.0.0")] }, undefined, {
       fetch: servingFetch(),
+      tmpRoot,
     });
-    const after = (await readdir(os.tmpdir())).filter((name) => name.startsWith("plugin-catalog-"));
-    expect(after).toEqual(before);
+    expect(await readdir(tmpRoot)).toEqual([]);
+  });
+});
+
+describe("checkEntry", () => {
+  it("removes its download whether the entry passes, fails, or never arrives", async () => {
+    const workDir = await mkdtemp(path.join(tmpDir, "work-"));
+    const fetch = servingFetch({ [assetUrl("1.1.0")]: () => new Response("", { status: 404 }) });
+    const mismatched = entry("2.0.0", { sha256: "b".repeat(64) });
+    for (const listed of [entry("1.0.0"), mismatched, entry("1.1.0")]) {
+      await checkEntry(listed, workDir, { fetch, sleep: noSleep });
+      expect(await readdir(workDir), listed.version).toEqual([]);
+    }
   });
 });
 
@@ -340,32 +394,42 @@ describe("escapeAnnotation", () => {
 
 describe("command line", () => {
   const script = path.join(repoRoot, "scripts/ci/check-plugin-catalog.ts");
-  const tsx = path.join(repoRoot, "node_modules/.bin/tsx");
+  const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
   let gitDir: string;
 
-  const run = (...args: string[]) =>
-    spawnSync(tsx, [script, ...args], {
+  const run = (...args: string[]) => {
+    const result = spawnSync(process.execPath, [tsxCli, script, ...args], {
       cwd: gitDir,
       encoding: "utf8",
       env: { ...process.env, GITHUB_STEP_SUMMARY: "" },
     });
+    expect(result.error).toBeUndefined();
+    return result;
+  };
 
   beforeAll(async () => {
     gitDir = await mkdtemp(path.join(os.tmpdir(), "check-plugin-catalog-git-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd: gitDir, stdio: "ignore" });
+    const commit = (message: string) =>
+      git(
+        "-c",
+        "user.email=ci@example.test",
+        "-c",
+        "user.name=CI",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        message
+      );
     git("init", "-q");
-    git(
-      "-c",
-      "user.email=ci@example.test",
-      "-c",
-      "user.name=CI",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "empty"
-    );
+    commit("no catalog");
+    git("tag", "no-catalog");
     await mkdir(path.join(gitDir, "plugins"));
+    await writeFile(path.join(gitDir, "plugins/catalog.json"), '{ "entries": ');
+    git("add", "plugins/catalog.json");
+    commit("broken catalog");
+    git("tag", "broken-catalog");
     await writeFile(path.join(gitDir, "plugins/catalog.json"), '{ "entries": [] }\n');
   });
 
@@ -374,10 +438,18 @@ describe("command line", () => {
   });
 
   it("treats a base commit without a catalog as an empty one", () => {
-    const result = run("--base", "HEAD");
+    const result = run("--base", "no-catalog");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("plugins/catalog.json passed, 0 added or changed");
+  });
+
+  it("lets a pull request repair a base catalog that isn't JSON, with a warning", () => {
+    const result = run("--base", "broken-catalog");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /^::warning file=plugins\/catalog\.json::the base catalog doesn't parse/m
+    );
   });
 
   it("fails when the base commit can't be read", () => {

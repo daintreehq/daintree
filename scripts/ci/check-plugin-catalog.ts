@@ -30,6 +30,7 @@ import {
   type PluginCatalogEntry,
 } from "../../electron/services/plugin/pluginCatalogSchema.js";
 import { MAX_DNTR_BYTES } from "../../electron/utils/pluginArchiveConstants.js";
+import { PLUGIN_CATALOG_MAX_BYTES } from "../../shared/config/pluginCatalog.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
 
 export const CATALOG_FILE = "plugins/catalog.json";
@@ -44,6 +45,11 @@ export interface DownloadOptions {
   readonly timeoutMs?: number;
   readonly attempts?: number;
   readonly sleep?: (ms: number) => Promise<unknown>;
+}
+
+export interface CheckOptions extends DownloadOptions {
+  /** Where the downloads' temporary directory is made. */
+  readonly tmpRoot?: string;
 }
 
 export interface ReviewNote {
@@ -268,7 +274,7 @@ function manifestMismatches(
 export async function checkCatalog(
   head: unknown,
   base: unknown,
-  download: DownloadOptions = {}
+  { tmpRoot = os.tmpdir(), ...download }: CheckOptions = {}
 ): Promise<CatalogCheckResult> {
   const parsedHead = parsePluginCatalog(head);
   if (!parsedHead.ok) {
@@ -282,7 +288,7 @@ export async function checkCatalog(
       : [];
   const changed = changedEntries(baseEntries, parsedHead.catalog.entries);
 
-  const workDir = await mkdtemp(path.join(os.tmpdir(), "plugin-catalog-"));
+  const workDir = await mkdtemp(path.join(tmpRoot, "plugin-catalog-check-"));
   const errors: string[] = [];
   try {
     for (const entry of changed) {
@@ -299,20 +305,30 @@ export async function checkCatalog(
   };
 }
 
-/** The catalog at `ref`, or `undefined` when that commit has no catalog. */
+/**
+ * The catalog at `ref`, or `undefined` when that commit has no catalog. A
+ * catalog that isn't JSON comes back as its text, which `checkCatalog` treats
+ * like any other base that doesn't parse, so a pull request can repair it.
+ */
 function readCatalogAt(ref: string, file: string): unknown {
   let raw: string;
   try {
     raw = execFileSync("git", ["show", `${ref}:${file}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      // The default 1 MiB would refuse a catalog the client still reads.
+      maxBuffer: PLUGIN_CATALOG_MAX_BYTES * 4,
     });
   } catch (err) {
     const stderr = String((err as { stderr?: unknown }).stderr ?? "");
     if (/does not exist|exists on disk, but not in/.test(stderr)) return undefined;
     throw new Error(`git show ${ref}:${file} failed: ${stderr.trim() || String(err)}`);
   }
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function argValue(argv: readonly string[], flag: string): string | undefined {

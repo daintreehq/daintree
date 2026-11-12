@@ -178,6 +178,22 @@ describe("verifyListOnce", () => {
     expect(result.error).toContain("does not match");
   });
 
+  it("catches a changed field inside an entry, not just a changed entry count", async () => {
+    // The edge still serving the previous version of an entry: an older
+    // blocklist range, or a catalog entry's previous digest.
+    const catalogEntry = { id: "acme.widget", version: "1.0.0", sha256: "a".repeat(64) };
+    const pairs = [
+      [LIST, { entries: [{ ...LIST.entries[0], ranges: ["<=1.2.2"] }] }],
+      [{ entries: [catalogEntry] }, { entries: [{ ...catalogEntry, sha256: "b".repeat(64) }] }],
+    ];
+    for (const [committed, served] of pairs) {
+      await writeFile(filePath, JSON.stringify(committed));
+      const fetchImpl = vi.fn().mockResolvedValue(makeResponse({ body: JSON.stringify(served) }));
+      const result = await verifyListOnce(REMOTE_URL, filePath, fetchImpl);
+      expect(result).toMatchObject({ ok: false, transient: true });
+    }
+  });
+
   it("fails permanently when the committed file can't be read", async () => {
     const fetchImpl = vi.fn();
     const result = await verifyListOnce(REMOTE_URL, path.join(dir, "missing.json"), fetchImpl);
