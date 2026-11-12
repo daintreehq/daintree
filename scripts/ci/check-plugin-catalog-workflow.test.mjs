@@ -16,6 +16,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const workflow = load(readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
 const job = workflow.jobs["plugin-catalog"];
 const steps = job.steps;
+// A developer's global signing settings would otherwise apply to the fixtures.
+const GIT_FIXTURE_CONFIG = [
+  "user.email=ci@example.test",
+  "user.name=CI",
+  "commit.gpgsign=false",
+  "tag.gpgsign=false",
+].flatMap((setting) => ["-c", setting]);
 const step = (name) => {
   const found = steps.find((s) => s.name === name);
   expect(found, name).toBeDefined();
@@ -55,7 +62,7 @@ describe("ci.yml plugin-catalog job", () => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "plugin-catalog-job-"));
       try {
         const git = (...args) =>
-          execFileSync("git", ["-c", "user.email=ci@example.test", "-c", "user.name=CI", ...args], {
+          execFileSync("git", [...GIT_FIXTURE_CONFIG, ...args], {
             cwd: dir,
             encoding: "utf8",
           }).trim();

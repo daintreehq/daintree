@@ -64,6 +64,13 @@ function servingFetch(routes: Record<string, () => Response> = {}) {
 
 const noSleep = () => Promise.resolve();
 
+const GIT_FIXTURE_CONFIG = [
+  "user.email=ci@example.test",
+  "user.name=CI",
+  "commit.gpgsign=false",
+  "tag.gpgsign=false",
+].flatMap((setting) => ["-c", setting]);
+
 beforeAll(async () => {
   tmpDir = await mkdtemp(path.join(os.tmpdir(), "check-plugin-catalog-test-"));
   const capabilities = ["fs:user-data-read", "mcp:expose"];
@@ -409,28 +416,25 @@ describe("command line", () => {
 
   beforeAll(async () => {
     gitDir = await mkdtemp(path.join(os.tmpdir(), "check-plugin-catalog-git-"));
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: gitDir, stdio: "ignore" });
-    const commit = (message: string) =>
-      git(
-        "-c",
-        "user.email=ci@example.test",
-        "-c",
-        "user.name=CI",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        message
-      );
+    // A developer's global signing settings would otherwise apply here.
+    const git = (...args: string[]) =>
+      execFileSync("git", [...GIT_FIXTURE_CONFIG, ...args], { cwd: gitDir, stdio: "ignore" });
+    const commit = (message: string) => git("commit", "-q", "--allow-empty", "-m", message);
+    const catalogFile = path.join(gitDir, "plugins/catalog.json");
     git("init", "-q");
     commit("no catalog");
     git("tag", "no-catalog");
     await mkdir(path.join(gitDir, "plugins"));
-    await writeFile(path.join(gitDir, "plugins/catalog.json"), '{ "entries": ');
+    await writeFile(catalogFile, '{ "entries": ');
     git("add", "plugins/catalog.json");
     commit("broken catalog");
     git("tag", "broken-catalog");
-    await writeFile(path.join(gitDir, "plugins/catalog.json"), '{ "entries": [] }\n');
+    // Over git's default 1 MiB output buffer, under the client's 4 MiB cap.
+    await writeFile(catalogFile, `{ "entries": [] }${" ".repeat(2 * 1024 * 1024)}\n`);
+    git("add", "plugins/catalog.json");
+    commit("large catalog");
+    git("tag", "large-catalog");
+    await writeFile(catalogFile, '{ "entries": [] }\n');
   });
 
   afterAll(async () => {
@@ -442,6 +446,13 @@ describe("command line", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("plugins/catalog.json passed, 0 added or changed");
+  });
+
+  it("reads a base catalog larger than git's default output buffer", () => {
+    const result = run("--base", "large-catalog");
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("::warning");
   });
 
   it("lets a pull request repair a base catalog that isn't JSON, with a warning", () => {
