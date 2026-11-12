@@ -47,7 +47,12 @@ import {
 } from "./relayConnection.js";
 import type { SetupDiagnostics } from "./setupDiagnostic.js";
 import { createTrustedPolicy } from "./workflowGates.js";
-import { isDiskSpaceFault, StorageRecovery } from "./storageRecovery.js";
+import {
+  BUSY_RECOVERY,
+  DISK_FULL_RECOVERY,
+  isDiskSpaceFault,
+  StorageRecovery,
+} from "./storageRecovery.js";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
 
@@ -179,9 +184,10 @@ export interface DecisionsServiceOptions {
    */
   checkDiskSpace?: () => Promise<boolean | null>;
   /**
-   * The store is about to be replaced after a disk-space fault (#16605).
-   * Anything holding the old store or its connection (a running setup check)
-   * lets go now; it runs inside the service's queue, so it must not wait on it.
+   * The store is about to be replaced after a disk-space fault (#16605) or a
+   * busy database (#16840). Anything holding the old store or its connection
+   * (a running setup check) lets go now; it runs inside the service's queue,
+   * so it must not wait on it.
    */
   onStoreReplacing?: () => void;
 }
@@ -247,7 +253,9 @@ export class DecisionsService {
   /** When the attached store stopped writing; null while it writes. */
   private faultedAt: number | null = null;
   /** Replaces a store the database ran out of room for (#16605). */
-  private readonly storageRecovery: StorageRecovery;
+  private readonly diskRecovery: StorageRecovery;
+  /** Replaces a store the database was busy for (#16840), on a budget of its own. */
+  private readonly busyRecovery: StorageRecovery;
   private readonly onStoreReplacing: () => void;
   /** Connections stopped but still settling: the store closes only after them. */
   private readonly stopping = new Set<Promise<void>>();
@@ -317,9 +325,14 @@ export class DecisionsService {
     this.deleteModelFiles = options.deleteModelFiles ?? deleteDecisionModelFiles;
     this.onStoreReplacing = options.onStoreReplacing ?? (() => {});
     const checkDiskSpace = options.checkDiskSpace ?? (async () => null);
-    this.storageRecovery = new StorageRecovery({
+    this.diskRecovery = new StorageRecovery({
+      policy: DISK_FULL_RECOVERY,
       checkDiskSpace,
-      restart: () => this.restartStore(),
+      restart: () => this.restartStore("disk-space"),
+    });
+    this.busyRecovery = new StorageRecovery({
+      policy: BUSY_RECOVERY,
+      restart: () => this.restartStore("busy"),
     });
   }
 
@@ -555,32 +568,47 @@ export class DecisionsService {
    * space is replaced. Resolves true when it was.
    */
   diskSpaceRecovered(): Promise<boolean> {
-    return this.restartStore();
+    return this.restartStore("disk-space");
   }
 
   /**
    * Replaces the lifetime's store, and everything bound to it, once it has
-   * stopped for disk space and writes are allowed again (#16605): as turning
+   * stopped for the fault `cause` covers: disk space, with writes allowed
+   * again (#16605), or the database being busy (#16840). As turning
    * Decisions off and on would, without showing it off meanwhile. The old
    * store never writes again, so a library step it refused can't be recorded
    * as done after it; the fresh one reads on from the last commit, and the
    * connection that stopped on the old one is made again. The settings,
    * role, policy and keys carry on, and the panes keep what they show until
    * the fresh store's first read replaces it. True when it was replaced.
+   *
+   * Each cause replaces only its own fault, so a disk-space exit can't spend
+   * a busy store's budget. A busy store is replaced even while disk space is
+   * critical: the fresh one is refused its first write for disk pressure,
+   * and the monitor's exit replaces it from there. Only the store attached
+   * when it was asked is replaced: a stop and start queued ahead of it may
+   * have opened another, which its own fault restarts on its own budget.
    */
-  private restartStore(): Promise<boolean> {
+  private restartStore(cause: "disk-space" | "busy"): Promise<boolean> {
+    const asked = this.store;
     return this.enqueue(async () => {
       const store = this.store;
       const reason = store?.faultReason() ?? null;
-      if (this.disposed || this.settings === null || store === null) return false;
-      if (!isDiskSpaceFault(reason) || getWritesSuppressed()) return false;
+      if (this.disposed || this.settings === null || store === null || store !== asked) {
+        return false;
+      }
+      const covered =
+        cause === "busy"
+          ? reason === "storage-busy"
+          : isDiskSpaceFault(reason) && !getWritesSuppressed();
+      if (!covered) return false;
       const keyFilePath = this.keyFilePath();
       try {
         this.onStoreReplacing();
       } catch (error) {
         console.warn("[Decisions] Letting go of the old store failed:", error);
       }
-      logInfo("[Decisions] Opening a fresh local store after it stopped for disk space", {
+      logInfo("[Decisions] Opening a fresh local store after it stopped writing", {
         reason,
         ...(this.faultedAt !== null ? { stoppedForMs: Date.now() - this.faultedAt } : {}),
       });
@@ -600,7 +628,8 @@ export class DecisionsService {
         opened = await this.openStore(() => this.disposed);
       } catch (error) {
         this.storeFailed = true;
-        logWarn("[Decisions] The local store didn't reopen after disk space came back", {
+        logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
+          reason,
           error: error instanceof Error ? error.name : "error",
         });
         this.reconcileConnection();
@@ -787,7 +816,8 @@ export class DecisionsService {
   /** App shutdown: ends the lifetime for good, and no later start is honoured. */
   dispose(): Promise<void> {
     this.disposed = true;
-    this.storageRecovery.dispose();
+    this.diskRecovery.dispose();
+    this.busyRecovery.dispose();
     return this.enqueue(async () => {
       await this.release(false);
       this.listeners.clear();
@@ -803,6 +833,9 @@ export class DecisionsService {
    * while it closes is cleared too.
    */
   private async release(clearViews: boolean): Promise<void> {
+    // The next lifetime's faults get every restart again.
+    this.diskRecovery.reset();
+    this.busyRecovery.reset();
     // The connection goes first: nothing may reach the store or keys once they close.
     this.paused = true;
     this.dropConnection();
@@ -1025,13 +1058,15 @@ export class DecisionsService {
   /**
    * The attached store stopped writing. One that ran out of room is replaced
    * once there is room; while space is critical, the disk-space monitor's
-   * exit replaces it (`diskSpaceRecovered`). Any other fault stays until the
-   * next start.
+   * exit replaces it (`diskSpaceRecovered`). One the database was busy for is
+   * replaced after a wait. Each gets a few restarts per outage; any other
+   * fault stays until the next start.
    */
   private storeFaulted(store: DaintreeLocalStore, reason: DecisionsStoreUnavailableReason): void {
     if (this.store !== store) return;
     this.faultedAt = Date.now();
-    if (reason === "disk-full") this.storageRecovery.diskFull();
+    if (reason === "disk-full") this.diskRecovery.faulted();
+    else if (reason === "storage-busy") this.busyRecovery.faulted();
   }
 
   /** Lets go of the lifetime's store, and stops feeding the panes from it; the caller closes it. */

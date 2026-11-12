@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import Database from "better-sqlite3";
 import {
   parseAnswers,
@@ -445,11 +447,24 @@ describe("DaintreeLocalStore", () => {
     expect(await store.getMeta("small")).toBeNull();
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
     expect(faults).toEqual(["disk-full"]);
-    // One line, when it stopped, with the cause's code and nothing it was writing.
+    // One line, when it stopped, with the cause's code, where the batch was
+    // (#16840), and nothing it was writing.
     const latched = logWarn.mock.calls.filter(([message]) =>
       String(message).includes("stopped taking writes")
     );
-    expect(latched).toEqual([[expect.any(String), { reason: "disk-full", code: "SQLITE_FULL" }]]);
+    expect(latched).toEqual([
+      [
+        expect.any(String),
+        {
+          reason: "disk-full",
+          code: "SQLITE_FULL",
+          step: "call",
+          writes: true,
+          calls: 1,
+          elapsedMs: expect.any(Number),
+        },
+      ],
+    ]);
     warn.mockRestore();
   });
 
@@ -637,6 +652,7 @@ describe("DaintreeLocalStore ordering and failures", () => {
 
   it("refuses every call in a batch whose commit fails, and stores none of it", async () => {
     const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
     // A deferred foreign key is only checked at COMMIT, after every call ran.
     sqlite.exec(`
       CREATE TABLE commit_probe_parent (id INTEGER PRIMARY KEY);
@@ -656,10 +672,37 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(count(sqlite, "decisions_audit")).toBe(0);
     expect(count(sqlite, "decisions_meta")).toBe(0);
     expect(store.isFaulted()).toBe(true);
+    expect(stopLines()).toEqual([
+      expect.objectContaining({ step: "commit", writes: true, calls: 2 }),
+    ]);
+  });
+
+  it("says a batch that couldn't raise its commit level failed before it began", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
+    const original = sqlite.pragma.bind(sqlite);
+    vi.spyOn(sqlite, "pragma").mockImplementation(((source: string, options?: never) => {
+      if (source === "synchronous = FULL") throw sqliteError("SQLITE_IOERR_WRITE");
+      return original(source, options);
+    }) as typeof sqlite.pragma);
+
+    await expect(store.setMeta("k", "v")).rejects.toMatchObject({ reason: "storage-fault" });
+
+    expect(stopLines()).toEqual([
+      {
+        reason: "storage-fault",
+        code: "SQLITE_IOERR_WRITE",
+        step: "setup",
+        writes: true,
+        calls: 1,
+        elapsedMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("refuses the writes after a storage error in the same batch, with the rest still committing", async () => {
     const store = new DaintreeLocalStore(sqlite);
+    logWarn.mockClear();
     sqlite.function("refuse_with_io_error", () => {
       throw sqliteError("SQLITE_IOERR_WRITE");
     });
@@ -684,6 +727,17 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.getMeta("before")).toBe("1");
     expect(await store.getMeta("after")).toBeNull();
     expect(store.isFaulted()).toBe(true);
+    // The call that failed, in a batch of four that committed (#16840).
+    expect(stopLines()).toEqual([
+      {
+        reason: "storage-fault",
+        code: "SQLITE_IOERR_WRITE",
+        step: "call",
+        writes: true,
+        calls: 4,
+        elapsedMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("stops writing after a batch of reads fails as a whole", async () => {
@@ -1214,3 +1268,178 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
     expect(await store.deletedQuestionIds()).toEqual(new Set());
   });
 });
+
+/**
+ * Another connection holding the database's write lock, as the maintenance
+ * worker's audit-ring write does (#16840). It holds it until `release()`,
+ * then commits after `holdMs` more on its own thread, so the store's thread
+ * can be waiting on the lock meanwhile.
+ */
+async function holdWriteLock(file: string, holdMs: number) {
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const Database = require(workerData.module);
+      const db = new Database(workerData.file);
+      db.pragma("busy_timeout = 5000");
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare(
+        "INSERT INTO decisions_meta (key, value) VALUES ('held', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).run();
+      parentPort.postMessage("locked");
+      parentPort.once("message", () => {
+        setTimeout(() => {
+          db.exec("COMMIT");
+          db.close();
+          parentPort.postMessage("released");
+        }, workerData.holdMs);
+      });
+    `,
+    {
+      eval: true,
+      workerData: {
+        module: createRequire(import.meta.url).resolve("better-sqlite3"),
+        file,
+        holdMs,
+      },
+    }
+  );
+  workers.push(worker);
+  const messages: string[] = [];
+  const next = () =>
+    new Promise<string>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("message", (message: string) => {
+        worker.off("error", reject);
+        messages.push(message);
+        resolve(message);
+      });
+    });
+  expect(await next()).toBe("locked");
+  const released = next();
+  return {
+    release: () => worker.postMessage("release"),
+    released,
+  };
+}
+
+const workers: Worker[] = [];
+
+afterEach(async () => {
+  await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
+});
+
+describe("DaintreeLocalStore under write-lock contention (#16840)", () => {
+  it("waits out another connection's write lock in a batch that reads before it writes", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    store.onFault((reason) => faults.push(reason));
+    const lock = await holdWriteLock(dbPath, 300);
+    releaseAsImmediateBegins(sqlite, lock.release);
+
+    // nextAlias reads the last alias, then writes the next one. Begun deferred,
+    // nothing releases the lock, and its write is refused at once.
+    const alias = store.nextAlias();
+
+    await expect(alias).resolves.toBe(1);
+    expect(await lock.released).toBe("released");
+    expect(faults).toEqual([]);
+    expect(store.isFaulted()).toBe(false);
+    expect(await store.getMeta("held")).toBe("1");
+    expect(await store.getMeta("alias")).toBe("1");
+  });
+
+  it("stops writing once the lock outlasts the busy timeout, saying it failed to begin and how long it waited", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const faults: string[] = [];
+    store.onFault((reason) => faults.push(reason));
+    sqlite.pragma("busy_timeout = 100");
+    logWarn.mockClear();
+    const lock = await holdWriteLock(dbPath, 0);
+
+    await expect(store.nextAlias()).rejects.toMatchObject({ reason: "storage-busy" });
+    lock.release();
+    expect(await lock.released).toBe("released");
+
+    expect(faults).toEqual(["storage-busy"]);
+    const latched = logWarn.mock.calls.filter(([message]) =>
+      String(message).includes("stopped taking writes")
+    );
+    expect(latched).toEqual([
+      [
+        expect.any(String),
+        {
+          reason: "storage-busy",
+          code: "SQLITE_BUSY",
+          step: "begin",
+          writes: true,
+          calls: 1,
+          elapsedMs: expect.any(Number),
+        },
+      ],
+    ]);
+    // Waited out the timeout rather than refused at once.
+    expect((latched[0]![1] as { elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(50);
+    // The lock is gone, but this store still never writes again.
+    await expect(store.setMeta("later", "1")).rejects.toMatchObject({ reason: "storage-busy" });
+    expect(await store.getMeta("alias")).toBeNull();
+  });
+
+  it.each(["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_TIMEOUT"])(
+    "takes %s as the database being busy, and says which call failed",
+    async (code) => {
+      const store = new DaintreeLocalStore(sqlite);
+      logWarn.mockClear();
+      failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError(code));
+
+      await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-busy" });
+
+      expect(store.faultReason()).toBe("storage-busy");
+      expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("stopped taking writes"), {
+        reason: "storage-busy",
+        code,
+        step: "call",
+        writes: false,
+        calls: 1,
+        elapsedMs: expect.any(Number),
+      });
+    }
+  );
+
+  it("keeps a lock held on this connection's own tables a storage fault", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    failNextRead(sqlite, "FROM decisions_meta WHERE key", sqliteError("SQLITE_LOCKED"));
+
+    await expect(store.getMeta("k")).rejects.toMatchObject({ reason: "storage-fault" });
+    expect(store.faultReason()).toBe("storage-fault");
+  });
+});
+
+/** What each "stopped taking writes" line carried, in order. */
+function stopLines(): unknown[] {
+  return logWarn.mock.calls
+    .filter(([message]) => String(message).includes("stopped taking writes"))
+    .map(([, fields]) => fields);
+}
+
+/**
+ * Calls `release` as the store's next batch begins with `BEGIN IMMEDIATE`,
+ * and never for one begun deferred, so the lock is still held when the batch
+ * starts however late it is scheduled.
+ */
+function releaseAsImmediateBegins(db: Database.Database, release: () => void): void {
+  const original = db.transaction.bind(db);
+  vi.spyOn(db, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
+    const transaction = original(fn);
+    if (db.inTransaction) return transaction;
+    return Object.assign((...args: unknown[]) => transaction(...args), {
+      default: transaction.default,
+      deferred: transaction.deferred,
+      exclusive: transaction.exclusive,
+      immediate: (...args: unknown[]) => {
+        release();
+        return transaction.immediate(...args);
+      },
+    });
+  }) as typeof db.transaction);
+}
