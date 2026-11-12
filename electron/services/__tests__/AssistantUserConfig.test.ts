@@ -242,6 +242,37 @@ describe("MCP servers and hooks", () => {
     expect(config.warnings[0]).toContain("codex sessions don't load it");
   });
 
+  it("reads no mcp.json servers for an agent whose launch can't carry them", async () => {
+    await write(globalDir, "mcp.json", mcpJson);
+    await write(globalDir, "hooks.json", hooksJson);
+
+    const agy = await load(true, "antigravity");
+
+    expect(agy.mcpServers).toEqual({});
+    expect(agy.claudeHooks).toBeNull();
+    expect(agy.warnings).toEqual([
+      "mcp.json servers aren't passed to antigravity sessions",
+      "hooks.json is for Claude Code; antigravity sessions don't load it",
+    ]);
+    // The backends that do carry them still get them from the same folder.
+    expect(Object.keys((await load(true, "copilot")).mcpServers)).toEqual(["linear", "docs"]);
+  });
+
+  it("never opens mcp.json for such an agent, so a file that can't be read can't block it", async () => {
+    await fs.mkdir(globalDir, { recursive: true });
+    await fs.writeFile(
+      path.join(globalDir, "mcp.json"),
+      Buffer.concat([
+        Buffer.from('{"mcpServers":{"x":"'),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('"}}'),
+      ])
+    );
+
+    await expect(load(true, "antigravity")).resolves.toMatchObject({ mcpServers: {} });
+    await expect(load(true, "codex")).rejects.toThrow(/valid UTF-8/);
+  });
+
   it("warns and adds nothing when mcp.json isn't valid JSON", async () => {
     await write(globalDir, "mcp.json", "{ nope");
 

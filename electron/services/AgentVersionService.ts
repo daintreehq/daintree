@@ -37,6 +37,8 @@ export class AgentVersionService {
   private readonly EXIT_DRAIN_MS = 200;
   private readonly MAX_BUFFER = 256 * 1024;
   private inFlightChecks = new Map<AgentId, Promise<AgentVersionInfo>>();
+  /** Installed-only reads under way, which a launch gate shares rather than repeats. */
+  private inFlightInstalledReads = new Map<AgentId, Promise<string | null>>();
   /** Bumped when the copy an agent launches changes, so no older answer is kept. */
   private readonly generations = new Map<string, number>();
   private runningCopyProbes = 0;
@@ -74,6 +76,7 @@ export class AgentVersionService {
     this.generations.set(agentId, (this.generations.get(agentId) ?? 0) + 1);
     this.cache.delete(agentId as AgentId);
     this.inFlightChecks.delete(agentId as AgentId);
+    this.inFlightInstalledReads.delete(agentId as AgentId);
   }
 
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
@@ -234,6 +237,33 @@ export class AgentVersionService {
       const next = this.copyProbeWaiters.shift();
       if (next) next();
       else this.runningCopyProbes--;
+    }
+  }
+
+  /**
+   * The installed CLI's version alone, for a launch that gates on it: the
+   * cached reading while it's fresh, else the CLI asked directly, and never
+   * the latest release, so no launch waits on the network. `refresh` asks the
+   * CLI past the cache and past any read under way, which may predate an
+   * upgrade; other callers share the latest read. Null when it can't be told.
+   */
+  async getInstalledVersionForLaunch(agentId: AgentId, refresh = false): Promise<string | null> {
+    if (!refresh) {
+      const cached = this.cache.get(agentId);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+        return cached.info.installedVersion;
+      }
+      const inFlight = this.inFlightInstalledReads.get(agentId);
+      if (inFlight) return inFlight;
+    }
+    const read = this.getInstalledVersion(agentId).catch(() => null);
+    this.inFlightInstalledReads.set(agentId, read);
+    try {
+      return await read;
+    } finally {
+      if (this.inFlightInstalledReads.get(agentId) === read) {
+        this.inFlightInstalledReads.delete(agentId);
+      }
     }
   }
 

@@ -1413,9 +1413,9 @@ export function getAgentModelConfig(
 
 /**
  * The MCP injection mode Daintree has actually written host-side wiring for,
- * per agent id. `claude` and `copilot` each get a config writer in
- * `HelpSessionService` plus a launch-arg getter that `lifecycle.ts` appends;
- * `codex` gets `-c` args built at provision time. Any other id can only be
+ * per agent id. `claude`, `copilot` and `antigravity` each get a config writer
+ * in `AssistantSessionFiles` plus a launch-arg getter that `lifecycle.ts`
+ * appends; `codex` gets `-c` args built at provision time. Any other id can only be
  * wired through the env contract described in `supportsImplementedMcpInjection`.
  *
  * An id listed here must declare the mode its branch implements — a `claude`

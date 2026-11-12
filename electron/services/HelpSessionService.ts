@@ -1248,10 +1248,16 @@ export class HelpSessionService {
     // for plugins to start, doesn't serialize sibling lanes behind it. Neither
     // throws. Plugin knowledge describes plugin tools, which reach the
     // Assistant through Daintree's MCP server, so with that off there is none.
+    // The launch hands them over in the agent's own `launchMcp` dialect, so an
+    // agent without one (Antigravity) is never given them, nor their knowledge.
     const { mcpServerService } = await this.loadMcpServerModule();
+    const takesPluginTools =
+      getEffectiveAgentConfig(input.agentId)?.capabilities?.launchMcp !== undefined;
     const [projectFacts, pluginKnowledge, hostInventory] = await Promise.all([
       this.readProjectFacts(input.projectId, input.projectPath),
-      agentSupportsAssistantContent(input.agentId) && mcpServerService.isEnabled()
+      agentSupportsAssistantContent(input.agentId) &&
+      takesPluginTools &&
+      mcpServerService.isEnabled()
         ? resolveAssistantPluginKnowledge({
             projectId: input.projectId,
             projectPath: input.projectPath,

@@ -101,9 +101,12 @@ describe("agentRegistry", () => {
   });
 
   describe("assistant support", () => {
-    it("returns claude and codex as the stable-tier assistant agents", () => {
+    it("returns claude, antigravity and codex as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(["claude", "codex"]);
+      expect(ids).toEqual(["claude", "antigravity", "codex"]);
+      // Copilot is wired but stays experimental, so the picker keeps hiding it.
+      expect(getAssistantWiredAgentIds()).toContain("copilot");
+      expect(ids).not.toContain("copilot");
     });
 
     it("getAssistantWiredAgentIds includes stable and experimental tiers but excludes deprecated (#8811)", () => {
@@ -312,10 +315,9 @@ describe("agentRegistry", () => {
       try {
         const ids = getAssistantSupportedAgentIds();
         // Built-ins first, in BUILT_IN_AGENT_IDS order
-        expect(ids[0]).toBe("claude");
-        expect(ids[1]).toBe("codex");
+        expect(ids.slice(0, 3)).toEqual(["claude", "antigravity", "codex"]);
         // Then user-defined agents in registration order
-        const userDefinedIds = ids.slice(2);
+        const userDefinedIds = ids.slice(3);
         expect(userDefinedIds[0]).toBe("zzz-last-agent");
         expect(userDefinedIds[1]).toBe("aaa-first-agent");
       } finally {
@@ -1566,10 +1568,10 @@ describe("Antigravity install help (#15622)", () => {
     expect(paths.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
   });
 
-  it("is admitted for help sessions while the assistant picker still hides it (#16814)", () => {
+  it("is admitted for help sessions and offered in the assistant picker (#16815)", () => {
     expect(getAssistantWiredAgentIds()).toContain("antigravity");
     expect(hasAssistantMcpImplementation("antigravity")).toBe(true);
-    expect(getAssistantSupportedAgentIds()).not.toContain("antigravity");
+    expect(getAssistantSupportedAgentIds()).toContain("antigravity");
   });
 });
 

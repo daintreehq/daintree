@@ -189,6 +189,8 @@ vi.mock("@/config/agents", () => ({
       };
     if (id === "codex")
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
+    if (id === "antigravity")
+      return { name: "Antigravity", supports: { permissionBypass: true, tier: "stable" } };
     // Assistant-wired but with no bypass mechanism of any kind — the shape a
     // user-defined agent takes.
     if (id === "byoa")
@@ -791,6 +793,32 @@ describe("DaintreeAssistantSettingsTab", () => {
     // Scoped to Codex's OWN approvals (#12119): an unqualified "without
     // approval" contradicts the host-confirmation exception appended below it.
     expect(container.textContent).toContain("without its own approval prompts");
+  });
+
+  it("names Antigravity and its flag in the bypass row once it's the selected agent (#16815)", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "antigravity", "codex"]);
+    helpPanelState.preferredAgentId = "antigravity";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Bypass Antigravity permission prompts");
+
+    const select = container.querySelector("select[aria-label='Agent']");
+    if (!(select instanceof HTMLSelectElement)) throw new Error("select not found");
+    expect(Array.from(select.options).map((o) => o.textContent ?? "")).toContain("Antigravity");
+    expect(container.textContent).toContain("(passes --dangerously-skip-permissions)");
+    expect(container.textContent).not.toContain("Bypass Claude permission prompts");
+    expect(container.textContent).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+
+    fireEvent.click(
+      screen.getByLabelText("Bypass Antigravity permission prompts during help sessions")
+    );
+    // Shell commands and edits outside the folder are the blast radius, not just MCP calls.
+    await waitForContent(container, "runs shell commands, edits files and calls MCP tools");
+    expect(container.textContent).not.toContain("built-in (Bash, Write)");
   });
 
   // #11907: with the permission gate off, the tool set carries most of the

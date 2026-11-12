@@ -167,6 +167,13 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
     warning:
       "With this on, Codex runs every tool without its own approval prompts and outside its sandbox, so it reaches anywhere the process can.",
   },
+  antigravity: {
+    title: "Bypass Antigravity permission prompts",
+    effect: "Auto-approve Antigravity's tool permission requests",
+    ariaLabel: "Bypass Antigravity permission prompts during help sessions",
+    warning:
+      "With this on, Antigravity runs shell commands, edits files and calls MCP tools without asking first, including outside the session folder.",
+  },
 };
 
 /**
@@ -835,7 +842,7 @@ export function DaintreeAssistantSettingsTab() {
           />
           <SettingsSwitchCard
             title="Load my MCP servers and hooks"
-            subtitle="Starts the servers in mcp.json and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
+            subtitle="Starts the servers in mcp.json, except for Antigravity, and runs the Claude hooks in hooks.json from ~/.daintree/assistant. A project's folder can never add these."
             isEnabled={settings.loadGlobalHooksAndServers}
             onChange={toggleLoadGlobalHooksAndServers}
             ariaLabel="Load my MCP servers and hooks"
