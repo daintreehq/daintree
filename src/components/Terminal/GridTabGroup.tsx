@@ -4,7 +4,6 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { hasBypassFlags } from "@shared/types/agentSettings";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -125,12 +124,6 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         }
       }
 
-      const hasDangerousFlags = hasBypassFlags(
-        pty?.agentLaunchFlags,
-        pty?.launchAgentId,
-        agentSettings
-      );
-
       return {
         id: p.id,
         // Compact slot (~100px): the agent's task alone — the tab icon already
@@ -156,7 +149,6 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         isUsingFallback: pty?.isUsingFallback,
         fallbackTooltip,
         presetName,
-        hasDangerousFlags,
       };
     });
   }, [

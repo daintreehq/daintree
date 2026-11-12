@@ -114,28 +114,12 @@ const defaultProps = {
 };
 
 describe("TabButton", () => {
-  it("does not show indicator when hasDangerousFlags is false", () => {
-    render(<TabButton {...defaultProps} hasDangerousFlags={false} />);
-
-    const indicator = screen.queryByLabelText("Launched with dangerous permissions");
-    expect(indicator).toBeNull();
-  });
-
-  it("shows both dangerous flag and fallback indicators when both are true", () => {
+  it("shows the fallback indicator on a tab running on a fallback preset", () => {
     render(
-      <TabButton
-        {...defaultProps}
-        hasDangerousFlags={true}
-        isUsingFallback={true}
-        fallbackTooltip="Using fallback preset"
-      />
+      <TabButton {...defaultProps} isUsingFallback={true} fallbackTooltip="Using fallback preset" />
     );
 
-    const dangerousIndicator = screen.getByLabelText("Launched with dangerous permissions");
-    const fallbackIndicator = screen.getByLabelText("Running on fallback preset");
-
-    expect(dangerousIndicator).toBeDefined();
-    expect(fallbackIndicator).toBeDefined();
+    expect(screen.queryByLabelText("Running on fallback preset")).not.toBe(null);
   });
 
   it("names the live preset when the visible title doesn't (#13746)", () => {

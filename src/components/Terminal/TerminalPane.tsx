@@ -390,8 +390,6 @@ export interface TerminalPaneProps {
   everDetectedAgent?: boolean;
   agentPresetId?: string;
   presetColor?: string;
-  /** The flags the agent was launched with, for the header's bypass warning. */
-  agentLaunchFlags?: string[];
   worktreeId?: string;
   cwd: string;
   isFocused: boolean;
@@ -438,7 +436,6 @@ function TerminalPaneComponent({
   everDetectedAgent,
   agentPresetId,
   presetColor,
-  agentLaunchFlags,
   worktreeId,
   cwd,
   isFocused,
@@ -1540,7 +1537,6 @@ function TerminalPaneComponent({
       chrome={chrome}
       everDetectedAgent={everDetectedAgent}
       presetColor={livePresetColor}
-      agentLaunchFlags={agentLaunchFlags}
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}

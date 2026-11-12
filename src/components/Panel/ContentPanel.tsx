@@ -102,7 +102,6 @@ export interface ContentPanelProps extends BasePanelProps {
   everDetectedAgent?: boolean;
   detectedProcessId?: string;
   presetColor?: string;
-  agentLaunchFlags?: string[];
   isExited?: boolean;
   exitCode?: number | null;
   isWorking?: boolean;
@@ -244,7 +243,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     everDetectedAgent,
     detectedProcessId,
     presetColor,
-    agentLaunchFlags,
     isExited = false,
     exitCode = null,
     isWorking: _isWorking = false,
@@ -806,7 +804,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             agentId={agentId}
             chrome={terminalChrome}
             presetColor={presetColor}
-            agentLaunchFlags={agentLaunchFlags}
             worktreeAccentColor={worktreeAccentColor}
             worktreeBranch={worktreeBranch}
             // The header lifts with the frame, not with the store's focused id:

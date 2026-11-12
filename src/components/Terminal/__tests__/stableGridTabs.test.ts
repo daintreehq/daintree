@@ -28,7 +28,6 @@ function tab(id: string, fields: Partial<TabInfo> = {}, chrome: Partial<TabInfo[
     isUsingFallback: undefined,
     fallbackTooltip: undefined,
     presetName: undefined,
-    hasDangerousFlags: false,
     ...fields,
   };
   return built;
@@ -45,7 +44,6 @@ const tabFieldChanges: [string, Partial<TabInfo>][] = [
   ["isUsingFallback", { isUsingFallback: true }],
   ["fallbackTooltip", { fallbackTooltip: "Using fallback" }],
   ["presetName", { presetName: "Team" }],
-  ["hasDangerousFlags", { hasDangerousFlags: true }],
 ];
 
 const chromeFieldChanges: [string, Partial<TabInfo["chrome"]>][] = [

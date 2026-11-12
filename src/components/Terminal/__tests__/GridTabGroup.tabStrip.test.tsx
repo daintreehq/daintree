@@ -213,14 +213,11 @@ const PANELS: Record<string, PanelInstance> = {
 const updateTitle = vi.fn();
 const realUpdateTitle = usePanelStore.getState().updateTitle;
 
-function seed(activeTabId: string, terminal?: Partial<PanelInstance>) {
+function seed(activeTabId: string) {
   const group: TabGroup = { id: GROUP, location: "grid", activeTabId, panelIds: ORDER };
   act(() => {
     usePanelStore.setState({
-      panelsById: {
-        ...PANELS,
-        ...(terminal && { [TERMINAL]: { ...PANELS[TERMINAL]!, ...terminal } as PanelInstance }),
-      },
+      panelsById: { ...PANELS },
       // Unlike the group's order, so a strip drawn in store order shows.
       panelIds: [...ORDER].reverse(),
       tabGroups: new Map([[GROUP, group]]),
@@ -230,8 +227,8 @@ function seed(activeTabId: string, terminal?: Partial<PanelInstance>) {
   });
 }
 
-function mount(activeTabId: string, terminal?: Partial<PanelInstance>) {
-  seed(activeTabId, terminal);
+function mount(activeTabId: string) {
+  seed(activeTabId);
   const view = render(
     <GridTabGroup group={usePanelStore.getState().tabGroups.get(GROUP)!} focusedId={null} />
   );
@@ -461,22 +458,5 @@ describe("GridTabGroup tab reorder on a shown dev preview or file browser (#1616
     const expected = [...ORDER];
     expected.splice(to, 0, ...expected.splice(from, 1));
     expect(vi.mocked(reorderGroupTabsWithUndo).mock.calls).toEqual([[GROUP, expected]]);
-  });
-});
-
-// The tab reads the same per-agent bypass flags as the pane header (#16785).
-describe("GridTabGroup permission-bypass mark", () => {
-  const marked = (tab: HTMLElement) =>
-    tab.querySelector('[aria-label="Launched with dangerous permissions"]') !== null;
-
-  it.each([
-    ["grok", ["--always-approve"], true],
-    ["kiro", ["--model", "x", "--trust-all-tools"], true],
-    ["claude", ["--always-approve"], false],
-    ["claude", ["--force"], false],
-  ] as const)("on a %s tab launched with %j: %s", (agentId, flags, expected) => {
-    const view = mount(PREVIEW, { launchAgentId: agentId, agentLaunchFlags: [...flags] });
-    expect(marked(view.tab(TERMINAL))).toBe(expected);
-    expect(marked(view.tab(FILES))).toBe(false);
   });
 });
