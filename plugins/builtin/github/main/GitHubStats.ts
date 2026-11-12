@@ -454,15 +454,16 @@ async function fetchOpenCountsImpl(
  * a closed PR into a phantom open issue. So the pair seeds an empty state and
  * re-confirms counts it agrees with, but a pair that disagrees, or that only
  * one held kind can vouch for, moves nothing until the GraphQL totals the
- * dropdown lists read confirm it. `confirmed` is false when that read failed: the state's
- * counts are served unchanged, and the caller leaves the events ETag
- * uncommitted so the next probe looks again.
+ * dropdown lists read confirm it. `confirmed` is false when that read failed:
+ * the state's counts are served unchanged, and the caller leaves the events
+ * ETag uncommitted so the next probe looks again. `null` when it failed and
+ * the state doesn't hold both counts: the read is a failed fetch.
  */
 async function settleRestCounts(
   context: RepoContext,
   cacheKey: string,
   rest: RepoStats
-): Promise<{ stats: RepoStats; confirmed: boolean }> {
+): Promise<{ stats: RepoStats; confirmed: boolean } | null> {
   const state = getRepoCountState(cacheKey);
   const issueAgrees = state?.issue === undefined || state.issue.value === rest.issueCount;
   const prAgrees = state?.pr === undefined || state.pr.value === rest.prCount;
@@ -492,7 +493,15 @@ async function settleRestCounts(
       confirmed = false;
     }
   }
-  return { stats: withRepoCountState(cacheKey, rest), confirmed };
+  const settled = withRepoCountState(cacheKey, rest);
+  if (!confirmed && statsFromCountState(cacheKey, 0) === undefined) {
+    // The state can't stand in for the kind it lacks, and the pair's value
+    // for it is the one in doubt: no read, and no baseline a replay could
+    // serve it from either.
+    restCountsCache.invalidate(cacheKey);
+    return null;
+  }
+  return { stats: settled, confirmed };
 }
 
 /**
@@ -767,8 +776,9 @@ export async function getRepoStatsAndPageForContext(
   if (!bypassCache) {
     const token = GitHubAuth.getToken();
     const restPair = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
-    if (restPair) {
-      const { stats: restStats, confirmed } = await settleRestCounts(context, cacheKey, restPair);
+    const settled = restPair ? await settleRestCounts(context, cacheKey, restPair) : null;
+    if (settled) {
+      const { stats: restStats, confirmed } = settled;
       repoStatsCache.set(cacheKey, restStats);
       persistentCache.set(cacheKey, restStats, projectPath);
       // Commit the changed-probe's events ETag in lockstep with the counts it

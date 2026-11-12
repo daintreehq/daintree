@@ -1261,6 +1261,25 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
       expect(openCountsQueryCount()).toBe(1);
     });
 
+    it("treats a pair it can't confirm for a partial state as a failed read", async () => {
+      expect(updateRepoStatsCount(CACHE_KEY, "pr", 0)).toBe(true);
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(1)],
+        pulls: [pullsOk(0)],
+      });
+      routeGraphQL({});
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      // No phantom issue from the unconfirmed subtraction, and no REST
+      // baseline left for a replay to serve it from.
+      expect(result.error).toBeDefined();
+      expect(result.stats).toBeNull();
+      expect(restCountsCache.get(CACHE_KEY)).toBeUndefined();
+      expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
+    });
+
     it("orders a REST pair by when it was sent, so a list sent while it was in flight outranks it", async () => {
       let sentAt = 0;
       mockFetch.mockImplementation(async (input: unknown) => {

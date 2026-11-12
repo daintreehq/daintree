@@ -354,6 +354,11 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     if (!issues || !Array.isArray(issues.nodes)) {
       throw new Error("Repository not found or token lacks access.");
     }
+    // Dropping a total that isn't a count would let the page's length stand
+    // in for it, which reads as an exact open count (#16866).
+    if (issues.totalCount != null && !isValidOpenCount(issues.totalCount)) {
+      throw new Error("GitHub returned an invalid issue count.");
+    }
     const nodes = issues.nodes as Array<Record<string, unknown>>;
     const page: Page<Issue> = {
       items: nodes.filter(Boolean).map(toForgeIssue),
@@ -616,6 +621,9 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
     // A response without the connection is a failed read, not an empty list.
     if (!prs || !Array.isArray(prs.nodes)) {
       throw new Error("Repository not found or token lacks access.");
+    }
+    if (prs.totalCount != null && !isValidOpenCount(prs.totalCount)) {
+      throw new Error("GitHub returned an invalid pull request count.");
     }
     const nodes = prs.nodes as Array<Record<string, unknown>>;
     // Enrich before the guard below so the value written to `forgePRListCache`

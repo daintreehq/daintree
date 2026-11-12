@@ -103,9 +103,13 @@ describe("sharedRepoStats", () => {
       expect(readSharedRepoStats(REPO)?.issueCount).toBe(2);
     });
 
-    it("never takes a count from a reading that couldn't make it", () => {
+    it("never takes a count from a reading that couldn't make it, however long ago the other was", () => {
       publishSharedRepoStats(REPO, reading("local", 1_000, 4), NOW);
       publishSharedRepoStats(REPO, { ...reading("studio", 5_000), issueCount: null }, NOW + 10);
+
+      expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 4 });
+
+      vi.mocked(Date.now).mockReturnValue(NOW + 10 * 60 * 1000 + 1);
 
       expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 4 });
     });

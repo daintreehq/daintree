@@ -169,9 +169,12 @@ function pickCount(
   now: number
 ): SharedRepoStats | null {
   let best = newest[count] === null ? null : newest;
+  // The hold only limits outranking a count the newest reading has: when it
+  // couldn't count the kind, the latest count anyone made stands, however old.
+  const holdFrom = best === null ? -Infinity : now - COUNT_HOLD_MS;
   for (const record of records) {
     if (record === newest || record[count] === null) continue;
-    if (record[observedAt] < now - COUNT_HOLD_MS) continue;
+    if (record[observedAt] < holdFrom) continue;
     if (
       best === null ||
       (record[observedAt] !== best[observedAt]

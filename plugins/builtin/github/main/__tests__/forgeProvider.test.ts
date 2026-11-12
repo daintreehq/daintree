@@ -1244,14 +1244,18 @@ describe("list provenance and the open-count write-back (#16866)", () => {
     expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
   });
 
-  it("leaves an invalid total off the page and out of the count", async () => {
-    mockGraphQLClient.mockResolvedValue(issueListResponse(-1));
+  it.each([
+    ["issue", () => githubForgeProvider.listIssues(repo, { state: "open" }), issueListResponse(-1)],
+    ["pr", () => githubForgeProvider.listPRs(repo, { state: "open" }), prListResponse(1.5)],
+  ] as const)(
+    "rejects a %s page whose total isn't a count, so its length can't stand in for one",
+    async (_kind, list, response) => {
+      mockGraphQLClient.mockResolvedValue(response);
 
-    const page = await githubForgeProvider.listIssues(repo, { state: "open" });
-
-    expect(page.totalCount).toBeUndefined();
-    expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
-  });
+      await expect(list()).rejects.toThrow(/invalid/);
+      expect(repoCountStateCache.get("owner/repo")).toBeUndefined();
+    }
+  );
 
   it.each([
     ["a closed list", { state: "closed" as const }],
