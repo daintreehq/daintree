@@ -1190,7 +1190,10 @@ function defaultListKey(
 }
 
 describe("listIssues caching", () => {
-  beforeEach(() => mockGraphQLClient.mockReset());
+  // Braced: a hook that returns a function has vitest call it as teardown.
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
 
   it("labels a page read now as network and a warm cache hit as cache (#16866)", async () => {
     mockGraphQLClient.mockResolvedValue(issueListResponse(1));
@@ -1233,6 +1236,23 @@ describe("listIssues caching", () => {
     await githubForgeProvider.listIssues(repo, { state: "open" });
 
     expect(getHeldCount("owner/repo", "issue")).toBeUndefined();
+  });
+
+  it("holds the later of two reads, whichever answers last", async () => {
+    const answers: Array<(value: unknown) => void> = [];
+    mockGraphQLClient.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+
+    // Issued back to back, often in the same millisecond: the ledger's read
+    // stamp still orders them as issued.
+    const older = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
+    const newer = githubForgeProvider.listIssues(repo, { state: "open", bypassCache: true });
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]!(issueListResponse(0));
+    await newer;
+    answers[0]!(issueListResponse(1));
+    await older;
+
+    expect(getHeldCount("owner/repo", "issue")?.count).toBe(0);
   });
 
   it("holds the total even when a REST count delta moved the list epoch mid-flight", async () => {

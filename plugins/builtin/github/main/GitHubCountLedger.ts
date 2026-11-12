@@ -45,6 +45,19 @@ function countOf(pair: CountPair, kind: CountKind): number {
   return kind === "issue" ? pair.issueCount : pair.prCount;
 }
 
+let lastReadStamp = 0;
+
+/**
+ * When a read is being issued, as epoch ms strictly later than every stamp
+ * handed out before it: two reads issued in the same millisecond still order
+ * the way they were issued, so the later one's count is the one held.
+ */
+export function issueReadStamp(): number {
+  const now = Date.now();
+  lastReadStamp = now > lastReadStamp ? now : lastReadStamp + 0.001;
+  return lastReadStamp;
+}
+
 export function getHeldCount(repoKey: string, kind: CountKind): HeldCount | undefined {
   return heldCounts.get(repoKey)?.[kind];
 }
@@ -134,4 +147,5 @@ export function heldCountsDisagree(repoKey: string, pair: CountPair): boolean {
 
 export function clearHeldCounts(): void {
   heldCounts.clear();
+  lastReadStamp = 0;
 }

@@ -29,7 +29,12 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
-import { getHeldCount, holdObservedCount, withHeldCounts } from "./GitHubCountLedger.js";
+import {
+  getHeldCount,
+  holdObservedCount,
+  issueReadStamp,
+  withHeldCounts,
+} from "./GitHubCountLedger.js";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
@@ -114,7 +119,7 @@ export function updateRepoStatsCount(
   cacheKey: string,
   type: "issue" | "pr",
   count: number,
-  readAt: number = Date.now()
+  readAt: number = issueReadStamp()
 ): void {
   if (!holdObservedCount(cacheKey, type, count, readAt)) return;
 
@@ -554,7 +559,7 @@ export async function listPullRequests(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
-    const readAt = Date.now();
+    const readAt = issueReadStamp();
 
     try {
       let result: GitHubListResponse<GitHubPR>;

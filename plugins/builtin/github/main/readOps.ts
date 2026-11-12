@@ -67,6 +67,7 @@ import {
   parseBatchRequiredChecksResponse,
   updateRepoStatsCount,
 } from "./GitHubPRs.js";
+import { issueReadStamp } from "./GitHubCountLedger.js";
 import {
   mapIssueGraphQLStates,
   mapMergeMethod,
@@ -344,7 +345,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
-    const readAt = Date.now();
+    const readAt = issueReadStamp();
 
     const response = await runQuery(
       LIST_ISSUES_QUERY,
@@ -604,7 +605,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
     const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
-    const readAt = Date.now();
+    const readAt = issueReadStamp();
 
     const response = await runQuery(
       LIST_PRS_QUERY,

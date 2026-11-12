@@ -17,6 +17,7 @@ import {
   getRepoListEpoch,
 } from "./GitHubCaches.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE, updateRepoStatsCount } from "./GitHubPRs.js";
+import { issueReadStamp } from "./GitHubCountLedger.js";
 import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
   GitHubIssue,
@@ -497,7 +498,7 @@ export async function listIssues(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
-    const readAt = Date.now();
+    const readAt = issueReadStamp();
 
     try {
       let result: GitHubListResponse<GitHubIssue>;

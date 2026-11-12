@@ -27,6 +27,7 @@ import {
   heldCountsDisagree,
   holdObservedCount,
   holdRestCounts,
+  issueReadStamp,
   restDisagreements,
   withHeldCounts,
 } from "./GitHubCountLedger.js";
@@ -279,7 +280,7 @@ async function fetchRestCountsImpl(
 ): Promise<RestCountsReading | null> {
   const block = gitHubRateLimitService.shouldBlockRequest("core");
   if (block.blocked) return null;
-  const readAt = Date.now();
+  const readAt = issueReadStamp();
 
   const prior = restCountsCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
@@ -407,7 +408,7 @@ async function fetchOpenCounts(
 ): Promise<{ issueCount: number; prCount: number; readAt: number } | null> {
   const client = GitHubAuth.createClient();
   if (!client || gitHubRateLimitService.shouldBlockRequest("graphql").blocked) return null;
-  const readAt = Date.now();
+  const readAt = issueReadStamp();
   try {
     const result = (await client(REPO_OPEN_COUNTS_QUERY, {
       owner: context.owner,
@@ -803,7 +804,7 @@ export async function getRepoStatsAndPageForContext(
   // refetches); the response is still returned and broadcast for display.
   const issueEpochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
   const prEpochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
-  const readAt = Date.now();
+  const readAt = issueReadStamp();
 
   try {
     const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
