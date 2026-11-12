@@ -13,6 +13,7 @@ The release runbook is [`docs/release.md`](../../docs/release.md): signing, nota
 | `nightly-publish.yml` | Nightly macOS and Linux builds published to the nightly update channel; no unit or E2E suites, launch smoke tests still run |
 | `publish-plugin-blocklist.yml` | Publishes `plugins/blocklist.json`, the plugin kill-switch list, to `updates.daintree.org/plugins/blocklist.json` when a change to it lands on `develop`; validates it first and verifies the CDN edge after |
 | `publish-plugin-catalog.yml` | Publishes `plugins/catalog.json`, the community plugin catalog, to `updates.daintree.org/plugins/catalog.json` when a change to it lands on `develop`, the same way and as a separate run; validates it and downloads every entry's asset first, and verifies the CDN edge after |
+| `propose-plugin-catalog-updates.yml` | Every six hours, opens a pull request adding a catalog entry for each new release of a plugin listed in `plugins/catalog.json`, marked for a quick merge or as needing a person; a person merges every one. Opens nothing without `PLUGIN_CATALOG_BOT_TOKEN` |
 | `ci.yml` | Checks and tests on pushes and pull requests to `main` and `develop`; on a pull request that changes `plugins/catalog.json`, the `plugin-catalog` job downloads each added or changed entry's asset and checks it against the entry |
 | `e2e.yml`, `e2e-single.yml` | Reusable E2E runner (core smoke and the `full-*` buckets) and the single-spec runner |
 | `stabilize.yml` | On-demand cross-platform validation, driven by the `stabilize` skill |
@@ -63,7 +64,7 @@ R2 (read by the three per-OS release workflows, `nightly-publish.yml`, `publish-
 | `R2_ACCESS_KEY_ID`     | R2 API token access key                         |
 | `R2_SECRET_ACCESS_KEY` | R2 API token secret                             |
 
-Other secrets the release and nightly workflows read:
+Other secrets the release, nightly and plugin catalog workflows read:
 
 | Secret | Used by | Purpose |
 | --- | --- | --- |
@@ -73,6 +74,7 @@ Other secrets the release and nightly workflows read:
 | `WEBSITE_WEBHOOK_SECRET` | Release publish jobs | Notifies the website of a new release |
 | `SENTRY_DSN` | Release builds | Error reporting DSN baked into the build |
 | `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET`, `STORE_PRODUCT_ID` | Windows release | Microsoft Store submission; skipped with a notice unless all five exist (see [`docs/distribution/microsoft-store.md`](../../docs/distribution/microsoft-store.md)) |
+| `PLUGIN_CATALOG_BOT_TOKEN` | `propose-plugin-catalog-updates.yml` | Fine-grained token with Contents and Pull requests read and write on `daintreehq/daintree`, which opens the catalog pull requests; a pull request opened with the workflow's own token would start no checks. Without it each run only lists what it would propose, with a notice (see [`plugins/README.md`](../../plugins/README.md#new-releases-of-a-listed-plugin)) |
 | `HOMEBREW_TAP_TOKEN` | macOS release | Fine-grained token with Contents read and write on `daintreehq/homebrew-tap`, which `publish-homebrew-tap` pushes the cask to on stable tags; skipped with a notice when missing (see [`docs/release.md`](../../docs/release.md#homebrew-tap)) |
 
 ### 4. Publish URL

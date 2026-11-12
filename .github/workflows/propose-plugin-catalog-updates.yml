@@ -1,0 +1,60 @@
+# Opens a pull request adding a catalog entry for each new release of a plugin
+# listed in plugins/catalog.json (#16780). The work is done by
+# scripts/ci/propose-plugin-catalog-updates.ts: it reads each listed
+# repository's newest releases, downloads every `.dntr` asset above the
+# plugin's newest entry, and proposes an entry built from those bytes, marked
+# for a quick merge or as needing a person. A person merges every one of them
+# (plugins/README.md says why).
+#
+# Pull requests are opened with the PLUGIN_CATALOG_BOT_TOKEN secret, because
+# one opened with the workflow's own token starts no checks. Without the secret
+# a run only lists what it would propose. The workflow token stays read-only.
+#
+# To run it now:
+#   gh workflow run propose-plugin-catalog-updates.yml --ref develop
+
+name: Propose plugin catalog updates
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: propose-plugin-catalog-updates
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  propose:
+    # Pull requests start from the catalog on develop, so a dispatch from any
+    # other branch, or a fork's schedule, must not run.
+    if: github.repository == 'daintreehq/daintree' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the develop tip
+        uses: actions/checkout@v6
+        with:
+          ref: develop
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+          install_args: --ignore-scripts
+
+      - name: Propose new releases
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PLUGIN_CATALOG_BOT_TOKEN: ${{ secrets.PLUGIN_CATALOG_BOT_TOKEN }}
+        run: npx tsx scripts/ci/propose-plugin-catalog-updates.ts

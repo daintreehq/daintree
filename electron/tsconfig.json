@@ -23,7 +23,9 @@
     "./services/canopy/canopy-reader-manifest.json",
     "../plugins/blocklist.json",
     "../scripts/ci/check-plugin-catalog.ts",
-    "../scripts/ci/check-plugin-catalog.test.ts"
+    "../scripts/ci/check-plugin-catalog.test.ts",
+    "../scripts/ci/propose-plugin-catalog-updates.ts",
+    "../scripts/ci/propose-plugin-catalog-updates.test.ts"
   ],
   "exclude": ["node_modules", "preload.cts", "**/__fixtures__/**"],
   "references": [{ "path": "../shared/tsconfig.json" }]
