@@ -13,6 +13,7 @@ import {
 import { PLUGIN_CATALOG_MAX_BYTES } from "../../shared/config/pluginCatalog.js";
 import { CATALOG_FILE } from "./check-plugin-catalog.js";
 import {
+  GitHubApiError,
   LABELS,
   RestCatalogGitHub,
   branchName,
@@ -22,6 +23,7 @@ import {
   formatCatalog,
   proposeCatalogUpdates,
   rewriteProblem,
+  runMode,
   watchedRepositories,
   type CatalogGitHub,
   type OpenPullRequestRequest,
@@ -145,7 +147,7 @@ async function run(
   const result = await proposeCatalogUpdates({
     catalogText: await catalogText(entries),
     github,
-    baseCommit: options.dryRun ? undefined : BASE,
+    baseCommit: BASE,
     dryRun: options.dryRun,
     download: { fetch, sleep: noSleep },
     tmpRoot: tmpDir,
@@ -209,11 +211,16 @@ describe("cannotBeNew", () => {
   const newest = new Map(entries.map((entry) => [entry.id, entry]));
   const asset = (name: string) => ({ name, browser_download_url: `${REPO}/x/${name}` });
 
-  it("skips a packaged name at or below the newest entry, or a prerelease", () => {
+  it("skips a packaged name at or below the newest entry", () => {
     expect(cannotBeNew(asset("acme.widget-1.0.0.dntr"), watched, newest)).toBe(true);
     expect(cannotBeNew(asset("acme.widget-0.9.9.dntr"), watched, newest)).toBe(true);
-    expect(cannotBeNew(asset("acme.widget-1.1.0-rc.1.dntr"), watched, newest)).toBe(true);
+    expect(cannotBeNew(asset("acme.widget-1.0.0-rc.1.dntr"), watched, newest)).toBe(true);
     expect(cannotBeNew(asset("acme.widget-1.0.1.dntr"), watched, newest)).toBe(false);
+  });
+
+  it("downloads a name that only looks like a prerelease, since the packager drops `+`", () => {
+    // 1.1.1+1-linux is packaged as acme.widget-1.1.11-linux.dntr.
+    expect(cannotBeNew(asset("acme.widget-1.1.11-linux.dntr"), watched, newest)).toBe(false);
   });
 
   it("matches a name to the right plugin when one id begins another", () => {
@@ -228,10 +235,14 @@ describe("cannotBeNew", () => {
 });
 
 describe("branchName", () => {
-  it("drops build metadata, which can't make a release newer and can spell an invalid ref", () => {
-    expect(branchName({ id: "acme.widget", version: "1.2.0+x.lock" })).toBe(
-      branchName({ id: "acme.widget", version: "1.2.0" })
+  it("gives two builds of one version their own ref-safe branches", () => {
+    const branches = ["1.2.0", "1.2.0+x.lock", "1.2.0+y.lock"].map((version) =>
+      branchName({ id: "acme.widget", version })
     );
+    expect(new Set(branches).size).toBe(3);
+    for (const branch of branches) {
+      expect(branch).toMatch(/^plugin-catalog\/acme\.widget-1\.2\.0(-build-[0-9a-f]+)?$/);
+    }
   });
 });
 
@@ -345,6 +356,24 @@ describe("proposeCatalogUpdates", () => {
     expect(newCapability.labels).toEqual([LABELS.catalog, LABELS.needsPerson]);
     expect(newCapability.body).toContain("new capabilities since 1.0.0: network:fetch");
     expect(result.proposed.map((p) => p.pullRequest?.number)).toEqual([101, 102]);
+  });
+
+  it("compares with the plugin's newest entry by semver, wherever it sits in the file", async () => {
+    const github = new FakeGitHub();
+    github.releases.set("acme/widget-plugin", [
+      release("v1.2.0", [["acme.widget-1.2.0.dntr", "1.2.0"]]),
+      release("v0.9.0", [["widget-0.9.0.dntr", "0.9.0"]]),
+    ]);
+    const entries = [listed("0.5.0"), listed("1.1.0"), listed("0.8.0")];
+    const { result } = await run(github, entries);
+
+    expect(result.skipped.map((s) => s.reason)).toEqual([
+      "0.9.0 isn't newer than the listed 1.1.0",
+    ]);
+    expect(result.proposed.map((p) => [p.entry.version, p.previous.version])).toEqual([
+      ["1.2.0", "1.1.0"],
+    ]);
+    expect(github.opened[0].body).toContain("new capabilities since 1.1.0: network:fetch");
   });
 
   it("skips drafts, GitHub prereleases and prerelease manifests", async () => {
@@ -462,7 +491,7 @@ describe("proposeCatalogUpdates", () => {
   it("warns and carries on past an unreadable repository and a broken asset", async () => {
     const gadgetRepo = "https://github.com/acme/gadget";
     const github = new FakeGitHub();
-    github.releases.set("acme/gadget", new Error("HTTP 404"));
+    github.releases.set("acme/gadget", new GitHubApiError("HTTP 404", 404));
     github.releases.set("acme/widget-plugin", [
       release("v1.2.0", [["widget-1.2.0.dntr", "broken"]]),
       release("v1.1.0", [["acme.widget-1.1.0.dntr", "1.1.0"]]),
@@ -484,6 +513,17 @@ describe("proposeCatalogUpdates", () => {
       /^acme\/widget-plugin v1\.2\.0 widget-1\.2\.0\.dntr: it isn't an installable \.dntr/
     );
     expect(github.opened.map((pr) => pr.branch)).toEqual(["plugin-catalog/acme.widget-1.1.0"]);
+  });
+
+  it("fails when GitHub refuses the token, rather than pass while watching nothing", async () => {
+    const github = new FakeGitHub();
+    github.releases.set("acme/widget-plugin", new GitHubApiError("HTTP 401: Bad credentials", 401));
+    const { result } = await run(github);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.errors).toEqual([
+      "acme/widget-plugin: its releases couldn't be read: HTTP 401: Bad credentials",
+    ]);
   });
 
   it("proposes neither of two different assets that claim the same release", async () => {
@@ -638,6 +678,7 @@ describe("RestCatalogGitHub", () => {
       base: "develop",
       body: "body",
     });
+    expect(calls[3].body).toEqual({ labels: request.labels });
     expect(calls.every((c) => c.headers.authorization === "Bearer tok")).toBe(true);
   });
 
@@ -661,6 +702,17 @@ describe("RestCatalogGitHub", () => {
     const { calls, fetch } = fakeApi([
       [`POST ${API}/git/refs`, json({ message: "Reference already exists" }, 422)],
       [`GET ${API}/compare/`, json({ ahead_by: 1, files: [{ filename: "src/app.ts" }] })],
+    ]);
+    await expect(
+      new RestCatalogGitHub("daintreehq/daintree", "tok", fetch).openPullRequest(request)
+    ).rejects.toThrow(/already exists with other changes/);
+    expect(calls.map((c) => c.method)).toEqual(["POST", "GET"]);
+  });
+
+  it("leaves alone a catalog-only branch with more than one commit", async () => {
+    const { calls, fetch } = fakeApi([
+      [`POST ${API}/git/refs`, json({ message: "Reference already exists" }, 422)],
+      [`GET ${API}/compare/`, json({ ahead_by: 2, files: [{ filename: CATALOG_FILE }] })],
     ]);
     await expect(
       new RestCatalogGitHub("daintreehq/daintree", "tok", fetch).openPullRequest(request)
@@ -708,5 +760,37 @@ describe("RestCatalogGitHub", () => {
     expect(await github.openPullRequests("develop")).toHaveLength(103);
     expect(await github.pullRequestsFor("plugin-catalog/acme.widget-1.1.0")).toEqual([pr]);
     expect(calls.at(-1)?.url).toContain("head=daintreehq%3Aplugin-catalog%2Facme.widget-1.1.0");
+  });
+
+  it("reads a repository's releases past the first page", async () => {
+    const releases = (count: number, tag: string) =>
+      Array.from({ length: count }, () => release(tag, []));
+    const route = "https://api.github.com/repos/acme/widget-plugin/releases?per_page=100";
+    const { fetch } = fakeApi([
+      [`GET ${route}&page=1`, json(releases(100, "v2.0.0-rc"))],
+      [`GET ${route}&page=2`, json(releases(1, "v1.1.0"))],
+    ]);
+    const found = await new RestCatalogGitHub("daintreehq/daintree", "tok", fetch).listReleases(
+      "acme",
+      "widget-plugin"
+    );
+    expect(found).toHaveLength(101);
+    expect(found.at(-1)?.tag_name).toBe("v1.1.0");
+  });
+});
+
+describe("runMode", () => {
+  it("opens pull requests only with the bot token, and reads with any token", () => {
+    expect(runMode(false, { PLUGIN_CATALOG_BOT_TOKEN: "bot", GITHUB_TOKEN: "gh" })).toEqual({
+      dryRun: false,
+      token: "bot",
+    });
+    const fallback = runMode(false, { GITHUB_TOKEN: "gh" });
+    expect(fallback).toMatchObject({ dryRun: true, token: "gh" });
+    expect(fallback.notice).toMatch(/PLUGIN_CATALOG_BOT_TOKEN isn't set/);
+    expect(runMode(true, { PLUGIN_CATALOG_BOT_TOKEN: "bot" })).toEqual({
+      dryRun: true,
+      token: "bot",
+    });
   });
 });

@@ -24,8 +24,10 @@ permissions:
   contents: read
   pull-requests: read
 
+# Keyed by ref so a refused dispatch from another branch can't replace a
+# develop run waiting in the queue.
 concurrency:
-  group: propose-plugin-catalog-updates
+  group: propose-plugin-catalog-updates-${{ github.ref }}
   cancel-in-progress: false
 
 env:

@@ -34,8 +34,9 @@ describe(workflowPath, () => {
 
   it("runs only on develop in this repository, and checks out develop without credentials", () => {
     for (const job of jobs) {
-      expect(job.if).toContain("github.repository == 'daintreehq/daintree'");
-      expect(job.if).toContain("github.ref == 'refs/heads/develop'");
+      expect(job.if).toBe(
+        "github.repository == 'daintreehq/daintree' && github.ref == 'refs/heads/develop'"
+      );
     }
     const checkouts = steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkouts).toHaveLength(1);
@@ -51,9 +52,14 @@ describe(workflowPath, () => {
     expect(text.split(BOT_SECRET)).toHaveLength(2);
 
     // The token, not a flag, decides whether it opens anything.
-    const script = /npx tsx (\S+)/.exec(propose.run)?.[1];
-    expect(script && existsSync(path.join(repoRoot, script))).toBe(true);
-    expect(propose.run).not.toContain("--dry-run");
+    const command = "npx tsx scripts/ci/propose-plugin-catalog-updates.ts";
+    expect(propose.run.trim()).toBe(command);
+    expect(existsSync(path.join(repoRoot, command.split(" ")[2]))).toBe(true);
+  });
+
+  it("queues runs per ref, so a refused dispatch can't replace a waiting develop run", () => {
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toContain("${{ github.ref }}");
   });
 
   it("never merges or approves a pull request", () => {

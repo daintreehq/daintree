@@ -16,6 +16,7 @@
 // committed catalog.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -46,11 +47,11 @@ const API_TIMEOUT_MS = 30_000;
 const DEFAULT_REPOSITORY = "daintreehq/daintree";
 export const DEFAULT_BASE_BRANCH = "develop";
 /**
- * GitHub lists releases newest first, and only a release above the newest
- * listed one is proposed, so the first page covers anything published since
- * the last run.
+ * GitHub lists releases newest first. A run reads every page up to this many,
+ * so a stretch of prereleases or other plugins' releases can't hide an
+ * eligible one, without paging through a monorepo's whole history.
  */
-const RELEASES_PER_REPOSITORY = 30;
+const RELEASE_PAGES = 10;
 const OPEN_PULL_REQUEST_PAGES = 10;
 export const BRANCH_PREFIX = "plugin-catalog/";
 export const LABELS = {
@@ -164,9 +165,20 @@ export interface ProposeOptions {
 const entryKey = (entry: Pick<PluginCatalogEntry, "id" | "version">): string =>
   `${entry.id}@${entry.version}`;
 
-/** Build metadata is dropped: it can't make a release newer, and it can spell an invalid ref. */
-export const branchName = (entry: Pick<PluginCatalogEntry, "id" | "version">): string =>
-  `${BRANCH_PREFIX}${entry.id}-${semver.parse(entry.version)?.version ?? entry.version}`;
+/**
+ * One branch per release. Build metadata is replaced by a digest of it: two
+ * builds of one version are different entries, and spelled out it could end
+ * a ref in `.lock`.
+ */
+export function branchName(entry: Pick<PluginCatalogEntry, "id" | "version">): string {
+  const parsed = semver.parse(entry.version);
+  if (!parsed) return `${BRANCH_PREFIX}${entry.id}-${entry.version}`;
+  const build =
+    parsed.build.length > 0
+      ? `-build-${createHash("sha256").update(parsed.build.join(".")).digest("hex").slice(0, 12)}`
+      : "";
+  return `${BRANCH_PREFIX}${entry.id}-${parsed.version}${build}`;
+}
 
 /** The spelling the catalog requires: `semver.parse` also takes a leading "v". */
 export function isCanonicalSemver(value: string): boolean {
@@ -219,9 +231,11 @@ export function watchedRepositories(entries: readonly PluginCatalogEntry[]): Wat
 
 /**
  * Whether an asset's file name, as `daintree-plugin package` writes it
- * (`{id}-{version}.dntr`), says it can't be proposed: a version no newer than
- * the plugin's newest entry, or a prerelease. Only ever used to skip a
- * download; for anything else the manifest decides.
+ * (`{id}-{version}.dntr`), says its version is no newer than the plugin's
+ * newest entry. Only ever used to skip a download; the manifest decides the
+ * rest. The packager drops `+` from the version, so `1.1.1+1-linux` is named
+ * as if it were the prerelease `1.1.11-linux`: a name can't rule out a
+ * release by looking like a prerelease, only by being too old.
  */
 export function cannotBeNew(
   asset: ReleaseAsset,
@@ -234,7 +248,7 @@ export function cannotBeNew(
     if (!listed || !asset.name.startsWith(prefix)) continue;
     const version = asset.name.slice(prefix.length, -".dntr".length);
     if (!isCanonicalSemver(version)) continue;
-    return semver.prerelease(version) !== null || !semver.gt(version, listed.version);
+    return !semver.gt(version, listed.version);
   }
   return false;
 }
@@ -446,7 +460,12 @@ export async function proposeCatalogUpdates({
       try {
         releases = await github.listReleases(watched.owner, watched.name);
       } catch (err) {
-        warnings.push(`${repoName}: its releases couldn't be read: ${errorText(err)}`);
+        // A token that's expired or lacks access can't read any repository, so
+        // the run fails rather than pass while watching nothing.
+        const refused = err instanceof GitHubApiError && (err.status === 401 || err.status === 403);
+        (refused ? errors : warnings).push(
+          `${repoName}: its releases couldn't be read: ${errorText(err)}`
+        );
         continue;
       }
       for (const release of releases) {
@@ -678,7 +697,13 @@ export class RestCatalogGitHub implements CatalogGitHub {
 
   async listReleases(owner: string, name: string): Promise<readonly Release[]> {
     const route = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/releases`;
-    return this.json<Release[]>("GET", `${route}?per_page=${RELEASES_PER_REPOSITORY}`);
+    const all: Release[] = [];
+    for (let page = 1; page <= RELEASE_PAGES; page++) {
+      const batch = await this.json<Release[]>("GET", `${route}?per_page=100&page=${page}`);
+      all.push(...batch);
+      if (batch.length < 100) break;
+    }
+    return all;
   }
 
   async pullRequestsFor(branch: string): Promise<readonly PullRequestRef[]> {
@@ -806,20 +831,37 @@ function writeSummary(result: ProposeResult, dryRun: boolean): void {
   appendFileSync(summaryFile, `${lines.join("\n")}\n`);
 }
 
+export interface RunMode {
+  readonly dryRun: boolean;
+  /** What GitHub is read, and written, with. */
+  readonly token: string | undefined;
+  readonly notice?: string;
+}
+
+/**
+ * Only the bot token opens pull requests: one opened with the workflow's own
+ * token would start no checks. Without it a run is a dry run that still reads
+ * GitHub with whatever token it has.
+ */
+export function runMode(dryRunRequested: boolean, env: NodeJS.ProcessEnv): RunMode {
+  const botToken = env.PLUGIN_CATALOG_BOT_TOKEN || undefined;
+  const token = botToken ?? (env.GITHUB_TOKEN || env.GH_TOKEN || undefined);
+  if (dryRunRequested || botToken) return { dryRun: dryRunRequested, token };
+  return {
+    dryRun: true,
+    token,
+    notice:
+      "PLUGIN_CATALOG_BOT_TOKEN isn't set, so this run opens nothing and only lists what it would propose. .github/workflows/README.md says how to create it.",
+  };
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const catalogPath = argValue(argv, "--catalog");
-  let dryRun = argv.includes("--dry-run");
-  if (catalogPath && !dryRun) {
+  if (catalogPath && !argv.includes("--dry-run")) {
     throw new Error("--catalog needs --dry-run: a pull request starts from the committed catalog");
   }
-  const botToken = process.env.PLUGIN_CATALOG_BOT_TOKEN || undefined;
-  if (!dryRun && !botToken) {
-    const notice =
-      "PLUGIN_CATALOG_BOT_TOKEN isn't set, so this run opens nothing and only lists what it would propose. .github/workflows/README.md says how to create it.";
-    console.log(`::notice::${escapeAnnotation(notice)}`);
-    dryRun = true;
-  }
-  const token = botToken ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined);
+  const { dryRun, token, notice } = runMode(argv.includes("--dry-run"), process.env);
+  if (notice) console.log(`::notice::${escapeAnnotation(notice)}`);
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
 
   const git = (...args: string[]) =>
