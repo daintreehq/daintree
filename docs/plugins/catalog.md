@@ -1,12 +1,12 @@
 # Community plugin catalog
 
-How community plugins become discoverable, and the trust policy that comes with it. This is the decision record for [#16342](https://github.com/daintreehq/daintree/issues/16342). Only "Where things stand" and the parts marked **shipped** describe Daintree as it ships today. The catalog itself (its repository, entries, review and moderation) doesn't exist yet, and every step marked **planned** is still to be built.
+How community plugins become discoverable, and the trust policy that comes with it. This is the decision record for [#16342](https://github.com/daintreehq/daintree/issues/16342). Only "Where things stand" and the parts marked **shipped** describe Daintree as it ships today. The catalog file, its pull-request checks and its publishing exist but list no plugin yet; the release-watching bot and every step marked **planned** are still to be built.
 
 ## Decision
 
 **Go: a reviewed list on GitHub. No registry, and no signing in the first cut.**
 
-- The catalog is a JSON file, `catalog.json`, kept in `daintreehq/plugins` and published beside the [blocklist](./trust-model.md#3-explicit-non-guarantees-the-10-contract). Changes are pull requests.
+- The catalog is a JSON file, `catalog.json`, published beside the [blocklist](./trust-model.md#3-explicit-non-guarantees-the-10-contract). Changes are pull requests. It was planned for `daintreehq/plugins`, which doesn't exist yet, so it is kept in this repository as `plugins/catalog.json`, beside the blocklist's source.
 - Authors host their own `.dntr` files on their own GitHub Releases. Daintree hosts no plugin bytes.
 - Every entry pins one reviewed release: its URL and its SHA-256. A release nobody reviewed has no entry, so it can't reach anyone through the catalog.
 - A registry (Open VSX, Harbor with ORAS, Verdaccio) waits for a concrete need. A self-hosted one means operating publishing, storage and retention before anything needs them; the public Open VSX instance avoids that but imposes its own package model and publishing terms. None of them understands `.dntr` or Daintree's trust contract.
@@ -20,6 +20,7 @@ How community plugins become discoverable, and the trust policy that comes with 
 - **Updates.** For a URL install, **Check for updates** re-fetches the URL the plugin was installed from and compares digests. Since #16781 a catalog install is checked against a freshly fetched catalog instead: it offers the newest reviewed release above the installed version, says when the plugin or the installed release was delisted, and says when no fresh catalog could be read ([Distribution → Updating a plugin](./distribution.md#updating-a-plugin)).
 - **Disclosure.** An archive opened from the operating system, a URL install and a catalog install each show the archive's capabilities before it is installed.
 - **Kill-switch.** The blocklist at `updates.daintree.org/plugins/blocklist.json` matches by plugin name and version range, refuses to load a match, and unloads a running copy when a refreshed list arrives. It is the only control that reaches plugins already installed. The list is maintained in this repository as `plugins/blocklist.json` and published on every change merged to `develop` (#16774), not in `daintreehq/plugins`.
+- **Catalog file.** `plugins/catalog.json` in this repository, empty so far, with its JSON Schema beside it. The `plugin-catalog` CI job downloads every entry a pull request adds or changes and holds it to its listing, and a merge to `develop` publishes the file to `updates.daintree.org/plugins/catalog.json` through `publish-plugin-catalog.yml`, which uses the blocklist's bucket, upload and edge check (#16778). [`plugins/README.md`](../../plugins/README.md) covers proposing a listing.
 - **Catalog client.** The main process can fetch `updates.daintree.org/plugins/catalog.json`, validate it and cache it under `userData` (`PluginCatalogService`), following the rules in [Reading the catalog](#reading-the-catalog). A catalog install link, an update check of a catalog install and the plugin manager's Browse view call it: no fetch happens at startup or when the plugin manager opens.
 - **Deep links.** `daintree://plugin/install?id=<publisher.name>[&version=]` resolves the release from a freshly fetched catalog, previews it, and installs only the entry's digest; `?url=<https url>&sha256=<hex>` previews and installs only an archive with that digest ([Distribution → Deep links](./distribution.md#deep-links)).
 
@@ -42,7 +43,7 @@ The registries each solve publishing and storage, which GitHub Releases already 
 
 ## The catalog
 
-**Planned.** This section is the policy the catalog will follow; neither `daintreehq/plugins` nor its bot exists yet.
+**Shipped**, except the bot. The catalog is `plugins/catalog.json` in this repository, checked on every pull request and published on merge; [`plugins/README.md`](../../plugins/README.md) is the contributor's guide. The release-watching bot doesn't exist yet.
 
 ### Entry
 
@@ -76,13 +77,13 @@ Each entry is one reviewed release:
 
 ### Review
 
-A bot watching each listed repository opens a pull request per new release. Review confirms:
+A bot watching each listed repository will open a pull request per new release (planned); until it exists, authors open them. Review confirms, and the `plugin-catalog` CI job checks by downloading each new or changed entry:
 
 - the release is in the listed repository, and the asset's SHA-256 matches the entry;
 - the archive's `manifest.name` and `version` match the entry;
-- the capabilities match the manifest.
+- the capabilities match the manifest, in its order.
 
-A new release from the same repository with the same capabilities merges quickly. A new capability, a changed repository, or a first listing waits for a person.
+A new release from the same repository with the same capabilities merges quickly. A new capability, a changed repository, a first listing, or a change to a listed release waits for a person; the CI job names each one in its summary but doesn't block on it.
 
 Review confirms the source and the bytes. It does not confirm that the code is safe, and the listing says so. Plugins run unsandboxed with full Node.js privileges, whatever they declare.
 
@@ -90,7 +91,7 @@ Pinning only the repository is the Obsidian model, where every release after the
 
 ### Moderation and removal
 
-- Anyone will be able to report an entry through an issue on `daintreehq/plugins`.
+- Anyone can report an entry through an issue on `daintreehq/daintree`.
 - Removing an entry stops new installs and new updates. It does not touch installed copies: the plugin keeps running.
 - A compromised or malicious release also goes on the blocklist, by name and version range. That refuses it at load and unloads running copies when the refreshed list arrives.
 
@@ -99,7 +100,7 @@ Pinning only the repository is the Obsidian model, where every release after the
 `daintreehq.continue-session` is the end-to-end test. It sits outside the reserved `daintree.*` namespace, so it installs as a package. Its source moved out of this repository (`plugins/sample/continue-session`) into a public one of its own, [`daintreehq/plugin-continue-session`](https://github.com/daintreehq/plugin-continue-session), where its tests run, and it has two releases, `0.1.0` then `0.1.1`, so install and update both run against real GitHub Releases. Step 4's preview ships today for URL installs, and step 5's digest check ships for those and the CLI.
 
 1. **Publish** (shipped). The author tags `v0.1.0`; the repository's release workflow runs `daintree-plugin package` and attaches the versioned `.dntr` and its `SHA256SUMS` to the release ([`v0.1.0`](https://github.com/daintreehq/plugin-continue-session/releases/tag/v0.1.0), [`v0.1.1`](https://github.com/daintreehq/plugin-continue-session/releases/tag/v0.1.1)).
-2. **List** (planned). The bot opens a pull request adding the `0.1.0` entry with the asset's digest; a person reviews it as a first listing.
+2. **List** (planned). A pull request adds the `0.1.0` entry with the asset's digest (the bot's job once it exists); CI downloads and checks the asset, and a person reviews it as a first listing.
 3. **Discover** (shipped). **Browse** in the plugin manager reads the catalog and lists each plugin's newest reviewed release (the one an unversioned install link would pick) with its repository, its capabilities, and that it is a community listing reviewed for source and bytes, not a Daintree endorsement and not checked for safety. An installed plugin is marked as installed, and **Install** previews that exact release through the catalog route.
 4. **Inspect and trust** (shipped for URL installs). Install downloads the archive and shows its identity and capabilities, read from the downloaded bytes, with the full-privilege warning. The user decides whether to trust the publisher.
 5. **Install** (shipped). The installer refuses anything but the reviewed digest. That check is reached through a `daintree://plugin/install?id=daintreehq.continue-session` link, which resolves `0.1.0` from a fresh catalog and records the install as a community listing from its repository, through `daintree-plugin install <url> --sha256 <hex>`, and through a URL install's preview, whose confirm installs only the digest it showed.
@@ -146,4 +147,4 @@ In the order they have to land:
 4. **Deep links.** Shipped: `daintree://plugin/install` carries a catalog id, or a URL with its `sha256`.
 5. **Browse.** Shipped: a Browse view in the plugin manager, which reads the catalog only when opened. A stale copy is listed with a note saying it couldn't be refreshed; with no copy at all the view says why, and installed plugins are unaffected.
 
-Outside the app: create `daintreehq/plugins` with `catalog.json`, its validation and the release-watching bot. Publish the plugin packages' `0.2.0` to npm too: npm still serves `0.1.0`, which can't build a plugin that uses `host.tasks`, `host.notify` or `mcpName`, so `plugin-continue-session` builds against tarballs packed from `v0.50.0`.
+Outside the app: the release-watching bot, and listing `daintreehq.continue-session`. The catalog and its checks live in this repository (#16778); moving them and the blocklist to `daintreehq/plugins` means moving both publish workflows and their R2 credentials. Publish the plugin packages' `0.2.0` to npm too: npm still serves `0.1.0`, which can't build a plugin that uses `host.tasks`, `host.notify` or `mcpName`, so `plugin-continue-session` builds against tarballs packed from `v0.50.0`.
