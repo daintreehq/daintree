@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { m, AnimatePresence } from "framer-motion";
-import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type { PanelKind, AgentState, PanelLocation } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -48,7 +48,6 @@ export interface TabInfo {
   fallbackTooltip?: string;
   /** Name of the preset the pane is live on, whatever its title says (#13746). */
   presetName?: string;
-  hasDangerousFlags?: boolean;
 }
 
 export interface TabButtonProps {
@@ -69,7 +68,6 @@ export interface TabButtonProps {
   fallbackTooltip?: string;
   /** Name of the preset the pane is live on; shown unless the title already says it. */
   presetName?: string;
-  hasDangerousFlags?: boolean;
   /** The id of the region this tab switches — `aria-controls`, per the APG tabs pattern. */
   tabPanelId?: string;
   /**
@@ -111,7 +109,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     isUsingFallback,
     fallbackTooltip,
     presetName,
-    hasDangerousFlags,
     tabPanelId,
     parked = false,
     menuLocation,
@@ -462,26 +459,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   <TooltipContent side="bottom">
                     {fallbackTooltip ??
                       "Running on fallback preset — original provider unavailable"}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-
-              {hasDangerousFlags && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {/* The pane header's mark, smaller: a dot here meant
-                        "dangerous flags" while the same dot on the header
-                        means a failed broadcast. */}
-                    <span
-                      role="img"
-                      className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-status-danger"
-                      aria-label="Launched with dangerous permissions"
-                    >
-                      <ShieldAlert className="h-3 w-3" aria-hidden="true" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    Launched with dangerous permissions — agent can modify files without prompting
                   </TooltipContent>
                 </Tooltip>
               )}

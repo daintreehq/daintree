@@ -583,60 +583,6 @@ function bypassGroupAt(
 }
 
 /**
- * The option groups Daintree adds to the agent's launches itself (the
- * registry's fixed args, the screen-mode flags, the decorations opt-out), which
- * a launch carries whatever its bypass. A registry arg that is the agent's own
- * declared bypass still counts as one.
- */
-function managedLaunchGroups(agentId: string): string[] {
-  const config = getEffectiveAgentConfig(agentId);
-  const capabilities = config?.capabilities;
-  const declared = optionGroups(getDefaultDangerousArgs(agentId).split(/\s+/).filter(Boolean)).map(
-    (group) => group.join(" ")
-  );
-  return [
-    ...optionGroups(config?.args ?? [])
-      .map((group) => group.join(" "))
-      .filter((group) => !declared.includes(group)),
-    ...[capabilities?.inlineModeFlag, capabilities?.altScreenFlag].filter(
-      (flag): flag is string => !!flag
-    ),
-    ...optionGroups(capabilities?.decorations?.offArgs ?? []).map((group) => group.join(" ")),
-  ];
-}
-
-/**
- * Whether a pane's launch flags carry its agent's permission bypass (#16785):
- * an option group {@link reconcileBypassFlags} would strip, other than the
- * groups Daintree adds to every launch itself. So
- * the warning reads what the CLI was handed, not today's bypass mode; a flag
- * that only means bypass to another agent never trips it; and, like the
- * stripping, each option of a declaration counts on its own, so cleanup that
- * drops another part of it (a model, a conversation selector) can't hide it.
- */
-export function hasBypassFlags(
-  flags: readonly string[] | undefined,
-  agentId: string | undefined,
-  settings: Pick<AgentSettings, "agents" | "pluginBypassArgHistory"> | null | undefined
-): boolean {
-  if (!flags?.length || !agentId) return false;
-  const written = settings?.agents ? ownEntry(settings.agents, agentId)?.dangerousArgs : undefined;
-  const managed = managedLaunchGroups(agentId);
-  const groups = bypassArgGroups(
-    bypassArgSources(
-      agentId,
-      resolveDangerousArgs(typeof written === "string" ? written : undefined, agentId),
-      getPluginBypassArgHistory(settings, agentId)
-    )
-  ).filter((group) => !managed.includes(group.join(" ")));
-  if (groups.length === 0) return false;
-  const instruction = systemPromptArgPositions(flags, agentId);
-  return flags.some((_, index) =>
-    groups.some((group) => bypassGroupAt(flags, index, group, instruction))
-  );
-}
-
-/**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
  * effective bypass setting (#10432, the "resume trap").
  *

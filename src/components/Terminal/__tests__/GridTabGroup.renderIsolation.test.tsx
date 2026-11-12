@@ -305,16 +305,6 @@ describe("GridTabGroup render isolation", () => {
       expect(backTab()?.chrome.hasExited).toBe(true);
     });
 
-    it("re-renders with the background tab's permission-bypass flag, on and off", () => {
-      seed();
-      renderGroup();
-      expect(backTab()?.hasDangerousFlags).toBe(false);
-      patch(BACK, { agentLaunchFlags: ["--dangerously-skip-permissions"] });
-      expect(backTab()?.hasDangerousFlags).toBe(true);
-      patch(BACK, { agentLaunchFlags: [] });
-      expect(backTab()?.hasDangerousFlags).toBe(false);
-    });
-
     it("re-renders with the background tab's renamed preset", () => {
       act(() =>
         useProjectPresetsStore.setState({

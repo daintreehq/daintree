@@ -26,7 +26,6 @@ import {
   RefreshCw,
   RotateCw,
   Settings,
-  ShieldAlert,
   Trash2,
   X,
 } from "lucide-react";
@@ -86,7 +85,6 @@ import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import {
   DropdownMenu,
@@ -149,7 +147,6 @@ import {
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
 import { isPtyPanel } from "@shared/types/panel";
-import { hasBypassFlags } from "@shared/types/agentSettings";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { scratchpadHasContent } from "@/lib/terminalScratchpad";
@@ -256,7 +253,6 @@ export interface PanelHeaderProps {
   isMaximized?: boolean;
   location?: "grid" | "dock";
   isDragging?: boolean;
-  agentLaunchFlags?: string[];
 
   // Title editing (provided by TitleEditingContext consumer)
   isEditingTitle: boolean;
@@ -356,7 +352,6 @@ function PanelHeaderComponent({
   isMaximized = false,
   location = "grid",
   isDragging = false,
-  agentLaunchFlags,
   isEditingTitle,
   editingValue,
   titleInputRef,
@@ -425,12 +420,6 @@ function PanelHeaderComponent({
   const readoutRef = useRef<HTMLDivElement | null>(null);
   const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
-
-  // Selected as a boolean, so a settings change re-renders only a header whose
-  // mark flips.
-  const hasDangerousFlags = useAgentSettingsStore((s) =>
-    hasBypassFlags(agentLaunchFlags, agentId, s.settings)
-  );
 
   // Watch state — only relevant for agent panels
   const isWatched = usePanelStore((state) => state.watchedPanels.has(id));
@@ -1224,7 +1213,6 @@ function PanelHeaderComponent({
                       isUsingFallback={tab.isUsingFallback}
                       fallbackTooltip={tab.fallbackTooltip}
                       presetName={tab.presetName}
-                      hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
                       menuLocation={location}
                       isStripFocused={location === "dock" || isFocused}
@@ -1265,7 +1253,6 @@ function PanelHeaderComponent({
                   isUsingFallback={tab.isUsingFallback}
                   fallbackTooltip={tab.fallbackTooltip}
                   presetName={tab.presetName}
-                  hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
                   menuLocation={location}
                   isStripFocused={location === "dock" || isFocused}
@@ -1404,24 +1391,6 @@ function PanelHeaderComponent({
             {hasPty && <TerminalHostSuffix />}
 
             {hasPty && <TerminalScheduleChip terminalId={id} />}
-
-            {hasDangerousFlags && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    role="img"
-                    className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-status-danger"
-                    aria-label="Launched with dangerous permissions"
-                    data-testid="panel-dangerous-flags-mark"
-                  >
-                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Launched with dangerous permissions — agent can modify files without prompting
-                </TooltipContent>
-              </Tooltip>
-            )}
 
             {/* Primary ink on any pane: its job is to be found on one that has
                 lost focus while dictation still goes into it. */}
