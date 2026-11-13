@@ -951,6 +951,44 @@ describe("useGettingStartedChecklist", () => {
       expect(result.current.visible).toBe(true);
     });
 
+    it("credits each step once when its own reopen echo arrives before the reply", async () => {
+      // Main pushes to every view, the sender included, before it replies.
+      onboardingMock.reopenChecklist.mockImplementationOnce(() => {
+        const reopened = { ...dismissedChecklist, dismissed: false };
+        pushHandler!(reopened);
+        return Promise.resolve(reopened);
+      });
+      const { result } = await mountDismissed();
+      projectState = { currentProject: "/some/project" };
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const marks = onboardingMock.markChecklistItem.mock.calls.filter(
+        ([item]) => item === "openedProject"
+      );
+      expect(marks).toHaveLength(1);
+      expect(result.current.checklist?.items.openedProject).toBe(true);
+      expect(result.current.forced).toBe(true);
+    });
+
+    it("keeps a step this view credited when a push doesn't know about it yet", async () => {
+      onboardingMock.getChecklist.mockResolvedValue({ ...dismissedChecklist, dismissed: false });
+      const { result } = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => result.current.markItem("createdWorktree"));
+
+      await act(async () => {
+        pushHandler!({ ...dismissedChecklist, dismissed: false });
+      });
+
+      expect(result.current.checklist?.items.createdWorktree).toBe(true);
+    });
+
     it("hides a checklist Help forced open when another view dismisses it", async () => {
       const { result } = await mountDismissed();
       await act(async () => {

@@ -285,17 +285,26 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(getHandler("onboarding:checklist-get")(null)).toEqual(expected);
   });
 
-  it("pushes every dismissal and reopen to all views, in order", () => {
+  it("pushes every dismissal and reopen to all views, in order, with progress", () => {
     registerOnboardingHandlers();
-    seedOnboarding();
+    const items = {
+      openedProject: true,
+      launchedAgent: true,
+      createdWorktree: false,
+      ranSecondParallelAgent: false,
+    };
+    seedOnboarding({ checklist: { dismissed: false, celebrationShown: true, items } });
 
     getHandler("onboarding:checklist-dismiss")(null);
     getHandler("onboarding:checklist-reopen")(null);
 
     const pushes = broadcastToRendererMock.mock.calls
       .filter(([channel]) => channel === "onboarding:checklist-push")
-      .map(([, state]) => (state as { dismissed: boolean }).dismissed);
-    expect(pushes).toEqual([true, false]);
+      .map(([, state]) => state);
+    expect(pushes).toEqual([
+      { dismissed: true, celebrationShown: true, items },
+      { dismissed: false, celebrationShown: true, items },
+    ]);
   });
 
   describe("tour", () => {
