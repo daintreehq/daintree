@@ -1376,7 +1376,7 @@ describe("useRecipeRunner — delete confirm flow", () => {
       makeRecipe({ id: "r1", name: "Dev server" }),
       makeRecipe({ id: "r2", name: "Docs" })
     );
-    let settle: (value: unknown) => void = () => {};
+    let settle: (value: Awaited<ReturnType<typeof actionService.dispatch>>) => void = () => {};
     dispatchMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
