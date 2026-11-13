@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import {
   useWorktreeResourceTeardownConfirmStore,
   type ResourceTeardownConfirmRequest,
@@ -21,22 +21,36 @@ function open(overrides: Partial<ResourceTeardownConfirmRequest> = {}): Promise<
   return answer;
 }
 
-const dialog = () =>
-  waitFor(() => {
-    const el = document.querySelector<HTMLElement>('[role="dialog"], [role="alertdialog"]');
-    if (!el) throw new Error("dialog not open");
-    return el;
+function dialog(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+  if (!el) throw new Error("dialog not open");
+  return el;
+}
+
+const button = (label: string) =>
+  Array.from(dialog().querySelectorAll("button")).find((b) => b.textContent === label)!;
+
+const preview = () =>
+  dialog().querySelector<HTMLElement>('[data-testid="resource-teardown-preview"]')!;
+
+const isGated = (el: HTMLElement) => el.getAttribute("aria-disabled") === "true";
+
+/** Past the read-time gate a destructive confirm holds its primary behind. */
+function readThrough() {
+  act(() => {
+    vi.advanceTimersByTime(1_200);
   });
+}
 
-const button = (root: HTMLElement, label: string) =>
-  Array.from(root.querySelectorAll("button")).find((b) => b.textContent === label)!;
-
-const preview = (root: HTMLElement) =>
-  root.querySelector<HTMLElement>('[data-testid="resource-teardown-preview"]')!;
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 
 afterEach(() => {
   cleanup();
   useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false);
+  vi.runOnlyPendingTimers();
+  vi.useRealTimers();
 });
 
 describe("WorktreeResourceTeardownConfirmDialog", () => {
@@ -48,13 +62,13 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
   it("names the worktree, lists every command, and resolves true on confirm", async () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
     const answer = open();
-    const el = await dialog();
-    expect(el.textContent).toContain("Tear down resource for 'feature/box'?");
-    expect(preview(el).querySelector("pre")!.textContent).toBe("devbox rm box\ndns rm box.dev");
-    expect(preview(el).textContent).toContain("Commands that will run");
+    expect(dialog().textContent).toContain("Tear down resource for 'feature/box'?");
+    expect(preview().querySelector("pre")!.textContent).toBe("devbox rm box\ndns rm box.dev");
+    expect(preview().textContent).toContain("Commands that will run");
 
-    await act(async () => {
-      fireEvent.click(button(el, "Tear down resource"));
+    readThrough();
+    act(() => {
+      fireEvent.click(button("Tear down resource"));
     });
     expect(await answer).toBe(true);
   });
@@ -62,52 +76,50 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
   it("resolves false on cancel", async () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
     const answer = open();
-    const el = await dialog();
 
-    await act(async () => {
-      fireEvent.click(button(el, "Cancel"));
+    act(() => {
+      fireEvent.click(button("Cancel"));
     });
     expect(await answer).toBe(false);
   });
 
-  it("still lists the commands, but says they await approval rather than that they will run", async () => {
+  it("still lists the commands, but says they await approval rather than that they will run", () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
     void open({ approved: false });
-    const el = preview(await dialog());
-    expect(el.querySelector("pre")!.textContent).toBe("devbox rm box\ndns rm box.dev");
-    expect(el.textContent).not.toContain("Commands that will run");
-    expect(el.textContent).toContain("isn't approved yet");
+    expect(preview().querySelector("pre")!.textContent).toBe("devbox rm box\ndns rm box.dev");
+    expect(preview().textContent).not.toContain("Commands that will run");
+    expect(preview().textContent).toContain("isn't approved yet");
   });
 
   it.each([true, false])(
     "says there are no commands, and nothing about approval, when none were found (approved %s)",
-    async (approved) => {
+    (approved) => {
       render(<WorktreeResourceTeardownConfirmDialog />);
       void open({ commands: [], approved });
-      const el = preview(await dialog());
-      expect(el.querySelector("pre")!.textContent).toBe("No teardown commands found.");
-      expect(el.textContent).not.toContain("isn't approved yet");
+      expect(preview().querySelector("pre")!.textContent).toBe("No teardown commands found.");
+      expect(preview().textContent).not.toContain("isn't approved yet");
     }
   );
 
-  it("answers a superseded request no, and gives the new one a fresh dialog", async () => {
+  it("answers a superseded request no, and holds the new one's confirm for its own read", async () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
     const first = open({ label: "first" });
-    const firstButton = button(await dialog(), "Tear down resource");
+    readThrough();
+    expect(isGated(button("Tear down resource"))).toBe(false);
 
     const second = open({ label: "second" });
     expect(await first).toBe(false);
-    const el = await waitFor(() => {
-      const current = document.querySelector<HTMLElement>('[role="dialog"], [role="alertdialog"]');
-      if (!current?.textContent?.includes("'second'")) throw new Error("not superseded yet");
-      return current;
+    expect(dialog().textContent).toContain("'second'");
+    // The press that was about to approve the first can't approve the second.
+    expect(isGated(button("Tear down resource"))).toBe(true);
+    act(() => {
+      fireEvent.click(button("Tear down resource"));
     });
-    // A new element, not the old button relabelled: focus or a press already
-    // on the first request's confirm can't land on the second's.
-    expect(button(el, "Tear down resource")).not.toBe(firstButton);
+    expect(useWorktreeResourceTeardownConfirmStore.getState().pendingConfirm).not.toBeNull();
 
-    await act(async () => {
-      fireEvent.click(button(el, "Tear down resource"));
+    readThrough();
+    act(() => {
+      fireEvent.click(button("Tear down resource"));
     });
     expect(await second).toBe(true);
   });
@@ -115,7 +127,6 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
   it("settles a pending request false when the host unmounts", async () => {
     const { unmount } = render(<WorktreeResourceTeardownConfirmDialog />);
     const answer = open();
-    await dialog();
 
     unmount();
     expect(await answer).toBe(false);

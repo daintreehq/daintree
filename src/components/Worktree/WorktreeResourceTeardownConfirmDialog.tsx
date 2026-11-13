@@ -4,8 +4,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 
+const CONFIRM_COOLDOWN_MS = 1_200;
+
 function WorktreeResourceTeardownConfirmDialogInner() {
   const pending = useWorktreeResourceTeardownConfirmStore((s) => s.pendingConfirm);
+  const requestSeq = useWorktreeResourceTeardownConfirmStore((s) => s.requestSeq);
   const resolveConfirmation = useWorktreeResourceTeardownConfirmStore((s) => s.resolveConfirmation);
   if (!pending) return null;
 
@@ -22,6 +25,14 @@ function WorktreeResourceTeardownConfirmDialogInner() {
       cancelLabel="Cancel"
       variant="destructive"
       hasPreview={true}
+      // A request that supersedes another lands in this same open dialog, so
+      // each one re-arms the read-time gate and the initial focus: a press or
+      // focus already on the old one's confirm can't approve the new one. Kept
+      // mounted rather than remounted so focus still returns to the opener.
+      confirmCooldownMs={CONFIRM_COOLDOWN_MS}
+      cooldownKey={requestSeq}
+      focusResetKey={requestSeq}
+      bodyResetKey={requestSeq}
       onConfirm={() => resolveConfirmation(true)}
     >
       <div className="space-y-1.5" data-testid="resource-teardown-preview">
@@ -63,10 +74,7 @@ export function WorktreeResourceTeardownConfirmDialog() {
       resetKeys={[requestSeq]}
       onError={() => useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false)}
     >
-      {/* Keyed per request: a request that supersedes another gets a fresh
-          dialog, so focus or a press already on the old one's confirm button
-          can't approve the new one. */}
-      <WorktreeResourceTeardownConfirmDialogInner key={requestSeq} />
+      <WorktreeResourceTeardownConfirmDialogInner />
     </ErrorBoundary>
   );
 }
