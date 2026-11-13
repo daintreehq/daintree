@@ -324,3 +324,87 @@ describe("PanelPalette IME composition (#15066)", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("PanelPalette Tab, page keys and staged Escape", () => {
+  const many: PanelKindOption[] = Array.from({ length: 30 }, (_, i) => ({
+    id: `tool:${i}`,
+    name: `Tool ${i}`,
+    iconId: "terminal",
+    color: "#fff",
+    category: "tool" as const,
+  }));
+
+  function field() {
+    return document.querySelector<HTMLElement>('[role="combobox"]')!;
+  }
+
+  it("leaves Tab to native traversal instead of moving the selection", () => {
+    const onSelectNext = vi.fn();
+    const onSelectPrevious = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query=""
+        results={resumeResults}
+        onSelectNext={onSelectNext}
+        onSelectPrevious={onSelectPrevious}
+      />
+    );
+
+    expect(fireEvent.keyDown(field(), { key: "Tab" })).toBe(true);
+    fireEvent.keyDown(field(), { key: "Tab", shiftKey: true });
+    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(onSelectPrevious).not.toHaveBeenCalled();
+  });
+
+  it("pages the cursor, stopping at the ends and on live rows", () => {
+    const rows = [...many.slice(0, 29), { ...many[29]!, isStale: true }];
+    function Stateful() {
+      const [selectedIndex, setSelectedIndex] = useState(0);
+      return (
+        <PanelPalette
+          {...baseProps}
+          query="tool"
+          results={rows}
+          selectedIndex={selectedIndex}
+          onHoverIndex={setSelectedIndex}
+        />
+      );
+    }
+    render(<Stateful />);
+    const active = () => field().getAttribute("aria-activedescendant");
+
+    expect(fireEvent.keyDown(field(), { key: "PageDown" })).toBe(false);
+    const afterOnePage = active();
+    expect(afterOnePage).not.toBe(`panel-option-${rows[0]!.id}`);
+    expect(afterOnePage).not.toBe(`panel-option-${rows[1]!.id}`);
+
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(field(), { key: "PageDown" });
+    expect(active()).toBe(`panel-option-${rows[28]!.id}`);
+
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(field(), { key: "PageUp" });
+    expect(active()).toBe(`panel-option-${rows[0]!.id}`);
+
+    expect(fireEvent.keyDown(field(), { key: "PageDown", shiftKey: true })).toBe(true);
+    expect(active()).toBe(`panel-option-${rows[0]!.id}`);
+  });
+
+  it("clears a query on Escape from the results region before it closes", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query="cla"
+        results={resumeResults}
+        onQueryChange={onQueryChange}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.keyDown(screen.getByRole("group", { name: "Panel types" }), { key: "Escape" });
+
+    expect(onQueryChange).toHaveBeenCalledWith("");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
