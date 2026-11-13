@@ -141,7 +141,8 @@ describe("appActions adversarial", () => {
     const cb = onConfigReloadedMock.mock.calls[0]![0];
 
     const reload = cb();
-    await Promise.resolve();
+    // A full turn, so every other refresh in the fan-out has settled.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(cliAvailabilityRecheckMock).not.toHaveBeenCalled();
 
     finishRegistry();

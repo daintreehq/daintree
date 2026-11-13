@@ -279,12 +279,14 @@ describe("cliAvailabilityStore", () => {
       return (value: typeof installedAvail) => resolve(value);
     }
 
-    it("probes at once when no probe is running", async () => {
+    it("probes at once when no probe is running, inside the refresh throttle", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
       refreshMock.mockResolvedValueOnce(rechecked);
+      await useCliAvailabilityStore.getState().refresh();
 
       await useCliAvailabilityStore.getState().recheck();
 
-      expect(refreshMock).toHaveBeenCalledTimes(1);
+      expect(refreshMock).toHaveBeenCalledTimes(2);
       expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
     });
 
@@ -364,6 +366,46 @@ describe("cliAvailabilityStore", () => {
 
       expect(refreshMock).toHaveBeenCalledTimes(3);
       expect(useCliAvailabilityStore.getState().availability).toEqual(later);
+    });
+
+    it("keeps a host read waiting with it from putting the older answer back", async () => {
+      // The host answers a read from its last finished check.
+      let hostAnswer: typeof installedAvail = installedAvail;
+      function hostProbe() {
+        let resolve!: (value: typeof installedAvail) => void;
+        refreshMock.mockReturnValueOnce(
+          new Promise<typeof installedAvail>((r) => {
+            resolve = r;
+          }).then((value) => {
+            hostAnswer = value;
+            return value;
+          })
+        );
+        return (value: typeof installedAvail) => resolve(value);
+      }
+      let releaseRead!: () => void;
+      const readGate = new Promise<void>((r) => {
+        releaseRead = r;
+      });
+      getMock.mockImplementationOnce(() => {
+        const answer = hostAnswer;
+        return readGate.then(() => answer);
+      });
+      const finishRunning = hostProbe();
+      const finishRecheck = hostProbe();
+      const running = useCliAvailabilityStore.getState().refresh(true);
+      const recheck = useCliAvailabilityStore.getState().recheck();
+      const sync = useCliAvailabilityStore.getState().syncFromHost();
+
+      finishRunning(installedAvail);
+      await running;
+      await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(2));
+      finishRecheck(rechecked);
+      await recheck;
+      releaseRead();
+      await sync;
+
+      expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
     });
 
     it("doesn't probe once the store is cleaned up while it waits", async () => {

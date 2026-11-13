@@ -316,8 +316,9 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       const isCurrent = () => mySeq === syncSeq && epoch === myEpoch;
       const run = (async () => {
         // A check begun before the host's would answer after this read and put
-        // back what launched before.
-        await Promise.allSettled([initPromise, refreshPromise]);
+        // back what launched before. A waiting recheck probes after this read
+        // would start, so this read would put its older answer back over it.
+        await Promise.allSettled([initPromise, refreshPromise, recheckPromise]);
         if (!isCurrent()) return;
         try {
           const [availability, details] = await Promise.all([
