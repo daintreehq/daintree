@@ -232,10 +232,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const heatmapScrollerRef = useRef<HTMLDivElement>(null);
 
   // Declared before the settle effect so a worktree switch drops the baseline
-  // before that effect compares against it.
+  // (and any "Refreshing" said about the last worktree) before that effect
+  // compares against it.
   useEffect(() => {
     settledPulseRef.current = null;
     wasLoadingRef.current = false;
+    setRefreshAnnouncement("");
   }, [worktreeId]);
 
   useEffect(() => {
@@ -256,12 +258,15 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     if (!wasLoading) return;
     const changed = settled !== null && previous !== null && !isSamePulseData(previous, settled);
     setRefreshAnnouncement(changed ? "Pulse data updated" : "");
-  }, [isLoading, pulse, error, rangeDays]);
+  }, [worktreeId, isLoading, pulse, error, rangeDays]);
 
+  // `isLoading` too, not the gate alone: the gate only closes in an effect, so
+  // on the render that settles a slow first load it still reads open while the
+  // snapshot has just arrived.
   const hasPulse = !!pulse;
   useEffect(() => {
-    if (refreshGateOpen && hasPulse) setRefreshAnnouncement("Refreshing pulse data");
-  }, [refreshGateOpen, hasPulse]);
+    if (isLoading && refreshGateOpen && hasPulse) setRefreshAnnouncement("Refreshing pulse data");
+  }, [isLoading, refreshGateOpen, hasPulse]);
 
   // Guard on `error === undefined` (never fetched), not `!error`: a settled
   // null is the deliberate "no commits" outcome, and treating it as falsy would
@@ -295,12 +300,14 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   }, [worktreeId, fetchPulse]);
 
   // If the column is ever narrower than the calendar, open at the newest week
-  // — the days that answer "is this moving right now" — not the oldest.
+  // — the days that answer "is this moving right now" — not the oldest. Keyed
+  // on the skeleton too: data that lands while its floor holds mounts the
+  // scroller a render later than the length change.
   const heatmapLength = pulse?.heatmap.length ?? 0;
   useEffect(() => {
     const scroller = heatmapScrollerRef.current;
     if (scroller) scroller.scrollLeft = scroller.scrollWidth;
-  }, [heatmapLength]);
+  }, [heatmapLength, showSkeleton]);
 
   const handleRefresh = useCallback(() => {
     setManualRefresh(true);

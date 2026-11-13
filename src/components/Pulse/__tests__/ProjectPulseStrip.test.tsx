@@ -88,6 +88,18 @@ describe("ProjectPulseStrip", () => {
     expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
   });
 
+  it("fetches when the selected range moves away from a mounted strip's snapshot", () => {
+    const cached = makePulse({ rangeDays: 60 });
+    state.getPulse = () => cached;
+    const { rerender } = render(<ProjectPulseStrip worktreeId="wt1" />);
+    expect(state.fetchPulse).not.toHaveBeenCalled();
+
+    state.rangeDays = 180;
+    rerender(<ProjectPulseStrip worktreeId="wt1" />);
+
+    expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
+  });
+
   it("does not fetch on mount while a request is already in flight", () => {
     state.isLoading = () => true;
     render(<ProjectPulseStrip worktreeId="wt1" />);

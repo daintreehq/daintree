@@ -33,8 +33,11 @@ describe("pulseStore", () => {
     resetPulseStore();
   });
 
+  // Cancel retries instead of running them: a retry fired here would answer
+  // after the real clock is back and arm a real timer no test owns.
   afterEach(() => {
-    vi.runOnlyPendingTimers();
+    usePulseStore.getState().invalidateAll();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -118,7 +121,7 @@ describe("pulseStore", () => {
 
   it("clears stale request ids and cancels retries when range changes", () => {
     const retry = vi.fn();
-    const timer = setTimeout(retry, 2000);
+    const timer = setTimeout(() => retry(), 2000);
     usePulseStore.setState({
       requestIds: new Map([["wt-3", 123]]),
       retryTimers: new Map([["wt-3", timer]]),
@@ -159,7 +162,13 @@ describe("pulseStore", () => {
   });
 
   it("drops a snapshot from another range when the new range fails", async () => {
-    usePulseStore.setState({ pulses: new Map([["wt-1", makePulse("wt-1", 60)]]) });
+    const other = makePulse("wt-2", 60);
+    usePulseStore.setState({
+      pulses: new Map([
+        ["wt-1", makePulse("wt-1", 60)],
+        ["wt-2", other],
+      ]),
+    });
     usePulseStore.getState().setRangeDays(120);
     dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "boom" } });
 
@@ -167,6 +176,7 @@ describe("pulseStore", () => {
 
     expect(usePulseStore.getState().getPulse("wt-1")).toBeUndefined();
     expect(usePulseStore.getState().getError("wt-1")).toBe("Unable to load activity data");
+    expect(usePulseStore.getState().getPulse("wt-2")).toBe(other);
   });
 
   it("drops a snapshot from another range when the new range has no commits", async () => {
@@ -188,6 +198,26 @@ describe("pulseStore", () => {
     await usePulseStore.getState().fetchPulse("wt-1");
 
     expect(usePulseStore.getState().getPulse("wt-1")).toBe(kept);
+  });
+
+  it("ignores a late failure from an earlier request in the same millisecond", async () => {
+    const first = deferred();
+    dispatchMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(new Promise(() => {}));
+    const store = usePulseStore.getState();
+
+    const firstFetch = store.fetchPulse("wt-1");
+    store.setRangeDays(120);
+    store.setRangeDays(60);
+    void store.fetchPulse("wt-1");
+
+    first.resolve({ ok: false, error: { message: "boom" } });
+    await firstFetch;
+
+    const state = usePulseStore.getState();
+    expect(state.isLoading("wt-1")).toBe(true);
+    expect(state.getError("wt-1")).toBeNull();
+    expect(state.getRetryCount("wt-1")).toBe(0);
+    expect(state.retryTimers.has("wt-1")).toBe(false);
   });
 
   it("ignores a late answer from an earlier request in the same millisecond", async () => {
