@@ -1145,6 +1145,26 @@ describe("ThemeBrowser navigation contract", () => {
     opener.remove();
   });
 
+  // Opened from Settings, closing reopens Settings on the theme section, which
+  // takes focus before the browser's exit animation ends and it unmounts. The
+  // opener it recorded then is no longer where the user is.
+  it("leaves focus where the next surface put it by the time it unmounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+
+    const reopened = document.createElement("button");
+    document.body.appendChild(reopened);
+    act(() => reopened.focus());
+    view.unmount();
+
+    expect(document.activeElement).toBe(reopened);
+    opener.remove();
+    reopened.remove();
+  });
+
   describe("plugin themes (#13832)", () => {
     const base = BUILT_IN_APP_SCHEMES.find((s) => s.type !== "light")!;
     const pluginTheme = (pluginId: string, pluginName: string, themeId: string, name: string) => ({

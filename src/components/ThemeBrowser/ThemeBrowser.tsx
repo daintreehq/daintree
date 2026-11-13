@@ -237,6 +237,7 @@ export function ThemeBrowser() {
     return committed?.type === "light" ? "light" : "dark";
   });
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -434,13 +435,20 @@ export function ThemeBrowser() {
   // still in the document: opening from Settings unmounts the Settings dialog,
   // and that path is already handled by useThemeBrowserSettingsBridge reopening
   // the Appearance tab — focusing a detached node would just strand the user on
-  // document.body.
+  // document.body. That reopen lands focus on the theme section before this
+  // panel's exit animation ends, so only focus this panel stranded is handed
+  // back: an opener recorded once Settings had already closed (the toolbar's
+  // Settings button) would otherwise take it from behind the reopened dialog.
   useEffect(() => {
     const opener = document.activeElement;
+    const root = rootRef.current;
     const rafId = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => {
       cancelAnimationFrame(rafId);
+      const active = document.activeElement;
+      const stranded = active === null || active === document.body || !!root?.contains(active);
       if (
+        stranded &&
         opener instanceof HTMLElement &&
         opener.isConnected &&
         opener !== document.body &&
@@ -551,6 +559,7 @@ export function ThemeBrowser() {
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         "flex flex-col h-full bg-surface-canvas border-l border-divider",
         OVERLAY_SHEET_SHADOW_CLASS

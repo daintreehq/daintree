@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 vi.mock("@/clients/appThemeClient", () => ({
   appThemeClient: {
@@ -86,6 +86,7 @@ vi.mock("@/config/appColorSchemes", () => {
 
 import { accentOverrideHasLowContrast, type AccentContrastFailure } from "@shared/theme";
 import { AppThemePicker } from "../AppThemePicker";
+import { landOnSettingsElement } from "../settingsLanding";
 
 describe("AppThemePicker shuffle button", () => {
   beforeEach(() => {
@@ -245,6 +246,24 @@ describe("AppThemePicker Change theme button", () => {
     expect(onClose).not.toHaveBeenCalled();
 
     dispatchSpy.mockRestore();
+  });
+
+  // Closing the theme browser reopens Settings on this section; landing there
+  // hands focus back to the button that opened the browser, not to the first
+  // switch in the section.
+  it("is where a landing on its section puts focus", () => {
+    const { container } = render(
+      <div id="appearance-theme">
+        <AppThemePicker onClose={vi.fn()} />
+      </div>
+    );
+    const section = container.querySelector<HTMLElement>("#appearance-theme")!;
+    section.scrollIntoView = vi.fn();
+    expect(within(section).queryByRole("switch")).not.toBeNull();
+
+    landOnSettingsElement(section);
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /change theme/i }));
   });
 
   it("hides the Change theme button when onClose is not provided", () => {
