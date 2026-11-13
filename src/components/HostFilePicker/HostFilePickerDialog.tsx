@@ -316,6 +316,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // The arrow keys, not the pointer, last moved the active row: its full name
   // then shows without a hover.
   const [keyboardCursor, setKeyboardCursor] = useState(false);
+  // The full-name tooltip was dismissed (a scroll, say): the cursor stays the
+  // keyboard's, so the active descendant holds until the pointer takes over.
+  const [nameDismissed, setNameDismissed] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
   const [pathInput, setPathInput] = useState<HTMLInputElement | null>(null);
   const pathInputRef = useRef<HTMLInputElement | null>(null);
@@ -579,12 +582,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
       setKeyboardCursor(true);
+      setNameDismissed(false);
       setActiveIndex((index) => Math.min(entries.length - 1, Math.max(0, index + step)));
       return;
     }
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       setKeyboardCursor(true);
+      setNameDismissed(false);
       setActiveIndex(event.key === "Home" ? 0 : entries.length - 1);
       return;
     }
@@ -797,6 +802,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               // row is the keyboard's from the start.
               if (event.target === event.currentTarget && !listPointerRef.current) {
                 setKeyboardCursor(true);
+                setNameDismissed(false);
               }
               listPointerRef.current = false;
             }}
@@ -862,8 +868,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   <EntryIcon entry={entry} />
                   <EntryName
                     entry={entry}
-                    reveal={keyboardCursor && ready && index === activeIndex}
-                    onDismiss={() => setKeyboardCursor(false)}
+                    reveal={keyboardCursor && !nameDismissed && ready && index === activeIndex}
+                    onDismiss={() => setNameDismissed(true)}
                   />
                   {entry.size !== null && (
                     <span className="shrink-0 pl-2 text-right text-xs font-normal tabular-nums text-text-secondary">

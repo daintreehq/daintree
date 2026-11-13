@@ -579,6 +579,19 @@ describe("HostFilePickerHost keyboard", () => {
     await expect(picked).resolves.toBeNull();
   });
 
+  it("keeps ArrowUp moving the cursor instead of leaving the folder", async () => {
+    render(<HostFilePickerHost />);
+    void openPick({ mode: "file", title: "Choose file" });
+    await findRow("notes.md");
+    const listbox = screen.getByRole("listbox");
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(getRow("notes.md").id);
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(getRow("work").id);
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["Backspace", { key: "Backspace" }],
     ["Alt+ArrowUp", { key: "ArrowUp", altKey: true }],

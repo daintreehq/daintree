@@ -214,8 +214,13 @@ describe("HostDetail SSH target dialog a11y", () => {
     });
     render(<HostDetail entry={entry()} onBack={() => {}} />);
     const trigger = screen.getByRole("button", { name: "Change target…" });
-    act(() => trigger.focus());
+    // Opened from a control that is gone by the time the dialog closes, as a
+    // menu item is: only the trigger ref can take focus back.
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    act(() => opener.focus());
     fireEvent.click(trigger);
+    opener.remove();
     const field = screen.getByDisplayValue("greg@studio");
     fireEvent.change(field, { target: { value: "greg@newbox" } });
     await act(async () => {
