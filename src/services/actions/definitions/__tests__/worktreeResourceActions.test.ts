@@ -513,26 +513,49 @@ describe("worktree resource action definitions", () => {
       }
     );
 
-    it("shows the host's resource-teardown commands, not the delete's other phases", async () => {
-      mockWorktrees.set("/box", { ...BOX, issueTitle: "Fix the devbox" });
-      mockGetDeleteTeardownPreview.mockResolvedValueOnce({
-        phases: [
-          { phase: "attachment-detach", attachment: "db", commands: ["db detach"], approved: true },
-          { phase: "resource-teardown", commands: ["devbox rm box"], approved: false },
-          { phase: "teardown", commands: ["rm -rf .cache"], approved: true },
-        ],
-      });
+    it.each([true, false])(
+      "shows the host's resource-teardown commands and their approval (%s), not the delete's other phases",
+      async (approved) => {
+        mockWorktrees.set("/box", { ...BOX, issueTitle: "Fix the devbox" });
+        mockGetDeleteTeardownPreview.mockResolvedValueOnce({
+          phases: [
+            {
+              phase: "attachment-detach",
+              attachment: "db",
+              commands: ["db detach"],
+              approved: !approved,
+            },
+            { phase: "resource-teardown", commands: ["devbox rm box"], approved },
+            { phase: "teardown", commands: ["rm -rf .cache"], approved: !approved },
+          ],
+        });
+        const def = registry.get("worktree.resource.teardown")!();
+
+        await def.run!({ worktreeId: "/box" }, { dispatchSource: "user" });
+
+        expect(mockGetDeleteTeardownPreview).toHaveBeenCalledWith("/box");
+        expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith({
+          worktreeId: "/box",
+          label: "Fix the devbox",
+          commands: ["devbox rm box"],
+          approved,
+        });
+      }
+    );
+
+    it.each([
+      [{ issueTitle: "Fix the devbox", branch: "feature/box", name: "box" }, "Fix the devbox"],
+      [{ branch: "feature/box", name: "box" }, "feature/box"],
+      [{ branch: undefined, name: "box-folder" }, "box-folder"],
+    ])("names the worktree as its card does: %j → %s", async (naming, label) => {
+      mockWorktrees.set("/box", { ...BOX, ...naming });
       const def = registry.get("worktree.resource.teardown")!();
 
-      await def.run!({ worktreeId: "/box" }, { dispatchSource: "user" });
+      await def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" });
 
-      expect(mockGetDeleteTeardownPreview).toHaveBeenCalledWith("/box");
-      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith({
-        worktreeId: "/box",
-        label: "Fix the devbox",
-        commands: ["devbox rm box"],
-        approved: false,
-      });
+      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ label })
+      );
     });
 
     it("runs nothing and reports nothing when the person cancels", async () => {
@@ -548,17 +571,24 @@ describe("worktree resource action definitions", () => {
       expect(mockNotify).not.toHaveBeenCalled();
     });
 
-    it("still asks, saying the commands couldn't be read, when the preview read fails", async () => {
+    it("refuses without asking, and says why, when the commands can't be read", async () => {
       mockWorktrees.set("/box", BOX);
-      mockGetDeleteTeardownPreview.mockRejectedValueOnce(new Error("port closed"));
+      const portClosed = new Error("port closed");
+      mockGetDeleteTeardownPreview.mockRejectedValueOnce(portClosed);
       const def = registry.get("worktree.resource.teardown")!();
 
-      await def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" });
-
-      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({ label: "feature/box", commands: null, approved: true })
+      const failure = await def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" }).then(
+        () => null,
+        (err: unknown) => err as Error
       );
-      expect(mockResourceAction).toHaveBeenCalledWith("/box", "teardown");
+
+      expect(failure?.message).toMatch(/Couldn't read which commands/);
+      expect(failure?.cause).toBe(portClosed);
+      expect(mockRequestTeardownConfirmation).not.toHaveBeenCalled();
+      expect(mockResourceAction).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Teardown failed", message: failure?.message })
+      );
     });
 
     it("says it found no commands when the host previews none", async () => {
@@ -605,10 +635,6 @@ describe("worktree resource action definitions", () => {
       expect(mockRequestTeardownConfirmation).not.toHaveBeenCalled();
       expect(mockGetDeleteTeardownPreview).not.toHaveBeenCalled();
       expect(mockResourceAction).toHaveBeenCalledWith("/box", "teardown");
-    });
-
-    it("is titled with the verb", () => {
-      expect(registry.get("worktree.resource.teardown")!().title).toBe("Tear down resource");
     });
   });
 

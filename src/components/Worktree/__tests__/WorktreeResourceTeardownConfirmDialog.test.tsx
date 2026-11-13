@@ -70,23 +70,46 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
     expect(await answer).toBe(false);
   });
 
-  it("says when the commands await approval rather than promising they will run", async () => {
+  it("still lists the commands, but says they await approval rather than that they will run", async () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
     void open({ approved: false });
     const el = preview(await dialog());
+    expect(el.querySelector("pre")!.textContent).toBe("devbox rm box\ndns rm box.dev");
     expect(el.textContent).not.toContain("Commands that will run");
     expect(el.textContent).toContain("isn't approved yet");
   });
 
-  it.each([
-    [null, "Couldn't read which commands will run."],
-    [[], "No teardown commands found."],
-  ])("says so when the commands are %j", async (commands, text) => {
+  it.each([true, false])(
+    "says there are no commands, and nothing about approval, when none were found (approved %s)",
+    async (approved) => {
+      render(<WorktreeResourceTeardownConfirmDialog />);
+      void open({ commands: [], approved });
+      const el = preview(await dialog());
+      expect(el.querySelector("pre")!.textContent).toBe("No teardown commands found.");
+      expect(el.textContent).not.toContain("isn't approved yet");
+    }
+  );
+
+  it("answers a superseded request no, and gives the new one a fresh dialog", async () => {
     render(<WorktreeResourceTeardownConfirmDialog />);
-    void open({ commands });
-    const el = preview(await dialog());
-    expect(el.querySelector("pre")!.textContent).toBe(text);
-    expect(el.textContent).not.toContain("isn't approved yet");
+    const first = open({ label: "first" });
+    const firstButton = button(await dialog(), "Tear down resource");
+
+    const second = open({ label: "second" });
+    expect(await first).toBe(false);
+    const el = await waitFor(() => {
+      const current = document.querySelector<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+      if (!current?.textContent?.includes("'second'")) throw new Error("not superseded yet");
+      return current;
+    });
+    // A new element, not the old button relabelled: focus or a press already
+    // on the first request's confirm can't land on the second's.
+    expect(button(el, "Tear down resource")).not.toBe(firstButton);
+
+    await act(async () => {
+      fireEvent.click(button(el, "Tear down resource"));
+    });
+    expect(await second).toBe(true);
   });
 
   it("settles a pending request false when the host unmounts", async () => {

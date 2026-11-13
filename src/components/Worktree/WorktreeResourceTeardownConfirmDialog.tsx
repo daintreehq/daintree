@@ -10,7 +10,7 @@ function WorktreeResourceTeardownConfirmDialogInner() {
   if (!pending) return null;
 
   const { label, commands, approved } = pending.request;
-  const hasCommands = commands !== null && commands.length > 0;
+  const hasCommands = commands.length > 0;
 
   return (
     <ConfirmDialog
@@ -29,11 +29,7 @@ function WorktreeResourceTeardownConfirmDialogInner() {
           {hasCommands && approved ? "Commands that will run" : "Teardown commands"}
         </span>
         <pre className="max-h-48 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-3 font-mono text-xs text-text-primary whitespace-pre-wrap break-all select-text">
-          {commands === null
-            ? "Couldn't read which commands will run."
-            : hasCommands
-              ? commands.join("\n")
-              : "No teardown commands found."}
+          {hasCommands ? commands.join("\n") : "No teardown commands found."}
         </pre>
         {hasCommands && !approved && (
           <p className="text-xs text-text-secondary">
@@ -67,7 +63,10 @@ export function WorktreeResourceTeardownConfirmDialog() {
       resetKeys={[requestSeq]}
       onError={() => useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false)}
     >
-      <WorktreeResourceTeardownConfirmDialogInner />
+      {/* Keyed per request: a request that supersedes another gets a fresh
+          dialog, so focus or a press already on the old one's confirm button
+          can't approve the new one. */}
+      <WorktreeResourceTeardownConfirmDialogInner key={requestSeq} />
     </ErrorBoundary>
   );
 }

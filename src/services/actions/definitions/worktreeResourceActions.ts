@@ -73,25 +73,28 @@ function notifyWorktreeResourceError(
  * Asks before a teardown, showing the commands the host would run. They come
  * from the host's own teardown preview rather than project settings, because
  * the run prefers the repository's lifecycle config and only falls back to
- * settings. A preview that can't be read still asks, saying so.
+ * settings. A teardown is approved against the commands it will run, so one
+ * whose commands can't be read is refused rather than asked about blind.
  */
 async function confirmResourceTeardown(worktreeId: string): Promise<boolean> {
   const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
   if (!worktree) throw new Error("Worktree not found");
-  let preview: WorktreeTeardownPreview | null | undefined;
+  let preview: WorktreeTeardownPreview | null;
   try {
     preview = await worktreeClient.getDeleteTeardownPreview(worktreeId);
-  } catch {
-    preview = undefined;
+  } catch (err) {
+    throw new Error("Couldn't read which commands the teardown would run, so nothing ran.", {
+      cause: err,
+    });
   }
   // `null` is the host saying the worktree's monitor is gone, so the teardown
   // would fail the same way after the person had approved it.
   if (preview === null) throw new Error("Worktree not found");
-  const phase = preview?.phases.find((p) => p.phase === "resource-teardown");
+  const phase = preview.phases.find((p) => p.phase === "resource-teardown");
   return useWorktreeResourceTeardownConfirmStore.getState().requestConfirmation({
     worktreeId,
     label: worktree.issueTitle ?? worktree.branch ?? worktree.name,
-    commands: preview ? (phase?.commands ?? []) : null,
+    commands: phase?.commands ?? [],
     approved: phase?.approved ?? true,
   });
 }

@@ -170,6 +170,15 @@ describe("action palette behavior", () => {
     expect(rows).toEqual(["terminal.viewInfo"]);
   });
 
+  it("enables the terminal info row only while a terminal has focus", () => {
+    const palette = definitions.get("terminal.viewInfo")?.palette as PaletteBehavior | undefined;
+    if (palette?.mode !== "requireContext") throw new Error("expected a requireContext row");
+    // An active worktree is not a terminal: the dialog needs a pane to describe.
+    expect(palette.isReady({})).toBe(false);
+    expect(palette.isReady({ activeWorktreeId: "wt-1" })).toBe(false);
+    expect(palette.isReady({ focusedTerminalId: "term-1" })).toBe(true);
+  });
+
   it("every palette redirect points at a registered, palette-runnable command", () => {
     const failures: string[] = [];
     for (const def of definitions.values()) {

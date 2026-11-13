@@ -5,11 +5,8 @@ export interface ResourceTeardownConfirmRequest {
   worktreeId: string;
   /** The worktree as the card names it: its issue title, else branch, else folder. */
   label: string;
-  /**
-   * The resource teardown commands the host would run, already substituted.
-   * Empty when it found none; `null` when they couldn't be read.
-   */
-  commands: string[] | null;
+  /** The resource teardown commands the host would run, already substituted. */
+  commands: string[];
   /** `false` when they come from a config the user hasn't approved, so none will run yet. */
   approved: boolean;
 }

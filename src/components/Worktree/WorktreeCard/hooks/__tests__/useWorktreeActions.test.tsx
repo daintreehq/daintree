@@ -37,8 +37,9 @@ vi.mock("@/store/recipeStore", () => {
   return { useRecipeStore };
 });
 
+const menuSource = vi.hoisted(() => ({ current: "user" as string }));
 vi.mock("@/components/ui/menu-source", () => ({
-  useMenuActionSource: () => "user",
+  useMenuActionSource: () => menuSource.current,
 }));
 
 import { useWorktreeActions } from "../useWorktreeActions";
@@ -70,6 +71,7 @@ function renderActions(overrides: Partial<WorktreeState> = {}) {
 beforeEach(() => {
   dispatch.mockClear();
   runRecipeWithResults.mockClear();
+  menuSource.current = "user";
 });
 
 describe("useWorktreeActions — running a recipe from the card (#16381)", () => {
@@ -145,10 +147,25 @@ describe("useWorktreeActions — session-wide destructive items defer to the act
 
     // One unconfirmed dispatch: the action's own gate stages the app-level
     // confirm, so the menu can't skip it or show a second dialog of its own.
+    // A person's source, never an agent one carrying `confirmed`, so the
+    // dispatch can't skip that gate either.
     expect(dispatch).toHaveBeenCalledTimes(1);
-    const [id, args] = dispatch.mock.calls[0]!;
-    expect(id).toBe(actionId);
-    expect(args).toEqual({ worktreeId: "wt-1" });
+    expect(dispatch).toHaveBeenCalledWith(actionId, { worktreeId: "wt-1" }, { source: "user" });
     expect(result.current.confirmDialog.isOpen).toBe(false);
+  });
+
+  it("dispatches teardown as the menu it was picked from", () => {
+    menuSource.current = "context-menu";
+    const { result } = renderActions();
+
+    act(() => {
+      result.current.handleResourceTeardown();
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "worktree.resource.teardown",
+      { worktreeId: "wt-1" },
+      { source: "context-menu" }
+    );
   });
 });
