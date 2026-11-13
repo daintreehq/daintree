@@ -97,6 +97,8 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
       render(<WorktreeResourceTeardownConfirmDialog />);
       void open({ commands: [], approved });
       expect(preview().querySelector("pre")!.textContent).toBe("No teardown commands found.");
+      expect(preview().textContent).toContain("Teardown commands");
+      expect(preview().textContent).not.toContain("Commands that will run");
       expect(preview().textContent).not.toContain("isn't approved yet");
     }
   );
@@ -122,6 +124,34 @@ describe("WorktreeResourceTeardownConfirmDialog", () => {
       fireEvent.click(button("Tear down resource"));
     });
     expect(await second).toBe(true);
+  });
+
+  it("moves focus off the old confirm on a supersede, and still returns it to the opener", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    render(<WorktreeResourceTeardownConfirmDialog />);
+    void open({ label: "first" });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    button("Tear down resource").focus();
+
+    const second = open({ label: "second" });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(document.activeElement).toBe(button("Cancel"));
+
+    act(() => {
+      fireEvent.click(button("Cancel"));
+    });
+    expect(await second).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("settles a pending request false when the host unmounts", async () => {
