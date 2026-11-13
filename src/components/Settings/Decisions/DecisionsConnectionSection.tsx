@@ -177,6 +177,7 @@ export function DecisionsConnectionSection({
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   /** The deployed relay's URL as Daintree put it in the field, until the person edits it. */
   const autoFilled = useRef<string | null>(null);
+  const relayUrlField = useRef<HTMLInputElement>(null);
   const deploy = status.relayDeploy;
   // Main is claiming the relay a guided deploy created (#16200): nothing here starts meanwhile.
   const deployClaiming = deploy?.claim?.state === "claiming";
@@ -431,13 +432,17 @@ export function DecisionsConnectionSection({
             control={({ labelId, descriptionId, disabled }) => (
               <form
                 className="flex items-center gap-2"
+                // Main takes a bare host and adds the scheme, which a URL field's
+                // own validation would refuse before the check ever ran.
+                noValidate
                 onSubmit={(event) => {
                   event.preventDefault();
                   submitDraft();
                 }}
               >
                 <Input
-                  type="text"
+                  ref={relayUrlField}
+                  type="url"
                   inputMode="url"
                   autoComplete="off"
                   autoCapitalize="off"
@@ -454,7 +459,9 @@ export function DecisionsConnectionSection({
                   placeholder="https://decisions.example.workers.dev"
                   aria-labelledby={labelId}
                   aria-describedby={descriptionId}
-                  aria-invalid={check?.result === "invalid-url" ? true : undefined}
+                  // Explicit both ways: a bare host fails the URL field's own check,
+                  // which assistive tech would otherwise read as invalid.
+                  aria-invalid={check?.result === "invalid-url"}
                   disabled={disabled}
                 />
                 <Button
@@ -634,6 +641,8 @@ export function DecisionsConnectionSection({
           if (identity.pending !== "disconnect") setDisconnectOpen(false);
         }}
         onConfirm={confirmDisconnect}
+        // With the relay gone, so is its button; setting up the next one starts here.
+        restoreFocusTo={relayUrlField}
       />
     </SettingsSection>
   );

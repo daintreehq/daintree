@@ -307,15 +307,16 @@ export function DecisionsModelSection({
         />
       </SettingsGroup>
 
+      {/* Open until main answers, so focus goes back to a switch that takes it again. */}
       <DecisionsModelConsentDialog
         isOpen={consentOpen}
+        saving={pending !== null}
         onCancel={() => setConsentOpen(false)}
         onAccept={() => {
-          setConsentOpen(false);
-          void read.setPreferences(
-            { learning: true, adapter: savedAdapter, consent: true },
-            "learning"
-          );
+          if (locked) return;
+          void read
+            .setPreferences({ learning: true, adapter: savedAdapter, consent: true }, "learning")
+            .then(() => setConsentOpen(false));
         }}
       />
       <DecisionsModelClearDialog

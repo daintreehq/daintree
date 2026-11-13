@@ -230,6 +230,116 @@ describe("DecisionsConnectionSection claim and restore", () => {
     expect(screen.getByText("No kit chosen")).toBeTruthy();
   });
 
+  it("empties the file picker as each kit is read, so the same file chosen again is read again", async () => {
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
+    renderSection({ state: "not-connected" });
+    await checkAddress("claimed");
+    const input = screen.getByLabelText("Recovery kit file") as HTMLInputElement;
+    // A picker still holding the file fires no change for it a second time.
+    const emptied = vi.spyOn(input, "value", "set");
+
+    await chooseKit('{"v":1}');
+    expect(emptied).toHaveBeenLastCalledWith("");
+    fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+    await submit(passphraseField());
+    expect(screen.getByText("No kit chosen")).toBeTruthy();
+
+    emptied.mockClear();
+    await chooseKit('{"v":1}');
+    expect(emptied).toHaveBeenLastCalledWith("");
+    expect(screen.getByText("decisions-recovery.json")).toBeTruthy();
+  });
+
+  it("shows each secret only by its own eye, and masks both again once either is sent", async () => {
+    claimRelay.mockResolvedValue({
+      result: "refused",
+      origin: ORIGIN,
+      reason: "wrong-secret",
+      kept: true,
+    });
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("claimed");
+    const secretInput = () =>
+      document.querySelector<HTMLInputElement>("#decisions-claim-secret input")!;
+    const showSecret = screen.getByRole("button", { name: "Show claim secret" });
+    const showPassphrase = screen.getByRole("button", { name: "Show recovery kit passphrase" });
+    const revealBoth = async () => {
+      fireEvent.change(secretInput(), { target: { value: SECRET } });
+      fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+      await chooseKit('{"v":1}');
+      fireEvent.click(showSecret);
+      fireEvent.click(showPassphrase);
+    };
+    const expectBothMasked = () => {
+      for (const [field, eye] of [
+        [secretInput(), showSecret],
+        [passphraseField(), showPassphrase],
+      ] as const) {
+        expect(field.type).toBe("password");
+        expect(field.value).toBe("");
+        expect(eye.getAttribute("aria-pressed")).toBe("false");
+      }
+    };
+
+    fireEvent.change(secretInput(), { target: { value: SECRET } });
+    fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+    // A press on the eye leaves the caret in the field.
+    expect(fireEvent.mouseDown(showSecret)).toBe(false);
+    fireEvent.click(showSecret);
+    expect(secretInput().type).toBe("text");
+    expect(secretInput().value).toBe(SECRET);
+    expect(showSecret.getAttribute("aria-pressed")).toBe("true");
+    expect(passphraseField().type).toBe("password");
+    expect(showPassphrase.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(showPassphrase);
+    expect(passphraseField().type).toBe("text");
+    expect(passphraseField().value).toBe(PASSPHRASE);
+    expect(claimRelay).not.toHaveBeenCalled();
+    expect(restoreIdentity).not.toHaveBeenCalled();
+
+    await submit(secretInput());
+    expect(claimRelay).toHaveBeenCalledOnce();
+    expectBothMasked();
+
+    await revealBoth();
+    await submit(passphraseField());
+    expect(restoreIdentity).toHaveBeenCalledOnce();
+    expectBothMasked();
+  });
+
+  it("masks a shown secret again once its field is emptied", async () => {
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("claimed");
+    const fields: [() => HTMLInputElement, string, string][] = [
+      [
+        () => document.querySelector<HTMLInputElement>("#decisions-claim-secret input")!,
+        "Show claim secret",
+        SECRET,
+      ],
+      [passphraseField, "Show recovery kit passphrase", PASSPHRASE],
+    ];
+
+    for (const [field, eye, value] of fields) {
+      fireEvent.change(field(), { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: eye }));
+      expect(field().type).toBe("text");
+      fireEvent.change(field(), { target: { value: "" } });
+      expect(field().type).toBe("password");
+      fireEvent.change(field(), { target: { value } });
+      expect(field().type).toBe("password");
+    }
+  });
+
   it("clears the other form's secret too, whichever form is sent", async () => {
     restoreIdentity.mockResolvedValue({
       result: "kit-refused",

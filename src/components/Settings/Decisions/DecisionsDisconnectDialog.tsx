@@ -1,5 +1,6 @@
 import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { hostOf } from "./relayCheckCopy";
 
 interface DecisionsDisconnectDialogProps {
@@ -10,6 +11,8 @@ interface DecisionsDisconnectDialogProps {
   error: string | null;
   onCancel: () => void;
   onConfirm: () => void;
+  /** Where focus goes once a disconnect has taken its own button away. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -24,6 +27,7 @@ export function DecisionsDisconnectDialog({
   error,
   onCancel,
   onConfirm,
+  restoreFocusTo,
 }: DecisionsDisconnectDialogProps) {
   const host = relayOrigin ? hostOf(relayOrigin) : null;
   return (
@@ -40,6 +44,7 @@ export function DecisionsDisconnectDialog({
       confirmLabel={host ? "Disconnect relay" : "Remove keys"}
       onConfirm={onConfirm}
       isConfirmLoading={disconnecting}
+      restoreFocusTo={restoreFocusTo}
     >
       {error && <InlineError role="alert">{error}</InlineError>}
     </ConfirmDialog>

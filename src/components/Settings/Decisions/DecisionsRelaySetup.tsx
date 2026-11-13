@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -16,6 +17,34 @@ const MAX_KIT_BYTES = 256 * 1024;
 interface ChosenKit {
   name: string;
   text: string;
+}
+
+/** Shows or masks one secret field; the press leaves the caret where it was. */
+function RevealButton({
+  label,
+  shown,
+  disabled,
+  onToggle,
+}: {
+  label: string;
+  shown: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      disabled={disabled}
+      aria-label={`Show ${label}`}
+      aria-pressed={shown}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onToggle}
+    >
+      {shown ? <EyeOff /> : <Eye />}
+    </Button>
+  );
 }
 
 interface DecisionsRelaySetupProps {
@@ -48,9 +77,11 @@ export function DecisionsRelaySetup({
   deploy,
 }: DecisionsRelaySetupProps) {
   const [secret, setSecret] = useState("");
+  const [secretShown, setSecretShown] = useState(false);
   const [kit, setKit] = useState<ChosenKit | null>(null);
   const [kitError, setKitError] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState("");
+  const [passphraseShown, setPassphraseShown] = useState(false);
   const [acceptWeak, setAcceptWeak] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   /** Bumped by each choice, submit and unmount, so a slower read can't land after them. */
@@ -76,11 +107,13 @@ export function DecisionsRelaySetup({
       ? deploy
       : null;
 
-  /** Every secret on the page goes as an attempt starts, whichever form sent it. */
+  /** Every secret on the page goes as an attempt starts, whichever form sent it, and the next is typed masked. */
   const clearSecrets = () => {
     kitRead.current += 1;
     setSecret("");
     setPassphrase("");
+    setSecretShown(false);
+    setPassphraseShown(false);
     setKit(null);
   };
 
@@ -174,15 +207,24 @@ export function DecisionsRelaySetup({
               }}
             >
               <Input
-                type="password"
+                type={secretShown ? "text" : "password"}
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={256}
                 value={secret}
-                onChange={(event) => setSecret(event.target.value)}
+                onChange={(event) => {
+                  setSecret(event.target.value);
+                  if (event.target.value === "") setSecretShown(false);
+                }}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 disabled={rowDisabled}
+              />
+              <RevealButton
+                label="claim secret"
+                shown={secretShown}
+                disabled={rowDisabled}
+                onToggle={() => setSecretShown((shown) => !shown)}
               />
               <Button
                 type="submit"
@@ -236,18 +278,29 @@ export function DecisionsRelaySetup({
               <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
                 {kit?.name ?? "No kit chosen"}
               </span>
-              <Input
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={1024}
-                value={passphrase}
-                onChange={(event) => setPassphrase(event.target.value)}
-                placeholder="Passphrase"
-                aria-label="Recovery kit passphrase"
-                className="w-52"
-                disabled={rowDisabled}
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  type={passphraseShown ? "text" : "password"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={1024}
+                  value={passphrase}
+                  onChange={(event) => {
+                    setPassphrase(event.target.value);
+                    if (event.target.value === "") setPassphraseShown(false);
+                  }}
+                  placeholder="Passphrase"
+                  aria-label="Recovery kit passphrase"
+                  className="w-52"
+                  disabled={rowDisabled}
+                />
+                <RevealButton
+                  label="recovery kit passphrase"
+                  shown={passphraseShown}
+                  disabled={rowDisabled}
+                  onToggle={() => setPassphraseShown((shown) => !shown)}
+                />
+              </div>
               <Button
                 type="submit"
                 variant="outline"

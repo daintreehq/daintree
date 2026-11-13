@@ -75,6 +75,19 @@ function learningSwitch(): HTMLButtonElement {
   return screen.getByRole("switch", { name: /Learn from your answers/ }) as HTMLButtonElement;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Longer than a dialog's exit animation, so one that closed has left the DOM by then. */
+const EXIT_ALLOWANCE_MS = 300;
+
 /** A dialog plays its exit before it leaves the DOM. */
 async function gone() {
   await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -169,6 +182,69 @@ describe("Decisions → Decision model", () => {
       consent: true,
     });
     expect(learningSwitch().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("keeps the agreement open and locked until main answers, then hands focus back to the switch", async () => {
+    getModel.mockResolvedValue(state());
+    const saving = deferred<DecisionsModelState>();
+    setModel.mockReturnValue(saving.promise);
+    await renderSection();
+
+    learningSwitch().focus();
+    fireEvent.click(learningSwitch());
+    const accept = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Turn on learning",
+    });
+    act(() => accept.focus());
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    expect(setModel).toHaveBeenCalledExactlyOnceWith({
+      learning: true,
+      adapter: null,
+      consent: true,
+    });
+    // Past any exit animation, still open over a switch that can't take focus
+    // yet, and Cancel can't take back what's being saved.
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(learningSwitch().disabled).toBe(true);
+
+    await act(async () => saving.resolve(state({ revision: 1, learning: true, consentedAt: 5 })));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(learningSwitch().disabled).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(learningSwitch()));
+  });
+
+  it("closes the agreement on a failed save too, with the failure in the section", async () => {
+    getModel.mockResolvedValue(state());
+    const saving = deferred<DecisionsModelState>();
+    setModel.mockReturnValue(saving.promise);
+    await renderSection();
+
+    learningSwitch().focus();
+    fireEvent.click(learningSwitch());
+    const accept = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Turn on learning",
+    });
+    act(() => accept.focus());
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () => saving.reject(new Error("store is locked")));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(row("decisions-model").textContent).toContain("store is locked");
+    expect(learningSwitch().getAttribute("aria-checked")).toBe("false");
+    await vi.waitFor(() => expect(document.activeElement).toBe(learningSwitch()));
   });
 
   it("turns learning on again without asking once agreed, keeping the CLI chosen", async () => {

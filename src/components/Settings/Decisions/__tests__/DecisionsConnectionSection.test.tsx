@@ -7,6 +7,7 @@ import type {
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
 } from "@shared/types/decisions";
+import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 
@@ -91,6 +92,25 @@ describe("DecisionsConnectionSection relay check", () => {
     );
     expect(screen.getByText("decisions.example.workers.dev is ready to claim")).toBeTruthy();
     expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+  });
+
+  it("sends a bare host through the form's own submit, leaving the scheme to main", async () => {
+    checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
+    renderSection({ state: "not-connected" });
+
+    fireEvent.change(urlField(), { target: { value: ORIGIN } });
+    expect(urlField().validity.typeMismatch).toBe(false);
+    fireEvent.change(urlField(), { target: { value: "decisions.example.workers.dev" } });
+    // A URL field holds a bare host as a mismatch of its own, which neither
+    // stops the check nor reaches assistive tech as an invalid entry.
+    expect(urlField().validity.typeMismatch).toBe(true);
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
+    // requestSubmit, unlike a bare submit event, runs the form's own validation first.
+    await act(async () => {
+      urlField().form!.requestSubmit();
+    });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith("decisions.example.workers.dev");
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
   });
 
   it.each<[string, DecisionsRelayCheck, string, RegExp]>([
@@ -504,5 +524,83 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     renderSection({ state: "not-connected", relayOrigin: ORIGIN, problem: "keys" });
     expect(statusRow()).toContain("keys couldn't be read");
     expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+});
+
+describe("DecisionsConnectionSection disconnect focus", () => {
+  const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
+
+  /** The tab's part: the status main answers with replaces the one shown. */
+  function Section({ initial }: { initial: DecisionsStatus }) {
+    const [status, setStatus] = useState(initial);
+    return (
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={status}
+          onChanged={(next) => {
+            if (next) setStatus(next);
+          }}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    checkRelay.mockReset();
+    startSetupCheck.mockReset();
+    disconnectRelay.mockReset();
+    const stub = electronStub();
+    Object.defineProperty(window, "electron", {
+      value: { ...stub, decisions: { ...stub.decisions, disconnectRelay } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each<[string, DecisionsStatus, string]>([
+    ["a relay", { state: "not-connected", relayOrigin: ORIGIN }, "Disconnect relay"],
+    ["an unfinished setup's keys", { state: "not-connected", keysStored: true }, "Remove keys"],
+  ])(
+    "hands focus to the relay URL field once removing %s takes its button away",
+    async (_, initial, label) => {
+      disconnectRelay.mockResolvedValue({ state: "not-connected" });
+      render(<Section initial={initial} />);
+      await act(async () => {});
+
+      const trigger = screen.getByRole("button", { name: label });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: label,
+      });
+      act(() => confirm.focus());
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+
+      expect(disconnectRelay).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+      await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
+    }
+  );
+
+  it("hands focus back to Disconnect relay when the confirm is cancelled", async () => {
+    render(<Section initial={{ state: "not-connected", relayOrigin: ORIGIN }} />);
+    await act(async () => {});
+
+    const trigger = screen.getByRole("button", { name: "Disconnect relay" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const cancel = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    fireEvent.click(cancel);
+
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(disconnectRelay).not.toHaveBeenCalled();
   });
 });
