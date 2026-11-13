@@ -165,17 +165,44 @@ describe("HybridInputBar completions in the Expanded Editor", () => {
   it("inserts the row the pointer picks", async () => {
     const { view, type, openExpandedEditor } = await mount();
     await openExpandedEditor();
-    await type("@dif");
-    const [row] = within(dialog()).getAllByRole("option", { name: /^@diff/ });
+    await type("@");
+    const row = within(dialog())
+      .getAllByRole("option")
+      .find((option) => option.getAttribute("aria-selected") !== "true" && !option.ariaDisabled)!;
+    const token = row.querySelector("span")!.textContent!;
 
+    // Apart, as a browser runs them: a press read as outside closes the menu
+    // before the click lands.
     await act(async () => {
-      fireEvent.pointerDown(row!);
-      fireEvent.mouseDown(row!);
-      fireEvent.click(row!);
+      fireEvent.pointerDown(row);
+    });
+    expect(view.contentDOM.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => {
+      fireEvent.mouseDown(row);
+      fireEvent.click(row);
     });
 
-    expect(view.state.doc.toString()).toMatch(/^@diff\b/);
+    expect(view.state.doc.toString().startsWith(token)).toBe(true);
     expect(dialog().contains(view.dom)).toBe(true);
+  });
+
+  // jsdom has no layout, so the geometry is given: the token near the top of
+  // a 1000 × 500 frame at (100, 200).
+  it("places the menu at the token in the dialog's frame", async () => {
+    const { view, type, openExpandedEditor } = await mount();
+    await openExpandedEditor();
+    const frame = view.dom.parentElement!.parentElement!;
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(100, 200, 1000, 500));
+    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 500 });
+    vi.spyOn(view, "coordsAtPos").mockReturnValue({ left: 150, right: 150, top: 230, bottom: 250 });
+
+    await type("@");
+
+    const menu = menuIn(dialog())!;
+    expect(menu.parentElement).toBe(frame);
+    expect(menu.style.left).toBe("50px");
+    expect(parseFloat(menu.style.top)).toBeGreaterThanOrEqual(250 - 200);
+    expect(menu.style.bottom).toBe("");
   });
 
   it("inserts the selected row on Enter without sending", async () => {

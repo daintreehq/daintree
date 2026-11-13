@@ -33,6 +33,9 @@ const MENU_WIDTH_PX = 420;
 /** The space the menu leaves between itself and the caret's line. */
 const MENU_CARET_GAP_PX = 4;
 
+/** The menu's header and one row: less than that shows no completion at all. */
+const MENU_MIN_HEIGHT_PX = 64;
+
 function samePlacement(a: MenuPlacement, b: MenuPlacement): boolean {
   return (
     a.left === b.left &&
@@ -49,6 +52,19 @@ interface CaretFrame {
   clientLeft: number;
   clientTop: number;
   clientHeight: number;
+  /** Measured size over layout size: AppDialog scales its panel in. */
+  scaleX: number;
+  scaleY: number;
+}
+
+interface CaretToken {
+  left: number;
+  /** From the top of the token's first line to the bottom of its last. */
+  top: number;
+  bottom: number;
+  /** The last line alone, where the caret types. */
+  lastTop: number;
+  lastBottom: number;
 }
 
 /**
@@ -58,41 +74,53 @@ interface CaretFrame {
  */
 export function placeMenuAtCaret(
   frame: CaretFrame,
-  token: { left: number; top: number; bottom: number },
+  token: CaretToken,
   viewport: { width: number; height: number }
 ): MenuPlacement {
-  const { rect } = frame;
+  const { rect, scaleX, scaleY } = frame;
   const minLeft = Math.max(rect.left, 0) + EDGE_GAP_PX;
   const maxRight = Math.min(rect.right, viewport.width) - EDGE_GAP_PX;
   const minTop = Math.max(rect.top, 0) + EDGE_GAP_PX;
   const maxBottom = Math.min(rect.bottom, viewport.height) - EDGE_GAP_PX;
   // A token scrolled out of the frame keeps the menu at the edge it left by.
-  const tokenTop = Math.min(Math.max(token.top, rect.top), rect.bottom);
-  const tokenBottom = Math.min(Math.max(token.bottom, rect.top), rect.bottom);
-  const roomAbove = tokenTop - MENU_CARET_GAP_PX - minTop;
-  const roomBelow = maxBottom - tokenBottom - MENU_CARET_GAP_PX;
+  const fit = (top: number, bottom: number) => {
+    const lineTop = Math.min(Math.max(top, rect.top), rect.bottom);
+    const lineBottom = Math.min(Math.max(bottom, rect.top), rect.bottom);
+    return {
+      lineTop,
+      lineBottom,
+      roomAbove: lineTop - MENU_CARET_GAP_PX - minTop,
+      roomBelow: maxBottom - lineBottom - MENU_CARET_GAP_PX,
+    };
+  };
+  let lines = fit(token.top, token.bottom);
+  // A token wrapped past both of the frame's edges leaves neither side of it.
+  if (Math.max(lines.roomAbove, lines.roomBelow) < MENU_MIN_HEIGHT_PX) {
+    lines = fit(token.lastTop, token.lastBottom);
+  }
 
   const maxWidth = Math.max(0, maxRight - minLeft);
   const menuWidth = Math.min(MENU_WIDTH_PX, maxWidth);
   const left = Math.max(minLeft, Math.min(token.left, maxRight - menuWidth));
-  const originX = rect.left + frame.clientLeft;
-  const originY = rect.top + frame.clientTop;
+  // Client coordinates in, the frame's own unscaled offsets out.
+  const x = (clientX: number) => (clientX - rect.left) / scaleX - frame.clientLeft;
+  const y = (clientY: number) => (clientY - rect.top) / scaleY - frame.clientTop;
 
-  if (roomBelow >= roomAbove) {
+  if (lines.roomBelow >= lines.roomAbove) {
     return {
       side: "below",
-      left: left - originX,
-      top: tokenBottom + MENU_CARET_GAP_PX - originY,
-      maxWidth,
-      maxHeight: Math.max(0, roomBelow),
+      left: x(left),
+      top: y(lines.lineBottom) + MENU_CARET_GAP_PX,
+      maxWidth: maxWidth / scaleX,
+      maxHeight: Math.max(0, lines.roomBelow) / scaleY,
     };
   }
   return {
     side: "above",
-    left: left - originX,
-    bottom: originY + frame.clientHeight - (tokenTop - MENU_CARET_GAP_PX),
-    maxWidth,
-    maxHeight: Math.max(0, roomAbove),
+    left: x(left),
+    bottom: frame.clientHeight - y(lines.lineTop) + MENU_CARET_GAP_PX,
+    maxWidth: maxWidth / scaleX,
+    maxHeight: Math.max(0, lines.roomAbove) / scaleY,
   };
 }
 
@@ -180,14 +208,24 @@ export function useAutocompletePositioning({
       if (!start) return;
       // A long query can wrap: the menu clears every line the token is on.
       const end = view.coordsAtPos(tokenEnd, -1) ?? start;
+      const rect = modalFrameEl.getBoundingClientRect();
+      const { offsetWidth, offsetHeight } = modalFrameEl;
       const next = placeMenuAtCaret(
         {
-          rect: modalFrameEl.getBoundingClientRect(),
+          rect,
           clientLeft: modalFrameEl.clientLeft,
           clientTop: modalFrameEl.clientTop,
           clientHeight: modalFrameEl.clientHeight,
+          scaleX: rect.width > 0 && offsetWidth > 0 ? rect.width / offsetWidth : 1,
+          scaleY: rect.height > 0 && offsetHeight > 0 ? rect.height / offsetHeight : 1,
         },
-        { left: start.left, top: start.top, bottom: Math.max(start.bottom, end.bottom) },
+        {
+          left: start.left,
+          top: start.top,
+          bottom: Math.max(start.bottom, end.bottom),
+          lastTop: end.top,
+          lastBottom: end.bottom,
+        },
         { width: window.innerWidth, height: window.innerHeight }
       );
       setMenuPlacement((current) => (samePlacement(current, next) ? current : next));
