@@ -103,11 +103,17 @@ describe("Forge stats token error UX — issue #5024", () => {
     // Whole-button opacity dimmed the focus ring and hover along with the
     // content and made the token-repair click read as disabled.
     // Both segments take their tone from one helper, which answers a token
-    // error before anything else.
-    expect(source).toMatch(/const segmentTone = [^=]*=>\s*isTokenError\s*\?\s*"unavailable"/);
-    for (const ref of ["buttonRef={issuesButtonRef}", "buttonRef={prsButtonRef}"]) {
+    // error before anything else — each segment's own provider's (#16944): the
+    // issues pill's may be a separate tracker's.
+    expect(source).toMatch(/const segmentTone = [^=]*=>\s*tokenError\s*\?\s*"unavailable"/);
+    for (const [ref, tokenError] of [
+      ["buttonRef={issuesButtonRef}", "issuesTokenError"],
+      ["buttonRef={prsButtonRef}", "isTokenError"],
+    ]) {
       const button = source.slice(source.indexOf(ref), source.indexOf(ref) + 2500);
-      expect(button).toMatch(/tone=\{segmentTone\(\w+DisplayCount\)\}/);
+      expect(button).toMatch(
+        new RegExp(`tone=\\{segmentTone\\(\\w+DisplayCount, ${tokenError}\\)\\}`)
+      );
       expect(button).not.toMatch(/opacity-\d/);
     }
   });
