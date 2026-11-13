@@ -43,7 +43,11 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // The handler the panel last handed the dialog, so a test can drive it past the
 // disabled button the way the real dialog's Enter key path could.
-const confirmDialogProps = vi.hoisted(() => ({ onConfirm: null as (() => void) | null }));
+const confirmDialogProps = vi.hoisted(() => ({
+  onConfirm: null as (() => void) | null,
+  initialFocus: undefined as string | undefined,
+  hasPreview: undefined as boolean | undefined,
+}));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
@@ -56,7 +60,11 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     confirmLabel,
     confirmDisabled,
     hint,
+    initialFocus,
+    hasPreview,
   }: {
+    initialFocus?: string;
+    hasPreview?: boolean;
     isOpen: boolean;
     title: ReactNode;
     description?: ReactNode;
@@ -69,6 +77,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   }) => {
     if (!isOpen) return null;
     confirmDialogProps.onConfirm = onConfirm;
+    confirmDialogProps.initialFocus = initialFocus;
+    confirmDialogProps.hasPreview = hasPreview;
     return (
       <div role="alertdialog" data-testid="push-confirm-dialog">
         <div data-testid="confirm-title">{title}</div>
@@ -322,6 +332,35 @@ describe("CommitPanel — push confirm", () => {
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", unpreviewed("feature/x"));
     expect(screen.queryByTestId("push-confirm-dialog")).toBeNull();
     expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
+  });
+
+  it("asks the dialog to focus its confirm button, not the file list (#16894)", () => {
+    renderPanel({ currentBranch: "feature/x" });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(confirmDialogProps.initialFocus).toBe("confirm");
+    expect(confirmDialogProps.hasPreview).toBe(true);
+  });
+
+  it("opens the confirm on a protected branch despite the opt-out (#16894)", () => {
+    for (const branch of ["main", "master"]) {
+      cleanup();
+      const { onCommitAndPush } = renderPanel({ currentBranch: branch, skipPushConfirm: true });
+      fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+      expect(onCommitAndPush).not.toHaveBeenCalled();
+      expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
+    }
+  });
+
+  it("offers no 'don't ask again' box on a protected branch and keeps the stored opt-out (#16894)", async () => {
+    const { onSetSkipPushConfirm, onCommitAndPush } = renderPanel({
+      currentBranch: "main",
+      skipPushConfirm: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(screen.queryByTestId("commit-panel-push-confirm-dont-ask")).toBeNull();
+    await confirmWhenReady(/Push to origin\/main/);
+    expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
+    expect(onCommitAndPush).toHaveBeenCalled();
   });
 
   it("pins a confirmed push to the tip and destination its preview measured", async () => {
