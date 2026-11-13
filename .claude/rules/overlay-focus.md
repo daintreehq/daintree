@@ -17,9 +17,10 @@ Radix opens tooltips on **focus** as well as hover, and every anchored overlay h
 
 The policy, per close:
 
-- **Pointer click away** → `preventDefault()` and restore nothing; the clicked target owns focus. Exception: a context menu (`restoreFocusOnPointerClose`) restores ringlessly, because its restore target is the surface the user was working in, not a control they dismissed — dropping focus on `document.body` there strands them.
+- **Pointer click away** → `preventDefault()`; the clicked target owns focus. If nothing took it a task later (a modal menu swallows the dismissing press), the trigger takes it back ringless. Exception: a context menu (`restoreFocusOnPointerClose`) restores ringlessly, because its restore target is the surface the user was working in, not a control they dismissed — dropping focus on `document.body` there strands them.
 - **Pointer click on an item** → `preventDefault()` and restore with `focus({ preventScroll: true, focusVisible: false })`. Never plain restoration (Chromium rings it) and never nothing (Radix has already unmounted the item, so focus falls to `document.body` and strands the keyboard user).
 - **Keyboard** → leave it alone. Radix restores and the ring is correct.
+- **Handoff** → an item that sends focus to another surface (`AgentButton`'s preset launch) calls `expectHandoff()` from its own activation. The close cancels Radix's restore, which would steal focus back from a surface that got there first, and restores only if nothing took focus a task later: ringless after a pointer pick, ringed after a keyboard one.
 
 Detection: `event.target.closest('[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"],[role="option"],button,[role="button"],a[href]')` **and** (`event.detail > 0` **or** a pointer went down inside the content during this opening). Radix implements keyboard select as a synthetic `.click()` with `detail === 0`, but its pointer-up fallback — press elsewhere, release over the item — fires one too, which the pointer-inside flag catches.
 
@@ -47,7 +48,7 @@ Element-scoped, in `src/lib/tooltipFocusSuppression.ts`: the close arms a one-sh
 
 ## Known local wiring
 
-A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the outcome (`AppPalettePopover`).
+A consumer that preventDefaults `onCloseAutoFocus` itself keeps ownership of the outcome (`AppPalettePopover`), so it never does that to claim a pointer close: it skips the click-away fallback and strands focus on `document.body` (#16922). A plugin popover opened from a menu row is the toolbar's one such owner, since the popover takes focus into itself.
 
 Sanctioned survivors, because launching or switching moves focus away from the control entirely: `AgentButton.tsx`, `PluginTrayButton.tsx`, `DockLaunchButton.tsx` (controlled tooltip + `isRestoringFocusRef`), and the toolbar's project pill (`useToolbarProjectPill.tsx`, `isRestoringFocusPillRef`).
 
