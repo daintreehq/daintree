@@ -179,6 +179,17 @@ describe("useWorktreeFormValidation", () => {
     });
   });
 
+  it.each([
+    ["new", {}],
+    ["existing", { branchMode: "existing" as const, selectedExistingBranch: "develop" }],
+  ])("rejects a blank worktree path in %s mode", (_mode, overrides) => {
+    const { result } = renderHook(() => useWorktreeFormValidation());
+
+    const validation = result.current.validate({ ...baseInput, ...overrides, worktreePath: "   " });
+    expect(validation.valid).toBe(false);
+    expect(validation.error?.field).toBe("worktree-path");
+  });
+
   it("returns fullBranchName for unprefixed input", () => {
     const { result } = renderHook(() => useWorktreeFormValidation());
 

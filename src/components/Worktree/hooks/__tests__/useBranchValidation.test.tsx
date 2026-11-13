@@ -412,16 +412,19 @@ describe("useBranchValidation — a path the user chose", () => {
     expect(result.current.pathWasAutoResolved).toBe(false);
   });
 
-  it("follows suggestions again once the user empties the path", async () => {
-    const { result, rerender } = renderValidation("feature/terrain");
-    await settle();
-    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
-    act(() => result.current.setCustomWorktreePath(""));
+  it.each(["", "   "])(
+    "follows suggestions again once the user empties the path to %j",
+    async (emptied) => {
+      const { result, rerender } = renderValidation("feature/terrain");
+      await settle();
+      act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+      act(() => result.current.setCustomWorktreePath(emptied));
 
-    rerender({ branchInput: "feature/canyon" });
-    await settle();
-    expect(result.current.worktreePath).toBe("/worktrees/feature/canyon");
-  });
+      rerender({ branchInput: "feature/canyon" });
+      await settle();
+      expect(result.current.worktreePath).toBe("/worktrees/feature/canyon");
+    }
+  );
 
   it("is forgotten on reopen", async () => {
     const { result, rerender } = renderHook(
@@ -491,6 +494,18 @@ describe("useBranchValidation — a path the user chose", () => {
     expect(result.current.worktreePath).toBe("/custom/terrain");
   });
 
+  it("keeps it when the branch name is taken and another is offered", async () => {
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+
+    mockGetAvailableBranch.mockResolvedValue("feature/canyon-2");
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+    expect(result.current.branchWasAutoResolved).toBe(true);
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+
   it("keeps it for an existing branch too", async () => {
     const { result, rerender } = renderHook(
       (props: { overrideBranchName: string }) =>
@@ -552,14 +567,47 @@ describe("useBranchValidation — an emptied branch name", () => {
     vi.clearAllMocks();
   });
 
-  it("clears the path suggested for the name it replaced", async () => {
+  // A suffixed suggestion, so the "resolved" hint is up before the name goes.
+  it.each([
+    ["is emptied", "  "],
+    ["is down to its prefix", "feature/"],
+    ["turns invalid", "feature/bad..name"],
+  ])("clears the path suggested for the name it replaced when the name %s", async (_, next) => {
+    mockGetDefaultPath.mockResolvedValue("/worktrees/feature-terrain-2");
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature-terrain-2");
+    expect(result.current.pathWasAutoResolved).toBe(true);
+    mockGetAvailableBranch.mockClear();
+    mockGetDefaultPath.mockClear();
+
+    rerender({ branchInput: next });
+    expect(result.current.worktreePath).toBe("");
+    expect(result.current.pathWasAutoResolved).toBe(false);
+    await settle();
+    expect(mockGetAvailableBranch).not.toHaveBeenCalled();
+    expect(mockGetDefaultPath).not.toHaveBeenCalled();
+  });
+
+  it("doesn't take a lookup for the old name that lands after it", async () => {
     const { result, rerender } = renderValidation("feature/terrain");
     await settle();
     expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
 
-    rerender({ branchInput: "  " });
+    let answer: (path: string) => void = () => {};
+    mockGetDefaultPath.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (answer = resolve))
+    );
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith(ROOT, "feature/canyon");
+
+    rerender({ branchInput: "" });
     expect(result.current.worktreePath).toBe("");
-    expect(result.current.pathWasAutoResolved).toBe(false);
+    await act(async () => {
+      answer("/worktrees/feature/canyon");
+    });
+    expect(result.current.worktreePath).toBe("");
   });
 
   it("clears an existing-branch suggestion when the pick is cleared", async () => {

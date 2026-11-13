@@ -2905,17 +2905,17 @@ describe("NewWorktreeDialog — a path the user chose (#16891)", () => {
     mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
       Promise.resolve(`/test/root-worktrees/${branch}`)
     );
-    mockDispatch.mockImplementation((id: string) =>
-      Promise.resolve(
-        id === "project.openDialog"
-          ? { ok: true, result: "/picked/place" }
-          : { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/two" } }
-      )
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/two" } }
+        : { ok: true, result: undefined }
     );
     mockGetCurrentUser.mockResolvedValue(null);
   });
 
   afterEach(() => {
+    placement.getDraft = null;
+    placement.onCommitChange = null;
     vi.useRealTimers();
     cleanup();
     vi.clearAllMocks();
@@ -2953,14 +2953,23 @@ describe("NewWorktreeDialog — a path the user chose (#16891)", () => {
     await typeBranch("feature/two");
 
     expect(mockGetAvailableBranch).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
     expect(pathInput().value).toBe("/custom/place");
     expect(await createAndReadPath()).toMatchObject({
       newBranch: "feature/two",
       path: "/custom/place",
     });
+    // Created, the form starts over: the next name gets a suggestion again.
+    expect(pathInput().value).toBe("");
   });
 
   it("keeps a browsed path the same way", async () => {
+    const createOnly = mockDispatch.getMockImplementation()!;
+    mockDispatch.mockImplementation(async (actionId: string, ...rest: unknown[]) =>
+      actionId === "project.openDialog"
+        ? { ok: true, result: "/picked/place" }
+        : createOnly(actionId, ...rest)
+    );
     renderDialog();
     await advanceTimersGradually(500);
     await typeBranch("feature/one");
@@ -2971,6 +2980,7 @@ describe("NewWorktreeDialog — a path the user chose (#16891)", () => {
     expect(pathInput().value).toBe("/picked/place");
     await typeBranch("feature/two");
 
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
     expect(pathInput().value).toBe("/picked/place");
     expect(await createAndReadPath()).toMatchObject({ path: "/picked/place" });
   });
@@ -3039,24 +3049,36 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     return submit;
   }
 
-  it("leaves an emptied path to the chosen host, and asks for one again back on this host", async () => {
+  it("creates on the chosen host with an emptied path, and asks for one again back on this host", async () => {
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();
     await act(async () => {
       fireEvent.change(screen.getByTestId("worktree-path-input"), { target: { value: "" } });
     });
-    await chooseHost("studio-02", { relativePath: null });
+    // The row's submit asks the dialog for its draft, as the real one does.
+    const drafts: unknown[] = [];
+    await chooseHost("studio-02", {
+      relativePath: null,
+      submit: () => drafts.push(placement.getDraft!()),
+    });
 
     expect(screen.queryByTestId("worktree-path-input")).toBeNull();
     expect(screen.getByTestId("placed-worktree-path").textContent).toBe(
       "Where studio-02 puts new worktrees"
     );
-    let placedDraft: unknown = null;
-    act(() => {
-      placedDraft = placement.getDraft?.() ?? null;
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => {
+      fireEvent.click(primary);
     });
-    expect(placedDraft).toMatchObject({ newBranch: "feature/placed", path: "" });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(drafts).toEqual([
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+    ]);
     expect(screen.queryByText("Please enter a worktree path")).toBeNull();
 
     await chooseHost(null);
