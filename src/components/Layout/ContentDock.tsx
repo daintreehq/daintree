@@ -188,6 +188,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeDockIndexRef = useRef(0);
+  // Two claims on the last chip that held focus, with different lifetimes. The
+  // tab stop follows a chip that is moved while its panel has focus, so that
+  // identity outlives focus leaving the chip (a keyboard move runs from inside
+  // its terminal). Recovery after a removal is a claim on focus itself, and it
+  // ends the moment focus leaves the rail.
+  const followedDockItemRef = useRef<HTMLElement | null>(null);
   const prevFocusedDockItemRef = useRef<HTMLElement | null>(null);
   const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useHorizontalScrollControls(
     scrollContainerRef,
@@ -222,6 +228,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     if (items.length === 0) {
       // The last chip going takes its history with it; a stale ref would claim
       // the next chip to arrive on behalf of focus that is long gone.
+      followedDockItemRef.current = null;
       prevFocusedDockItemRef.current = null;
       return;
     }
@@ -229,8 +236,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     // (#14972) keeps it, and the next arrow roves from where the chip now sits.
     // React has already put focus back on a moved chip by now, so one that holds
     // it is scrolled into view the way an arrow-key rove would.
-    const followed = prevFocusedDockItemRef.current;
+    const followed = followedDockItemRef.current;
     const followedIdx = followed ? items.indexOf(followed) : -1;
+    if (followed && followedIdx === -1) followedDockItemRef.current = null;
     if (
       followed &&
       followedIdx !== -1 &&
@@ -269,6 +277,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       const idx = items.indexOf(target);
       if (idx !== -1) {
         activeDockIndexRef.current = idx;
+        followedDockItemRef.current = target;
         prevFocusedDockItemRef.current = target;
         syncDockTabStops(items, idx);
       }

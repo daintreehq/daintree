@@ -73,6 +73,10 @@ vi.mock("@dnd-kit/core", () => ({
   useDroppable: () => ({ setNodeRef: () => {}, isOver: dndMocks.isOver }),
 }));
 
+// Every ConfirmDialog the container mounts, by title — the "last rendered" props
+// below cannot say anything about the other one.
+const restoreByTitle: Record<string, (() => HTMLElement | null) | undefined> = {};
+
 let confirmDialogProps: {
   isOpen: boolean;
   title: string;
@@ -103,6 +107,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
       onClose: props.onClose,
       restoreFocusTo: props.restoreFocusTo,
     };
+    restoreByTitle[props.title] = props.restoreFocusTo;
     return props.isOpen ? (
       <div data-testid="confirm-dialog">
         <div data-testid="confirm-dialog-title">{props.title}</div>
@@ -826,6 +831,16 @@ describe("TrashContainer", () => {
       // The dialog is unmounted with the trash, and its cleanup asks this where
       // to put focus: the dock's landmark, never the app shell.
       expect(restoreTarget?.()).toBe(landmarkTarget);
+    });
+
+    it("sends the Remove confirmation to the dock as well once its removal empties the trash", () => {
+      const { empty } = renderTrash([makeTrashedItem("1")]);
+      const restore = restoreByTitle["Remove panel?"];
+      expect(restore).toBeDefined();
+
+      empty();
+
+      expect(restore?.()).toBe(landmarkTarget);
     });
 
     it("prefers the popover only while it is open", () => {

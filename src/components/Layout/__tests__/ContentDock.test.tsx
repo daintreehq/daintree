@@ -350,6 +350,9 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
 
       expect(first.scrollIntoView).not.toHaveBeenCalled();
       expect(document.activeElement).toBe(inputs.uncancelled);
+      // The keyboard move runs from inside the chip's own panel, so the tab
+      // stop still goes with the chip it was on.
+      expect(tabStops(screen.getAllByTestId(/^chip-/))).toEqual([-1, 0]);
     } finally {
       fixture.panelState.panelIds = panelIds;
     }

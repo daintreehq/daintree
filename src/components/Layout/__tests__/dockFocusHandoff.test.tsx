@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useLayoutEffect } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DockFocusLandmarkContext,
@@ -305,6 +305,22 @@ describe("useDockPillHideHandoff", () => {
     );
     act(() => other.focus());
     ringed.setCount(0);
+    expect(handoff).toHaveBeenLastCalledWith({ focusVisible: true });
+  });
+
+  it("re-reads the ring on a key press, which is what turns it on for a pointer focus", () => {
+    const view = renderPill(1);
+    const trigger = view.getByTestId("trigger");
+    let ringed = false;
+    vi.spyOn(trigger, "matches").mockImplementation((selector: string) =>
+      selector === ":focus-visible" ? ringed : Element.prototype.matches.call(trigger, selector)
+    );
+    act(() => trigger.focus());
+    ringed = true;
+    fireEvent.keyDown(trigger, { key: "a" });
+
+    view.setCount(0);
+
     expect(handoff).toHaveBeenLastCalledWith({ focusVisible: true });
   });
 

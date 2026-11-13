@@ -122,8 +122,9 @@ function showsFocusRing(el: Element): boolean {
  * control's own unmount so a removal can be told apart from the user leaving.
  * Events from portalled content (popovers, dialogs) bubble the React tree, so
  * attaching these to the control's root covers its overlays too. Whether it
- * was ringed is read as it takes focus: by the time it is removed the browser
- * can no longer say.
+ * is ringed is read as it takes focus and again on each key press, since a key
+ * press is what turns the ring on for an element that was focused by the
+ * pointer; by the time it is removed the browser can no longer say.
  */
 export function useFocusOwner() {
   const ownerRef = useRef<Element | null>(null);
@@ -138,6 +139,12 @@ export function useFocusOwner() {
     onFocusCapture: (event: React.FocusEvent) => {
       ownerRef.current = event.target;
       ringedRef.current = showsFocusRing(event.target);
+    },
+    onKeyDownCapture: (event: React.KeyboardEvent) => {
+      const { target } = event;
+      if (target === ownerRef.current && target instanceof Element) {
+        ringedRef.current = showsFocusRing(target);
+      }
     },
     onBlurCapture: (event: React.FocusEvent) => releaseFocusOwner(event, ownerRef),
   };
