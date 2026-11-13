@@ -726,16 +726,19 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const baseLabel = leftWorktree ? worktreeOptionLabel(leftWorktree) : null;
   const compareLabel = rightWorktree ? worktreeOptionLabel(rightWorktree) : null;
 
-  // Focus stays on the button, so the two selectors changing underneath it is
-  // announced rather than left for the user to find.
+  // The reset rides in the same commit as the swap: the fetch effect clears
+  // the old diff a render late, and for that frame the old direction's patch
+  // would sit under the reversed labels. Focus stays on the button, so the two
+  // selectors changing underneath it is announced rather than left to be found.
   const swapSides = () => {
+    resetComparison();
     setLeftId(rightId);
     setRightId(leftId);
+    const sideName = (wt: typeof leftWorktree) =>
+      wt ? (wt.branch ?? `${wt.name} (detached)`) : "not chosen";
     useAnnouncerStore
       .getState()
-      .announce(
-        `Base is now ${rightBranch ?? "not chosen"}, Compare is now ${leftBranch ?? "not chosen"}`
-      );
+      .announce(`Base is now ${sideName(rightWorktree)}, Compare is now ${sideName(leftWorktree)}`);
   };
 
   const fileListToggle = (

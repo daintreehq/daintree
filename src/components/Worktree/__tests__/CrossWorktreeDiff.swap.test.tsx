@@ -92,6 +92,7 @@ beforeEach(() => {
     configurable: true,
   });
   setWorktrees(LEFT(), RIGHT());
+  useAnnouncerStore.setState({ polite: null, assertive: null });
 });
 
 function tree(initialWorktreeId: string | null = "wt-left") {
@@ -139,6 +140,11 @@ describe("CrossWorktreeDiff swapping Base and Compare", () => {
     );
     expect(mockCompareWorktrees).toHaveBeenCalledWith("/wt/wt-right", "feature", "main");
     expect(mockCompareWorktrees).not.toHaveBeenCalledWith("/wt/wt-left", "main", "feature");
+    // The patch and the full-context read behind it follow the new direction too.
+    const fileCalls = mockCompareWorktrees.mock.calls.filter((c) => c[3] !== undefined);
+    expect(fileCalls.length).toBeGreaterThan(0);
+    for (const call of fileCalls)
+      expect(call.slice(0, 3)).toEqual(["/wt/wt-right", "feature", "main"]);
   });
 
   it("swaps back to the original comparison on a second press", async () => {
@@ -174,10 +180,13 @@ describe("CrossWorktreeDiff swapping Base and Compare", () => {
 
     expect(select("Base").value).toBe("");
     expect(select("Compare").value).toBe("");
+    expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 
   it("says which worktree is on which side, since focus stays on the button", async () => {
     await openComparison();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: SWAP }));
 
@@ -186,12 +195,28 @@ describe("CrossWorktreeDiff swapping Base and Compare", () => {
     );
   });
 
+  it("names a detached side by its worktree rather than calling it unchosen", async () => {
+    const view = await openComparison();
+    setWorktrees(LEFT(), snapshot("wt-right", undefined));
+    view.rerender(tree());
+
+    fireEvent.click(screen.getByRole("button", { name: SWAP }));
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe(
+      "Base is now wt-right (detached), Compare is now main"
+    );
+  });
+
   it("keeps focus on the button so it can be pressed again", async () => {
     await openComparison();
     const swap = screen.getByRole("button", { name: SWAP });
-    swap.focus();
+    act(() => swap.focus());
+    diffText = "diff reversed";
 
     fireEvent.click(swap);
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").textContent).toBe("diff reversed")
+    );
 
     expect(document.activeElement).toBe(swap);
   });
