@@ -117,6 +117,35 @@ describe("DiagnosticsReviewDialogHost", () => {
     expect(screen.getByRole("button", { name: "Save report" })).toBeTruthy();
   });
 
+  it("holds Save while a new review is being collected to replace the open one", async () => {
+    render(<DiagnosticsReviewDialogHost />);
+    await openReview();
+
+    let resolveCollect: (payload: DiagnosticsReviewPayload) => void = () => {};
+    collectMock.mockImplementationOnce(
+      () =>
+        new Promise<DiagnosticsReviewPayload>((resolve) => {
+          resolveCollect = resolve;
+        })
+    );
+    let reopen: Promise<void> = Promise.resolve();
+    act(() => {
+      reopen = useDiagnosticsReviewStore.getState().openReview();
+    });
+    const save = screen.getByRole("button", { name: "Save report" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    await clickSave();
+    expect(saveMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveCollect(reviewPayload);
+      await reopen;
+    });
+    expect(
+      screen.getByRole("button", { name: "Save report" }).getAttribute("aria-disabled")
+    ).toBeNull();
+  });
+
   it.each([
     [undefined, false],
     ["modal", false],

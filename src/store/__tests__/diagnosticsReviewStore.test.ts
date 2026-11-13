@@ -258,6 +258,8 @@ describe("diagnosticsReviewStore", () => {
     saveMock.mockRejectedValue(new Error("disk full"));
     await useDiagnosticsReviewStore.getState().openReview();
     await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    useDiagnosticsReviewStore.getState().closeReview();
+    // The dialog is still fading out on the error it showed.
     expect(useDiagnosticsReviewStore.getState().saveError).toContain("disk full");
 
     await useDiagnosticsReviewStore.getState().openReview();
@@ -329,6 +331,8 @@ describe("diagnosticsReviewStore", () => {
       expect(systemClient.openExternal).toHaveBeenCalledWith(issueUrl);
       expect(safeFireAndForget).toHaveBeenCalledTimes(1);
       expect(useDiagnosticsReviewStore.getState().isOpen).toBe(false);
+      // Still the saved view while the dialog fades out.
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBe(issueUrl);
 
       // A second press while the dialog fades out opens nothing more.
       useDiagnosticsReviewStore.getState().continueToIssue();

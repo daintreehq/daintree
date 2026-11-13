@@ -27,6 +27,7 @@ export function DiagnosticsReviewDialogHost({
     isOpen,
     reviewPayload,
     isSaving,
+    isCollecting,
     saveError,
     savedIssueUrl,
     scope,
@@ -38,6 +39,7 @@ export function DiagnosticsReviewDialogHost({
       isOpen: s.isOpen,
       reviewPayload: s.reviewPayload,
       isSaving: s.isSaving,
+      isCollecting: s.isCollecting,
       saveError: s.saveError,
       savedIssueUrl: s.savedIssueUrl,
       scope: s.scope,
@@ -56,6 +58,7 @@ export function DiagnosticsReviewDialogHost({
         void saveReview(enabledSections, replacements, timeWindowStartMs, confirmation);
       }}
       isSaving={isSaving}
+      isCollecting={isCollecting}
       initialScope={scope}
       saveError={saveError}
       saved={savedIssueUrl !== null}

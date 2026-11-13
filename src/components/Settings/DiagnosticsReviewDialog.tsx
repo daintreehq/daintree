@@ -124,6 +124,8 @@ interface DiagnosticsReviewDialogProps {
     timeWindowStartMs: number | null
   ) => void;
   isSaving: boolean;
+  /** A new review is being collected to replace this one, so this one can't be saved. */
+  isCollecting?: boolean;
   /**
    * Optional scope hint. When `sections` is provided, only those keys start
    * enabled; sections not listed start unchecked. The user can still toggle
@@ -147,6 +149,7 @@ export function DiagnosticsReviewDialog({
   reviewPayload,
   onSave,
   isSaving,
+  isCollecting = false,
   initialScope,
   saveError = null,
   saved = false,
@@ -676,7 +679,7 @@ export function DiagnosticsReviewDialog({
         primaryAction={{
           label: "Save report",
           onClick: handleSave,
-          disabled: isSaving,
+          disabled: isSaving || isCollecting,
           loading: isSaving,
           intent: "default",
         }}
