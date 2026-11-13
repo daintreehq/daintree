@@ -133,7 +133,7 @@ export function registerTerminalLifecycleActions(
     title: "Close panel",
     description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
-    paletteDescription: "Close the focused panel, or the first visible one, usually to the trash",
+    paletteDescription: "Close the focused panel, or another open one, usually to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",

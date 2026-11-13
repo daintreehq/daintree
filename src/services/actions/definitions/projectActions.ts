@@ -122,7 +122,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description:
       "Open the agent overview scoped to this project, grouped by worktree, or the whole fleet when this workspace has no worktree axis",
     paletteDescription:
-      "Show or hide this project's agents, or the whole fleet when it has no worktrees",
+      "Show or hide this project's agents, or the whole fleet when there's no worktree grouping",
     category: "project",
     kind: "command",
     danger: "safe",
