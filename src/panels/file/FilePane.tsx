@@ -728,6 +728,8 @@ export function FilePane({
         },
         {
           hasChanges: localChangeStatus !== undefined,
+          // The menu is on the file this pane is already showing.
+          showOpenFile: false,
           // This pane's own Diff mode, the same one the toggle switches to,
           // rather than a second diff panel.
           onOpenDiff: () => handleViewModeChange("diff"),

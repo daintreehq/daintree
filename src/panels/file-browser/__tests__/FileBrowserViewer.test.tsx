@@ -2414,7 +2414,8 @@ describe("file menu on the viewer's content (#13423)", () => {
         isDirectory: false,
         status: "added",
       },
-      expect.objectContaining({ hasChanges: true })
+      // `Open file` would open a dialog onto the file this viewer is showing.
+      expect.objectContaining({ hasChanges: true, showOpenFile: false })
     );
   });
 

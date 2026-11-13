@@ -118,6 +118,9 @@ const {
       listingStatus: "ready" as "pending" | "ready" | "error",
       listingHasHiddenDotfiles: false,
       listingHiddenCounts: { dotfiles: 0, alwaysHidden: 0 },
+      // The real hook rules on a row-less path from its listings; tests flip
+      // this to "pending" to stand in for an ancestor that hasn't been read.
+      missingRowStatus: ((_path: string) => "absent") as (path: string) => "pending" | "absent",
     },
     // What the pane last handed the tree hook, so a test can assert the derived
     // change tick rather than only what renders.
@@ -649,6 +652,7 @@ beforeEach(() => {
     value: { writeText: writeTextMock },
   });
   treeState.rows = defaultRows;
+  treeState.missingRowStatus = () => "absent";
   treeState.rootError = null;
   treeState.isInitialLoading = false;
   treeState.captureSnapshot = () => null;
@@ -1596,9 +1600,22 @@ describe("insert file reference", () => {
     expect(screen.queryByRole("button", { name: /Insert file reference/ })).toBeNull();
   });
 
-  it("advertises the shortcut on the live item", () => {
+  it("advertises the shortcut on the cursor row's menu", () => {
     renderPane();
+    act(() => {
+      treeProps.onSelect?.(FOLDER_ROW.path, true);
+    });
     expect(insertItem().getAttribute("aria-keyshortcuts")).toBeTruthy();
+  });
+
+  it("advertises nothing on a row the cursor isn't on", () => {
+    // A right-click opens a row's menu without moving the cursor, and Cmd+I acts
+    // on the cursor row, so the hint on any other row would name the wrong file.
+    renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+    expect(insertItem().hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
   it("gives the tree the same handler and gate as the menu", () => {
@@ -3327,6 +3344,160 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
     rerender(paneJsx({ worktreeId: "wt-1" }));
 
     expect(treeProps.cursorPath).toBe("src/other.ts");
+  });
+});
+
+/**
+ * #16918: Collapse all, the dotfile toggle, a delete and a re-root each remove
+ * the cursor's row without touching the cursor, and every key that reads the
+ * cursor then goes dead. The pane rehomes it, but only for a cursor whose row
+ * was seen and has since gone.
+ */
+describe("tree cursor reconciliation", () => {
+  const row = (path: string, isDirectory = false, isExpanded = false) => ({
+    path,
+    name: path.split("/").pop() as string,
+    isDirectory,
+    depth: path.split("/").length - 1,
+    isExpanded,
+    isLoading: false,
+  });
+  const EXPANDED = [
+    row("src", true, true),
+    row("src/app.ts"),
+    row("src/other.ts"),
+    row(".env"),
+    row("README.md"),
+  ];
+  const COLLAPSED = [row("src", true), row(".env"), row("README.md")];
+
+  function showRows(rows: ReturnType<typeof row>[], rerender: (ui: React.ReactElement) => void) {
+    treeState.rows = rows as unknown as typeof defaultRows;
+    rerender(paneJsx({ worktreeId: "wt-1" }));
+  }
+
+  it("moves a nested cursor onto its ancestor after Collapse all, leaving the viewer alone", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+    setFileBrowserViewMock.mockClear();
+
+    showRows(COLLAPSED, rerender);
+
+    expect(treeProps.cursorPath).toBe("src");
+    // The cursor moved; what the viewer shows did not.
+    expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+    expect(treeProps.openPath).toBe("src/app.ts");
+  });
+
+  it("lands on the row that took a filtered dotfile's place", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.(".env", false);
+    });
+    expect(treeProps.cursorPath).toBe(".env");
+
+    showRows(
+      [row("src", true, true), row("src/app.ts"), row("src/other.ts"), row("README.md")],
+      rerender
+    );
+
+    expect(treeProps.cursorPath).toBe("README.md");
+  });
+
+  it("falls back to the row before when nothing follows the one that went", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.("README.md", false);
+    });
+
+    showRows(EXPANDED.slice(0, 4), rerender);
+
+    expect(treeProps.cursorPath).toBe(".env");
+  });
+
+  it("moves a deleted row's cursor to the folder it lived in", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/other.ts", false);
+    });
+
+    showRows(
+      EXPANDED.filter((candidate) => candidate.path !== "src/other.ts"),
+      rerender
+    );
+
+    expect(treeProps.cursorPath).toBe("src");
+  });
+
+  it("leaves a cursor that never had a row alone", () => {
+    // A reveal lands the cursor on the target before its ancestors are listed,
+    // so a missing row says nothing about the cursor yet.
+    treeState.rows = COLLAPSED as unknown as typeof defaultRows;
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    showRows(COLLAPSED.slice(0, 2), rerender);
+
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+  });
+
+  it("waits while the tree says the row may still arrive", () => {
+    // A re-root drops every listing but the root's, so a cursor that is still
+    // inside the tree loses its row for a few frames and gets it back.
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+
+    treeState.missingRowStatus = () => "pending";
+    showRows([row("src", true, true)], rerender);
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    // The listing lands with the row back: nothing was ever stale.
+    showRows(EXPANDED, rerender);
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    // Now it really is gone once the tree is sure.
+    treeState.missingRowStatus = () => "absent";
+    showRows(COLLAPSED, rerender);
+    expect(treeProps.cursorPath).toBe("src");
+  });
+
+  it("clears the cursor when the tree has no rows left to hold it", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.(".env", false);
+    });
+
+    // No tree renders for an empty listing, so the cursor is read back once
+    // rows return: it must not have been left naming the row that went.
+    showRows([], rerender);
+    showRows(EXPANDED, rerender);
+
+    expect(treeProps.cursorPath).toBeNull();
+  });
+
+  it("does not drag the cursor back after the user moves it", () => {
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+    showRows(COLLAPSED, rerender);
+    expect(treeProps.cursorPath).toBe("src");
+
+    act(() => {
+      treeProps.onSelect?.("README.md", false);
+    });
+    showRows(COLLAPSED, rerender);
+
+    expect(treeProps.cursorPath).toBe("README.md");
   });
 });
 
