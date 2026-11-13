@@ -820,10 +820,15 @@ describe("PanelHeader", () => {
       expect(trashButton?.getAttribute("data-destructive")).not.toBe("true");
     });
 
-    it("dispatches terminal.rename when clicking Rename", () => {
+    it("dispatches terminal.rename only after the menu has returned focus", async () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Rename")?.click();
+      expect(mockDispatch).not.toHaveBeenCalled();
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.rename",
         { terminalId: "test-panel" },
@@ -1443,7 +1448,7 @@ describe("PanelHeader", () => {
       ["background", "terminal.background", "grid"],
       ["trash", "terminal.trash", "grid"],
       ["kill", "terminal.kill", "grid"],
-    ] as const)("routes %s to %s for this panel", (commandId, actionId, location) => {
+    ] as const)("routes %s to %s for this panel", async (commandId, actionId, location) => {
       registerPluginKind(PLUGIN_KIND);
       // Another panel holds focus: the command still names this one.
       mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
@@ -1466,6 +1471,13 @@ describe("PanelHeader", () => {
         .find((entry) => entry.id === commandId)!;
 
       findMenuButton(command.label)!.click();
+      if (commandId === "rename") {
+        expect(mockDispatch).not.toHaveBeenCalled();
+        act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
 
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(

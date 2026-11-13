@@ -799,6 +799,13 @@ function PanelHeaderComponent({
       });
       return;
     }
+    if (commandId === "rename") {
+      pendingMenuDispatchRef.current = {
+        actionId: GENERIC_PANEL_MENU_ACTION_IDS[commandId],
+        args: { terminalId: id },
+      };
+      return;
+    }
     void actionService.dispatch(
       GENERIC_PANEL_MENU_ACTION_IDS[commandId],
       { terminalId: id },
@@ -1916,13 +1923,14 @@ function PanelHeaderComponent({
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.rename",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
+                    onSelect={() => {
+                      // Dispatched from the close hook: the inline input would
+                      // otherwise lose focus to the menu's restore and submit.
+                      pendingMenuDispatchRef.current = {
+                        actionId: "terminal.rename",
+                        args: { terminalId: id },
+                      };
+                    }}
                   >
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
