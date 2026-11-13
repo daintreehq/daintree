@@ -117,10 +117,14 @@ describe("DiagnosticsReviewDialogHost", () => {
     expect(screen.getByRole("button", { name: "Save report" })).toBeTruthy();
   });
 
-  it("stacks above the dialog it opens over when asked for the nested tier", async () => {
-    render(<DiagnosticsReviewDialogHost zIndex="nested" confirmation="inline" />);
+  it.each([
+    [undefined, false],
+    ["modal", false],
+    ["nested", true],
+  ] as const)("with zIndex %s, sits on the nested dialog tier: %s", async (zIndex, nested) => {
+    render(<DiagnosticsReviewDialogHost zIndex={zIndex} />);
     await openReview();
-    const scrim = screen.getByTestId("diagnostics-review-dialog");
-    expect(scrim.closest('[aria-modal="true"]')?.className).toContain("--z-nested-dialog");
+    const scrim = screen.getByTestId("diagnostics-review-dialog").closest('[aria-modal="true"]');
+    expect(scrim?.className.includes("--z-nested-dialog")).toBe(nested);
   });
 });

@@ -50,8 +50,9 @@ describe("diagnosticsReviewStore", () => {
   beforeEach(() => {
     collectMock.mockReset();
     saveMock.mockReset();
-    vi.mocked(notify).mockClear();
+    vi.mocked(notify).mockReset();
     vi.mocked(safeFireAndForget).mockClear();
+    vi.mocked(systemClient.openExternal).mockReset().mockResolvedValue(undefined);
     resetStore();
   });
 
@@ -252,28 +253,40 @@ describe("diagnosticsReviewStore", () => {
     expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
   });
 
-  it("closing or reopening the review drops a failed save's error", async () => {
+  it("a failed save's error lasts until the review next opens", async () => {
     collectMock.mockResolvedValue(samplePayload);
     saveMock.mockRejectedValue(new Error("disk full"));
     await useDiagnosticsReviewStore.getState().openReview();
     await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
-    useDiagnosticsReviewStore.getState().closeReview();
-    expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
+    expect(useDiagnosticsReviewStore.getState().saveError).toContain("disk full");
 
-    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
-    expect(useDiagnosticsReviewStore.getState().saveError).not.toBeNull();
     await useDiagnosticsReviewStore.getState().openReview();
     expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
   });
 
-  it("confirms a toast save with a notification once the dialog has closed", async () => {
+  it("saves nothing once the review has closed", async () => {
+    collectMock.mockResolvedValueOnce(samplePayload);
+    await useDiagnosticsReviewStore.getState().openReview();
+    useDiagnosticsReviewStore.getState().closeReview();
+
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("closes the dialog before confirming a toast save, so the toast never reports an open review", async () => {
     collectMock.mockResolvedValueOnce(samplePayload);
     saveMock.mockResolvedValueOnce(true);
     await useDiagnosticsReviewStore.getState().openReview();
+    let stateAtNotify: { isOpen: boolean; isSaving: boolean } | null = null;
+    vi.mocked(notify).mockImplementationOnce(() => {
+      const { isOpen, isSaving } = useDiagnosticsReviewStore.getState();
+      stateAtNotify = { isOpen, isSaving };
+      return "";
+    });
 
     await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
-    expect(notify).toHaveBeenCalledTimes(1);
     expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({ type: "success" });
+    expect(stateAtNotify).toEqual({ isOpen: false, isSaving: false });
     expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
   });
 
@@ -315,21 +328,33 @@ describe("diagnosticsReviewStore", () => {
       useDiagnosticsReviewStore.getState().continueToIssue();
       expect(systemClient.openExternal).toHaveBeenCalledWith(issueUrl);
       expect(safeFireAndForget).toHaveBeenCalledTimes(1);
-      const state = useDiagnosticsReviewStore.getState();
-      expect(state.isOpen).toBe(false);
-      expect(state.savedIssueUrl).toBeNull();
+      expect(useDiagnosticsReviewStore.getState().isOpen).toBe(false);
+
+      // A second press while the dialog fades out opens nothing more.
+      useDiagnosticsReviewStore.getState().continueToIssue();
+      expect(systemClient.openExternal).toHaveBeenCalledTimes(1);
     });
 
-    it("leaves the saved view behind once the review closes or reopens", async () => {
+    it("refuses another save from the saved view", async () => {
+      collectMock.mockResolvedValueOnce(samplePayload);
+      saveMock.mockResolvedValueOnce(true);
+      await useDiagnosticsReviewStore.getState().openReview();
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      expect(saveMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds the saved view through the close and drops it on the next open", async () => {
       collectMock.mockResolvedValue(samplePayload);
       saveMock.mockResolvedValue(true);
       await useDiagnosticsReviewStore.getState().openReview();
       await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      const issueUrl = useDiagnosticsReviewStore.getState().savedIssueUrl;
       useDiagnosticsReviewStore.getState().closeReview();
-      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+      // The dialog is still fading out on the saved view, not the review form.
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBe(issueUrl);
 
-      await useDiagnosticsReviewStore.getState().openReview();
-      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
       await useDiagnosticsReviewStore.getState().openReview();
       expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
     });

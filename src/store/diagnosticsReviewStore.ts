@@ -42,7 +42,7 @@ interface DiagnosticsReviewState {
   /**
    * Set when a save confirmed inline has written the bundle: the review dialog
    * swaps to its saved view, which links here. Only a save the user completed
-   * sets it; a cancelled or failed one never does.
+   * sets it; a cancelled or failed one never does. Cleared by the next open.
    */
   savedIssueUrl: string | null;
   /**
@@ -131,12 +131,17 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   },
 
   closeReview: () => {
-    set({ isOpen: false, scope: null, saveError: null, savedIssueUrl: null });
+    // A failed save's error and the saved view stay until the next open: the
+    // dialog is still fading out on them, and swapping its content mid-exit
+    // would flash the review form back up.
+    set({ isOpen: false, scope: null });
   },
 
   saveReview: async (enabledSections, replacements, timeWindowStartMs, confirmation = "toast") => {
-    const { reviewPayload } = get();
-    if (!reviewPayload || get().isSaving) return;
+    const { reviewPayload, isOpen, isSaving, isCollecting, savedIssueUrl } = get();
+    // Only the open review form saves: not a closed dialog, not one whose
+    // payload a new collection is about to replace, not the saved view.
+    if (!reviewPayload || !isOpen || isSaving || isCollecting || savedIssueUrl) return;
     set({ isSaving: true, saveError: null });
     const payload = reviewPayload.payload;
     let saved: boolean;
@@ -185,10 +190,10 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   },
 
   continueToIssue: () => {
-    const { savedIssueUrl } = get();
-    if (!savedIssueUrl) return;
+    const { savedIssueUrl, isOpen } = get();
+    if (!savedIssueUrl || !isOpen) return;
     openIssue(savedIssueUrl);
-    set({ isOpen: false, scope: null, savedIssueUrl: null });
+    set({ isOpen: false, scope: null });
   },
 
   clearError: () => set({ downloadError: null }),

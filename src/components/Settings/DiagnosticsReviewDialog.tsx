@@ -361,7 +361,7 @@ export function DiagnosticsReviewDialog({
         </AppDialog.Header>
         <AppDialog.Body>
           <Callout severity="success" title="Diagnostics saved">
-            <AppDialog.Description as="span" className="text-xs">
+            <AppDialog.Description className="text-xs">
               Open a GitHub issue and drag the saved ZIP into it.
             </AppDialog.Description>
           </Callout>
