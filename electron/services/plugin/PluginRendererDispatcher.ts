@@ -21,7 +21,11 @@ import type {
 import type { PluginAgentPaneObservation } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import type { HostApprovedPluginPresetLaunch } from "../../../shared/utils/agentPresetLaunchConsent.js";
-import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import {
+  isLocalHostId,
+  LOCAL_HOST_ID,
+  parseHostScopedKey,
+} from "../../../shared/types/remoteHosts.js";
 import { z } from "zod";
 
 /** More panes than any grid holds; a longer answer is truncated, not trusted. */
@@ -547,17 +551,53 @@ export class PluginRendererDispatcher {
     if (projectId != null) {
       return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
     }
-    const frontend = this.routedFrontend(null, pluginId);
-    if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) {
-      return { projectId: null, agents: [] };
-    }
-    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
-    if (!webContents) return { projectId: null, agents: [] };
-    const viewKey = getProjectForWebContents(webContents.id);
+    const read = await this.readAmbientAgentsView(pluginId);
+    if (read === null) return { projectId: null, agents: [] };
     // A view bound to another machine's host is keyed `<hostId>:<projectId>`;
     // this machine's plugins have no business filing statuses against it.
     const owner =
-      viewKey !== null && isLocalHostId(parseHostScopedKey(viewKey).hostId) ? viewKey : null;
+      read.viewKey !== null && isLocalHostId(parseHostScopedKey(read.viewKey).hostId)
+        ? read.viewKey
+        : null;
+    return { projectId: owner, agents: read.agents };
+  }
+
+  /**
+   * {@link sendAgentsListToRenderer} that also names the machine whose
+   * terminals the panes are (#16845), from the very view that answered. A
+   * local view bound to a Remote Host lists that host's agents, under that
+   * host's terminal ids; every other answer is this machine's, a Shell's for a
+   * Host plugin included, since the plugin runs where its terminals do.
+   */
+  async sendAgentsListWithHost(
+    projectId?: PluginTargetProjectId,
+    pluginId?: string
+  ): Promise<{ hostId: string; agents: PluginAgentPaneObservation[] }> {
+    const frontend = projectId != null ? null : this.routedFrontend(null, pluginId);
+    if (projectId != null || (frontend !== null && frontend.kind !== "local")) {
+      return {
+        hostId: LOCAL_HOST_ID,
+        agents: await this.sendAgentsListToRenderer(projectId, pluginId),
+      };
+    }
+    const read = await this.readAmbientAgentsView(pluginId);
+    if (read === null) return { hostId: LOCAL_HOST_ID, agents: [] };
+    const hostId = read.viewKey === null ? LOCAL_HOST_ID : parseHostScopedKey(read.viewKey).hostId;
+    return { hostId, agents: read.agents };
+  }
+
+  /**
+   * The panes of the view an unbound plugin's list reads, with that view's
+   * key, or null when no local view would answer.
+   */
+  private async readAmbientAgentsView(
+    pluginId?: string
+  ): Promise<{ viewKey: string | null; agents: PluginAgentPaneObservation[] } | null> {
+    const frontend = this.routedFrontend(null, pluginId);
+    if ((frontend !== null && frontend.kind !== "local") || this.deps.isDisposed()) return null;
+    const webContents = resolveTargetWebContents(null, "Plugin agents.list");
+    if (!webContents) return null;
+    const viewKey = getProjectForWebContents(webContents.id);
     // Same response shape as `sendAgentsListToRenderer`: the channel's listener
     // keeps the first extractor registered, so the two must agree.
     const agents = await this.requestFromWebContents<PluginAgentPaneObservation[]>(webContents, {
@@ -567,7 +607,7 @@ export class PluginRendererDispatcher {
       extract: (payload) => projectAgentPanes((payload as { agents?: unknown }).agents),
       fallback: [],
     });
-    return { projectId: owner, agents };
+    return { viewKey, agents };
   }
 
   /**

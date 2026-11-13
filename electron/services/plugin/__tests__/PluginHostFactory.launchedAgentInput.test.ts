@@ -67,6 +67,7 @@ import {
   admitRestoredPluginLaunches,
   attachPluginLaunchPersistence,
   forgetPluginLaunches,
+  recordRemotePluginLaunch,
   type PluginLaunchPersistence,
   type StoredPluginLaunch,
 } from "../pluginLaunchedAgents.js";
@@ -740,13 +741,14 @@ describe("host.agents.list says which panes the plugin launched (#16845)", () =>
     ...extra,
   });
 
-  function listingHarness(panes: ReturnType<typeof pane>[]): Harness {
+  /** A view listing `panes`, the terminals of `hostId`'s machine. */
+  function listingHarness(panes: ReturnType<typeof pane>[], hostId = "local"): Harness {
     const h = makeHarness();
     for (const id of [PLUGIN_ID, OTHER_PLUGIN_ID]) {
-      h.capabilities.set(id, new Set(["agent:input", "agent:read"]));
+      h.capabilities.set(id, new Set(["agent:input", "agent:read", "project:dispatch"]));
     }
-    (h.deps.dispatcher as unknown as Record<string, unknown>).sendAgentsListToRenderer = vi.fn(
-      async () => panes
+    (h.deps.dispatcher as unknown as Record<string, unknown>).sendAgentsListWithHost = vi.fn(
+      async () => ({ hostId, agents: panes })
     );
     return h;
   }
@@ -776,21 +778,56 @@ describe("host.agents.list says which panes the plugin launched (#16845)", () =>
   });
 
   it("answers from main's record, whatever the view's answer claims", async () => {
-    const h = listingHarness([pane("t-user", { launchedByThisPlugin: true })]);
+    const h = listingHarness([
+      pane("t-1", { launchedByThisPlugin: false }),
+      pane("t-user", { launchedByThisPlugin: true }),
+    ]);
+    await launch(h);
     terminals.set("t-user", agent());
-    await expect(launchedIds(h)).resolves.toEqual([]);
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
   });
 
-  it("agrees with interrupt when the pane turns up in another project", async () => {
+  it("drops a launch whose pane turned up outside the project the launch was sent to", async () => {
     const h = listingHarness([pane("t-1")]);
+    grantMock.hasGrant.mockReturnValue(true);
+    await launch(h, {
+      options: { projectId: OTHER_PROJECT_ID },
+      terminal: agent({ projectId: OTHER_PROJECT_ID }),
+    });
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+
+    terminals.set("t-1", agent());
+    await expect(launchedIds(h)).resolves.toEqual([]);
+    await expect(hostFor(h).agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("keeps a bound plugin to its own project, whatever its launch recorded", async () => {
+    const h = listingHarness([pane("t-1")]);
+    // An ambient launch records no project, so only the binding can refuse.
+    await launch(h);
     h.plugins.set(PLUGIN_ID, loaded(PLUGIN_ID, BOUND));
-    await launch(h, { binding: BOUND });
     await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual(["t-1"]);
 
     terminals.set("t-1", agent({ projectId: OTHER_PROJECT_ID }));
     await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual([]);
-    await expect(hostFor(h, BOUND).agents.interrupt("t-1")).resolves.toEqual({
-      status: "not-found",
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+  });
+
+  describe("a view of a Remote Host's project", () => {
+    const HOST_ID = "studio-1";
+
+    it("marks what this plugin launched on that host, as interrupt with its hostId reaches", async () => {
+      const h = listingHarness([pane("t-1"), pane("t-2"), pane("t-3")], HOST_ID);
+      recordRemotePluginLaunch(PLUGIN_ID, HOST_ID, "agent.launch", {}, launchResult("t-1"));
+      recordRemotePluginLaunch(OTHER_PLUGIN_ID, HOST_ID, "agent.launch", {}, launchResult("t-2"));
+      recordRemotePluginLaunch(PLUGIN_ID, "studio-2", "agent.launch", {}, launchResult("t-3"));
+      await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+    });
+
+    it("never reads this machine's record for that host's terminal ids", async () => {
+      const h = listingHarness([pane("t-1")], HOST_ID);
+      await launch(h);
+      await expect(launchedIds(h)).resolves.toEqual([]);
     });
   });
 
@@ -816,10 +853,13 @@ describe("host.agents.list says which panes the plugin launched (#16845)", () =>
   });
 
   it("marks nothing once the plugin's launches are forgotten", async () => {
-    const h = listingHarness([pane("t-1")]);
+    const h = listingHarness([pane("t-1"), pane("t-2")]);
     await launch(h);
+    await launch(h, { pluginId: OTHER_PLUGIN_ID, result: launchResult("t-2") });
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
     forgetPluginLaunches(PLUGIN_ID);
     await expect(launchedIds(h)).resolves.toEqual([]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual(["t-2"]);
   });
 
   it("marks nothing with no terminal host", async () => {

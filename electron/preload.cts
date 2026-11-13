@@ -3439,7 +3439,7 @@ function buildElectronApi(): ElectronAPI {
 
       sendAgentsListResponse: (payload: {
         requestId: string;
-        agents: import("../shared/types/plugin.js").PluginAgentPane[];
+        agents: import("../shared/types/plugin.js").PluginAgentPaneObservation[];
       }) => {
         ipcRenderer.send(CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE, payload);
       },

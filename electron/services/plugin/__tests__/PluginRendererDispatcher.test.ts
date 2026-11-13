@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 const ipcMainMock = vi.hoisted(() => {
@@ -30,6 +30,7 @@ const windowRefMock = vi.hoisted(() => ({
 const registryMock = vi.hoisted(() => ({
   getWebContentsForProject: vi.fn((_projectId: string): unknown[] => []),
   isCachedViewWebContents: vi.fn((_id: number): boolean => false),
+  getProjectForWebContents: vi.fn((_id: number): string | null => null),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -40,6 +41,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWebContentsForProject: registryMock.getWebContentsForProject,
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
+  getProjectForWebContents: registryMock.getProjectForWebContents,
 }));
 
 // The dispatcher thaws a (possibly CDP-frozen) view before sending (#13119).
@@ -522,6 +524,50 @@ describe("PluginRendererDispatcher", () => {
     await expect(promise).resolves.toEqual([]);
     d.dispose();
   });
+
+  describe("sendAgentsListWithHost (#16845)", () => {
+    const PANE = {
+      terminalId: "t-1",
+      title: "Claude",
+      agentId: "claude",
+      worktree: null,
+      isFocused: false,
+      canDraft: true,
+    };
+
+    async function readAmbient(viewKey: string | null) {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      registryMock.getProjectForWebContents.mockReturnValue(viewKey);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+      const promise = d.sendAgentsListWithHost(null, "acme.deploy");
+      await vi.waitFor(() => lastRequestId(wc, CHANNELS.PLUGIN_AGENTS_LIST_REQUEST));
+      const requestId = lastRequestId(wc, CHANNELS.PLUGIN_AGENTS_LIST_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+        { sender: { id: 7 } },
+        { requestId, agents: [PANE] }
+      );
+      const answer = await promise;
+      d.dispose();
+      return answer;
+    }
+
+    afterEach(() => {
+      registryMock.getProjectForWebContents.mockReturnValue(null);
+    });
+
+    it("names the Remote Host whose project the answering view shows", async () => {
+      await expect(readAmbient("studio-1:proj-9")).resolves.toEqual({
+        hostId: "studio-1",
+        agents: [PANE],
+      });
+    });
+
+    it("names this machine for a view of a local project", async () => {
+      await expect(readAmbient("proj-9")).resolves.toEqual({ hostId: "local", agents: [PANE] });
+    });
+  });
 });
 
 describe("projectAgentPanes", () => {
@@ -543,8 +589,10 @@ describe("projectAgentPanes", () => {
   });
 
   it("drops a view's claim about who launched a pane, which only main answers (#16845)", () => {
-    const [projected] = projectAgentPanes([{ ...pane, launchedByThisPlugin: true }]);
-    expect(projected).toEqual(pane);
+    for (const claim of [true, false, "yes"]) {
+      const [projected] = projectAgentPanes([{ ...pane, launchedByThisPlugin: claim }]);
+      expect(projected).toEqual(pane);
+    }
   });
 
   it("drops malformed entries and keeps the rest", () => {

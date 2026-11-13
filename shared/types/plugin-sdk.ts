@@ -350,6 +350,7 @@ export type {
   PluginAgentKeysInput,
   PluginAgentKeysResult,
   PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginAgentRun,
   PluginAgentsApi,
   PluginAllAgentsSnapshot,

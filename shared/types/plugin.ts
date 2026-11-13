@@ -5324,11 +5324,15 @@ export interface PluginAgentPane {
   readonly draftRefusal?: PluginSendToAgentRefusalReason;
   /**
    * Whether this plugin launched the agent with its own `agent.launch`, by the
-   * record main keeps of its launches: the one the {@link PluginAgentsApi}
-   * input methods reach, kept across an app restart for a pane restored under
-   * the id it was launched with. `false` for an agent the user, an assistant or
-   * another plugin started, and for one launched before this plugin was last
-   * disabled or uninstalled.
+   * record the host keeps of its launches: the one the {@link PluginAgentsApi}
+   * input methods reach. A pane restored after a restart under the id it was
+   * launched with keeps it while the host still holds the record: one whose
+   * pane hasn't come back in 30 days lapses, and only the 200 most recent are
+   * kept. `false` for an agent the user, an
+   * assistant or another plugin started, for a launch that named its own
+   * `requestedId`, and for one launched before this plugin was last disabled
+   * or uninstalled. In a view of a Remote Host's project, `true` means a launch
+   * sent there with `{ hostId }` since this machine last started.
    */
   readonly launchedByThisPlugin: boolean;
 }
