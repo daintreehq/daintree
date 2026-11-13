@@ -90,7 +90,8 @@ describe("devPreview.toggleElementPicker", () => {
 
   it("is a neutral, described command an agent can find", () => {
     const action = definition();
-    expect(action.title).toBe("Toggle Element Picker");
+    // Sentence case: nothing after the first letter is capitalised.
+    expect(action.title.slice(1)).toBe(action.title.slice(1).toLowerCase());
     expect(Buffer.byteLength(action.description ?? "")).toBeLessThanOrEqual(400);
     for (const word of ["sveltekit", "builder", "plugin"]) {
       expect(`${action.id} ${action.title} ${action.description}`.toLowerCase()).not.toContain(

@@ -122,6 +122,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
     },

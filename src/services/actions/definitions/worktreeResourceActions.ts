@@ -2,9 +2,10 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import type { WorktreeResourceStatus } from "@shared/types/worktree";
+import type { WorktreeResourceStatus, WorktreeTeardownPreview } from "@shared/types/worktree";
 import { worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { notify } from "@/lib/notify";
 import { clientErrorText } from "@/utils/clientAppError";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
@@ -66,6 +67,36 @@ function notifyWorktreeResourceError(
       // that's left to carry the failure.
     }
   }
+}
+
+/**
+ * Asks before a teardown, showing the commands the host would run. They come
+ * from the host's own teardown preview rather than project settings, because
+ * the run prefers the repository's lifecycle config and only falls back to
+ * settings. A teardown is approved against the commands it will run, so one
+ * whose commands can't be read is refused rather than asked about blind.
+ */
+async function confirmResourceTeardown(worktreeId: string): Promise<boolean> {
+  const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
+  if (!worktree) throw new Error("Worktree not found");
+  let preview: WorktreeTeardownPreview | null;
+  try {
+    preview = await worktreeClient.getDeleteTeardownPreview(worktreeId);
+  } catch (err) {
+    throw new Error("Couldn't read which commands the teardown would run, so nothing ran.", {
+      cause: err,
+    });
+  }
+  // `null` is the host saying the worktree's monitor is gone, so the teardown
+  // would fail the same way after the person had approved it.
+  if (preview === null) throw new Error("Worktree not found");
+  const phase = preview.phases.find((p) => p.phase === "resource-teardown");
+  return useWorktreeResourceTeardownConfirmStore.getState().requestConfirmation({
+    worktreeId,
+    label: worktree.issueTitle ?? worktree.branch ?? worktree.name,
+    commands: phase?.commands ?? [],
+    approved: phase?.approved ?? true,
+  });
 }
 
 const worktreeResourceStatusSchema = z.object({
@@ -143,7 +174,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.teardown", () =>
     defineAction({
       id: "worktree.resource.teardown",
-      title: "Teardown resource",
+      title: "Tear down resource",
       description:
         "Run the project's teardown commands for a worktree's remote resource, typically destroying a cloud devbox. What is destroyed and whether it is recoverable depends on that config; read it first. Pause is the lighter path if the resource is still needed.",
       category: "worktree",
@@ -171,6 +202,14 @@ export function registerWorktreeResourceActions(
         const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         try {
           if (!targetWorktreeId) throw new Error("No worktree selected");
+          // `ActionService` gates only agent and plugin dispatch, so every
+          // person-driven route (palette, keybinding, the card's menu) asks
+          // here. An agent dispatch has already cleared the MCP bridge's own
+          // confirm, and a renderer dialog a headless client can't answer
+          // would hang it past its deadline (#11538).
+          if (ctx.dispatchSource !== "agent") {
+            if (!(await confirmResourceTeardown(targetWorktreeId))) return;
+          }
           await worktreeClient.resourceAction(targetWorktreeId, "teardown");
         } catch (err) {
           notifyWorktreeResourceError(

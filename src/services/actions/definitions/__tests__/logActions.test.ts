@@ -23,6 +23,17 @@ vi.mock("@/clients", () => ({
   telemetryPreviewClient: {},
 }));
 
+// ActionService pulls in the shortcut-hint store and keybinding service at
+// module load; the repeat-last case below only needs it to dispatch.
+vi.mock("@/store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: vi.fn(() => ({ counts: {}, show: vi.fn(), incrementCount: vi.fn() })),
+  },
+}));
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
+}));
+
 import { registerLogActions } from "../logActions";
 
 function setupActions(): ActionRegistry {
@@ -396,5 +407,37 @@ describe("eventInspector.getEvents pagination", () => {
     await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "-1" })).rejects.toThrow(
       /Invalid cursor/
     );
+  });
+});
+
+describe("logs.setLogLevel", () => {
+  it("opens the picker without displacing the action repeat-last replays (#16948)", async () => {
+    const { ActionService } = await import("@/services/ActionService");
+    const service = new ActionService();
+    for (const [, factory] of setupActions()) {
+      service.register(factory() as AnyActionDefinition);
+    }
+    service.register({
+      id: "test.repeatable",
+      title: "Repeatable",
+      description: "A repeatable command",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: async () => {},
+    } as unknown as AnyActionDefinition);
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    try {
+      await service.dispatch("test.repeatable" as never, undefined, { source: "user" });
+      const result = await service.dispatch("logs.setLogLevel", undefined, { source: "user" });
+
+      expect(result.ok).toBe(true);
+      expect(dispatchEvent).toHaveBeenCalledOnce();
+      expect(service.getLastAction()?.actionId).toBe("test.repeatable");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

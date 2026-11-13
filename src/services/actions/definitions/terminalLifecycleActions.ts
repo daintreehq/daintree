@@ -545,6 +545,13 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     keywords: ["details", "metadata", "inspect", "status"],
+    // Palette-only: the context menu and MCP name their terminal explicitly,
+    // and `run()` silently does nothing without one.
+    palette: {
+      mode: "requireContext",
+      isReady: (ctx) => !!ctx.focusedTerminalId,
+      reason: "Focus a terminal to view its info",
+    },
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.viewInfo", args, ctx),
@@ -558,6 +565,8 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // The same dialog as `terminal.viewInfo`, which is the palette's row for it.
+    palette: { mode: "hidden" },
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>

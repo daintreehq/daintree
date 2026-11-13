@@ -1226,7 +1226,6 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
-  "worktree.resource.teardown",
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
@@ -1256,6 +1255,10 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Deferred-promise via scheduleRunConfirmStore (#15980); run() awaits the
   // app-level ScheduleRunConfirmDialog only when earlier runs are still open.
   "schedules.runNow",
+  // Deferred-promise via worktreeResourceTeardownConfirmStore (#16948); run()
+  // awaits the app-level WorktreeResourceTeardownConfirmDialog for every
+  // non-agent dispatch, the card's menu included.
+  "worktree.resource.teardown",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",
