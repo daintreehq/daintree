@@ -832,6 +832,37 @@ describe("ProjectSchedulesTab — the editor's answer (#16907)", () => {
     expect(await screen.findByText("Nightly audit, edited")).toBeTruthy();
     expect(screen.queryByText("Weekly triage")).toBeNull();
   });
+
+  it("waits for its own read over an answer the editor gave while the tab was away", async () => {
+    const EDITED = { ...NIGHTLY, name: "Nightly audit, edited", updatedAt: NIGHTLY.updatedAt + 1 };
+    client.update.mockResolvedValue({
+      status: "saved",
+      schedule: EDITED,
+      snapshot: snapshot([EDITED, WEEKLY], 2),
+    });
+    const { update } = renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    fireEvent.change(await screen.findByDisplayValue("Nightly audit"), {
+      target: { value: "Nightly audit, edited" },
+    });
+
+    // Settings leaves project scope under the editor, which then saves.
+    update({ mounted: false });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(editor()).toBeNull());
+    expect(useSchedulesViewStore.getState().editorAnswer?.revision).toBe(2);
+
+    // Another window deleted Weekly triage since; the tab's own read says so.
+    let answer: (value: SchedulesSnapshot) => void = () => {};
+    client.list.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    update({ mounted: true });
+    await waitFor(() => expect(useSchedulesViewStore.getState().editorAnswer).toBeNull());
+    expect(screen.queryByText("Weekly triage")).toBeNull();
+
+    await act(async () => answer(snapshot([EDITED], 3)));
+    expect(await screen.findByText("Nightly audit, edited")).toBeTruthy();
+    expect(screen.queryByText("Weekly triage")).toBeNull();
+  });
 });
 
 describe("ProjectSchedulesTab — waiting on a read (#16907)", () => {

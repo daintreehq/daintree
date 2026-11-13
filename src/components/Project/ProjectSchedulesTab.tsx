@@ -117,6 +117,10 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
   const request = useSchedulesViewStore((s) => s.request);
   const editing = useSchedulesViewStore((s) => s.editor !== null);
   const editorAnswer = useSchedulesViewStore((s) => s.editorAnswer);
+  const takeEditorAnswer = useSchedulesViewStore((s) => s.takeEditorAnswer);
+  // An answer from before this mount is already in the list it reads, and folded
+  // in first it could show rows changed or deleted since.
+  const [answerBeforeMount] = useState(() => useSchedulesViewStore.getState().editorAnswer);
   const markLanded = useSchedulesViewStore((s) => s.markLanded);
   const setShowing = useSchedulesViewStore((s) => s.setShowing);
   const openEditor = useSchedulesViewStore((s) => s.openEditor);
@@ -162,10 +166,13 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
   useEffect(() => () => setShowing(false), [setShowing]);
 
   const { state, retry, accept } = useProjectSchedules(active);
-  // The editor's save or delete answer, folded in so the list doesn't wait for the push.
+  // The editor's save or delete answer, folded in so the list doesn't wait for the
+  // push, then taken, so a later mount never folds it in over newer changes.
   useEffect(() => {
-    if (editorAnswer) accept(editorAnswer);
-  }, [editorAnswer, accept]);
+    if (!editorAnswer) return;
+    if (editorAnswer !== answerBeforeMount) accept(editorAnswer);
+    takeEditorAnswer(editorAnswer);
+  }, [editorAnswer, answerBeforeMount, accept, takeEditorAnswer]);
   // Each answer is shown against the snapshot it was asked about, so turning a
   // switch shows once main has written or removed the job, not before.
   const osJob = useScheduleOsJob(active, state.snapshot?.revision ?? null, state.snapshot);
