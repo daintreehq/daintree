@@ -8,6 +8,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { MarkdownEditorStatusBar } from "../MarkdownEditorStatusBar";
 import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
+import { describeChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 
 const BASE = {
   filePath: "docs/release-plan.md",
@@ -66,6 +68,33 @@ describe("MarkdownEditorStatusBar", () => {
     expect(saveButton().disabled).toBe(true);
     rerender(<MarkdownEditorStatusBar {...BASE} dirty />);
     expect(saveButton().disabled).toBe(false);
+  });
+
+  it("names the save shortcut in the save button's tooltip", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <MarkdownEditorStatusBar {...BASE} dirty />
+      </TooltipProvider>
+    );
+    fireEvent.focus(saveButton());
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Save file");
+    expect(tooltip.textContent).toContain(describeChord("Cmd+S", isMac()));
+  });
+
+  it("offers the shortcut while the save button is disabled", async () => {
+    // A natively disabled button takes no pointer events, so a tooltip bound
+    // to the button itself would never open on a clean document.
+    render(
+      <TooltipProvider delayDuration={0}>
+        <MarkdownEditorStatusBar {...BASE} />
+      </TooltipProvider>
+    );
+    expect(saveButton().disabled).toBe(true);
+    const trigger = screen.getByTestId("markdown-editor-save-tooltip");
+    expect(trigger.contains(saveButton())).toBe(true);
+    fireEvent.pointerMove(trigger, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Save file");
   });
 
   it("declares no live region — the controller owns terminal announcements", () => {

@@ -1,8 +1,12 @@
 import { Save } from "lucide-react";
-import { Button } from "@daintreehq/plugin-ui";
+import { Button, KbdChord, Tooltip } from "@daintreehq/plugin-ui";
 import { FILE_METADATA_STRIP_CLASS } from "@/components/FileViewer/fileMetadataStrip";
 import { FileMetadataFacts, type FileLineEnding } from "@/components/FileViewer/FileMetadataFacts";
 import { matchCodeMirrorLanguage } from "@/components/FileViewer/codeMirrorLanguages";
+
+// Not a registered keybinding: the editor's own keydown handler takes Mod-S
+// (see `buildMarkdownEditorExtensions`), so the hint names it directly.
+const SAVE_SHORTCUT = "Cmd+S";
 
 export interface MarkdownEditorStatusBarProps {
   /** Names the language fact, matched the way Source mode's viewer matches it. */
@@ -84,23 +88,38 @@ export function MarkdownEditorStatusBar({
         >
           {state}
         </span>
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={onSave}
-          // `saving` is deliberately absent from `disabled` and carried by
-          // `loading` instead: the primitive blocks activation through ARIA
-          // precisely so the button keeps focus across the write, and a native
-          // `disabled` here would drop a keyboard user out of the strip the
-          // moment they pressed it.
-          disabled={!dirty || saveBlocked}
-          loading={saving}
-          aria-label="Save file"
-          data-testid="markdown-editor-save"
-          icon={<Save />}
+        <Tooltip
+          side="bottom"
+          content={
+            <span className="flex items-center justify-between gap-4">
+              <span>Save file</span>
+              <KbdChord shortcut={SAVE_SHORTCUT} />
+            </span>
+          }
         >
-          Save
-        </Button>
+          {/* The trigger is a wrapper, not the button: a natively disabled
+              button takes no pointer events, and the shortcut is worth
+              learning while the document is clean too. */}
+          <span className="inline-flex" data-testid="markdown-editor-save-tooltip">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={onSave}
+              // `saving` is deliberately absent from `disabled` and carried by
+              // `loading` instead: the primitive blocks activation through ARIA
+              // precisely so the button keeps focus across the write, and a native
+              // `disabled` here would drop a keyboard user out of the strip the
+              // moment they pressed it.
+              disabled={!dirty || saveBlocked}
+              loading={saving}
+              aria-label="Save file"
+              data-testid="markdown-editor-save"
+              icon={<Save />}
+            >
+              Save
+            </Button>
+          </span>
+        </Tooltip>
       </span>
     </div>
   );
