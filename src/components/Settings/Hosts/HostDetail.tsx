@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -146,6 +146,7 @@ export function HostDetail({
   const wslDistro = wslDistroOf(descriptor.connection);
   const removeOutcome = removeHostOutcome(descriptor.connection, hostName);
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
+  const changeTargetButtonRef = useRef<HTMLButtonElement | null>(null);
   const connected = connection.status === "connected";
   // What a host reports is about it now only while it is connected: kept from
   // before a drop, it would read as current. The overview's history keeps it.
@@ -306,7 +307,12 @@ export function HostDetail({
               label="SSH target"
               description={sshTarget}
               control={
-                <Button variant="outline" size="sm" onClick={() => setChangeTargetOpen(true)}>
+                <Button
+                  ref={changeTargetButtonRef}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setChangeTargetOpen(true)}
+                >
                   Change target…
                 </Button>
               }
@@ -561,6 +567,7 @@ export function HostDetail({
         <ChangeHostTargetDialog
           isOpen
           onClose={() => setChangeTargetOpen(false)}
+          restoreFocusTo={changeTargetButtonRef}
           hostId={descriptor.id}
           hostName={hostName}
           currentTarget={sshTarget}

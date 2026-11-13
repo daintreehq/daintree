@@ -76,7 +76,7 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
   };
 
   return (
-    <AppDialog isOpen onClose={onClose} size="5xl" initialFocus="none">
+    <AppDialog isOpen onClose={onClose} size="5xl" initialFocus="first">
       <AppDialog.Header>
         <AppDialog.Title icon={<LayoutGrid className="h-4 w-4 text-text-secondary" />}>
           Hosts overview

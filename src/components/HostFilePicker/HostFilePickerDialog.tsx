@@ -316,6 +316,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // The arrow keys, not the pointer, last moved the active row: its full name
   // then shows without a hover.
   const [keyboardCursor, setKeyboardCursor] = useState(false);
+  // The full-name tooltip was dismissed (a scroll, say): the cursor stays the
+  // keyboard's, so the active descendant holds until the pointer takes over.
+  const [nameDismissed, setNameDismissed] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
   const [pathInput, setPathInput] = useState<HTMLInputElement | null>(null);
   const pathInputRef = useRef<HTMLInputElement | null>(null);
@@ -532,6 +535,15 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     setEditingPath(true);
   };
 
+  const cancelPathEdit = () => {
+    confirmOwedRef.current = null;
+    setEditingPath(false);
+    setPathError(null);
+    setPathDraft(shownPath);
+    setDraftEdited(false);
+    listRef.current?.focus();
+  };
+
   const goToDraft = (thenConfirm = false) => {
     if (!isAbsoluteHostPath(draftTarget)) {
       setPathError("Enter an absolute path, starting with /");
@@ -557,17 +569,27 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       editPath("/");
       return;
     }
+    if (
+      (event.key === "Backspace" && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+      (event.key === "ArrowUp" && event.altKey && !event.metaKey && !event.ctrlKey)
+    ) {
+      event.preventDefault();
+      if (parentTarget !== null) navigate(parentTarget);
+      return;
+    }
     if (!ready || entries.length === 0) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
       setKeyboardCursor(true);
+      setNameDismissed(false);
       setActiveIndex((index) => Math.min(entries.length - 1, Math.max(0, index + step)));
       return;
     }
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       setKeyboardCursor(true);
+      setNameDismissed(false);
       setActiveIndex(event.key === "Home" ? 0 : entries.length - 1);
       return;
     }
@@ -712,7 +734,13 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 setDraftEdited(false);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                if (event.key === "Escape") {
+                  // Cancels the edit, not the dialog: the dialog's backstop
+                  // sits on the document and honours a stopped event.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelPathEdit();
+                } else if (event.key === "Enter") {
                   event.preventDefault();
                   goToDraft();
                 } else if (event.key === "ArrowDown") {
@@ -760,7 +788,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
             aria-label="Folder contents"
             aria-busy={loading || undefined}
             aria-multiselectable={multiple || undefined}
-            aria-activedescendant={activeEntry ? optionId(activeIndex) : undefined}
+            aria-activedescendant={
+              activeEntry && keyboardCursor ? optionId(activeIndex) : undefined
+            }
             tabIndex={0}
             onKeyDown={onListKeyDown}
             onPointerDown={() => {
@@ -772,6 +802,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               // row is the keyboard's from the start.
               if (event.target === event.currentTarget && !listPointerRef.current) {
                 setKeyboardCursor(true);
+                setNameDismissed(false);
               }
               listPointerRef.current = false;
             }}
@@ -837,8 +868,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   <EntryIcon entry={entry} />
                   <EntryName
                     entry={entry}
-                    reveal={keyboardCursor && ready && index === activeIndex}
-                    onDismiss={() => setKeyboardCursor(false)}
+                    reveal={keyboardCursor && !nameDismissed && ready && index === activeIndex}
+                    onDismiss={() => setNameDismissed(true)}
                   />
                   {entry.size !== null && (
                     <span className="shrink-0 pl-2 text-right text-xs font-normal tabular-nums text-text-secondary">
