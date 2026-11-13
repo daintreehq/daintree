@@ -97,6 +97,31 @@ describe("worktreeFilterStore", () => {
     expect(useWorktreeFilterStore.getState().query).toBe("");
   });
 
+  it("clearFacetFilters resets every facet and nothing else", () => {
+    const store = useWorktreeFilterStore.getState();
+    store.toggleStatusFilter("active");
+    store.toggleTypeFilter("feature");
+    store.togglePrIssueFilter("hasIssue");
+    store.toggleSessionFilter("working");
+    store.setHasAgentFilter(true);
+    store.toggleActivityFilter("last1h");
+    store.toggleDevServerFilter("running");
+    store.setQuickStateFilter("working");
+    store.setHideMainWorktree(true);
+    store.setLiveQuery("draft");
+    store.setQuery("committed");
+
+    useWorktreeFilterStore.getState().clearFacetFilters();
+
+    const after = useWorktreeFilterStore.getState();
+    expect(after.hasFacetFilters()).toBe(false);
+    expect(after.hasAgentFilter).toBe(false);
+    expect(after.query).toBe("committed");
+    expect(after.liveQuery).toBe("draft");
+    expect(after.quickStateFilter).toBe("working");
+    expect(after.hideMainWorktree).toBe(true);
+  });
+
   describe("per-section clear actions", () => {
     // Populate every facet section so each clear can be shown to affect only its own.
     function populateAllSections() {

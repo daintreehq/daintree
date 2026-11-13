@@ -130,6 +130,8 @@ interface WorktreeFilterActions {
   clearSessionFilters: () => void;
   clearActivityFilters: () => void;
   clearDevServerFilters: () => void;
+  /** Resets the facet filters only; the text query, quick-state and view prefs stay. */
+  clearFacetFilters: () => void;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -1108,6 +1110,17 @@ const _actions: WorktreeFilterActions = {
   },
   clearDevServerFilters: () => {
     _projectStore.setState({ devServerFilters: new Set() });
+  },
+  clearFacetFilters: () => {
+    _projectStore.setState({
+      statusFilters: new Set(),
+      typeFilters: new Set(),
+      prIssueFilters: new Set(),
+      sessionFilters: new Set(),
+      hasAgentFilter: false,
+      activityFilters: new Set(),
+      devServerFilters: new Set(),
+    });
   },
   clearAll: () => {
     _projectStore.setState({

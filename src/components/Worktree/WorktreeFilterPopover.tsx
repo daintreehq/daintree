@@ -373,6 +373,7 @@ export function WorktreeFilterPopover({
     clearSessionFilters,
     clearActivityFilters,
     clearDevServerFilters,
+    clearFacetFilters,
     clearAll,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
@@ -402,6 +403,7 @@ export function WorktreeFilterPopover({
       clearSessionFilters: state.clearSessionFilters,
       clearActivityFilters: state.clearActivityFilters,
       clearDevServerFilters: state.clearDevServerFilters,
+      clearFacetFilters: state.clearFacetFilters,
       clearAll: state.clearAll,
     }))
   );
@@ -460,16 +462,23 @@ export function WorktreeFilterPopover({
   }, [setQuery]);
 
   const handleClearAll = useCallback(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
     // The footer (and this button) unmount the moment the last filter clears,
     // so move focus onto the still-mounted popover content first — else
     // it drops to document.body inside the open popover (issue #10315).
     contentRef.current?.focus();
+    if (hideSearchInput) {
+      // The text belongs to the field beside the trigger, which has its own X
+      // and its own pending commit. Wiping it here, or cancelling that commit,
+      // would reach into a field this popover does not own.
+      clearFacetFilters();
+      return;
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
     setLocalQuery("");
     clearAll();
-  }, [clearAll]);
+  }, [hideSearchInput, clearFacetFilters, clearAll]);
 
   // Sort options are a real radio group, so they take one tab stop and the
   // arrows move (and select) within it — ARIA APG. Exposing `role="radio"`
@@ -512,7 +521,10 @@ export function WorktreeFilterPopover({
 
   const isField = appearance === "field";
   const filtersActive = showBadge;
-  const hasAnyFilter = fullFilterCount > 0;
+  // The footer follows the trigger's count: beside an external search field the
+  // query is not this popover's filter, and the debounced commit of typed text
+  // must not pop the footer in under an open popover.
+  const hasAnyFilter = filterCount > 0;
 
   const sortSummary = useMemo(() => {
     const label = ORDER_OPTIONS.find((option) => option.value === orderBy)?.label ?? "";
