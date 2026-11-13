@@ -405,9 +405,11 @@ function DeletedWorktreeTerminalChip({
           aria-description={description}
         >
           <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/chip:text-text-primary">
-            {terminal.title}
-          </span>
+          <TruncatedTooltip content={terminal.title} focusable={false}>
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary transition-colors duration-150 group-hover/chip:text-text-primary">
+              {terminal.title}
+            </span>
+          </TruncatedTooltip>
           <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
             {StateIcon && agentState && (
               <StateIcon

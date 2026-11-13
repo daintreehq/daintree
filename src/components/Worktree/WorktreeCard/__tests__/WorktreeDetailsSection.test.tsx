@@ -781,3 +781,21 @@ describe("WorktreeDetailsSection review change hint", () => {
     expect(screen.getByText(/Changed since review/)).toBeDefined();
   });
 });
+
+describe("WorktreeDetailsSection resource controls", () => {
+  it("runs the visible resume button and mounts no hidden menu trigger beside it", () => {
+    const onResourceResume = vi.fn();
+    const { container } = renderSection({
+      hasResourceConfig: true,
+      resourceStatus: "stopped",
+      onResourceResume,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume resource" }));
+
+    expect(onResourceResume).toHaveBeenCalledTimes(1);
+    // A clipped 1px trigger no pointer can reach opened a menu nobody could use.
+    expect(screen.queryByText("Resource actions")).toBeNull();
+    expect(container.querySelector("[data-radix-context-menu-trigger], .sr-only")).toBeNull();
+  });
+});

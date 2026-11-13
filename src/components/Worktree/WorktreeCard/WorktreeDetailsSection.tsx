@@ -19,7 +19,6 @@ import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
-  Activity,
   ChevronRight,
   GitCommitHorizontal,
   Pause,
@@ -27,7 +26,6 @@ import {
   Plug,
   RefreshCw,
   ShieldAlert,
-  Trash2,
 } from "lucide-react";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
@@ -41,13 +39,6 @@ import {
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@/components/ui/context-menu";
 import { pluralize } from "@/lib/pluralize";
 
 const COUNT_BUMP_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
@@ -118,8 +109,6 @@ export interface WorktreeDetailsSectionProps {
   onResourcePause?: () => void;
   onResourceConnect?: () => void;
   onResourceProvision?: () => void;
-  onResourceTeardown?: () => void;
-  onResourceStatus?: () => void;
 }
 
 export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
@@ -154,8 +143,6 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     onResourceResume,
     onResourcePause,
     onResourceConnect,
-    onResourceTeardown,
-    onResourceStatus,
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
@@ -482,51 +469,6 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   )}
                 </span>
               </TruncatedTooltip>
-
-              {hasResourceConfig && (
-                <ContextMenu>
-                  <ContextMenuTrigger asChild>
-                    <span className="sr-only">Resource actions</span>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent onClick={(e) => e.stopPropagation()}>
-                    {showResourceResume && onResourceResume && (
-                      <ContextMenuItem onClick={onResourceResume}>
-                        <Play className="w-3.5 h-3.5 mr-2" />
-                        Resume resource
-                      </ContextMenuItem>
-                    )}
-                    {showResourcePause && onResourcePause && (
-                      <ContextMenuItem onClick={onResourcePause}>
-                        <Pause className="w-3.5 h-3.5 mr-2" />
-                        Pause resource
-                      </ContextMenuItem>
-                    )}
-                    {showResourceConnect && (
-                      <ContextMenuItem onClick={onResourceConnect}>
-                        <Plug className="w-3.5 h-3.5 mr-2" />
-                        Connect to resource
-                      </ContextMenuItem>
-                    )}
-                    {(showResourceResume || showResourcePause || showResourceConnect) &&
-                      onResourceStatus && <ContextMenuSeparator />}
-                    {onResourceStatus && (
-                      <ContextMenuItem onClick={onResourceStatus}>
-                        <Activity className="w-3.5 h-3.5 mr-2" />
-                        Check status
-                      </ContextMenuItem>
-                    )}
-                    {onResourceTeardown && (
-                      <>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem destructive onClick={onResourceTeardown}>
-                          <Trash2 className="w-3.5 h-3.5 mr-2" />
-                          Tear down resource
-                        </ContextMenuItem>
-                      </>
-                    )}
-                  </ContextMenuContent>
-                </ContextMenu>
-              )}
 
               {hasResourceConfig &&
                 (showResourceResume || showResourcePause || showResourceConnect) && (

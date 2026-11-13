@@ -124,6 +124,12 @@ export interface UseWorktreeSidebarKeyboardReturn {
    * (focus has moved into a real DOM button, which carries its own focus ring).
    */
   keyboardCursorId: string | null;
+  /**
+   * Hands the keys to the list with the cursor on its first row, for a caller
+   * outside the grid (the search field's ArrowDown). Returns false, leaving
+   * focus where it is, when no row is there to take it.
+   */
+  focusFirstRow: () => boolean;
   handleGridKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   handleGridFocus: (e: React.FocusEvent<HTMLDivElement>) => void;
   handleGridFocusCapture: (e: React.FocusEvent<HTMLDivElement>) => void;
@@ -383,8 +389,20 @@ export function useWorktreeSidebarKeyboard({
     // Tracked from the input rather than `:focus-visible`, which a scripted
     // focus reports inconsistently.
     let pointerPressed = false;
+    // A press ends with the pointer, wherever it is released. Left latched it
+    // outlived the click and hid the cursor for a focus the keyboard caused
+    // later, such as ArrowDown from the search field.
+    const endPress = () => {
+      pointerPressed = false;
+      document.removeEventListener("pointerup", endPress, true);
+      document.removeEventListener("pointercancel", endPress, true);
+      window.removeEventListener("blur", endPress);
+    };
     const onPointerDown = () => {
       pointerPressed = true;
+      document.addEventListener("pointerup", endPress, true);
+      document.addEventListener("pointercancel", endPress, true);
+      window.addEventListener("blur", endPress);
     };
     const onKeyDownCapture = () => {
       pointerPressed = false;
@@ -407,6 +425,7 @@ export function useWorktreeSidebarKeyboard({
     grid.addEventListener("focusin", onFocusIn);
     grid.addEventListener("focusout", onFocusOut);
     return () => {
+      endPress();
       grid.removeEventListener("pointerdown", onPointerDown, true);
       grid.removeEventListener("keydown", onKeyDownCapture, true);
       grid.removeEventListener("focusin", onFocusIn);
@@ -469,6 +488,14 @@ export function useWorktreeSidebarKeyboard({
     },
     [getToolbarItemsForRow, setGridMode, syncToolbarTabStops]
   );
+
+  const focusFirstRow = useCallback((): boolean => {
+    const first = firstRowFlatIndex();
+    if (first === null) return false;
+    enterListMode(null);
+    navigateTo(first);
+    return true;
+  }, [enterListMode, firstRowFlatIndex, navigateTo]);
 
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -746,6 +773,7 @@ export function useWorktreeSidebarKeyboard({
     gridRef,
     activeDescendantId,
     keyboardCursorId,
+    focusFirstRow,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,

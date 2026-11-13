@@ -50,6 +50,12 @@ vi.mock("@/components/DragDrop/SortableWorktreeTerminal", () => ({
   getAccordionDragId: (id: string) => `accordion-${id}`,
 }));
 
+// jsdom has no layout, so overflow is whatever the test says it is.
+const truncation = vi.hoisted(() => ({ truncated: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.truncated }),
+}));
+
 vi.mock("@/components/Terminal/TerminalIcon", () => ({
   TerminalIcon: ({ className }: { className?: string }) => (
     <svg data-testid="terminal-row-icon" className={className} />
@@ -118,6 +124,7 @@ function renderGroup(list: DeletedWorktree[] = worktrees) {
 
 beforeEach(() => {
   cleanup();
+  truncation.truncated = false;
   sortableProps.mockClear();
   useTerminalPendingDestructiveActionStore.getState().clear();
   useWorktreeSelectionStore.getState().reset();
@@ -165,6 +172,49 @@ describe("DeletedWorktreeGroup", () => {
         name: "Drag to rescue claude in deleted worktree feature/alpha",
       })
     ).toBeTruthy();
+  });
+
+  describe("rail chip title", () => {
+    const LONG_TITLE = "claude-code-session-with-a-very-long-title";
+
+    function chipTitle(): HTMLElement {
+      const chip = screen.getByRole("button", {
+        name: `${LONG_TITLE} in deleted worktree feature/alpha`,
+      });
+      const span = Array.from(chip.querySelectorAll("span")).find(
+        (el) => el.textContent === LONG_TITLE
+      );
+      if (!span) throw new Error("chip title not rendered");
+      return span;
+    }
+
+    it("discloses the full title on hover when it is cut off", async () => {
+      truncation.truncated = true;
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+
+      fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip.textContent).toBe(LONG_TITLE);
+    });
+
+    it("adds no tooltip when the title fits", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+
+      fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("leaves the chip button the only tab stop when the title is cut off", () => {
+      truncation.truncated = true;
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+
+      expect(chipTitle().hasAttribute("tabindex")).toBe(false);
+    });
   });
 
   it("swaps the rail for the member cards once expanded", () => {
