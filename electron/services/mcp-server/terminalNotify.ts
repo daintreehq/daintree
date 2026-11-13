@@ -358,8 +358,8 @@ export interface LaneWake {
    * carries a Decisions answer for the pane that asked (#16015), in
    * {@link LaneWake.decision}; `steer` carries a global Assistant's prompt
    * held for this pane's next prompt (#16187), in {@link LaneWake.steer};
-   * `composer` carries what the pane's own composer sent while its agent
-   * worked (#16379), in {@link LaneWake.composer}.
+   * `composer` carries what the pane's own composer sent while the pane had no
+   * line to take it (#16379, #16872), in {@link LaneWake.composer}.
    */
   kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer" | "composer";
   /**

@@ -1031,6 +1031,13 @@ export interface AgentConfig {
      * the pane's next settle. Omitted means unverified: the notice waits.
      */
     queuesInputWhileWorking?: boolean;
+    /**
+     * The CLI takes down its input line while it works, so a message typed
+     * mid-turn is lost or misread. The pane composer then holds a mid-turn
+     * send for the agent's next prompt (#16872). Omitted means the line stays
+     * up and a mid-turn send is typed at once.
+     */
+    noInputLineWhileWorking?: boolean;
     /** Delay in ms before sending Enter key after body write (default: 200) */
     submitEnterDelayMs?: number;
     /**

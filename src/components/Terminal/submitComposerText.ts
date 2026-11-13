@@ -41,13 +41,13 @@ export function submitComposerText(
 }
 
 /**
- * How a pane holds its composer's send while its agent works (#16379), read as
- * the text goes.
+ * How a pane holds its composer's send while it has no line to take it
+ * (#16379, #16872), read as the text goes.
  */
 export interface PaneComposerHold {
   /** The pane already holds a send: another is refused, never sent ahead of it. */
   isHolding: () => boolean;
-  /** Its agent was last seen working, and isn't declared to queue input mid-turn. */
+  /** Main is asked: the pane was last seen at a choice dialog, or with its agent working. */
   mayHold: () => boolean;
   onHeld: (send: HeldComposerSend) => void;
   onRefused: () => void;
@@ -61,8 +61,8 @@ export function attachableImagePaths(imagePaths: readonly string[] | undefined):
 /**
  * Asks main to hold the send. Null when input is blocked: it is never held,
  * and is refused the way it always was. A hold main couldn't take, or a
- * question it couldn't answer, isn't sent either: sending now into a busy
- * agent is what holding it was for.
+ * question it couldn't answer, isn't sent either: sending now into a pane
+ * with nowhere for it to go is what holding it was for.
  */
 async function requestComposerHold(
   id: string,

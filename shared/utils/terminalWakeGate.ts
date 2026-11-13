@@ -104,6 +104,32 @@ export function isAtChoiceDialog(snapshot: WakeGateSnapshot): boolean {
   );
 }
 
+/**
+ * Why the person's own composer send would be held for the pane's next
+ * prompt rather than typed now (#16872), or null when it goes at once: a
+ * choice dialog on screen, which would take the line as a choice, or a turn
+ * in a CLI known to take down its input line while it works. A question asked
+ * in prose, any prompt, idle, a shell and a pane gone or going all take it now.
+ */
+export type ComposerSendHoldCause = "choice-dialog" | "no-input-line";
+
+export function composerSendHoldCause(snapshot: WakeGateSnapshot): ComposerSendHoldCause | null {
+  if (snapshot.isTrashed === true || snapshot.isClosing === true) return null;
+  if (isAtChoiceDialog(snapshot)) return "choice-dialog";
+  if (
+    snapshot.detectedAgentId === undefined ||
+    snapshot.isExited === true ||
+    snapshot.hasPty === false ||
+    snapshot.agentState !== "working"
+  ) {
+    return null;
+  }
+  return getEffectiveAgentConfig(snapshot.detectedAgentId)?.capabilities
+    ?.noInputLineWhileWorking === true
+    ? "no-input-line"
+    : null;
+}
+
 /** What a refused send says, wherever it was refused. */
 export function choiceDialogRefusalMessage(terminalId: string): string {
   return `Terminal '${terminalId}' was last observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys. A dialog closed into a draft reads this way until the input row is empty or the agent next settles.`;

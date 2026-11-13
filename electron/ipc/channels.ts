@@ -1569,7 +1569,7 @@ export const CHANNELS = {
   TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
   TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
 
-  // A pane composer's send held while its agent works (#16379)
+  // A pane composer's send held for its pane's next prompt (#16379, #16872)
   COMPOSER_HOLD_HOLD: "composer-hold:hold",
   COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
   COMPOSER_HOLD_SEND_NOW: "composer-hold:send-now",
