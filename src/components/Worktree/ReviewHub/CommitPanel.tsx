@@ -465,7 +465,10 @@ export function CommitPanel({
       // push will be refused by the handler, and silently attempting it would
       // leave the user with a failed write and no explanation. So it is with no
       // branch to pin the push to; the confirm then waits for one.
-      if (!skipPushConfirm || pushDestination === null || !currentBranch) {
+      //
+      // A protected branch always confirms too: the opt-out is per worktree, and
+      // a worktree can later check out main, where the warning is the point.
+      if (!skipPushConfirm || isProtected || pushDestination === null || !currentBranch) {
         setPushConfirmMessage(commitMessage);
         setOutgoingAttempt((n) => n + 1);
         setPushConfirmOpen(true);
@@ -488,6 +491,7 @@ export function CommitPanel({
     pushDestination,
     currentBranch,
     skipPushConfirm,
+    isProtected,
     commitMessage,
     focusBlocker,
     handleCommitAndPush,
@@ -499,7 +503,8 @@ export function CommitPanel({
     // The opt-out is persisted on confirm regardless of whether the
     // subsequent push succeeds — the user expressed a preference about the
     // confirm dialog, which is orthogonal to network/rejection failure.
-    onSetSkipPushConfirm(dontAskChecked);
+    // A protected branch never records an opt-out: the box is not offered there.
+    onSetSkipPushConfirm(isProtected ? skipPushConfirm : dontAskChecked);
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     // What the dialog previewed is what gets pushed, even if a history recall
@@ -514,6 +519,8 @@ export function CommitPanel({
     currentBranch,
     outgoingRange,
     dontAskChecked,
+    isProtected,
+    skipPushConfirm,
     onSetSkipPushConfirm,
     handleCommitAndPush,
     pushConfirmMessage,
@@ -924,6 +931,10 @@ export function CommitPanel({
         confirmDisabled={!canConfirmPush}
         hint={pushConfirmHint}
         variant="default"
+        hasPreview={true}
+        // The file list below is a focusable scroller, so the default "first"
+        // lands on it and Enter does nothing. Cmd+Enter then Enter must confirm.
+        initialFocus="confirm"
         zIndex="nested"
         onConfirm={handleConfirmPush}
       >
@@ -1072,15 +1083,17 @@ export function CommitPanel({
               </p>
             )
           )}
-          <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
-            <Checkbox
-              data-testid="commit-panel-push-confirm-dont-ask"
-              checked={dontAskChecked}
-              onCheckedChange={(checked) => setDontAskChecked(checked === true)}
-              className="mt-0.5"
-            />
-            Don't ask again for this worktree
-          </label>
+          {!isProtected && (
+            <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
+              <Checkbox
+                data-testid="commit-panel-push-confirm-dont-ask"
+                checked={dontAskChecked}
+                onCheckedChange={(checked) => setDontAskChecked(checked === true)}
+                className="mt-0.5"
+              />
+              Don't ask again for this worktree
+            </label>
+          )}
         </div>
       </ConfirmDialog>
 
