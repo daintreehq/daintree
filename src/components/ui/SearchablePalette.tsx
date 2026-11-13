@@ -7,17 +7,17 @@ import {
   PaletteFooterHints,
   PaletteNoMatchHint,
   toHintPhrase,
+  type PaletteCloseReason,
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
-import { keyBelongsToField } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, pageListboxCursor } from "@/hooks/useListboxCursor";
 
 const noopHoverIndex = () => {};
 
@@ -51,7 +51,11 @@ export interface SearchablePaletteProps<T> {
    * (⌘ on macOS, Ctrl elsewhere), for palettes whose rows can open elsewhere.
    */
   onConfirm: (newWindow: boolean) => void;
-  onClose: () => void;
+  /**
+   * Escape with nothing left to clear, or a scrim click. The reason lets a
+   * multi-step palette take Escape back a step while a scrim click still closes.
+   */
+  onClose: (reason?: PaletteCloseReason) => void;
 
   /** Unique key for each item */
   getItemId: (item: T) => string;
@@ -75,9 +79,11 @@ export interface SearchablePaletteProps<T> {
   /** Called when the pointer hovers a row, for keeping selectedIndex in sync. */
   onHoverIndex?: (index: number) => void;
   /**
-   * Moves the cursor to an index. Home/End need it; without it (or
-   * `onHoverIndex` as a fallback) they are left to the input's own caret
-   * movement rather than swallowed.
+   * Moves the cursor to an index. Home/End and PageUp/PageDown need it; without
+   * it (or `onHoverIndex` as a fallback) they are left to the input rather than
+   * swallowed. The target can be any row, not just an end, so a consumer that
+   * skips unselectable rows should look from the target back toward the
+   * current row, which never wraps.
    */
   onSelectIndex?: (index: number) => void;
   /**
@@ -113,10 +119,16 @@ export interface SearchablePaletteProps<T> {
   searchAriaLabel?: string;
   /**
    * Id of an element that describes the search input — for a palette control
-   * the user reaches by a chord from the field rather than by Tab, which moves
-   * the list selection here.
+   * the user reaches by a chord from the field.
    */
   searchAriaDescribedBy?: string;
+  /**
+   * Escape empties a non-empty field before it closes, wherever focus is in the
+   * palette. Off for a step whose field holds an answer rather than a search
+   * (an argument prompt, a branch name), where Escape goes back a step through
+   * `onClose("escape")` with the text still in it.
+   */
+  clearQueryOnEscape?: boolean;
   /** ID for the listbox container */
   listId?: string;
   /** Prefix for item IDs used in aria-activedescendant */
@@ -257,6 +269,7 @@ export function SearchablePalette<T>({
   searchPlaceholder = "Search",
   searchAriaLabel,
   searchAriaDescribedBy,
+  clearQueryOnEscape = true,
   listId = "searchable-palette-list",
   itemIdPrefix = "palette-option",
   multiselectable = false,
@@ -401,13 +414,22 @@ export function SearchablePalette<T>({
     return undefined;
   }, [isOpen, isLoading, cancelCount, scheduleCount]);
 
-  useEscapeStack(isOpen, () => {
-    if (query !== "") {
-      onQueryChange("");
-    } else {
-      onClose();
-    }
-  });
+  // Escape anywhere in the palette clears a query before it closes. The dialog
+  // routes both of its Escape paths (its document backstop and the escape
+  // stack) through here, so the results region and any control past the list
+  // get the same two stages as the field. Focus goes back to the field, since
+  // an emptied search is one the user is about to retype.
+  const handleDialogClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && clearQueryOnEscape && query !== "") {
+        onQueryChange("");
+        inputRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      onClose(reason);
+    },
+    [clearQueryOnEscape, query, onQueryChange, onClose]
+  );
 
   const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
   const jumpToIndex = onSelectIndex ?? onHoverIndex;
@@ -451,6 +473,19 @@ export function SearchablePalette<T>({
           e.stopPropagation();
           jumpToIndex(results.length - 1);
           break;
+        // A page of rows rather than native scrolling, which would walk the
+        // highlighted row off screen and leave Enter committing something the
+        // user can no longer see.
+        case "PageUp":
+        case "PageDown": {
+          if (!jumpToIndex || keyBelongsToField(e)) break;
+          const target = pageListboxCursor(e.key, selectedIndex, results.length);
+          if (target === null) break;
+          e.preventDefault();
+          e.stopPropagation();
+          jumpToIndex(target);
+          break;
+        }
         case "Enter":
           e.preventDefault();
           e.stopPropagation();
@@ -458,7 +493,7 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, results.length, jumpToIndex]
+    [onSelectPrevious, onSelectNext, onConfirm, results.length, selectedIndex, jumpToIndex]
   );
 
   const handleKeyDown = useCallback(
@@ -470,34 +505,20 @@ export function SearchablePalette<T>({
         if (e.defaultPrevented) return;
       }
 
-      // A query clears before the palette closes. The escape-stack entry below
-      // says the same thing, but it never gets the chance: the dialog's
-      // document-level Escape backstop runs first, closes the palette and marks
-      // the key consumed. Stopping the event here keeps it from reaching that
-      // backstop; an empty field lets Escape through to close as before.
-      if (e.key === "Escape" && query !== "") {
+      // The field clears its own query and stops the key there, so the
+      // dialog's backstop never sees it; an empty field lets Escape through to
+      // `handleDialogClose`. Tab is left alone: it moves focus on to the
+      // results region and any control past the list, as it does everywhere.
+      if (e.key === "Escape" && clearQueryOnEscape && query !== "") {
         e.preventDefault();
         e.stopPropagation();
         onQueryChange("");
         return;
       }
 
-      // Tab stays input-only: on the results region it must keep its native
-      // traversal so controls rendered after the list stay reachable.
-      if (e.key === "Tab") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.shiftKey) {
-          onSelectPrevious();
-        } else {
-          onSelectNext();
-        }
-        return;
-      }
-
       handleNavigationKeyDown(e);
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown, query, onQueryChange]
+    [onKeyDown, handleNavigationKeyDown, clearQueryOnEscape, query, onQueryChange]
   );
 
   const activeDescendant =
@@ -559,7 +580,7 @@ export function SearchablePalette<T>({
   return (
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleDialogClose}
       ariaLabel={ariaLabel}
       tier={tier}
       zIndex={zIndex}
@@ -614,7 +635,7 @@ export function SearchablePalette<T>({
                     query={query}
                     emptyMessage={emptyMessage}
                     noMatchMessage={noMatchMessage}
-                    // Escape clears the query before it closes (see handleKeyDown),
+                    // Escape clears the query before it closes (handleDialogClose),
                     // so every no-match state has the same way back; a consumer
                     // with a better next step passes its own.
                     noMatchContent={noMatchContent ?? <PaletteNoMatchHint />}

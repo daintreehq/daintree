@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import type { PaletteCloseReason } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { logsClient } from "@/clients/logsClient";
@@ -204,6 +205,19 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
     confirmLevel(levelPalette.results[levelPalette.selectedIndex]);
   }, [confirmLevel, levelPalette.results, levelPalette.selectedIndex]);
 
+  // Escape on the level step goes back to the module list as it was left, its
+  // search and cursor intact; a scrim click still closes the whole picker.
+  const handleLevelClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape") {
+        setStep("logger");
+        return;
+      }
+      onClose();
+    },
+    [onClose]
+  );
+
   if (step === "logger") {
     return (
       <SearchablePalette<LoggerItem>
@@ -269,7 +283,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       onSelectNext={levelPalette.selectNext}
       onSelectIndex={levelPalette.setSelectedIndex}
       onConfirm={handleLevelConfirm}
-      onClose={onClose}
+      onClose={handleLevelClose}
       getItemId={(item) => item.id}
       onHoverIndex={levelPalette.setSelectedIndex}
       getActionLabel={getLevelActionLabel}

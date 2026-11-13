@@ -299,11 +299,16 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
       timeout: T_MEDIUM,
     });
 
-    // Close and reopen — it must start on the module step again, not the level step.
+    // Escape on the level step goes back to the module step rather than closing.
     await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.logLevelPalette.step1Dialog)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
     await expect(window.locator(SEL.logLevelPalette.step2Dialog)).not.toBeVisible({
       timeout: T_MEDIUM,
     });
+
+    // Close and reopen — it must start on the module step again, not the level step.
     await resetToApp(window);
 
     await openToStep1();

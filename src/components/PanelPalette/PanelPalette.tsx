@@ -2,7 +2,11 @@ import { useEffect, useRef, useCallback } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
-import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import {
+  AppPaletteDialog,
+  PaletteFooterHints,
+  type PaletteCloseReason,
+} from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import { MORE_AGENTS_PANEL_ID, type PanelKindOption } from "@/hooks/usePanelPalette";
@@ -15,7 +19,7 @@ import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { KbdChord } from "@/components/ui/Kbd";
-import { keyBelongsToField } from "@/hooks/useListboxCursor";
+import { keyBelongsToField, pageListboxCursor } from "@/hooks/useListboxCursor";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 interface PanelPaletteProps {
@@ -105,14 +109,23 @@ export function PanelPalette({
           e.preventDefault();
           onSelectNext();
           break;
-        // First and last, as in every other palette. Shift+Home selects the
-        // query instead, and an empty list leaves the keys to the caret.
+        // First and last, and a page at a time, as in every other palette.
+        // Shift+Home selects the query instead, and an empty list leaves the
+        // keys to the caret.
         case "Home":
-        case "End": {
+        case "End":
+        case "PageUp":
+        case "PageDown": {
           if (keyBelongsToField(e) || !onHoverIndex) break;
-          // A stale row is never selectable; the ends are the live rows.
+          // A stale row is never selectable; the cursor moves over live rows.
           const live = results.flatMap((item, index) => (item.isStale ? [] : [index]));
-          const target = (e.key === "Home" ? live[0] : live[live.length - 1]) ?? -1;
+          const at =
+            e.key === "Home"
+              ? 0
+              : e.key === "End"
+                ? live.length - 1
+                : (pageListboxCursor(e.key, live.indexOf(selectedIndex), live.length) ?? -1);
+          const target = live[at] ?? -1;
           if (target < 0) break;
           e.preventDefault();
           onHoverIndex(target);
@@ -123,40 +136,43 @@ export function PanelPalette({
           onConfirm();
           break;
         case "Escape":
-          e.preventDefault();
           // A query clears before the palette closes, as in every SearchablePalette.
-          // Stopped so the dialog's document-level Escape backstop cannot close it.
+          // Stopped so the dialog's document-level Escape backstop cannot close
+          // it; an empty field lets Escape through to `handleDialogClose`.
           if (query !== "") {
+            e.preventDefault();
             e.stopPropagation();
             onQueryChange("");
-          } else {
-            onClose();
           }
           break;
-        case "Tab":
-          // Stopped as well as prevented, as in SearchablePalette: the dialog's
-          // window-level focus wrap otherwise sees Shift+Tab on the field (its
-          // first tabbable) and moves focus to the last control.
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.shiftKey) {
-            onSelectPrevious();
-          } else {
-            onSelectNext();
-          }
-          break;
+        // Tab is left alone: it moves focus on to the results region, as it
+        // does in every other palette.
       }
     },
     [
       onSelectPrevious,
       onSelectNext,
       onConfirm,
-      onClose,
       query,
       onQueryChange,
       onHoverIndex,
       results,
+      selectedIndex,
     ]
+  );
+
+  // The region forwards no Escape, so off the field the dialog's own Escape
+  // lands here and gets the same two stages.
+  const handleDialogClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && query !== "") {
+        onQueryChange("");
+        inputRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      onClose();
+    },
+    [query, onQueryChange, onClose]
   );
 
   const panelCount = usePanelStore((state) =>
@@ -325,7 +341,12 @@ export function PanelPalette({
       : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette" tier="anchored">
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={handleDialogClose}
+      ariaLabel="Panel palette"
+      tier="anchored"
+    >
       <AppPaletteDialog.Header
         label={showCounter ? `New panel (${panelCount} / ${hardLimit})` : "New panel"}
         shortcut={panelPaletteShortcut}

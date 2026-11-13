@@ -594,6 +594,8 @@ export function ActionPalette({
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
       onClose={handleClose}
+      // An argument answer is not a search: Escape retreats a field with it.
+      clearQueryOnEscape={!argPrompt}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
       inputPrefix={chipNode}

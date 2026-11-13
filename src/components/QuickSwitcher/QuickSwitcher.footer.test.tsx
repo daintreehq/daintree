@@ -277,7 +277,7 @@ describe("QuickSwitcher plugin search scope", () => {
     expect(selectNext).not.toHaveBeenCalled();
   });
 
-  it("keeps Tab moving the selection without a keyword match, and Shift+Tab even with one", () => {
+  it("leaves Tab to focus traversal without a keyword match, and Shift+Tab even with one", () => {
     const enterScope = vi.fn();
     const selectNext = vi.fn();
     const selectPrevious = vi.fn();
@@ -288,8 +288,8 @@ describe("QuickSwitcher plugin search scope", () => {
       enterScope,
       selectNext,
     });
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
-    expect(selectNext).toHaveBeenCalledTimes(1);
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" })).toBe(true);
+    expect(selectNext).not.toHaveBeenCalled();
 
     rerender(
       <QuickSwitcher
@@ -313,7 +313,7 @@ describe("QuickSwitcher plugin search scope", () => {
       />
     );
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab", shiftKey: true });
-    expect(selectPrevious).toHaveBeenCalledTimes(1);
+    expect(selectPrevious).not.toHaveBeenCalled();
     expect(enterScope).not.toHaveBeenCalled();
   });
 
@@ -333,6 +333,20 @@ describe("QuickSwitcher plugin search scope", () => {
     fireEvent.keyDown(input, { key: "Escape" });
     expect(exitScope).toHaveBeenCalledTimes(2);
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it("steps out of the scope on Escape from the results region, and closes on a scrim click", () => {
+    const exitScope = vi.fn();
+    const close = vi.fn();
+    renderScoped({ scopedProvider: notesProvider, scopedStatus: "done", exitScope, close });
+
+    fireEvent.keyDown(screen.getByRole("group", { name: "Quick switch" }), { key: "Escape" });
+    expect(exitScope).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("dialog").parentElement!);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(exitScope).toHaveBeenCalledTimes(1);
   });
 
   it("names the provider when it didn't answer in time", () => {

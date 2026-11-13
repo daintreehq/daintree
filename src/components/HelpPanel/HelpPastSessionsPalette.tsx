@@ -327,7 +327,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       beforeList={
         failure === null ? undefined : failedEmpty ? (
           enterRetries ? (
-            // The field reads this out, since focus never leaves it. Kept out
+            // The field reads this out, since that is where focus rests. Kept out
             // of the empty state, which a crossfade can render twice and a
             // load hides.
             <span id={RETRY_HINT_ID} className="sr-only">

@@ -566,7 +566,12 @@ function KitCommandPalette({
       onQueryChange={handleQuery}
       onSelectPrevious={() => moveTo(stepEnabled(results, active - 1, -1))}
       onSelectNext={() => moveTo(stepEnabled(results, active + 1, 1))}
-      onSelectIndex={(index) => moveTo(stepEnabled(results, index, index === 0 ? 1 : -1))}
+      // Home, End and the page keys. A disabled target hands the cursor to the
+      // nearest enabled row back toward the current one, which is enabled, so
+      // the wrapping scan stops there instead of going round the list.
+      onSelectIndex={(index) =>
+        moveTo(stepEnabled(results, index, index === 0 || index < active ? 1 : -1))
+      }
       onHoverIndex={(index) => setCursor(index)}
       onConfirm={() => choose(active)}
       onClose={close}

@@ -222,8 +222,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
           onPointerDownCapture={(e) => e.preventDefault()}
         >
           {/* The chord that opened the palette, named here as the key for this
-            control — Tab moves the list selection, so this is the keyboard
-            route to it. */}
+            control — the route to it that doesn't leave the search field. */}
           <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
           <span id={SCOPE_HINT_ID} className="sr-only">
             {scope === "project"
