@@ -24,6 +24,7 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import { useDockPillHideHandoff } from "./dockFocusHandoff";
 import { pluralize } from "@/lib/pluralize";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -73,6 +74,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
+  const hideHandoff = useDockPillHideHandoff(count);
   const Icon = config.icon;
 
   useEffect(() => {
@@ -80,7 +82,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   }, [count]);
 
   return (
-    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"} {...hideHandoff}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>

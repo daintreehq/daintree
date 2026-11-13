@@ -216,6 +216,7 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 }));
 
 import { BackgroundContainer } from "../BackgroundContainer";
+import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
 /** The fleet reporting an unread Canopy ask on each of these runs: the only waits counted. */
 function deliverAsks(ids: string[]) {
@@ -958,5 +959,46 @@ describe("BackgroundContainer", () => {
       expect(screen.getByRole("region", { name: "Group panels" })).toBeTruthy();
       expect(screen.queryByTestId("bg-watch-button")).toBeNull();
     });
+  });
+});
+
+describe("BackgroundContainer — focus when the pill hides (#16921)", () => {
+  const handoff = vi.fn();
+  const withDock = (ui: React.ReactElement) => (
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => null }}>
+      <input data-testid="outside" />
+      {ui}
+    </DockFocusLandmarkContext.Provider>
+  );
+  const trigger = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+
+  beforeEach(() => handoff.mockClear());
+
+  it("hands focus to the dock when the last backgrounded panel leaves under a focused trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(view.container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus where the user put it", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => trigger(view.container).focus());
+    act(() => screen.getByTestId("outside").focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("outside"));
   });
 });

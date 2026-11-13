@@ -2,7 +2,7 @@
 import { createPortal } from "react-dom";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
@@ -45,6 +45,9 @@ const fixture = vi.hoisted(() => {
   return {
     PORTAL_TERMINAL_ID,
     dockPanels,
+    // A chip removed by the browser's own rules blurs as it goes in Chromium; a
+    // removal that does not is what jsdom does. Both have to behave the same.
+    blurChipOnRemoval: false,
     panelState: {
       panelsById: Object.fromEntries(dockPanels.map((panel) => [panel.id, panel])),
       panelIds: dockPanels.map((panel) => panel.id),
@@ -169,7 +172,16 @@ vi.mock("@/components/ui/context-menu", () => ({
 vi.mock("../DockedTerminalItem", () => ({
   DockedTerminalItem: ({ terminal }: { terminal: PtyPanelData }) => (
     <>
-      <button type="button" data-dock-item="" data-testid={`chip-${terminal.id}`}>
+      <button
+        type="button"
+        data-dock-item=""
+        data-testid={`chip-${terminal.id}`}
+        ref={(node) => () => {
+          if (fixture.blurChipOnRemoval && node) {
+            node.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+          }
+        }}
+      >
         {terminal.title}
       </button>
       {terminal.id === fixture.PORTAL_TERMINAL_ID
@@ -203,18 +215,35 @@ const dockLaunchProps = vi.hoisted(() => ({
     ) => void;
   },
 }));
+// What the tray's status containers and the launcher draw, and the landmark
+// the dock hands them, for the focus-handoff tests below.
+const dockStub = vi.hoisted(() => ({
+  launcher: null as React.ReactNode,
+  background: null as React.ReactNode,
+  waiting: null as React.ReactNode,
+  errors: null as React.ReactNode,
+  landmark: null as null | { resolve: () => HTMLElement | null; handoff: () => void },
+}));
 vi.mock("../DockLaunchButton", () => ({
   DockLaunchButton: (props: NonNullable<typeof dockLaunchProps.current>) => {
     dockLaunchProps.current = props;
-    return null;
+    return dockStub.launcher;
   },
 }));
 vi.mock("../DockLaunchMenuItems", () => ({ DockLaunchMenuItems: () => null }));
-vi.mock("../TrashContainer", () => ({ TrashContainer: () => null }));
-vi.mock("../WaitingContainer", () => ({ WaitingContainer: () => null }));
+vi.mock("../TrashContainer", async () => {
+  const { useDockFocusLandmark } = await import("../dockFocusHandoff");
+  return {
+    TrashContainer: () => {
+      dockStub.landmark = useDockFocusLandmark();
+      return null;
+    },
+  };
+});
+vi.mock("../WaitingContainer", () => ({ WaitingContainer: () => dockStub.waiting }));
 vi.mock("../UnreadContainer", () => ({ UnreadContainer: () => null }));
-vi.mock("../ErrorsContainer", () => ({ ErrorsContainer: () => null }));
-vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => null }));
+vi.mock("../ErrorsContainer", () => ({ ErrorsContainer: () => dockStub.errors }));
+vi.mock("../BackgroundContainer", () => ({ BackgroundContainer: () => dockStub.background }));
 
 import { ContentDock } from "../ContentDock";
 import { actionService } from "@/services/ActionService";
@@ -244,7 +273,15 @@ function renderDock() {
 /** Roving tabindex keeps the active chip as the rail's only tab stop. */
 const tabStops = (chips: HTMLElement[]) => chips.map((chip) => chip.tabIndex);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  dockStub.launcher = null;
+  dockStub.background = null;
+  dockStub.waiting = null;
+  dockStub.errors = null;
+  dockStub.landmark = null;
+  fixture.blurChipOnRemoval = false;
+});
 
 describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () => {
   it("roves focus across rail chips for arrows that originate on a chip", () => {
@@ -340,6 +377,183 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
     fireEvent.keyDown(chips[0]!, { key: "ArrowRight" });
 
     expect(document.activeElement).toBe(chips[1]);
+  });
+});
+
+/** Drops chips from the rail the way a closed terminal does: out of every index the dock reads. */
+function withDockPanels(ids: string[], run: () => void) {
+  const { panelState } = fixture;
+  const saved = {
+    panelIds: panelState.panelIds,
+    byWorktree: panelState.panelIdsByWorktreeId,
+    panelsById: panelState.panelsById,
+  };
+  const set = (next: string[]) => {
+    panelState.panelIds = next;
+    panelState.panelIdsByWorktreeId = { __none__: next };
+    panelState.panelsById = Object.fromEntries(
+      fixture.dockPanels.filter((p) => next.includes(p.id)).map((p) => [p.id, p])
+    );
+  };
+  try {
+    set(ids);
+    run();
+  } finally {
+    panelState.panelIds = saved.panelIds;
+    panelState.panelIdsByWorktreeId = saved.byWorktree;
+    panelState.panelsById = saved.panelsById;
+  }
+}
+
+describe("ContentDock — focus after a chip unmounts (#9681, #16921)", () => {
+  const settle = () =>
+    act(async () => {
+      await Promise.resolve();
+    });
+
+  it.each([
+    ["without a blur, as jsdom removes it", false],
+    ["with the blur Chromium dispatches as it goes", true],
+  ])("hands focus to the neighbour when the focused chip is removed %s", (_label, blur) => {
+    fixture.blurChipOnRemoval = blur;
+    const { chips, rerender } = renderDock();
+    chips[0]!.focus();
+
+    withDockPanels(["dock-2"], () => rerender());
+
+    expect(document.activeElement).toBe(chips[1]);
+  });
+
+  it("leaves focus alone when a chip is removed after focus left the rail for nothing", async () => {
+    const { chips, rerender } = renderDock();
+    chips[0]!.focus();
+    // A click on the grid's empty canvas: focus goes to <body>, no element named.
+    chips[0]!.blur();
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    withDockPanels(["dock-2"], () => rerender());
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves focus alone when a chip is removed after focus moved to another element", () => {
+    const { chips, inputs, rerender } = renderDock();
+    chips[0]!.focus();
+    inputs.uncancelled.focus();
+    inputs.uncancelled.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    withDockPanels(["dock-2"], () => rerender());
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("does not claim the next chip for focus lost with the last one", () => {
+    // A chip that mounts after the render has to count as laid out too, so the
+    // stub sits on the prototype rather than on the elements renderDock saw.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent");
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.parentElement;
+      },
+    });
+    try {
+      const { chips, rerender } = renderDock();
+      chips[0]!.focus();
+      withDockPanels(["dock-1"], () => rerender());
+      expect(document.activeElement).toBe(chips[0]);
+
+      withDockPanels([], () => rerender());
+      expect(screen.queryAllByTestId(/^chip-/)).toHaveLength(0);
+      expect(document.activeElement).toBe(document.body);
+
+      withDockPanels(["dock-2"], () => rerender());
+
+      const arrived = screen.getByTestId("chip-dock-2");
+      expect(arrived.isConnected).toBe(true);
+      expect(document.activeElement).toBe(document.body);
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, "offsetParent", original);
+    }
+  });
+
+  it("still follows a chip that moved while it holds focus", () => {
+    const { chips, rerender } = renderDock();
+    chips[0]!.focus();
+
+    withDockPanels(["dock-2", "dock-1"], () => rerender());
+
+    expect(document.activeElement).toBe(chips[0]);
+  });
+});
+
+describe("ContentDock — where status handoffs land (#16921)", () => {
+  const pill = (id: string, visible: boolean) => (
+    <span className="dock-status-pill" data-visible={visible ? "true" : "false"}>
+      <button type="button" data-testid={id}>
+        {id}
+      </button>
+    </span>
+  );
+
+  it("skips pills that are only hidden and lands on the first one showing", () => {
+    dockStub.background = pill("quiet-background", false);
+    dockStub.waiting = pill("quiet-waiting", false);
+    dockStub.errors = pill("live-errors", true);
+    renderDock();
+
+    expect(dockStub.landmark?.resolve()).toBe(screen.getByTestId("live-errors"));
+    dockStub.landmark?.handoff();
+
+    expect(document.activeElement).toBe(screen.getByTestId("live-errors"));
+  });
+
+  it("falls back to the rail's tab stop when no pill is showing", () => {
+    dockStub.waiting = pill("quiet-waiting", false);
+    const { chips } = renderDock();
+    chips[1]!.focus();
+    chips[1]!.blur();
+
+    dockStub.landmark?.handoff();
+
+    expect(document.activeElement).toBe(chips[1]);
+  });
+
+  it("falls back to the launcher when the rail is empty", () => {
+    dockStub.launcher = <button type="button" data-testid="launcher" />;
+    withDockPanels([], () => {
+      render(<ContentDock />);
+      dockStub.landmark?.handoff();
+    });
+
+    expect(document.activeElement).toBe(screen.getByTestId("launcher"));
+  });
+
+  it("falls back to the tray itself, never to the document", () => {
+    dockStub.waiting = pill("quiet-waiting", false);
+    withDockPanels([], () => {
+      render(<ContentDock />);
+      dockStub.landmark?.handoff();
+    });
+
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "All worktrees" }));
+  });
+
+  it("tries the next landmark when one refuses focus", () => {
+    // Tray order is Background, Waiting, Unread, Errors, Trash.
+    dockStub.background = pill("refuses", true);
+    dockStub.errors = pill("takes-it", true);
+    const { chips } = renderDock();
+    const refuses = screen.getByTestId("refuses");
+    refuses.focus = vi.fn();
+
+    dockStub.landmark?.handoff();
+
+    expect(refuses.focus).toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("takes-it"));
+    expect(chips).toHaveLength(2);
   });
 });
 
@@ -680,9 +894,11 @@ describe("ContentDock regression test", () => {
 
       // A stale ref would trigger a phantom redirect on a later unrelated
       // render, so the clear must precede the activeElement guard.
-      const clear = content.indexOf("prevFocusedDockItemRef.current = null");
-      const guard = content.indexOf("document.activeElement === document.body");
-      expect(clear).toBeGreaterThan(0);
+      const eviction = content.indexOf("if (prevFocused && !items.includes(prevFocused))");
+      const clear = content.indexOf("prevFocusedDockItemRef.current = null", eviction);
+      const guard = content.indexOf("document.activeElement === document.body", eviction);
+      expect(eviction).toBeGreaterThan(0);
+      expect(clear).toBeGreaterThan(eviction);
       expect(guard).toBeGreaterThan(clear);
     });
 

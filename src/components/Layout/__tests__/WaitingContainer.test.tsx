@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { TabGroup, AgentState } from "@/types";
@@ -199,6 +199,7 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 }));
 
 import { WaitingContainer } from "../WaitingContainer";
+import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -822,5 +823,57 @@ describe("WaitingContainer plugin panel rows (#13821)", () => {
     expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
       "false"
     );
+  });
+});
+
+describe("WaitingContainer — focus when the pill hides (#16921)", () => {
+  const handoff = vi.fn();
+  const withDock = (ui: React.ReactElement) => (
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => null }}>
+      <input data-testid="outside" />
+      {ui}
+    </DockFocusLandmarkContext.Provider>
+  );
+  const trigger = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+
+  beforeEach(() => handoff.mockClear());
+
+  it("hands focus to the dock when the pill hides under a focused trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(view.container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus where the user put it", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+    act(() => screen.getByTestId("outside").focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("outside"));
+  });
+
+  it("hands focus on when the last plugin panel clears, though no agent was ever listed", () => {
+    mockPluginRows = [makePluginRow()];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockPluginRows = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
   });
 });
