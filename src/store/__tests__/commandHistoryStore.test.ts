@@ -275,29 +275,29 @@ describe("commandHistoryStore persistence migration", () => {
     ]);
   });
 
-  it("keeps a repeat this view dropped dropped, though a sibling's disk still has it", async () => {
+  it("keeps one entry for a prompt sent again, the newest, as recording does", async () => {
     const backing = installLocalStorage({});
     const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
     store.getState().recordPrompt("proj-a", "hello", "claude");
+    // Canopy's window, meanwhile: the same text broadcast to an armed set.
     const disk = JSON.parse(backing.get(STORAGE_KEY)!) as {
       version: number;
       state: { history: Record<string, PromptHistoryEntry[]> };
     };
     disk.state.history["proj-a"] = [
-      { id: "canopy-1", prompt: "from canopy", agentId: "claude", addedAt: 1 },
+      { id: "fleet-1", prompt: "hello", agentId: "claude", addedAt: 1, armedIds: ["t1", "t2"] },
       ...disk.state.history["proj-a"]!,
     ];
     backing.set(STORAGE_KEY, JSON.stringify(disk));
 
-    // Sent again, the prompt's older entry goes: it comes back once, as the newer one.
+    // Sent again plainly, it replaces every older entry for that text.
     store.getState().recordPrompt("proj-a", "hello", "claude");
+    const newest = store.getState().getProjectHistory("proj-a")[0]!;
 
     const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
       state: { history: Record<string, PromptHistoryEntry[]> };
     };
-    const prompts = written.state.history["proj-a"]!.map((e) => e.prompt);
-    expect(prompts.filter((p) => p === "hello")).toHaveLength(1);
-    expect(prompts).toContain("from canopy");
+    expect(written.state.history["proj-a"]!.map((e) => e.id)).toEqual([newest.id]);
   });
 
   it("does not resurrect a project's history this view removed (#11351)", async () => {

@@ -50,9 +50,19 @@ function historyOf(
   return history !== null && typeof history === "object" ? history : {};
 }
 
-/** What `recordPrompt` treats as one prompt: a fleet send to another armed set is another. */
-function promptKey(entry: PromptHistoryEntry): string {
-  return `${entry.prompt}\u0000${entry.armedIds?.join(",") ?? ""}`;
+function armedKey(entry: PromptHistoryEntry): string {
+  return entry.armedIds?.join(",") ?? "";
+}
+
+/**
+ * Whether `newer` replaces `older` as `recordPrompt` would have: the same
+ * text, sent plainly or to the same armed set (a fleet send to another set is
+ * another intent).
+ */
+function supersedes(newer: PromptHistoryEntry, older: PromptHistoryEntry): boolean {
+  if (newer.prompt !== older.prompt) return false;
+  const key = armedKey(newer);
+  return key === "" || key === armedKey(older);
 }
 
 /**
@@ -70,12 +80,9 @@ function withSiblingEntries(
   const known = new Set([...(baseline ?? []), ...incoming].map((entry) => entry.id));
   const added = (onDisk ?? []).filter((entry) => !known.has(entry.id));
   if (added.length === 0) return [...incoming];
-  const seen = new Set<string>();
   const merged: PromptHistoryEntry[] = [];
   for (const entry of [...incoming, ...added].sort((a, b) => b.addedAt - a.addedAt)) {
-    const key = promptKey(entry);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (merged.some((kept) => supersedes(kept, entry))) continue;
     merged.push(entry);
   }
   return merged.slice(0, MAX_HISTORY_SIZE);

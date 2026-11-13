@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimPromptHistory,
   followPromptHistoryHost,
@@ -44,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const stop of stops.splice(0)) stop();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("promptHistoryOwnerStore", () => {
@@ -171,17 +172,19 @@ describe("promptHistoryOwnerStore", () => {
     expect(owner()).toBeNull();
   });
 
-  it("stops listening once it stops following", () => {
-    const aside = host();
-    const composer = focusable(aside, "div");
-    const pane = focusable(gridPane());
-    const stop = follow("assistant", composer);
-    pane.focus();
-    stop();
+  it("stops listening once nothing follows", () => {
+    const added = vi.spyOn(document, "addEventListener");
+    const removed = vi.spyOn(document, "removeEventListener");
+    const stopA = follow("a", focusable(host(), "div"));
+    const stopB = follow("b", focusable(host(), "div"));
+    const listens = added.mock.calls.filter(([type]) => type === "focusin");
+    expect(listens).toHaveLength(1);
 
-    composer.focus();
+    stopA();
+    expect(removed).not.toHaveBeenCalled();
+    stopB();
 
-    expect(owner()).toBeNull();
+    expect(removed).toHaveBeenCalledWith("focusin", listens[0]![1], true);
   });
 
   it("hands history back when it stops following, but never another composer's", () => {
