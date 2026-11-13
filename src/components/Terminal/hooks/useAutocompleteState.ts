@@ -40,8 +40,8 @@ export function useAutocompleteState({
   // `color: #333`), so its menu starts with nothing selected and Enter sends
   // what was typed until a row is chosen.
   // Elsewhere it starts on the first row a key can act on.
-  const initialIndex =
-    activeCompletionContext?.triggerChar === "#" ? -1 : firstEnabledIndex(autocompleteItems);
+  const startsUnselected = activeCompletionContext?.triggerChar === "#";
+  const initialIndex = startsUnselected ? -1 : firstEnabledIndex(autocompleteItems);
 
   useEffect(() => {
     const prev = prevRef.current;
@@ -61,7 +61,6 @@ export function useAutocompleteState({
       // Items merged/refreshed for the same query: keep the selected key if it
       // survived, else clamp into range — or, where nothing starts selected,
       // select nothing rather than a row that was never chosen.
-      const startsUnselected = activeCompletionContext?.triggerChar === "#";
       const clampedRaw = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
       const clamped = startsUnselected
         ? -1
@@ -90,7 +89,15 @@ export function useAutocompleteState({
       items: autocompleteItems,
       selectedKey: autocompleteItems[selectedIndex]?.key ?? prev.selectedKey,
     };
-  }, [queryKey, initialIndex, autocompleteItems, selectedIndex, setSelectedIndex, lastQueryRef]);
+  }, [
+    queryKey,
+    initialIndex,
+    startsUnselected,
+    autocompleteItems,
+    selectedIndex,
+    setSelectedIndex,
+    lastQueryRef,
+  ]);
 
   useEffect(() => {
     if (!isAutocompleteOpen) return;
