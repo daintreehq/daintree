@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Check, Copy, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { actionService } from "@/services/ActionService";
+import { logsClient } from "@/clients/logsClient";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -49,8 +49,14 @@ function buildDetailsText(
   return lines.join("\n");
 }
 
+// Direct IPC rather than actionService: this renders during startup crashes and
+// in auxiliary windows where renderer action definitions are never registered.
 function openLogs() {
-  void actionService.dispatch("logs.openFile", undefined, { source: "user" });
+  try {
+    void logsClient.openFile().catch(() => {});
+  } catch {
+    // preload bridge unavailable
+  }
 }
 
 export function ErrorFallback({
