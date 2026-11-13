@@ -315,16 +315,19 @@ export const ForgeStatsToolbarButton = memo(
     // A split issues pill is as fresh as the tracker's own read: the code
     // forge's outage or cached snapshot says nothing about whether the tracker
     // answered. Ageing still follows the poll, since a poll that never landed
-    // re-read neither.
+    // re-read neither. A snapshot no poll produced (a persisted seed) says
+    // nothing about the tracker either, so it keeps the blend's freshness.
     const issuesFreshnessLevel: FreshnessLevel = !issuesSplit
       ? freshnessLevel
       : issueError !== null
         ? "errored"
-        : stats?.issueStale
+        : stats?.issueStale === true
           ? "stale-disk"
-          : freshnessLevel === "aging"
-            ? "aging"
-            : "fresh";
+          : stats?.issueStale === false
+            ? freshnessLevel === "aging"
+              ? "aging"
+              : "fresh"
+            : freshnessLevel;
 
     // List-loaded counts reported by each dropdown's `onCountUpdate`. These
     // track what the dropdown actually lists (loaded first-page length +

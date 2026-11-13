@@ -193,10 +193,12 @@ export interface ForgeRepositoryStats {
    */
   issueError?: string;
   /**
-   * The issues provider's count is not a fresh observation (it failed, or was
-   * served stale) when the project binds its issues to a provider other than
-   * the code forge. {@link stale} folds it in with the code forge's; this says
-   * which half it was, so the issues pill dates only its own count.
+   * Whether the issues provider's count is not a fresh observation (it failed,
+   * or was served stale), set on every poll when the project binds its issues
+   * to a provider other than the code forge. {@link stale} folds it in with the
+   * code forge's; this says which half it was, so the issues pill dates only
+   * its own count. Absent when no issues provider is bound, and on a snapshot
+   * no poll produced (a persisted seed), whose issue count is of unknown age.
    */
   issueStale?: boolean;
   /** Whether the stats are from cache and may be outdated. */

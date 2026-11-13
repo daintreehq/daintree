@@ -1521,9 +1521,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12, issueStale: false });
     expect(stats).not.toHaveProperty("issueError");
-    expect(stats).not.toHaveProperty("issueStale");
     // No one repository reported both counts, so there is nothing to match
     // across hosts (#14199).
     expect(stats).not.toHaveProperty("repoKey");

@@ -494,6 +494,15 @@ describe("ForgeStatsToolbarButton with issues on another tracker (#16944)", () =
     );
   });
 
+  it("keeps a persisted seed's age on a tracker's pill until a poll reads the tracker", async () => {
+    statsState.freshnessLevel = "stale-disk";
+    await renderStats();
+
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toBe(
+      "3 open issues on Linear · cached from previous session"
+    );
+  });
+
   it("dates a tracker's stale read on its own pill alone", async () => {
     statsState.issueStale = true;
     statsState.freshnessLevel = "stale-disk";
@@ -507,6 +516,7 @@ describe("ForgeStatsToolbarButton with issues on another tracker (#16944)", () =
   it("keeps a healthy tracker's pill fresh while the code forge's poll fails", async () => {
     statsState.error = "Cannot reach GitHub. Check your internet connection.";
     statsState.freshnessLevel = "errored";
+    statsState.issueStale = false;
     await renderStats();
     const issues = screen.getByTestId("forge-stat-pill-issues");
 

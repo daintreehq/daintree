@@ -582,7 +582,7 @@ async function handleForgeGetRepoStats(payload: {
     // tracker's message can echo a setting back verbatim (a server URL with
     // credentials in it), so it is scrubbed here.
     if (overrideIssues.error) stats.issueError = sanitizeErrorMessage(overrideIssues.error);
-    if (!overrideIssues.clean) stats.issueStale = true;
+    stats.issueStale = !overrideIssues.clean;
   }
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
