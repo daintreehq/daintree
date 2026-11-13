@@ -119,6 +119,57 @@ describe("DecisionsDataSection", () => {
     expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
   });
 
+  it("exports on Enter from either passphrase field once both match, and only then", async () => {
+    const reply = deferred<DecisionsExportResult>();
+    exportData.mockReturnValue(reply.promise);
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.keyDown(first, { key: "Enter" });
+    fireEvent.change(second, { target: { value: `${PASSPHRASE}!` } });
+    fireEvent.keyDown(second, { key: "Enter" });
+    // An IME's Enter commits its candidate, not the export.
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    fireEvent.keyDown(second, { key: "Enter", isComposing: true });
+    expect(exportData).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Enter" });
+    });
+    expect(exportData).toHaveBeenCalledExactlyOnceWith({ passphrase: PASSPHRASE });
+    expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
+
+    await act(async () => {
+      reply.resolve({ result: "cancelled" });
+    });
+    await gone("dialog");
+  });
+
+  it("ties the mismatch to the repeated passphrase for assistive tech", () => {
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    /** What a screen reader reads after the field's name. */
+    const described = (field: HTMLInputElement) =>
+      (field.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => (id ? (document.getElementById(id)?.textContent ?? "") : ""))
+        .join(" ");
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: `${PASSPHRASE}!` } });
+    expect(second.getAttribute("aria-invalid")).toBe("true");
+    expect(described(second)).toContain("The passphrases don't match");
+    expect(first.getAttribute("aria-invalid")).toBeNull();
+    expect(described(first)).not.toContain("The passphrases don't match");
+
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    expect(second.getAttribute("aria-invalid")).toBeNull();
+    expect(described(second)).not.toContain("The passphrases don't match");
+  });
+
   it("keeps the export open with the reason when main couldn't export, and shows nothing for a cancel", async () => {
     exportData.mockRejectedValueOnce(new Error("The archive couldn't be written there"));
     exportData.mockResolvedValueOnce({ result: "cancelled" });

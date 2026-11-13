@@ -36,6 +36,13 @@ export function DecisionsExportDialog({
     setRepeat("");
   };
 
+  const submit = () => {
+    if (!ready || exporting) return;
+    const chosen = passphrase;
+    clear();
+    onExport(chosen);
+  };
+
   return (
     <ConfirmDialog
       isOpen={isOpen}
@@ -49,12 +56,7 @@ export function DecisionsExportDialog({
       confirmLabel="Export history…"
       confirmDisabled={!ready}
       isConfirmLoading={exporting}
-      onConfirm={() => {
-        if (!ready) return;
-        const chosen = passphrase;
-        clear();
-        onExport(chosen);
-      }}
+      onConfirm={submit}
       hint={
         ready
           ? undefined
@@ -67,6 +69,14 @@ export function DecisionsExportDialog({
         className="space-y-3"
         onSubmit={(event) => {
           event.preventDefault();
+          submit();
+        }}
+        // Two password fields and no submit button of its own block the form's
+        // implicit submission, so Enter is the export's own.
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+          event.preventDefault();
+          submit();
         }}
       >
         <Field>
