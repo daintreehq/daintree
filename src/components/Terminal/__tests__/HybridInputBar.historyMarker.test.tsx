@@ -203,22 +203,24 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     const elsewhere = document.createElement("button");
     document.body.appendChild(elsewhere);
     elsewhere.focus();
+    try {
+      // A click with no press first, so nothing but the marker's own handler
+      // can have put the editor under the palette as its opener.
+      await act(async () => {
+        fireEvent.click(marker);
+      });
+      expect(paletteOpen()).toBe(true);
+      const search = screen.getByRole("combobox", { name: "Search prompt history" });
+      await waitFor(() => expect(document.activeElement).toBe(search));
 
-    // A click with no press first, so nothing but the marker's own handler
-    // can have put the editor under the palette as its opener.
-    await act(async () => {
-      fireEvent.click(marker);
-    });
-    expect(paletteOpen()).toBe(true);
-    const search = screen.getByRole("combobox", { name: "Search prompt history" });
-    await waitFor(() => expect(document.activeElement).toBe(search));
-
-    await act(async () => {
-      fireEvent.keyDown(search, { key: "Escape" });
-    });
-    expect(paletteOpen()).toBe(false);
-    await waitFor(() => expect(document.activeElement).toBe(view.contentDOM));
-    elsewhere.remove();
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "Escape" });
+      });
+      expect(paletteOpen()).toBe(false);
+      await waitFor(() => expect(document.activeElement).toBe(view.contentDOM));
+    } finally {
+      elsewhere.remove();
+    }
   });
 
   it("opens from an unselected pane, which the press selects", async () => {
@@ -326,6 +328,8 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     });
     const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
     expect(tooltip.textContent).toContain("Search prompt history");
-    expect(tooltip.textContent).toMatch(/R/);
+    // The chord as spoken: the platform's primary modifier and R, nothing else.
+    const spoken = Array.from(tooltip.querySelectorAll(".sr-only")).map((el) => el.textContent);
+    expect(spoken).toContainEqual(expect.stringMatching(/^(Command|Ctrl) R$/));
   });
 });
