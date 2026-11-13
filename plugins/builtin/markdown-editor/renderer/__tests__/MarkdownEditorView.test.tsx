@@ -375,6 +375,31 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(document.querySelector(".cm-search input.cm-textfield[name=replace]")).not.toBeNull();
   });
 
+  it("pins the strip and the find bar together, above the scrolling document", async () => {
+    await renderReady();
+    await act(async () => {
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+    });
+    const header = screen.getByTestId("markdown-editor-header");
+    expect(header.contains(screen.getByTestId("markdown-editor-status"))).toBe(true);
+    expect(header.contains(document.querySelector(".cm-search"))).toBe(true);
+    expect(header.contains(screen.getByTestId("markdown-editor-host"))).toBe(false);
+  });
+
+  it("keeps the cursor from scrolling under the pinned header", async () => {
+    await renderReady();
+    const header = screen.getByTestId("markdown-editor-header");
+    let height = 28;
+    Object.defineProperty(header, "offsetHeight", { configurable: true, get: () => height });
+    const cm = editorView();
+    const topMargin = () =>
+      Math.max(0, ...cm.state.facet(EditorView.scrollMargins).map((f) => f(cm)?.top ?? 0));
+    expect(topMargin()).toBe(28);
+    // An open find bar docks in the header and grows it; the margin follows.
+    height = 64;
+    expect(topMargin()).toBe(64);
+  });
+
   it("unmounting the view keeps the draft — it is document state", async () => {
     const { unmount } = await renderReady();
     await type("\nkept");

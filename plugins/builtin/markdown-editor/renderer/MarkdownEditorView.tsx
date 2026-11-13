@@ -103,6 +103,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   }, []);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const panelHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   // The text this view last handed the controller, so a store update that
   // echoes our own typing is not re-applied to the buffer.
@@ -130,7 +132,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   // change, and on taking the disk version over a conflict.
   useEffect(() => {
     const host = hostRef.current;
-    if (!ready || !host || !language || !controller) return;
+    const panelHost = panelHostRef.current;
+    if (!ready || !host || !panelHost || !language || !controller) return;
     const inputs = liveInputsRef.current;
     const text = currentText(controller.record()) ?? "";
     lastLocalTextRef.current = text;
@@ -146,6 +149,10 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           polarity: inputs.polarity,
           wrapLines: inputs.wrapLines,
           ariaLabel: inputs.fileName,
+          pinnedHeader: {
+            panelContainer: panelHost,
+            height: () => headerRef.current?.offsetHeight ?? 0,
+          },
           callbacks: {
             onChange: (next) => {
               lastLocalTextRef.current = next;
@@ -359,155 +366,175 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
 
   return (
     <div className="flex min-h-full flex-col" data-testid="markdown-editor">
-      <MarkdownEditorStatusBar
-        filePath={filePath}
-        lineCount={lineCount}
-        byteLength={byteLength}
-        hasBom={base?.hasBom ?? false}
-        eolLabel={eolLabel}
-        lineEnding={lineEnding}
-        dirty={dirty}
-        saving={record.saving}
-        saveBlocked={record.conflict !== null}
-        onSave={() => void handleSave()}
-      />
+      {/* Pinned by sticking to the pane body, which is the scroller in a grid
+          cell and in a content-sized dialog alike. A scroller of the view's own
+          would need `h-full`, which collapses to the content's height inside a
+          dialog and leaves that scroller never scrolling. Opaque, because the
+          document passes beneath it; the find bar docks under the strip so the
+          two stack rather than sticking to the same edge. */}
+      <div
+        ref={headerRef}
+        className="sticky top-0 z-10 shrink-0 bg-surface-canvas"
+        data-testid="markdown-editor-header"
+      >
+        <MarkdownEditorStatusBar
+          filePath={filePath}
+          lineCount={lineCount}
+          byteLength={byteLength}
+          hasBom={base?.hasBom ?? false}
+          eolLabel={eolLabel}
+          lineEnding={lineEnding}
+          dirty={dirty}
+          saving={record.saving}
+          saveBlocked={record.conflict !== null}
+          onSave={() => void handleSave()}
+        />
+        <div ref={panelHostRef} />
+      </div>
 
-      {record.status === "unavailable" && (
-        <Callout
-          variant="strip"
-          severity="warning"
-          title="File isn't where it was"
-          role="status"
-          aria-live="polite"
-          actionPlacement="below"
-          action={
-            <>
+      {/* `isolate` keeps CodeMirror's gutters (z-index 200) and the comparison's
+          sticky file header inside this layer, so neither paints over the
+          header as it scrolls beneath. */}
+      <div className="isolate flex flex-1 flex-col">
+        {record.status === "unavailable" && (
+          <Callout
+            variant="strip"
+            severity="warning"
+            title="File isn't where it was"
+            role="status"
+            aria-live="polite"
+            actionPlacement="below"
+            action={
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon="refresh"
+                  // The banner's own mark for its recommended action, which the
+                  // forced-colours rules draw with the heavier border.
+                  data-notification-action="primary"
+                  onClick={() => void controller.revalidate()}
+                >
+                  Retry
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-notification-action="primary"
+                  onClick={() =>
+                    setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1"))
+                  }
+                >
+                  Save draft as…
+                </Button>
+              </>
+            }
+          >
+            The draft is kept. Save it somewhere else, or retry once the file is back.
+          </Callout>
+        )}
+
+        {record.conflict && (
+          <InlineStatusBanner
+            severity="warning"
+            title={record.conflict.tooLarge ? "File on disk is over 2 MiB" : "File changed on disk"}
+            description={
+              record.conflict.tooLarge
+                ? "It grew past the editor's limit, so it can't be compared or loaded here. Your draft is kept and saving is held; save the draft elsewhere."
+                : "Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
+            }
+            role="status"
+            ariaLive="polite"
+            actions={[
+              {
+                id: "compare",
+                label: showCompare ? "Hide comparison" : "Compare",
+                onClick: () => setShowCompare((value) => !value),
+                disabled: record.conflict.text === null,
+              },
+              {
+                id: "load-disk",
+                label: "Load disk version",
+                onClick: () => setConfirmLoadDisk(true),
+                disabled: record.conflict.tooLarge,
+              },
+              {
+                id: "save-as",
+                label: "Save draft as…",
+                onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
+              },
+            ]}
+          />
+        )}
+
+        {record.error && (
+          <Callout
+            variant="strip"
+            severity="error"
+            title="Couldn't save"
+            actionPlacement="below"
+            action={
               <Button
                 variant="outline"
                 size="sm"
                 icon="refresh"
-                // The banner's own mark for its recommended action, which the
-                // forced-colours rules draw with the heavier border.
                 data-notification-action="primary"
-                onClick={() => void controller.revalidate()}
+                onClick={() => void handleSave()}
               >
                 Retry
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                data-notification-action="primary"
-                onClick={() => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1"))}
-              >
-                Save draft as…
-              </Button>
-            </>
-          }
-        >
-          The draft is kept. Save it somewhere else, or retry once the file is back.
-        </Callout>
-      )}
-
-      {record.conflict && (
-        <InlineStatusBanner
-          severity="warning"
-          title={record.conflict.tooLarge ? "File on disk is over 2 MiB" : "File changed on disk"}
-          description={
-            record.conflict.tooLarge
-              ? "It grew past the editor's limit, so it can't be compared or loaded here. Your draft is kept and saving is held; save the draft elsewhere."
-              : "Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
-          }
-          role="status"
-          ariaLive="polite"
-          actions={[
-            {
-              id: "compare",
-              label: showCompare ? "Hide comparison" : "Compare",
-              onClick: () => setShowCompare((value) => !value),
-              disabled: record.conflict.text === null,
-            },
-            {
-              id: "load-disk",
-              label: "Load disk version",
-              onClick: () => setConfirmLoadDisk(true),
-              disabled: record.conflict.tooLarge,
-            },
-            {
-              id: "save-as",
-              label: "Save draft as…",
-              onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
-            },
-          ]}
-        />
-      )}
-
-      {record.error && (
-        <Callout
-          variant="strip"
-          severity="error"
-          title="Couldn't save"
-          actionPlacement="below"
-          action={
-            <Button
-              variant="outline"
-              size="sm"
-              icon="refresh"
-              data-notification-action="primary"
-              onClick={() => void handleSave()}
-            >
-              Retry
-            </Button>
-          }
-        >
-          {record.error}
-        </Callout>
-      )}
-
-      {record.storageWarning && (
-        <Callout
-          variant="strip"
-          severity="warning"
-          title="Draft isn't backed up"
-          role="status"
-          aria-live="polite"
-          actionPlacement="below"
-          action={
-            // The copy announces itself; keep its label swap out of the warning's live region.
-            <span aria-live="off" className="inline-flex">
-              <CopyButton
-                label="Copy draft"
-                text={text}
-                variant="outline"
-                size="sm"
-                data-notification-action="primary"
-                data-testid="markdown-editor-copy-draft"
-              />
-            </span>
-          }
-        >
-          {record.storageWarning}
-        </Callout>
-      )}
-
-      {compareDiff !== null && (
-        <div
-          className="border-b border-border-default diff-scroll-root"
-          data-testid="markdown-editor-compare"
-        >
-          <Suspense fallback={<EditorSkeleton />}>
-            <LazyDiffViewer diff={compareDiff} viewType="unified" wrapLines />
-          </Suspense>
-        </div>
-      )}
-
-      <div
-        ref={hostRef}
-        className={cn(
-          "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
-          !ready && "hidden"
+            }
+          >
+            {record.error}
+          </Callout>
         )}
-        data-testid="markdown-editor-host"
-      />
+
+        {record.storageWarning && (
+          <Callout
+            variant="strip"
+            severity="warning"
+            title="Draft isn't backed up"
+            role="status"
+            aria-live="polite"
+            actionPlacement="below"
+            action={
+              // The copy announces itself; keep its label swap out of the warning's live region.
+              <span aria-live="off" className="inline-flex">
+                <CopyButton
+                  label="Copy draft"
+                  text={text}
+                  variant="outline"
+                  size="sm"
+                  data-notification-action="primary"
+                  data-testid="markdown-editor-copy-draft"
+                />
+              </span>
+            }
+          >
+            {record.storageWarning}
+          </Callout>
+        )}
+
+        {compareDiff !== null && (
+          <div
+            className="border-b border-border-default diff-scroll-root"
+            data-testid="markdown-editor-compare"
+          >
+            <Suspense fallback={<EditorSkeleton />}>
+              <LazyDiffViewer diff={compareDiff} viewType="unified" wrapLines />
+            </Suspense>
+          </div>
+        )}
+
+        <div
+          ref={hostRef}
+          className={cn(
+            "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+            !ready && "hidden"
+          )}
+          data-testid="markdown-editor-host"
+        />
+      </div>
 
       <ConfirmDialog
         open={confirmLoadDisk}

@@ -7,6 +7,7 @@ import {
   rectangularSelection,
   crosshairCursor,
   dropCursor,
+  panels,
 } from "@codemirror/view";
 import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -80,8 +81,15 @@ export function buildMarkdownEditorExtensions(options: {
   wrapLines: boolean;
   ariaLabel: string;
   callbacks: MarkdownEditorCallbacks;
+  /**
+   * Chrome pinned over the top of the document as it scrolls (the view's
+   * sticky header). The find bar docks in `panelContainer` so it stacks under
+   * that chrome rather than sticking to the same edge beneath it, and
+   * `height` keeps the cursor and search matches from scrolling under it.
+   */
+  pinnedHeader?: { panelContainer: HTMLElement; height: () => number };
 }): Extension[] {
-  const { language, polarity, wrapLines, ariaLabel, callbacks } = options;
+  const { language, polarity, wrapLines, ariaLabel, callbacks, pinnedHeader } = options;
   return [
     // Save is a DOM-level handler rather than a keymap entry: a keymap that
     // runs preventDefaults but lets the event bubble, and the panel around
@@ -118,6 +126,12 @@ export function buildMarkdownEditorExtensions(options: {
     crosshairCursor(),
     highlightSelectionMatches(),
     search({ top: true, createPanel: createEditorSearchPanel }),
+    pinnedHeader
+      ? [
+          panels({ topContainer: pinnedHeader.panelContainer }),
+          EditorView.scrollMargins.of(() => ({ top: pinnedHeader.height() })),
+        ]
+      : [],
     keymap.of([
       ...searchKeymap,
       ...markdownKeymap,
