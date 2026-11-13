@@ -2,12 +2,12 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ErrorFallback } from "../ErrorFallback";
-import { actionService } from "@/services/ActionService";
+import { logsClient } from "@/clients/logsClient";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
-vi.mock("@/services/ActionService", () => ({
-  actionService: {
-    dispatch: vi.fn().mockResolvedValue({ ok: true }),
+vi.mock("@/clients/logsClient", () => ({
+  logsClient: {
+    openFile: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -178,13 +178,11 @@ describe("ErrorFallback", () => {
       expect(screen.getByText("View logs")).toBeTruthy();
     });
 
-    it("dispatches logs.openFile when View logs is clicked", () => {
+    it("opens the log file over IPC without needing registered actions", () => {
       vi.stubEnv("DEV", false);
       render(<ErrorFallback {...baseProps} variant="section" />);
       fireEvent.click(screen.getByText("View logs"));
-      expect(actionService.dispatch).toHaveBeenCalledWith("logs.openFile", undefined, {
-        source: "user",
-      });
+      expect(logsClient.openFile).toHaveBeenCalledTimes(1);
     });
 
     it("keeps Report issue focused but inert while a report is in flight", () => {
