@@ -9,6 +9,7 @@ import { logError } from "@/utils/logger";
 import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
 import { isInPaneDialog } from "@/lib/paneDialog";
 import { hasAppModal } from "@/lib/appModal";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
@@ -278,6 +279,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // dispatching the general escape stack here can hit a retiring entry and
       // stop propagation before the visible modal gets a chance to close.
       if (e.key === "Escape" && hasDialogBackstop) return;
+
+      // A popover, select or drawer open inside the plugin manager closes on
+      // its own Escape, which runs after this capture handler. Popping the
+      // stack here would take the manager down underneath it.
+      if (isEscape && activePaletteId === null && nestedLayerOwnsEscape(e)) return;
 
       if (
         e.key === "Escape" &&

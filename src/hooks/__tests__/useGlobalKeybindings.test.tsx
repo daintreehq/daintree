@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
+import { render, act, screen } from "@testing-library/react";
+import { useState } from "react";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
@@ -2342,5 +2344,183 @@ describe("useGlobalKeybindings — per-keystroke document scans", () => {
     } finally {
       querySelector.mockRestore();
     }
+  });
+});
+
+describe("useGlobalKeybindings — layers open inside the plugin manager (#16942)", () => {
+  let manager: HTMLElement;
+
+  beforeEach(() => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    manager = document.createElement("div");
+    manager.setAttribute("data-plugin-manager-open", "");
+    document.body.appendChild(manager);
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function pressEscapeOn(target: HTMLElement) {
+    const reached = vi.fn();
+    document.addEventListener("keydown", reached);
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    try {
+      act(() => {
+        target.dispatchEvent(event);
+      });
+    } finally {
+      document.removeEventListener("keydown", reached);
+    }
+    return { event, reachedDocument: reached.mock.calls.length > 0 };
+  }
+
+  function portalledLayer(role: "listbox" | "menu" | "dialog"): HTMLButtonElement {
+    const layer = document.createElement("div");
+    layer.setAttribute("role", role);
+    layer.setAttribute("data-state", "open");
+    const button = document.createElement("button");
+    layer.appendChild(button);
+    document.body.appendChild(layer);
+    return button;
+  }
+
+  it("lets an open select close itself instead of popping the manager off the stack", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    const { event, reachedDocument } = pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("lets a drawer inside the manager take Escape from a control inside it", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const drawer = document.createElement("div");
+    drawer.setAttribute("data-drawer-panel", "right");
+    drawer.setAttribute("data-state", "open");
+    drawer.setAttribute("role", "complementary");
+    const button = document.createElement("button");
+    drawer.appendChild(button);
+    manager.appendChild(drawer);
+    render(<Host />);
+
+    const { reachedDocument } = pressEscapeOn(button);
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+  });
+
+  it("still closes the manager when its open modal drawer doesn't hold focus", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const drawer = document.createElement("div");
+    drawer.setAttribute("data-drawer-panel", "right");
+    drawer.setAttribute("data-state", "open");
+    drawer.setAttribute("role", "dialog");
+    manager.appendChild(drawer);
+    const outside = document.createElement("button");
+    manager.appendChild(outside);
+    render(<Host />);
+
+    const { event } = pressEscapeOn(outside);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("ignores a layer left open behind the manager in the inert workspace", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const workspace = document.createElement("div");
+    workspace.setAttribute("inert", "");
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("data-state", "open");
+    workspace.appendChild(menu);
+    document.body.appendChild(workspace);
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    render(<Host />);
+
+    pressEscapeOn(control);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to the stack when the manager isn't open", () => {
+    manager.removeAttribute("data-plugin-manager-open");
+    const closeTop = vi.fn();
+    registerEscape(closeTop);
+    render(<Host />);
+
+    pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closeTop).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a palette opened over the manager keep Escape", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState("action"));
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const closePalette = vi.fn();
+    registerEscape(closePalette);
+    render(<Host />);
+
+    pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closePalette).toHaveBeenCalledTimes(1);
+    expect(closeManager).not.toHaveBeenCalled();
+  });
+
+  it("closes a real popover open in the manager first, and the manager on the next Escape", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const onOpenChange = vi.fn();
+    function OpenPopover() {
+      const [open, setOpen] = useState(true);
+      return (
+        <PopoverPrimitive.Root
+          open={open}
+          onOpenChange={(next) => {
+            onOpenChange(next);
+            setOpen(next);
+          }}
+        >
+          <PopoverPrimitive.Anchor />
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content>
+              <button type="button">Inside popover</button>
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    render(
+      <>
+        <Host />
+        <OpenPopover />
+      </>
+    );
+
+    pressEscapeOn(screen.getByRole("button", { name: "Inside popover" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(closeManager).not.toHaveBeenCalled();
+
+    pressEscapeOn(control);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
   });
 });
