@@ -371,6 +371,16 @@ export function McpConfirmDialog() {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [expiredAside, currentRequestId, dismiss]);
 
+  // Gone, the dialog can't take anyone back: a navigation still under way for
+  // it must not move focus for whatever mounts in its place.
+  useEffect(
+    () => () => {
+      visitRef.current += 1;
+      pendingShowRef.current = null;
+    },
+    []
+  );
+
   const reviewRequest = useCallback(() => {
     visitRef.current += 1;
     // Reopened before the exit finished: the close that would have navigated
@@ -1615,6 +1625,8 @@ function escapeDismissesPill(event: KeyboardEvent): boolean {
   // Fields in the app itself, a terminal's or a composer's, are where the user
   // went to see the requester.
   const target = event.target instanceof HTMLElement ? event.target : null;
+  // An open suggestion list closes first (a composer's autocomplete).
+  if (target?.closest('[role="combobox"][aria-expanded="true"]')) return false;
   if (
     target !== null &&
     (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) &&

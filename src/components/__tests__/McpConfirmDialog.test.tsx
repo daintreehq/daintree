@@ -1812,6 +1812,27 @@ describe("McpConfirmDialog", () => {
         }
       });
 
+      it("leaves Escape to a field's open suggestion list", async () => {
+        vi.useFakeTimers();
+        try {
+          await expireAside("req-suggest");
+          const composer = append(document.createElement("textarea"));
+          composer.setAttribute("role", "combobox");
+          composer.setAttribute("aria-expanded", "true");
+
+          expect(fireEvent.keyDown(composer, { key: "Escape" })).toBe(true);
+          expect(screen.getByRole("region", { name: "Approval request" })).toBeTruthy();
+
+          composer.setAttribute("aria-expanded", "false");
+          act(() => {
+            fireEvent.keyDown(composer, { key: "Escape" });
+          });
+          expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
       describe("a navigation that fails late", () => {
         let navigations: Array<(arrived: boolean) => void>;
         beforeEach(() => {
@@ -1841,6 +1862,28 @@ describe("McpConfirmDialog", () => {
 
           expect(screen.getByRole("region", { name: "Approval request" })).toBeTruthy();
           expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
+        });
+
+        it("doesn't move focus once the dialog that started it has gone", async () => {
+          focusedOpener();
+          void enqueue({
+            requestId: "req-a",
+            danger: "safe",
+            actionTitle: "Push",
+            requester: PANE,
+          });
+          const { unmount } = render(<McpConfirmDialog />);
+          await stepAside();
+          unmount();
+          const elsewhere = append(document.createElement("button"));
+          elsewhere.focus();
+
+          await act(async () => {
+            navigations[0]?.(false);
+            await Promise.resolve();
+          });
+
+          expect(document.activeElement).toBe(elsewhere);
         });
 
         it("doesn't pull focus from the next request once its own has settled", async () => {
