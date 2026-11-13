@@ -138,6 +138,9 @@ export function PluginMcpConfirmDialog() {
         variant={variant}
         hasPreview={hasScrollableContent}
         bodyResetKey={current.requestId}
+        // Without it, focus stays on the button that approved the last request,
+        // one Enter from approving this one once its cooldown clears.
+        focusResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
         hint={<GateHint queueDepth={queueDepth} />}

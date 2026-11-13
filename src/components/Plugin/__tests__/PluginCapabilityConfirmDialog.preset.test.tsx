@@ -84,6 +84,7 @@ function ask(requestId: string, preset = summary) {
 afterEach(() => {
   act(() => __resetPluginCapabilityConfirmStoreForTesting());
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () => {
@@ -112,6 +113,7 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
   });
 
   it("answers approved-and-pin on allow and rejected on deny", async () => {
+    vi.useFakeTimers();
     let first!: ReturnType<typeof ask>;
     let second!: ReturnType<typeof ask>;
     act(() => {
@@ -127,21 +129,36 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     render(<PluginCapabilityConfirmDialog />);
 
     const allow = screen.getByRole("button", { name: "Allow and remember" });
+    // Held for a read before it can answer.
+    expect(allow.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_200);
+    });
+    const scroller = document.querySelector<HTMLElement>('[role="dialog"] .dialog-body-inset')!;
+    Object.defineProperty(scroller, "scrollTop", { value: 40, writable: true, configurable: true });
     act(() => {
       allow.focus();
       fireEvent.click(allow);
     });
     await expect(first).resolves.toBe("approved-and-pin");
+    // The next preset is read from the top, not from where the last one was left.
+    expect(scroller.isConnected).toBe(true);
+    expect(scroller.scrollTop).toBe(0);
     // The next prompt doesn't inherit focus on the button that approved the last.
-    await vi.waitFor(() =>
-      expect(document.activeElement).not.toBe(
-        screen.getByRole("button", { name: "Allow and remember" })
-      )
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16);
+    });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Deny" }));
     // The next prompt names its own preset, not the one just approved.
     const next = screen.getByRole("dialog").textContent ?? "";
     expect(next).toContain("Danger zone");
     expect(next).toContain("Skipped: the preset turns bypass on");
+    // And is held for its own read: a press meant for the last one doesn't answer it.
+    expect(allow.getAttribute("aria-disabled")).toBe("true");
+    act(() => {
+      fireEvent.click(allow);
+    });
+    expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("preset-2");
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     });

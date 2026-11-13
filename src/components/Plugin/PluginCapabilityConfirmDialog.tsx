@@ -15,6 +15,8 @@ import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useHostConnection } from "@/hooks/useHostConnection";
 import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
 
+const CONFIRM_COOLDOWN_MS = 1_200;
+
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
  * Mounted once near the top of `App.tsx`, sibling to `PluginMcpConfirmDialog`.
@@ -61,6 +63,15 @@ export function PluginCapabilityConfirmDialog() {
     );
   }
 
+  // The queue advances by swapping `current` on the mounted dialog, whichever
+  // branch renders it, so each request starts at the top, with focus back on the
+  // safe answer rather than the button that answered the last one.
+  const perRequest = {
+    focusResetKey: current.requestId,
+    bodyResetKey: current.requestId,
+    cooldownKey: current.requestId,
+  };
+
   if (current.restore !== undefined) {
     return (
       <ErrorBoundary
@@ -79,6 +90,8 @@ export function PluginCapabilityConfirmDialog() {
           variant="destructive"
           // The body carries a permission list, so this is a `dialog`, not an `alertdialog`.
           hasPreview={true}
+          {...perRequest}
+          confirmCooldownMs={CONFIRM_COOLDOWN_MS}
           hint={
             <span className="min-w-0 leading-tight">Only what this version still declares</span>
           }
@@ -113,6 +126,7 @@ export function PluginCapabilityConfirmDialog() {
           cancelLabel="Deny"
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
           variant="default"
+          {...perRequest}
           hint={<span className="min-w-0 leading-tight">Only {site}, not other sites</span>}
         />
       </ErrorBoundary>
@@ -137,10 +151,8 @@ export function PluginCapabilityConfirmDialog() {
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
           variant="destructive"
           hasPreview={true}
-          // A queued prompt for another preset reuses the open dialog: start it
-          // from the top, with focus off the button that approved the last one.
-          focusResetKey={current.requestId}
-          bodyResetKey={current.requestId}
+          {...perRequest}
+          confirmCooldownMs={CONFIRM_COOLDOWN_MS}
           hint={<span className="min-w-0 leading-tight">Only this preset, as it is now</span>}
         >
           <PresetLaunchDetails preset={preset} />
@@ -179,6 +191,8 @@ export function PluginCapabilityConfirmDialog() {
         // The body carries a capability list, so this is a `dialog` — APG
         // reserves `alertdialog` for a brief message read out whole.
         hasPreview={true}
+        {...perRequest}
+        confirmCooldownMs={CONFIRM_COOLDOWN_MS}
         // Beside the action, where a modal is actually read: title, then
         // primary button. The description still carries the full wording for
         // the accessible description; this is the visual scan path.

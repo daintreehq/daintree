@@ -1160,6 +1160,14 @@ export interface DialogAction {
   intent?: "default" | "destructive";
   /** A leading glyph, sized by the button like any other icon child. */
   icon?: React.ReactNode;
+  /**
+   * Honoured on the primary. A press that can't answer, the second of a
+   * double-click or any press while unavailable, neither activates the action
+   * nor takes focus to it. For a confirm whose next question is promoted under
+   * the pointer: otherwise the press meant for the last answer answers the next
+   * one, or parks focus on its primary, one Enter from approving it.
+   */
+  ignoresRepeatPress?: boolean;
 }
 
 interface AppDialogFooterProps {
@@ -1305,8 +1313,17 @@ AppDialog.Footer = function AppDialogFooter({
           {primaryAction && (
             <Button
               variant={getPrimaryVariant()}
+              onMouseDown={(event) => {
+                if (!primaryAction.ignoresRepeatPress) return;
+                if (primaryAction.disabled || event.detail > 1) event.preventDefault();
+              }}
               onClick={(event) => {
-                if (primaryAction.disabled) {
+                // Keyboard activation clicks with `detail` 0, so only pointer
+                // repeats are refused.
+                if (
+                  primaryAction.disabled ||
+                  (primaryAction.ignoresRepeatPress && event.detail > 1)
+                ) {
                   event.preventDefault();
                   event.stopPropagation();
                   return;

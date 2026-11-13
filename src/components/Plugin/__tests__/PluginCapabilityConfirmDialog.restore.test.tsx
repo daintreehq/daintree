@@ -56,6 +56,7 @@ function offer(requestId: string) {
 afterEach(() => {
   act(() => __resetPluginCapabilityConfirmStoreForTesting());
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("PluginCapabilityConfirmDialog — offer-back after a replacing install (#14019)", () => {
@@ -73,6 +74,7 @@ describe("PluginCapabilityConfirmDialog — offer-back after a replacing install
   });
 
   it("answers approved-and-pin on restore and rejected when left off, then moves on", async () => {
+    vi.useFakeTimers();
     let first!: ReturnType<typeof offer>;
     let second!: ReturnType<typeof offer>;
     act(() => {
@@ -81,6 +83,10 @@ describe("PluginCapabilityConfirmDialog — offer-back after a replacing install
     });
     render(<PluginCapabilityConfirmDialog />);
 
+    // Restoring is held for a read; leaving it off never is.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_200);
+    });
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Restore permissions" }));
     });
