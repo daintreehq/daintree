@@ -393,6 +393,18 @@ describe("DiagnosticsDock — resize lag suppression", () => {
     });
     expect(region.getAttribute("data-resizing")).toBeNull();
   });
+
+  it("does not start a drag on a right-click or middle-click of the handle", () => {
+    const { container } = render(<DiagnosticsDock />);
+    const region = container.querySelector(`#${DIAGNOSTICS_DOCK_REGION_ID}`) as HTMLDivElement;
+    const separator = container.querySelector('[role="separator"]') as HTMLDivElement;
+
+    act(() => {
+      fireEvent.mouseDown(separator, { clientY: 100, button: 2 });
+      fireEvent.mouseDown(separator, { clientY: 100, button: 1 });
+    });
+    expect(region.getAttribute("data-resizing")).toBeNull();
+  });
 });
 
 // Issue #12264 — opening the dock takes its height out of the flex column that

@@ -1,11 +1,22 @@
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useLogsStore, useErrorStore } from "@/store";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
+
+// The button that fires these goes disabled once nothing is left to clear, and
+// a disabled control can't hold focus, so the keyboard returns to the tab bar.
+async function clearAndKeepFocus(
+  actionId: "errors.clearAll" | "telemetry.clearPreview",
+  focusVisible: boolean
+) {
+  const result = await actionService.dispatch(actionId, undefined, { source: "user" });
+  if (result.ok) useDiagnosticsStore.getState().requestTabFocus(focusVisible);
+}
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
@@ -30,9 +41,7 @@ export function ProblemsActions() {
             <Button
               variant="subtle"
               size="xs"
-              onClick={() =>
-                void actionService.dispatch("errors.clearAll", undefined, { source: "user" })
-              }
+              onClick={(e) => void clearAndKeepFocus("errors.clearAll", e.detail === 0)}
               disabled={!hasActiveErrors}
             >
               Dismiss all
@@ -102,8 +111,8 @@ export function TelemetryActions() {
     void actionService.dispatch("telemetry.togglePreview", undefined, { source: "user" });
   }, []);
 
-  const handleClear = useCallback(() => {
-    void actionService.dispatch("telemetry.clearPreview", undefined, { source: "user" });
+  const handleClear = useCallback((e: React.MouseEvent) => {
+    void clearAndKeepFocus("telemetry.clearPreview", e.detail === 0);
   }, []);
 
   return (
