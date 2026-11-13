@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useInsertionEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -53,6 +61,21 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   // The palette stays mounted once used; the dialog only while it's in use.
   const manageDialog = useRetainedDialog();
+  // What opened the palette, for the dialog it hands over to: the palette's
+  // own restore is skipped for that hand-off, and the control that opened the
+  // dialog leaves with the palette. Read before the palette takes focus; a
+  // reopen before the last close finished still has focus on the palette (its
+  // surface or a field in it), and keeps the opener it had.
+  const paletteOpenerRef = useRef<HTMLElement | null>(null);
+  const paletteBodyRef = useRef<HTMLDivElement>(null);
+  useInsertionEffect(() => {
+    if (!isOpen) return;
+    const el = document.activeElement;
+    const body = paletteBodyRef.current;
+    const surface = body?.closest<HTMLElement>('[role="dialog"]') ?? body;
+    if (el && surface?.contains(el)) return;
+    paletteOpenerRef.current = el instanceof HTMLElement ? el : null;
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -246,6 +269,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
           isOpen={manageDialog.isOpen}
           onClose={manageDialog.close}
           onCloseComplete={manageDialog.onCloseComplete}
+          restoreFocusTo={paletteOpenerRef}
         />
       )}
       <AppPaletteDialog
@@ -254,7 +278,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
         ariaLabel="Select terminals to arm"
         tier="command"
       >
-        <div className="flex flex-col">
+        <div ref={paletteBodyRef} className="flex flex-col">
           <div
             className={cn(
               "flex items-center gap-2 px-4 py-3 border-b border-border-default",

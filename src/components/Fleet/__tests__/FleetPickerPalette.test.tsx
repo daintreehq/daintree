@@ -845,5 +845,50 @@ describe("FleetPickerPalette", () => {
       expect(consumePaletteFocusRestoreSuppression()).toBe(true);
       expect(screen.getByTestId("fleet-saved-manage-dialog")).toBeTruthy();
     });
+
+    it("hands focus back to what opened the palette once the dialog closes (#16904)", async () => {
+      useProjectSettingsStore.setState({
+        settings: {
+          runCommands: [],
+          fleetSavedScopes: [
+            { kind: "snapshot", id: "s", name: "Old", terminalIds: ["gone"], createdAt: 1 },
+          ],
+        },
+      });
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([], { epoch: "test", seq: 1 });
+      function Harness() {
+        const [isOpen, setIsOpen] = React.useState(false);
+        return (
+          <WorktreeStoreContext.Provider value={store}>
+            {/* A click here leaves focus where it is, on the opener below. */}
+            <button type="button" data-testid="harness-open" onClick={() => setIsOpen(true)} />
+            <FleetPickerPalette isOpen={isOpen} onClose={() => setIsOpen(false)} />
+          </WorktreeStoreContext.Provider>
+        );
+      }
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      try {
+        const { unmount } = render(<Harness />);
+        opener.focus();
+        fireEvent.click(screen.getByTestId("harness-open"));
+        expect(document.activeElement).not.toBe(opener);
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
+        });
+        // The palette has closed, taking the Manage control the dialog opened from.
+        expect(screen.queryByTestId("fleet-picker-saved-manage")).toBeNull();
+        expect(screen.getByTestId("fleet-saved-manage-dialog")).toBeTruthy();
+
+        expect(document.activeElement).not.toBe(opener);
+
+        // The dialog hands focus back as it leaves.
+        unmount();
+        expect(document.activeElement).toBe(opener);
+      } finally {
+        opener.remove();
+      }
+    });
   });
 });

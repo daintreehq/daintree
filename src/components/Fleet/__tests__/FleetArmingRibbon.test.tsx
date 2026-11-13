@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { createPortal } from "react-dom";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, screen, act, waitFor, within } from "@testing-library/react";
 
@@ -44,9 +45,18 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
   ),
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="fleet-selection-menu">{children}</div>
-  ),
+  // Portalled like the real one, keeping its data attributes, so focus in the
+  // menu is outside the ribbon's own DOM.
+  DropdownMenuContent: ({ children, ...props }: { children: React.ReactNode }) =>
+    createPortal(
+      <div
+        data-testid="fleet-selection-menu"
+        {...Object.fromEntries(Object.entries(props).filter(([key]) => key.startsWith("data-")))}
+      >
+        {children}
+      </div>,
+      document.body
+    ),
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -60,6 +70,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => (
     <div
       role="menuitem"
+      tabIndex={-1}
       data-disabled={disabled ? "true" : undefined}
       data-destructive={destructive ? "true" : undefined}
       onClick={(e) => {
@@ -118,6 +129,7 @@ import { runManagedFleetBroadcast } from "../fleetEnterBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { useFleetRunStore, type FleetRun, type FleetRunTarget } from "@/store/fleetRunStore";
@@ -131,6 +143,7 @@ import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ReactNode } from "react";
 
@@ -2375,4 +2388,303 @@ describe("FleetArmingRibbon — exiting during a send (#15560)", () => {
       });
     }
   );
+});
+
+describe("FleetArmingRibbon — a failure outlives the ribbon (#16904)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetFailureStore.getState().clear();
+  });
+
+  afterEach(() => {
+    useFleetFailureStore.getState().clear();
+  });
+
+  it("keeps the failure banner and its Retry once only one pane is left armed", () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    act(() => {
+      // "b" died during the send and was disarmed; "a" rejected the write.
+      useFleetFailureStore.getState().recordFailure("ls\r", ["a"], 1);
+      useFleetArmingStore.getState().disarmId("b");
+    });
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Broadcast failed");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps the banner's state when the ribbon above it goes", () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    useFleetFailureStore.getState().recordFailure("ls\r", ["a"]);
+    render(<FleetArmingRibbon />);
+    const before = screen.getByRole("alert");
+
+    act(() => useFleetArmingStore.getState().disarmId("b"));
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    expect(screen.getByRole("alert")).toBe(before);
+  });
+
+  it("leaves nothing behind for one armed pane once the failure is cleared", () => {
+    seed([makeAgent("a")]);
+    useFleetArmingStore.getState().armIds(["a"]);
+    useFleetFailureStore.getState().recordFailure("ls\r", ["a"]);
+    render(<FleetArmingRibbon />);
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    act(() => useFleetFailureStore.getState().clear());
+    expect(screen.queryByTestId("fleet-arming-ribbon-group")).toBeNull();
+  });
+});
+
+describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () => {
+  const disposers: Array<() => void> = [];
+
+  // Stands in for a mounted pane: its registered handler puts the keyboard
+  // on an input of its own.
+  function paneInput(id: string): HTMLInputElement {
+    const input = document.createElement("input");
+    input.setAttribute("aria-label", `pane ${id}`);
+    document.body.appendChild(input);
+    const unregister = registerPanelFocusHandler(id, () => {
+      input.focus();
+      return document.activeElement === input;
+    });
+    disposers.push(() => {
+      unregister();
+      input.remove();
+    });
+    return input;
+  }
+
+  async function flushMicrotasks(): Promise<void> {
+    await act(async () => {});
+  }
+
+  beforeEach(() => {
+    resetStores();
+    useFleetFailureStore.getState().clear();
+  });
+
+  afterEach(() => {
+    for (const dispose of disposers.splice(0)) dispose();
+  });
+
+  function outsideButton(): HTMLButtonElement {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    disposers.push(() => button.remove());
+    return button;
+  }
+
+  it("hands the keyboard to the pane Exit selects, even one already selected", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    const target = useFleetArmingStore.getState().lastArmedId!;
+    usePanelStore.setState({ focusedId: target });
+    const input = paneInput(target);
+    // Where focus came from loses to the pane for a fleet with panes here.
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    const exit = screen.getByTestId("fleet-exit");
+    opener.focus();
+    exit.focus();
+    fireEvent.click(exit);
+    await flushMicrotasks();
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("hands the keyboard to the focused pane when the selection is cleared", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "a" });
+    const input = paneInput("a");
+    render(<FleetArmingRibbon />);
+
+    const item = screen.getByText("Clear selection").closest<HTMLElement>('[role="menuitem"]')!;
+    expect(screen.getByTestId("fleet-arming-ribbon").contains(item)).toBe(false);
+    item.focus();
+    fireEvent.click(item);
+    await flushMicrotasks();
+
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("leaves focus that already landed elsewhere where it is", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "a" });
+    paneInput("a");
+    const elsewhere = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    screen.getByTestId("fleet-exit").focus();
+    act(() => useFleetArmingStore.getState().clear());
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    // Taken before the hand-off runs.
+    elsewhere.focus();
+    await flushMicrotasks();
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("hands the keyboard to the focused pane when disarming from the list leaves one pane", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "b" });
+    const input = paneInput("b");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const disarm = screen.getByLabelText("Disarm a");
+    disarm.focus();
+    fireEvent.click(disarm);
+    await flushMicrotasks();
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("moves to the next row's Disarm, then the previous one's, while the ribbon stays", () => {
+    seed([makeAgent("a"), makeAgent("b"), makeAgent("c"), makeAgent("d")]);
+    useFleetArmingStore.getState().armIds(["a", "b", "c", "d"]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const first = screen.getByLabelText("Disarm b");
+    first.focus();
+    fireEvent.click(first);
+    expect(document.activeElement).toBe(screen.getByLabelText("Disarm c"));
+
+    const last = screen.getByLabelText("Disarm d");
+    last.focus();
+    fireEvent.click(last);
+    expect(document.activeElement).toBe(screen.getByLabelText("Disarm c"));
+    expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "c"]);
+  });
+
+  it("puts the keyboard in the primary pane when its row is clicked", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "a" });
+    const input = paneInput("a");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const row = screen.getByLabelText("Focus a (primary)");
+    row.focus();
+    fireEvent.click(row, { detail: 1 });
+
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(screen.queryByTestId("fleet-armed-list")).toBeNull();
+  });
+
+  it("puts the keyboard in another pane when its row is clicked", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "a" });
+    paneInput("a");
+    const input = paneInput("b");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const row = screen.getByLabelText("Focus b");
+    row.focus();
+    fireEvent.click(row, { detail: 1 });
+
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(usePanelStore.getState().focusedId).toBe("b");
+  });
+
+  it("hands a fleet of other hosts' agents back to where focus came from, not a pane", async () => {
+    usePanelStore.setState({ focusedId: "a" });
+    seed([makeAgent("a")]);
+    paneInput("a");
+    for (const terminalId of ["t1", "t2"]) {
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: `host-fleet:studio-01:${terminalId}`,
+        hostId: "studio-01",
+        hostName: "studio-01",
+        terminalId,
+        title: `Claude ${terminalId}`,
+      });
+    }
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    const exit = screen.getByTestId("fleet-exit");
+    opener.focus();
+    exit.focus();
+    fireEvent.click(exit);
+    await flushMicrotasks();
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("walks the Disarm buttons of other hosts' agents and still returns where focus came from", async () => {
+    usePanelStore.setState({ focusedId: "a" });
+    seed([makeAgent("a")]);
+    paneInput("a");
+    for (const terminalId of ["t1", "t2"]) {
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: `host-fleet:studio-01:${terminalId}`,
+        hostId: "studio-01",
+        hostName: "studio-01",
+        terminalId,
+        title: `Claude ${terminalId}`,
+      });
+    }
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    const chip = screen.getByTestId("fleet-armed-count-chip");
+    opener.focus();
+    chip.focus();
+    fireEvent.click(chip);
+    const first = screen.getByLabelText("Disarm Claude t1 on studio-01");
+    first.focus();
+    fireEvent.click(first);
+    // Moving within the list is not where focus came from.
+    const second = screen.getByLabelText("Disarm Claude t2 on studio-01");
+    expect(document.activeElement).toBe(second);
+    fireEvent.click(second);
+    await flushMicrotasks();
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves focus alone when the fleet gains its first pane here", async () => {
+    seed([makeAgent("a")]);
+    usePanelStore.setState({ focusedId: "a" });
+    paneInput("a");
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: "host-fleet:studio-01:t1",
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude t1",
+    });
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    opener.focus();
+    screen.getByTestId("fleet-exit").focus();
+    act(() => useFleetArmingStore.getState().armId("a"));
+    expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+    const exit = screen.getByTestId("fleet-exit");
+    expect(document.activeElement).toBe(exit);
+    exit.blur();
+    await flushMicrotasks();
+
+    // The ribbon stayed: nothing hands focus anywhere.
+    expect(document.activeElement).toBe(document.body);
+  });
 });
