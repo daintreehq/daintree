@@ -223,7 +223,7 @@ export function TerminalFleetMenuItems({
   isArmed,
   fleetSize,
   fleetRun,
-  detectedAgentId,
+  isAgent,
   isWatched,
   whenDone,
   onRequestPark,
@@ -233,7 +233,7 @@ export function TerminalFleetMenuItems({
   isArmed: boolean;
   fleetSize: number;
   fleetRun: ReturnType<typeof useFleetRunMenuState>;
-  detectedAgentId: string | undefined;
+  isAgent: boolean;
   isWatched: boolean;
   /** The pane's When done choice (#16171); absent where it can't be armed. */
   whenDone?: TerminalWhenDone;
@@ -257,11 +257,12 @@ export function TerminalFleetMenuItems({
   const hasReadMark = fleetEligible && handBackState !== "none";
   const hasRunItems = canSnooze || canPark || isParked || hasReadMark;
   const hasFleetMenu = fleetEligible || hasRunItems;
-  if (!detectedAgentId && !hasFleetMenu) return null;
+  const showWhenDone = whenDone !== undefined && (isAgent || whenDone !== "keep");
+  if (!isAgent && !hasFleetMenu && !showWhenDone) return null;
 
   return (
     <>
-      {detectedAgentId && (
+      {isAgent && (
         <ContextMenuCheckboxItem
           checked={isWatched}
           onSelect={() => onAction("toggle-watch")}
@@ -358,7 +359,7 @@ export function TerminalFleetMenuItems({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {detectedAgentId && whenDone !== undefined && (
+      {showWhenDone && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <FlagTriangleRight className={ICON_CLASS} aria-hidden="true" />
