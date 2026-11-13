@@ -52,6 +52,7 @@ import {
   ESCAPE_BACKSTOP_DIALOG_ATTR,
   radixLayerWasOpenWhenEscapePressed,
 } from "@/lib/dialogEscapeBackstop";
+import { hasHandlers as escapeStackHasHandlers } from "@/lib/escapeStack";
 import type { McpRequester } from "@shared/types/ipc/mcpServer";
 import {
   WORKTREE_DELETE_BLOCK_COPY,
@@ -289,6 +290,10 @@ export function McpConfirmDialog() {
   // that settles meanwhile can't leave the next one hidden.
   const [inspectingId, setInspectingId] = useState<string | null>(null);
   const inspecting = inspectingId !== null && inspectingId === currentRequestId;
+  const inspectingIdRef = useRef(inspectingId);
+  useEffect(() => {
+    inspectingIdRef.current = inspectingId;
+  }, [inspectingId]);
 
   // A request brought up in place of one that expired says so through the
   // announcer rather than a live region (#15700): two in a row can say the same
@@ -315,6 +320,9 @@ export function McpConfirmDialog() {
   // pull it straight out of the pane the user asked to see.
   const pendingShowRef = useRef<{ requestId: string; identity: McpRequester } | null>(null);
   const showRequester = useCallback((requestId: string, identity: McpRequester) => {
+    // A settled request held on screen through its exit has nowhere to step to.
+    const live = useMcpConfirmStore.getState().current;
+    if (live?.requestId !== requestId || live.expired === true) return;
     pendingShowRef.current = { requestId, identity };
     returnFocusRef.current = null;
     setInspectingId(requestId);
@@ -365,7 +373,7 @@ export function McpConfirmDialog() {
     pendingShowRef.current = null;
     setInspectingId(null);
   }, []);
-  const handleCloseComplete = useCallback(() => {
+  const handleCloseComplete = useCallback((restoreSkippedFocus?: () => void) => {
     // Off screen now, so a settled request has nothing left to hold up.
     if (useMcpConfirmStore.getState().current === null) setLastShown(null);
     const pending = pendingShowRef.current;
@@ -376,10 +384,19 @@ export function McpConfirmDialog() {
       return;
     }
     // Settled while the dialog was closing: there is nothing left to come back to.
-    if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
+    if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) {
+      restoreSkippedFocus?.();
+      return;
+    }
     // Nothing left to look at brings the request straight back, rather than
-    // leaving it behind a return control over a pane that isn't there.
-    const comeBack = () => setInspectingId((id) => (id === pending.requestId ? null : id));
+    // leaving it behind a return control over a pane that isn't there. Focus
+    // goes back to where the dialog was opened from first, so the dialog
+    // reopened over it returns there in turn.
+    const comeBack = () => {
+      if (inspectingIdRef.current !== pending.requestId) return;
+      restoreSkippedFocus?.();
+      setInspectingId((id) => (id === pending.requestId ? null : id));
+    };
     void showMcpRequester(pending.identity).then(
       (arrived) => {
         if (!arrived) comeBack();
@@ -1580,9 +1597,23 @@ function gateHintText(
  * tooltip, a page's own dialog, or a drag it would cancel).
  */
 function escapeDismissesPill(event: KeyboardEvent): boolean {
-  if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return false;
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  // Chromium can report an IME's Escape with keyCode 229 and isComposing false.
+  if (event.isComposing || event.keyCode === 229) return false;
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
   if (document.documentElement.dataset.dragging === "true") return false;
+  // A text field in an open popup that closes on Escape (a dropdown's search
+  // box) keeps it, as the keybinding layer leaves it there; a terminal's own
+  // field is not one of those.
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (
+    target !== null &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) &&
+    target.closest(".xterm") === null &&
+    escapeStackHasHandlers()
+  ) {
+    return false;
+  }
   return !(
     hasAppModal() ||
     document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null ||

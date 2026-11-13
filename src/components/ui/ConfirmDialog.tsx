@@ -103,7 +103,7 @@ type ConfirmDialogBaseProps = {
   /** Forwarded to {@link AppDialog.restoreFocusOnClose}. */
   restoreFocusOnClose?: boolean;
   /** Forwarded to {@link AppDialog.onCloseComplete}. */
-  onCloseComplete?: () => void;
+  onCloseComplete?: (restoreSkippedFocus?: () => void) => void;
   /**
    * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
    * beside the action row. Use it to say why the primary action is currently
