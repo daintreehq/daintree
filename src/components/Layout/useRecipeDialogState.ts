@@ -55,8 +55,11 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   const [recipeManagerEdit, setRecipeManagerEdit] = useState<TerminalRecipe | undefined>(undefined);
   // An Edit or New picked in the manager opens the editor only once the
   // manager has finished closing: its exit hands focus back to its opener, and
-  // an editor already open by then would lose focus to that restore.
-  const [isEditorAwaitingManager, setIsEditorAwaitingManager] = useState(false);
+  // an editor already open by then would lose focus to that restore. Whose
+  // draft is waiting decides what a reopened manager does with it.
+  const [editorAwaitingManager, setEditorAwaitingManager] = useState<"pick" | "request" | null>(
+    null
+  );
 
   // Mirror the open/close transitions of the two recipe surfaces into the
   // shared activity store so the focus-reload hook can suppress its silent
@@ -65,7 +68,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   // editor chunk's load, after the recipe snapshot is already taken.
   // Held across a hand-off from the manager too, which is otherwise a gap
   // with neither surface open.
-  const isEditorActive = isRecipeEditorOpen || isEditorAwaitingManager;
+  const isEditorActive = isRecipeEditorOpen || editorAwaitingManager !== null;
   useEffect(() => {
     if (!isEditorActive) return;
     useRecipeEditorActivityStore.getState().enter();
@@ -82,8 +85,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   // place and waits with it: opened now, the editor would lose focus to that
   // exit's restore just the same.
   const showEditor = useCallback(() => {
-    if (!isEditorAwaitingManager) setIsRecipeEditorOpen(true);
-  }, [isEditorAwaitingManager]);
+    if (editorAwaitingManager) setEditorAwaitingManager("request");
+    else setIsRecipeEditorOpen(true);
+  }, [editorAwaitingManager]);
 
   const handleOpenRecipeEditor = useCallback(
     (
@@ -165,9 +169,10 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
 
   useEffect(() => {
     const handleOpenRecipeManagerEvent = () => {
-      // Reopened mid-exit, the manager never finishes closing, and the editor
-      // a pick in it asked for is no longer what the user wants.
-      setIsEditorAwaitingManager(false);
+      // Reopened mid-exit, the manager doesn't finish closing yet. The user's
+      // own pick in it is no longer what they want; a request someone else
+      // was told had opened the editor waits for the manager's next close.
+      setEditorAwaitingManager((waiting) => (waiting === "pick" ? null : waiting));
       setIsRecipeManagerOpen(true);
     };
     const controller = new AbortController();
@@ -188,7 +193,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     setRecipeEditorInitialTerminals(undefined);
     setRecipeEditorLayoutOmissions(undefined);
     setRecipeManagerEdit(recipe);
-    setIsEditorAwaitingManager(true);
+    setEditorAwaitingManager("pick");
   }, []);
 
   const handleRecipeManagerCreate = useCallback((scope: "global" | "project") => {
@@ -198,20 +203,20 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     setRecipeEditorInitialTerminals(undefined);
     setRecipeEditorLayoutOmissions(undefined);
     setRecipeManagerEdit(undefined);
-    setIsEditorAwaitingManager(true);
+    setEditorAwaitingManager("pick");
   }, []);
 
   const handleRecipeManagerCloseComplete = useCallback(() => {
-    if (!isEditorAwaitingManager) return;
-    setIsEditorAwaitingManager(false);
+    if (!editorAwaitingManager) return;
+    setEditorAwaitingManager(null);
     setIsRecipeEditorOpen(true);
-  }, [isEditorAwaitingManager]);
+  }, [editorAwaitingManager]);
 
   // The draft stays in place through the exit, so a closing edit keeps its
   // "Edit recipe" title; every opening sets all of it afresh.
   const handleCloseRecipeEditor = useCallback(() => {
     setIsRecipeEditorOpen(false);
-    setIsEditorAwaitingManager(false);
+    setEditorAwaitingManager(null);
   }, []);
 
   return {

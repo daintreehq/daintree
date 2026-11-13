@@ -19,8 +19,8 @@ const {
   switchedState,
   managerFault,
 } = vi.hoisted(() => {
-  // Set to make the manager mock fail as it starts to close.
-  const managerFault = { throwOnClose: false };
+  // Set to make the manager mock fail as it starts to close, or at all.
+  const managerFault = { throwOnClose: false, throwAlways: false };
   const MANAGER_RECIPE: TerminalRecipe = {
     id: "recipe-managed",
     name: "Managed",
@@ -187,21 +187,26 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
 vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
   RecipeManager: ({
     isOpen,
+    onClose,
     onCloseComplete,
     onEditRecipe,
     onCreateRecipe,
   }: {
     isOpen: boolean;
+    onClose: () => void;
     onCloseComplete?: () => void;
     onEditRecipe: (recipe: TerminalRecipe) => void;
     onCreateRecipe: (scope: "global" | "project") => void;
   }) => {
-    if (!isOpen && managerFault.throwOnClose) throw new Error("manager failed while closing");
+    if (managerFault.throwAlways || (!isOpen && managerFault.throwOnClose)) {
+      throw new Error("manager failed");
+    }
     return (
       <div data-testid="recipe-manager" data-open={String(isOpen)}>
         <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
         <button onClick={() => onCreateRecipe("project")}>new team recipe</button>
         {/* Stands in for the dialog's exit finishing and handing focus back. */}
+        <button onClick={onClose}>close recipe manager</button>
         <button onClick={() => onCloseComplete?.()}>finish manager exit</button>
       </div>
     );
@@ -883,6 +888,52 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.open).toBe("true");
       expect(editor.dataset.recipe).toBe("");
       expect(editor.dataset.worktree).toBe("wt-1");
+    });
+
+    it("keeps an outside request waiting through a manager reopen, for its next close", async () => {
+      render(<ProjectDialogHost />);
+      const openManager = () =>
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+        });
+      openManager();
+      fireEvent.click(await screen.findByText("edit recipe"));
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", { detail: { worktreeId: "wt-1" } })
+        );
+      });
+
+      // Told the editor opened, the caller's draft can't just vanish.
+      openManager();
+      expect(screen.queryByTestId("recipe-editor")).toBeNull();
+      fireEvent.click(screen.getByText("close recipe manager"));
+      fireEvent.click(screen.getByText("finish manager exit"));
+
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.worktree).toBe("wt-1");
+      expect(editor.dataset.recipe).toBe("");
+    });
+
+    it("opens nothing when the manager fails with no pick waiting", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        managerFault.throwAlways = true;
+        render(<ProjectDialogHost />);
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+        });
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+
+        expect(screen.queryByTestId("recipe-manager")).toBeNull();
+        expect(screen.queryByTestId("recipe-editor")).toBeNull();
+      } finally {
+        managerFault.throwAlways = false;
+        consoleError.mockRestore();
+      }
     });
 
     it("goes ahead with the pick when the manager fails before finishing its exit", async () => {
