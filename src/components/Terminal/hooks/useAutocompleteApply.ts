@@ -125,7 +125,7 @@ export function useAutocompleteApply({
       const latest = latestRef.current;
       if (!latest) return false;
       const item = latest.autocompleteItems[index ?? latest.selectedIndex];
-      if (!item) return false;
+      if (!item || item.disabled === true) return false;
       applyAutocompleteItem(
         item,
         mode,
@@ -153,7 +153,8 @@ export function useAutocompleteApply({
   );
 
   const handleAutocompleteSelect = useCallback(
-    (item: AutocompleteItem) =>
+    (item: AutocompleteItem) => {
+      if (item.disabled === true) return;
       applyAutocompleteItem(
         item,
         "complete",
@@ -165,7 +166,8 @@ export function useAutocompleteApply({
         onPickTemplate,
         setActiveCompletionContext,
         setSelectedIndex
-      ),
+      );
+    },
     [
       editorViewRef,
       latestRef,

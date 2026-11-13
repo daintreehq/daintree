@@ -100,7 +100,11 @@ export function useEditorDomHandlers({
           const enterItem = latest.isAutocompleteOpen
             ? latest.autocompleteItems[latest.selectedIndex]
             : undefined;
-          if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
+          if (
+            enterItem &&
+            enterItem.disabled !== true &&
+            !latest.staleItemKeys.has(enterItem.key)
+          ) {
             event.preventDefault();
             applyAutocompleteSelectionRef.current("enter");
             return true;

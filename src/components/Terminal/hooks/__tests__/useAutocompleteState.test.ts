@@ -100,6 +100,40 @@ describe("useAutocompleteState", () => {
     });
   });
 
+  describe("disabled rows", () => {
+    const disabled = (key: string): AutocompleteItem => ({ ...item(key), disabled: true });
+
+    it("starts a session on the first row that can be acted on", () => {
+      render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), disabled("y"), item("z")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(2);
+    });
+
+    it("moves off a row that turns disabled when items refresh for the same query", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(1);
+    });
+  });
+
   describe("`#` selection", () => {
     function hashContext(query: string): ActiveCompletionContext {
       return { triggerChar: "#", start: 6, tokenEnd: 7 + query.length, query };

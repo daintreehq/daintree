@@ -81,6 +81,32 @@ export interface AutocompleteItem {
   insert?: AutocompleteInsert;
 }
 
+/** The first row a key can act on, or 0 when every row is disabled (the guards then act on nothing). */
+export function firstEnabledIndex(items: readonly AutocompleteItem[]): number {
+  const index = items.findIndex((item) => item.disabled !== true);
+  return index < 0 ? 0 : index;
+}
+
+/**
+ * The row an arrow lands on, wrapping and stepping over disabled rows. From no
+ * selection (-1) Down takes the first row and Up the last. Stays where it is
+ * when no row can take the selection.
+ */
+export function stepAutocompleteIndex(
+  items: readonly AutocompleteItem[],
+  from: number,
+  direction: 1 | -1
+): number {
+  const count = items.length;
+  if (count === 0) return from;
+  let at = from < 0 ? (direction === 1 ? -1 : 0) : from;
+  for (let tries = 0; tries < count; tries++) {
+    at = (at + direction + count) % count;
+    if (items[at]?.disabled !== true) return at;
+  }
+  return from;
+}
+
 /** The DOM id of the option at `index`, for the editor's `aria-activedescendant`. */
 export function autocompleteOptionId(listboxId: string, index: number): string {
   return `${listboxId}-option-${index}`;
@@ -110,7 +136,9 @@ export function getComboboxState({
     listboxId,
     expanded: isOpen,
     activeOptionId:
-      active && !staleKeys.has(active.key) ? autocompleteOptionId(listboxId, selectedIndex) : null,
+      active && active.disabled !== true && !staleKeys.has(active.key)
+        ? autocompleteOptionId(listboxId, selectedIndex)
+        : null,
   };
 }
 

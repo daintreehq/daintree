@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
-import type { AutocompleteItem } from "../AutocompleteMenu";
+import { stepAutocompleteIndex, type AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { currentDiffNotesChipEffects } from "../inputEditorExtensions/notesChip";
@@ -132,7 +132,7 @@ export function useEditorKeymap({
       const enterItem = latest.isAutocompleteOpen
         ? latest.autocompleteItems[latest.selectedIndex]
         : undefined;
-      if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
+      if (enterItem && enterItem.disabled !== true && !latest.staleItemKeys.has(enterItem.key)) {
         handledEnterRef.current = true;
         setTimeout(() => {
           handledEnterRef.current = false;
@@ -226,12 +226,8 @@ export function useEditorKeymap({
 
       const resultsCount = latest.autocompleteItems.length;
       if (latest.isAutocompleteOpen && resultsCount > 0) {
-        setSelectedIndex((prev) => {
-          if (resultsCount === 0) return 0;
-          // From no selection, up wraps to the last row as it does from the first.
-          if (prev < 0) return resultsCount - 1;
-          return (prev - 1 + resultsCount) % resultsCount;
-        });
+        const items = latest.autocompleteItems;
+        setSelectedIndex((prev) => stepAutocompleteIndex(items, prev, -1));
         return true;
       }
 
@@ -272,10 +268,8 @@ export function useEditorKeymap({
 
       const resultsCount = latest.autocompleteItems.length;
       if (latest.isAutocompleteOpen && resultsCount > 0) {
-        setSelectedIndex((prev) => {
-          if (resultsCount === 0) return 0;
-          return (prev + 1) % resultsCount;
-        });
+        const items = latest.autocompleteItems;
+        setSelectedIndex((prev) => stepAutocompleteIndex(items, prev, 1));
         return true;
       }
 
@@ -331,7 +325,7 @@ export function useEditorKeymap({
       if (tabItem) {
         // Swallow Tab while the selected item is stale — inserting an outdated
         // match is worse than a no-op, and letting Tab through would move focus.
-        if (latest.staleItemKeys.has(tabItem.key)) return true;
+        if (tabItem.disabled === true || latest.staleItemKeys.has(tabItem.key)) return true;
         applyAutocompleteSelection("complete", tabIndex);
         return true;
       }

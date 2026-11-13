@@ -469,6 +469,30 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  it("does not move the selection onto a disabled row under the pointer", () => {
+    const onHoverIndex = vi.fn();
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta", disabled: true },
+      { key: "c", label: "gamma", insertText: "gamma" },
+    ];
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={vi.fn()}
+        onHoverIndex={onHoverIndex}
+        emptyMessage="No matches"
+      />
+    );
+    const options = screen.getAllByRole("option");
+    fireEvent.pointerMove(options[1]!);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+    fireEvent.pointerMove(options[2]!);
+    expect(onHoverIndex).toHaveBeenCalledWith(2);
+  });
+
   it("marks only stale rows disabled and ignores clicks on them", () => {
     const onSelect = vi.fn();
     const items: AutocompleteItem[] = [
@@ -796,6 +820,13 @@ describe("AutocompleteMenu", () => {
       expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
       expect(
         getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId
+      ).toBeNull();
+    });
+
+    it("names no option while the selected one is disabled", () => {
+      const disabled = [items[0]!, { ...items[1]!, disabled: true }];
+      expect(
+        getComboboxState({ ...base, isOpen: true, items: disabled }).activeOptionId
       ).toBeNull();
     });
   });

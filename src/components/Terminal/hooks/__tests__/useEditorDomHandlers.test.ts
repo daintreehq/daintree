@@ -187,3 +187,32 @@ describe("useEditorDomHandlers Enter from beforeinput", () => {
     expect(sendFromEditor).not.toHaveBeenCalled();
   });
 });
+
+describe("useEditorDomHandlers Enter on a disabled completion row", () => {
+  it("never applies the disabled row and sends as typed instead", () => {
+    const onSendKey = vi.fn<(key: string) => void>();
+    const p = params();
+    p.latestRef = {
+      current: {
+        terminalId: "t1",
+        voiceId: "t1",
+        disabled: false,
+        isAutocompleteOpen: true,
+        autocompleteItems: [{ key: "a", label: "a", insertText: "a", disabled: true }],
+        staleItemKeys: new Set<string>(),
+        selectedIndex: 0,
+        value: "",
+        onSendKey,
+        isVoiceActiveForPanel: false,
+        isExpanded: false,
+      },
+    };
+    const apply = p.applyAutocompleteSelection;
+    const { result } = renderHook(() => useEditorDomHandlers(p));
+    if (!registersBeforeInput(result.current)) throw new Error("no beforeinput handler");
+    const event = new InputEvent("beforeinput", { inputType: "insertParagraph", cancelable: true });
+    result.current.beforeinput(event, {});
+    expect(apply).not.toHaveBeenCalled();
+    expect(onSendKey).toHaveBeenCalledWith("enter");
+  });
+});
