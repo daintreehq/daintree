@@ -124,12 +124,26 @@ describe("drops over an expanded session list (#16920)", () => {
     rect: rect(8, top, 224, 28),
   });
 
+  function contains(outer: ClientRect, inner: ClientRect): boolean {
+    return (
+      inner.left >= outer.left &&
+      inner.right <= outer.right &&
+      inner.top >= outer.top &&
+      inner.bottom <= outer.bottom
+    );
+  }
+
+  function overlaps(a: ClientRect, b: ClientRect): boolean {
+    return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  }
+
   it("lands on the card underneath a hovered row", () => {
-    const targets = [
-      ...cardTargets("wt-b"),
+    const rows = [
       row("t-1", "wt-b", "worktree-wt-b-accordion", 112),
       row("t-2", "wt-b", "worktree-wt-b-accordion", 140),
     ];
+    const targets = [...cardTargets("wt-b"), ...rows];
+    for (const r of rows) expect(contains(card, r.rect)).toBe(true);
 
     const over = overAt(100, 150, targets);
     expect(over.id).toBe(getAccordionDragId("t-2"));
@@ -143,10 +157,9 @@ describe("drops over an expanded session list (#16920)", () => {
   // that worktree, which the move refuses, so the drop is a no-op rather than a
   // reorder at the row's index.
   it("names the deleted worktree for a row in the deleted rail", () => {
-    const targets = [
-      ...cardTargets("wt-live"),
-      row("t-3", "wt-gone", "deleted-worktree-group-rail", 240),
-    ];
+    const railRow = row("t-3", "wt-gone", "deleted-worktree-group-rail", 240);
+    const targets = [...cardTargets("wt-live"), railRow];
+    expect(overlaps(card, railRow.rect)).toBe(false);
 
     const over = overAt(100, 250, targets);
     expect(over.id).toBe(getAccordionDragId("t-3"));
@@ -206,6 +219,20 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
     return init.arguments[0];
   }
 
+  const LAYOUT_MUTATIONS = new Set([
+    "reorderTerminals",
+    "reorderTabGroups",
+    "moveTerminalToPosition",
+    "moveTabGroupToLocation",
+  ]);
+
+  function isInside(node: ts.Node, container: ts.Node): boolean {
+    for (let current: ts.Node | undefined = node; current; current = current.parent) {
+      if (current === container) return true;
+    }
+    return false;
+  }
+
   function enclosingFunction(node: ts.Node): ts.Node | undefined {
     let current = node.parent;
     while (current && !ts.isFunctionLike(current)) current = current.parent;
@@ -228,10 +255,31 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
       "resolveCardDropWorktreeId(overData, overId)"
     );
 
-    const reorderGates = collect(ts.isIfStatement, source).filter(
-      (node) => node.expression.getText(source) === "!isWorktreeDrop"
+    const flag = collect(ts.isVariableDeclaration, source).find(
+      (node) => node.name.getText(source) === "isWorktreeDrop"
     );
-    expect(reorderGates.length).toBeGreaterThan(0);
+    expect(flag?.initializer?.getText(source)).toBe("dropWorktreeId !== null");
+
+    // Every grid or dock mutation sits behind the gate, or in the sidebar-row
+    // branch that returns before a card drop is resolved. A drop on a card's
+    // expanded session row must never reach one (#16920).
+    const gates = branchesOn("!isWorktreeDrop");
+    expect(gates).toHaveLength(1);
+    const rowBranches = branchesOn("isAccordionDrag");
+    expect(rowBranches).toHaveLength(1);
+    expect(branchStatements(rowBranches[0]!).at(-1)).toBe("return;");
+
+    const mutations = collect(ts.isCallExpression, handleDragEnd()).filter((call) =>
+      LAYOUT_MUTATIONS.has(call.expression.getText(source))
+    );
+    expect(new Set(mutations.map((call) => call.expression.getText(source)))).toEqual(
+      LAYOUT_MUTATIONS
+    );
+    for (const call of mutations) {
+      const guarded =
+        isInside(call, gates[0]!.thenStatement) || isInside(call, rowBranches[0]!.thenStatement);
+      expect(guarded, call.getText(source)).toBe(true);
+    }
   });
 
   it("moves a sidebar row dropped on another worktree's card", () => {
@@ -246,8 +294,8 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
     const target = collect(ts.isVariableDeclaration, source).find(
       (node) => node.name.getText(source) === "targetWorktreeId"
     );
-    expect(target?.initializer?.getText(source)).toMatch(
-      /^resolveCardDropWorktreeId\(overData, overId\)/
+    expect(target?.initializer?.getText(source)).toBe(
+      "resolveCardDropWorktreeId(overData, overId) ?? overTerminal?.worktreeId ?? null"
     );
   });
 });
