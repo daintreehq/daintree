@@ -47,7 +47,8 @@ export function registerDiagnosticsActions(
     title: "Why am I slow?",
     description:
       "Open the diagnostics dock to the performance snapshot: current resource profile and why it triggered, event-loop lag latch, focus throttle, terminal WebGL mode, PTY backpressure, and worktree monitor load.",
-    paletteDescription: "See the performance snapshot: resource profile, event-loop lag and terminal load",
+    paletteDescription:
+      "See the performance snapshot: resource profile, event-loop lag and terminal load",
     category: "diagnostics",
     kind: "command",
     danger: "safe",

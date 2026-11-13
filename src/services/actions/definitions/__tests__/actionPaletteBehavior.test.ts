@@ -321,7 +321,9 @@ describe("palette subtitles", () => {
         AGENT_VOICE.test(text) && "addressed to an agent",
       ].filter(Boolean);
       return problems.length > 0
-        ? [`${def.id}${def.paletteDescription ? " (paletteDescription)" : ""}: ${problems.join(", ")}`]
+        ? [
+            `${def.id}${def.paletteDescription ? " (paletteDescription)" : ""}: ${problems.join(", ")}`,
+          ]
         : [];
     });
     expect(offenders).toEqual([]);

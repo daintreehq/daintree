@@ -89,7 +89,8 @@ export function registerTerminalLayoutActions(
     title: "Move to grid",
     description:
       "Move a panel from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
-    paletteDescription: "Move the focused panel from the dock back into the grid, keeping it running",
+    paletteDescription:
+      "Move the focused panel from the dock back into the grid, keeping it running",
     category: "terminal",
     kind: "command",
     danger: "safe",

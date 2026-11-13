@@ -151,7 +151,8 @@ export function registerDevPreviewActions(
     title: "Open in portal",
     description:
       "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
-    paletteDescription: "Open the dev preview's URL in a portal tab, sharing its cookies and storage",
+    paletteDescription:
+      "Open the dev preview's URL in a portal tab, sharing its cookies and storage",
     category: "devServer",
     kind: "command",
     danger: "safe",

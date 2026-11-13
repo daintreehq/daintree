@@ -161,7 +161,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Export configuration…",
     description:
       "Write the portable configuration — custom agents, agent settings, keyboard shortcuts, theme, notification preferences, worktree path pattern, and global recipes — to a JSON file. Opens a save dialog. Secret-bearing values are left out.",
-    paletteDescription: "Save your agents, shortcuts, theme and other portable settings to a JSON file",
+    paletteDescription:
+      "Save your agents, shortcuts, theme and other portable settings to a JSON file",
     category: "app",
     kind: "command",
     danger: "safe",

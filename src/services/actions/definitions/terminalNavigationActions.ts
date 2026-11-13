@@ -59,7 +59,8 @@ export function registerTerminalNavigationActions(
     title: "Switch between hybrid input and terminal",
     description:
       "Move the keyboard between the focused agent panel's hybrid input and its terminal. Affects only this panel; a panel that can't take the hybrid input stays on its terminal",
-    paletteDescription: "Move typing between the focused agent panel's hybrid input and its terminal",
+    paletteDescription:
+      "Move typing between the focused agent panel's hybrid input and its terminal",
     category: "terminal",
     kind: "command",
     danger: "safe",

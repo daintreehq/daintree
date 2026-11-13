@@ -801,7 +801,8 @@ export function registerTerminalLifecycleActions(
     title: "Remove all panels in project",
     description:
       "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
-    paletteDescription: "Remove every panel in this project, across all worktrees, with no trash or undo",
+    paletteDescription:
+      "Remove every panel in this project, across all worktrees, with no trash or undo",
     category: "terminal",
     kind: "command",
     danger: "confirm",

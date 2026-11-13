@@ -913,7 +913,9 @@ describe("useActionPalette", () => {
       const { result } = renderHook(() => useActionPalette());
       act(() => result.current.open());
       act(() => result.current.setQuery("quarter"));
-      await waitFor(() => expect(result.current.results.map((r) => r.id)).toEqual(["widget.rotate"]));
+      await waitFor(() =>
+        expect(result.current.results.map((r) => r.id)).toEqual(["widget.rotate"])
+      );
       expect(result.current.results[0]!.description).toBe("Turn the focused widget a quarter");
 
       act(() => result.current.setQuery("zebrafish"));

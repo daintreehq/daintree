@@ -295,7 +295,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Archive project",
     description:
       "File a project away: it leaves the project switcher's main list for a folded Archived section, but keeps its settings, worktrees, pin and group, and still surfaces if one of its agents runs or asks for input. Defaults to the current project. Reverse it with project.unarchive.",
-    paletteDescription: "Move this project into the switcher's Archived section, keeping its settings",
+    paletteDescription:
+      "Move this project into the switcher's Archived section, keeping its settings",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -420,7 +421,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Restart project…",
     description:
       "Restart the project open in this window without restarting the app: its terminals and agents stop, its workspace host is replaced, and it reopens here with its layout, scrollback and agent sessions. Other projects keep running. Defaults to the current project and only accepts that one. Always asks the user to confirm.",
-    paletteDescription: "Restart this project's terminals, agents and workspace host without restarting the app",
+    paletteDescription:
+      "Restart this project's terminals, agents and workspace host without restarting the app",
     category: "project",
     kind: "command",
     danger: "confirm",
@@ -439,7 +441,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Sleep idle projects",
     description:
       "Sleep every background project that has no agent working or waiting on the user and isn't open in a window, after the user confirms a preview naming each one with an estimate of its terminal memory. Takes no arguments. The estimate sums process memory and counts shared pages, so the memory actually freed is lower.",
-    paletteDescription: "Sleep background projects with no working or waiting agent, after a preview",
+    paletteDescription:
+      "Sleep background projects with no working or waiting agent, after a preview",
     category: "project",
     kind: "command",
     danger: "confirm",

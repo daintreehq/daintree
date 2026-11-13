@@ -313,7 +313,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Stage all files",
     description:
       "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
-    paletteDescription: "Stage every change in the worktree, including new, deleted and renamed files",
+    paletteDescription:
+      "Stage every change in the worktree, including new, deleted and renamed files",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118) despite the wider reach:
