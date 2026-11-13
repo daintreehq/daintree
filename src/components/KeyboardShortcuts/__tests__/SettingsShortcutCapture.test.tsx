@@ -1187,6 +1187,102 @@ describe("SettingsShortcutCapture", () => {
       expect(mockOnCapture).toHaveBeenCalledWith("Shift+Escape");
     });
 
+    it.each([
+      ["Tab", false],
+      ["Shift+Tab", true],
+    ])("hands the keyboard back on %s instead of recording it", (_name, shiftKey) => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "Tab", code: "Tab", shiftKey });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      const field = screen.getByTestId("shortcut-capture-field");
+      expect(field.getAttribute("data-recording")).toBeNull();
+      expect(document.activeElement).toBe(field);
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      expect(mockOnCancel).not.toHaveBeenCalled();
+      expect(mockOnCapture).not.toHaveBeenCalled();
+    });
+
+    it("still records Tab when it carries Control", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "Tab", code: "Tab", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+Tab");
+    });
+
+    it.each([
+      ["Enter", "Enter", false],
+      ["Tab", "Tab", false],
+      ["Shift+Tab", "Tab", true],
+    ])(
+      "ends the second-key window on %s, keeping the first key and landing on Save",
+      (_name, key, shiftKey) => {
+        render(
+          <SettingsShortcutCapture
+            onCapture={mockOnCapture}
+            onCancel={mockOnCancel}
+            excludeActionId="test.action"
+            autoStart
+          />
+        );
+
+        press({ key: "k", code: "KeyK", ctrlKey: true });
+        press({ key, code: key, shiftKey });
+
+        const save = screen.getByRole("button", { name: "Save" });
+        expect(screen.getByTestId("shortcut-capture-field").getAttribute("data-recording")).toBe(
+          null
+        );
+        expect(document.activeElement).toBe(save);
+
+        // The cancelled window must not fire later and replace the draft.
+        act(() => {
+          vi.advanceTimersByTime(1100);
+        });
+        fireEvent.click(save);
+        expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
+      }
+    );
+
+    it("still records a modified Enter as the second key of a chord", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      press({ key: "Enter", code: "Enter", ctrlKey: true });
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k Cmd+Enter");
+    });
+
     it("keeps Control as its own modifier on macOS instead of dropping it", async () => {
       const { isMac } = await import("@/lib/platform");
       vi.mocked(isMac).mockReturnValue(true);
