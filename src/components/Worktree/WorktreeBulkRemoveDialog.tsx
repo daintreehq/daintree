@@ -6,6 +6,7 @@ import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfir
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { Callout } from "@/components/ui/Callout";
 import { cn } from "@/lib/utils";
 import { PathText } from "./PathText";
 import { selectLivePanelsForWorktree } from "./worktreeDeleteHelper";
@@ -31,6 +32,8 @@ import {
   type BulkRemoveExclusion,
   type BulkRemoveTarget,
   type UseWorktreeBulkRemoveReturn,
+  RECHECK_HELD_MESSAGE,
+  RECHECK_HELD_NOTHING_LEFT_MESSAGE,
 } from "./useWorktreeBulkRemove";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
@@ -557,13 +560,9 @@ export function WorktreeBulkRemoveDialog({
   ) : isPreviewPending ? (
     "Checking each worktree for uncommitted work"
   ) : showRecheckNotice ? (
-    <span
-      className="flex min-w-0 items-start gap-1.5 text-text-primary"
-      data-testid="bulk-remove-recheck-notice"
-    >
-      <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0 text-status-warning" aria-hidden="true" />
-      <span>Something changed since the check. Review the list and confirm again.</span>
-    </span>
+    <Callout severity="warning" className="w-full" data-testid="bulk-remove-recheck-notice">
+      {nothingToRun ? RECHECK_HELD_NOTHING_LEFT_MESSAGE : RECHECK_HELD_MESSAGE}
+    </Callout>
   ) : nothingToRun && (targets.length > 0 || excludedMainCount > 0) ? (
     "Every selected worktree was excluded"
   ) : null;

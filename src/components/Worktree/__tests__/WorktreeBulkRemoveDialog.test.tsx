@@ -828,7 +828,9 @@ describe("WorktreeBulkRemoveDialog — copy", () => {
 
   it("names the panels the run closes first (#16892)", () => {
     renderDialog();
-    expect(document.body.textContent).toContain("Open panels are closed");
+    expect(document.body.textContent).toContain(
+      "Open panels are closed and a running dev server is stopped first"
+    );
   });
 });
 
@@ -856,14 +858,24 @@ describe("WorktreeBulkRemoveDialog — each row names the panels it closes (#168
   it("names a clean row's terminals and other panels, and the agents among them", () => {
     seedPanels([
       { id: "t1", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
-      { id: "t2", worktreeId: "a" },
+      { id: "t2", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
+      { id: "t3", worktreeId: "a", launchAgentId: "claude", agentState: "waiting" },
+      { id: "shell", worktreeId: "a", agentState: "working" },
       { id: "web", worktreeId: "a", kind: "browser" },
     ] as Array<Partial<PanelInstance> & { id: string }>);
     renderDialog({ targets: [target("a")] });
 
     // A clean row has no loss line, and still has panels the run will close.
+    // Only an agent mid-work counts as running: a waiting one, or a plain
+    // shell, is cheap to close.
     expect(document.querySelector('[data-testid="bulk-remove-risks"]')).toBeNull();
-    expect(panelLine()).toBe("2 terminals and 1 other panel will be closed · 1 running agent");
+    expect(panelLine()).toBe("4 terminals and 1 other panel will be closed · 2 running agents");
+
+    seedPanels([
+      { id: "t1", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
+      { id: "t2", worktreeId: "a", launchAgentId: "claude", agentState: "waiting" },
+    ] as Array<Partial<PanelInstance> & { id: string }>);
+    expect(panelLine()).toBe("2 terminals will be closed · 1 running agent");
   });
 
   it("counts only what the run closes: not trash, ephemeral terminals or other worktrees", () => {
@@ -915,11 +927,22 @@ describe("WorktreeBulkRemoveDialog — a held confirm says why (#16892)", () => 
       "Something changed since the check. Review the list and confirm again."
     );
     // The hook already announced it assertively; a live region here would say
-    // it twice.
-    expect(notice()!.closest("[aria-live]")).toBeNull();
+    // it twice, and these roles are live regions without saying so.
+    expect(
+      notice()!.closest('[aria-live], [role="status"], [role="alert"], [role="log"]')
+    ).toBeNull();
     // The disabled primary points at it, so the reason travels with the button.
     const hintId = document.querySelector('[data-testid="app-dialog-hint"]')!.id;
     expect(confirmButton()!.getAttribute("aria-describedby") ?? "").toContain(hintId);
+  });
+
+  it("doesn't ask for a confirm that can no longer happen", () => {
+    renderDialog({
+      targets: [target("a", { status: { state: "failed", submodules: null } })],
+      hasRecheckChanges: true,
+    });
+
+    expect(notice()?.textContent).toBe("Something changed since the check. Nothing was deleted.");
   });
 
   it("gives way to the run's own progress", () => {

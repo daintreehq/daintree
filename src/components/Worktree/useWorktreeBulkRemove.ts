@@ -320,6 +320,12 @@ export interface UseWorktreeBulkRemoveReturn {
  */
 const PREVIEW_CONCURRENCY = 3;
 
+/** Why a confirm the submit-time re-read held did nothing, spoken and shown. */
+export const RECHECK_HELD_MESSAGE =
+  "Something changed since the check. Review the list and confirm again.";
+export const RECHECK_HELD_NOTHING_LEFT_MESSAGE =
+  "Something changed since the check. Nothing was deleted.";
+
 /** Concurrency for the delete fan-out. Unchanged. */
 const DELETE_CONCURRENCY = 4;
 
@@ -429,8 +435,9 @@ function deriveTargets(
  * Relaunch the terminals a failed target's run closed, unless its worktree is
  * gone: the host removes the directory before anything after it can fail, and
  * relaunching then would strand terminals on a deleted worktree. A lookup that
- * fails or never answers reads as still there. Never throws: the target's own
- * failure is what the summary reports.
+ * fails, never answers, or comes from a host that isn't up (`gitBacked: null`,
+ * whose empty list says nothing) reads as still there. Never throws: the
+ * target's own failure is what the summary reports.
  */
 async function restoreIfKept(
   worktreeId: string,
@@ -438,11 +445,14 @@ async function restoreIfKept(
 ): Promise<void> {
   try {
     const stillExists = await withDeadline(
-      worktreeClient.getAll(),
+      worktreeClient.getAllWithStatus(),
       RESTORE_LOOKUP_TIMEOUT_MS,
       "Timed out checking whether the worktree still exists"
     )
-      .then((worktrees) => worktrees.some((worktree) => worktree.id === worktreeId))
+      .then(
+        ({ worktrees, gitBacked }) =>
+          gitBacked === null || worktrees.some((worktree) => worktree.id === worktreeId)
+      )
       .catch(() => true);
     if (stillExists) await restoreClosedTerminals(snapshot);
   } catch (err) {
@@ -696,10 +706,14 @@ export function useWorktreeBulkRemove({
       isExecutingRef.current = false;
       setIsExecuting(false);
       setHasRecheckChanges(true);
+      // A re-read can also leave nothing to run, where "confirm again" would
+      // point at a button that is no longer there.
       useAnnouncerStore
         .getState()
         .announce(
-          "Something changed since the check. Review the list and confirm again.",
+          next.some(isBulkRemoveEligible)
+            ? RECHECK_HELD_MESSAGE
+            : RECHECK_HELD_NOTHING_LEFT_MESSAGE,
           "assertive"
         );
       return;
