@@ -12,6 +12,8 @@ import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { pluginKitLayoutCore } from "./PluginKitLayoutCore";
 import {
   PROGRAMMATIC_FOCUS_RING,
@@ -149,6 +151,7 @@ export function KitLoadMoreFooter({
   const loaded = wholeCount(loadedCount);
   const total = wholeCount(totalCount);
   const auto = autoLoad === true;
+  const showLoading = useDeferredLoading(state === "loading", UI_INLINE_LOADING_GATE_MS);
   const rootRef = useRef<HTMLDivElement>(null);
   const overlayZ = useKitOverlayZClass();
   const loadRef = useRef(load);
@@ -224,15 +227,17 @@ export function KitLoadMoreFooter({
       </>
     );
   } else {
-    spoken = state === "loading" ? "Loading more" : "";
+    spoken = showLoading ? "Loading more" : "";
     body = (
       <>
         <Button
           variant="ghost"
           size="xs"
-          loading={state === "loading"}
+          loading={showLoading}
           disabled={!load}
-          onClick={() => load?.()}
+          onClick={() => {
+            if (state !== "loading") load?.();
+          }}
         >
           {nonEmpty(label) ?? "Load more"}
         </Button>
