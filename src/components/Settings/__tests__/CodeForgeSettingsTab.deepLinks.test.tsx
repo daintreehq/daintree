@@ -141,8 +141,7 @@ function renderLinked({
   return handled;
 }
 
-const shownSubtab = () =>
-  screen.getByTestId("forge-provider-selector").getAttribute("data-active");
+const shownSubtab = () => screen.getByTestId("forge-provider-selector").getAttribute("data-active");
 const highlighted = () => document.querySelector(".settings-highlight");
 
 beforeEach(() => {
