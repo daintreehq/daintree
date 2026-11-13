@@ -893,6 +893,30 @@ describe("ReviewHub", () => {
       expect(unstageFileMock).not.toHaveBeenCalled();
     });
 
+    it("steps focus through the compared files with the arrow keys (#16895)", async () => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [
+          { status: "M", path: "src/component.tsx" },
+          { status: "A", path: "src/new-file.ts" },
+        ],
+      });
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
+      await waitFor(() => screen.getByText("new-file.ts"));
+
+      const first = screen.getByRole("button", { name: /component\.tsx/ });
+      const second = screen.getByRole("button", { name: /new-file\.ts/ });
+      first.focus();
+      act(() => void fireEvent.keyDown(first, { key: "ArrowDown" }));
+      expect(document.activeElement).toBe(second);
+      act(() => void fireEvent.keyDown(second, { key: "Home" }));
+      expect(document.activeElement).toBe(first);
+    });
+
     it("resets to working-tree mode when closed and reopened", async () => {
       const { rerender } = render(
         <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />

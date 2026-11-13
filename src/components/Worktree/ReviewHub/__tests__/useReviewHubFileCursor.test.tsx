@@ -112,6 +112,24 @@ describe("useReviewHubFileCursor — the cursor across a stage or unstage (#1689
     expect(focusedKey(hook, after)).toBe("unstaged:d");
   });
 
+  it("does not count the file's own copy in the other section as a neighbour", () => {
+    // A partially staged file is listed in both sections; staging the rest of
+    // it leaves only its staged copy, which is not the row below the cursor.
+    const before = list(["a"], ["a", "b"]);
+    const hook = cursorOn(before, "unstaged:a");
+    const after = list(["a"], ["b"]);
+    hook.rerender(after);
+    expect(focusedKey(hook, after)).toBe("unstaged:b");
+  });
+
+  it("keeps its position in the section when a refresh replaces every row around it", () => {
+    const before = list(["a"], ["b", "c", "d"]);
+    const hook = cursorOn(before, "unstaged:c");
+    const after = list(["a"], ["x", "y", "z"]);
+    hook.rerender(after);
+    expect(focusedKey(hook, after)).toBe("unstaged:y");
+  });
+
   it("clears the cursor when the list empties", () => {
     const before = list([], ["a"]);
     const hook = cursorOn(before, "unstaged:a");

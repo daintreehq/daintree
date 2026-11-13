@@ -740,8 +740,8 @@ describe("ReviewHub windowed file list (#12241)", () => {
     await waitFor(() => screen.getByText("file-000.ts"));
 
     // Windowed, but still the same read-only rows: a native button per file,
-    // named the way it always was. This list has no cursor and no listbox
-    // semantics, and windowing must not invent either.
+    // named the way it always was. Its arrow keys move DOM focus between those
+    // buttons; it has no listbox semantics, and windowing must not invent them.
     expect(screen.queryByText("file-050.ts")).toBeNull();
     expect(screen.getByRole("button", { name: /file-000\.ts/ })).toBeTruthy();
     expect(screen.queryAllByRole("option", { name: /file-000\.ts/ })).toHaveLength(0);
