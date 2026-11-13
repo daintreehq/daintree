@@ -122,8 +122,8 @@ export function PluginQuickPickDialog() {
   }, [promptId, resolveOnce]);
 
   // ⌘/Ctrl+Enter submits the checked set in multi-select mode.
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
       if (canSelectMany && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         submitMulti();
@@ -243,7 +243,7 @@ export function PluginQuickPickDialog() {
         onConfirm={handleConfirm}
         onClose={handleClose}
         onHoverIndex={setSelectedIndex}
-        onKeyDown={handleKeyDown}
+        onListKeyDown={handleListKeyDown}
         getItemId={(item) => item.id}
         renderItem={renderItem}
         label={options?.title || "Select an option"}

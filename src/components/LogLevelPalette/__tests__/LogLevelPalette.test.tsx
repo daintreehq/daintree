@@ -253,15 +253,19 @@ describe("LogLevelPalette Escape on the level step", () => {
     const onClose = vi.fn();
     renderPalette(true, onClose);
     await settle();
-    await type("Bravo");
+    await type("main");
+    await arrowDown();
+    await arrowDown();
+    const cursor = cursorId();
+    expect(cursor).not.toBe(optionIds()[0]);
     await enter();
     expect(stepLabel()).toContain("choose a level");
 
     await escape();
     expect(onClose).not.toHaveBeenCalled();
     expect(stepLabel()).toContain("choose a module");
-    expect(input().value).toBe("Bravo");
-    expect(cursorId()).toBe("palette-option-main:Bravo");
+    expect(input().value).toBe("main");
+    expect(cursorId()).toBe(cursor);
 
     await escape();
     expect(input().value).toBe("");
@@ -277,10 +281,15 @@ describe("LogLevelPalette Escape on the level step", () => {
     await enter();
     await type("off");
 
-    await escape(screen.getByRole("group", { name: /^Level for/ }));
+    await escape();
     expect(stepLabel()).toContain("choose a level");
     expect(input().value).toBe("");
     expect(optionIds()).toEqual(LEVEL_ROWS);
+
+    await type("off");
+    await escape(screen.getByRole("group", { name: /^Level for/ }));
+    expect(stepLabel()).toContain("choose a level");
+    expect(input().value).toBe("");
 
     await escape(screen.getByRole("group", { name: /^Level for/ }));
     expect(stepLabel()).toContain("choose a module");

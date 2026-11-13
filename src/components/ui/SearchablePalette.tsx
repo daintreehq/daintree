@@ -169,8 +169,18 @@ export interface SearchablePaletteProps<T> {
    */
   emptyEntityName?: string;
 
-  /** Additional keyboard handler called before default handling */
+  /**
+   * The field's own keys, before default handling: chords that read or edit
+   * the query. Field-only; a chord on a list key belongs in `onListKeyDown`.
+   */
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  /**
+   * A consumer's chords on the list keys (a modified Enter), offered before the
+   * shell's navigation wherever the list keys work: on the field, after
+   * `onKeyDown`, and on the results region, which Tab reaches and which hands
+   * on only the list keys. `preventDefault()` claims the key.
+   */
+  onListKeyDown?: (e: React.KeyboardEvent<HTMLElement>) => void;
   /**
    * Optional leading adornment rendered inside the input's border (e.g. the
    * action palette's mode-prefix chip). Forwarded to `AppPaletteDialog.Input`
@@ -280,6 +290,7 @@ export function SearchablePalette<T>({
   emptyShortcut,
   emptyEntityName,
   onKeyDown,
+  onListKeyDown,
   inputPrefix,
   footer,
   getFooter,
@@ -442,6 +453,10 @@ export function SearchablePalette<T>({
    */
   const handleNavigationKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
+      if (onListKeyDown) {
+        onListKeyDown(e);
+        if (e.defaultPrevented) return;
+      }
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
@@ -493,7 +508,15 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, results.length, selectedIndex, jumpToIndex]
+    [
+      onListKeyDown,
+      onSelectPrevious,
+      onSelectNext,
+      onConfirm,
+      results.length,
+      selectedIndex,
+      jumpToIndex,
+    ]
   );
 
   const handleKeyDown = useCallback(

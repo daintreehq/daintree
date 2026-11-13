@@ -329,6 +329,15 @@ describe("CommandPalette", () => {
     expect(screen.getByRole("dialog", { hidden: true }).getAttribute("aria-modal")).toBe("false");
   });
 
+  it("leaves the results region as the list's one tab stop", async () => {
+    render(inViewport(createElement(Harness)));
+    await screen.findByText("Alpha issue");
+    const scroller = document.querySelector<HTMLElement>("[data-virtuoso-scroller]");
+    expect(scroller).not.toBeNull();
+    expect(scroller!.tabIndex).toBe(-1);
+    expect(screen.getByRole("group", { name: "Go to" }).tabIndex).toBe(0);
+  });
+
   it("pages over disabled rows toward the cursor instead of wrapping to the far end", async () => {
     const paged = Array.from({ length: 25 }, (_, index) => ({
       id: `row-${index}`,

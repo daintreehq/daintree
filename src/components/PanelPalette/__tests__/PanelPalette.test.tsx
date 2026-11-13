@@ -3,6 +3,7 @@ import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PanelPalette } from "../PanelPalette";
+import { LISTBOX_PAGE_SIZE } from "@/hooks/useListboxCursor";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 
 // jsdom lacks ResizeObserver (used by the palette's scroll-shadow hook) and
@@ -402,9 +403,47 @@ describe("PanelPalette Tab, page keys and staged Escape", () => {
       />
     );
 
-    fireEvent.keyDown(screen.getByRole("group", { name: "Panel types" }), { key: "Escape" });
+    const region = screen.getByRole("group", { name: "Panel types" });
+    region.focus();
+    fireEvent.keyDown(region, { key: "Escape" });
 
     expect(onQueryChange).toHaveBeenCalledWith("");
     expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field());
+  });
+
+  it("closes on Escape from an empty field, once", () => {
+    const onClose = vi.fn();
+    render(<PanelPalette {...baseProps} query="" results={resumeResults} onClose={onClose} />);
+
+    fireEvent.keyDown(field(), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a page in live rows, stepping over removed ones in between", () => {
+    // Every third row is a removed worktree's session, so a page of live rows
+    // spans more than a page of indexes.
+    const rows = many.map((row, i) => (i % 3 === 2 ? { ...row, isStale: true } : row));
+    const live = rows.flatMap((row, i) => (row.isStale ? [] : [i]));
+    function Stateful() {
+      const [selectedIndex, setSelectedIndex] = useState(live[1]!);
+      return (
+        <PanelPalette
+          {...baseProps}
+          query="tool"
+          results={rows}
+          selectedIndex={selectedIndex}
+          onHoverIndex={setSelectedIndex}
+        />
+      );
+    }
+    render(<Stateful />);
+    const active = () => field().getAttribute("aria-activedescendant");
+
+    fireEvent.keyDown(field(), { key: "PageDown" });
+    expect(active()).toBe(`panel-option-${rows[live[1 + LISTBOX_PAGE_SIZE]!]!.id}`);
+    fireEvent.keyDown(field(), { key: "PageUp" });
+    expect(active()).toBe(`panel-option-${rows[live[1]!]!.id}`);
   });
 });

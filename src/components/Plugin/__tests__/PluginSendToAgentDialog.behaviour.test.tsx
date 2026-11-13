@@ -294,6 +294,18 @@ describe("PluginSendToAgentDialog", () => {
     expect(option("feat-1")).toBeTruthy();
   });
 
+  it("clears a search on the pick step before Escape gives up", () => {
+    const resolve = open();
+    act(() => {
+      fireEvent.change(combobox(), { target: { value: "feat" } });
+    });
+    press("Escape");
+    expect(combobox().value).toBe("");
+    expect(resolve).not.toHaveBeenCalled();
+    press("Escape");
+    expect(resolve).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
   it("steps back from the branch step on Escape from the results region too, branch name and all", () => {
     const resolve = open();
     act(() => {

@@ -535,6 +535,10 @@ function KitCommandPalette({
       <PluginStyleScope block>
         <Virtuoso
           ref={handle}
+          // Out of the tab order: the palette's results region around it is the
+          // list's one stop, and it is the one that hands the list keys on. A
+          // second stop here would take Tab and then ignore every key.
+          tabIndex={-1}
           // Sized to its rows up to the palette body's own cap, so a short list
           // does not stretch the palette and a long one scrolls inside it.
           style={{ height: `min(${listPx ?? estimate}px, calc(60vh - 1rem))` }}

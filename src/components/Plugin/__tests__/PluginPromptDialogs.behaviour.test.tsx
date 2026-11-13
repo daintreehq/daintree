@@ -281,6 +281,20 @@ describe("PluginQuickPickDialog — multi-select", () => {
     expect(resolve).toHaveBeenCalledWith([CHECKS[2]]);
   });
 
+  it("submits on the chord from the results region too, rather than toggling a row", () => {
+    const resolve = renderMulti();
+    fireEvent.keyDown(combobox(), { key: "Enter" });
+    const region = combobox()
+      .closest('[role="dialog"]')!
+      .querySelector<HTMLElement>('[role="group"][tabindex="0"]')!;
+
+    fireEvent.keyDown(region, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(region, { key: "Enter", ctrlKey: true });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledWith([CHECKS[0]]);
+  });
+
   it("accepts an empty selection as an answer, distinct from dismissing", () => {
     const resolve = renderMulti();
 
