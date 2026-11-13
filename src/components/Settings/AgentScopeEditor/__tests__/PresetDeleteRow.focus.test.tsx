@@ -31,11 +31,14 @@ function renderRow(onDelete = vi.fn()) {
   return { onDelete, add: screen.getByRole("button", { name: "Add preset" }) };
 }
 
+// Initial focus lands on Cancel a frame after the confirm mounts; waiting for
+// it means a later check sees the restore, not focus never having left.
 async function openConfirm(): Promise<HTMLElement> {
   const trigger = screen.getByRole("button", { name: "Delete Fast reviewer" });
   trigger.focus();
   fireEvent.click(trigger);
-  await screen.findByRole("button", { name: "Delete preset" });
+  const cancel = await screen.findByRole("button", { name: "Cancel" });
+  await waitFor(() => expect(document.activeElement).toBe(cancel));
   return trigger;
 }
 
@@ -56,6 +59,19 @@ describe("PresetDeleteRow focus", () => {
     renderRow();
     const trigger = await openConfirm();
 
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("treats a cancel after an earlier confirmed delete as a cancel", async () => {
+    // The save never lands, so the row stays and can be asked again.
+    const { add } = renderRow();
+    await openConfirm();
+    fireEvent.click(screen.getByRole("button", { name: "Delete preset" }));
+    await waitFor(() => expect(document.activeElement).toBe(add));
+
+    const trigger = await openConfirm();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));

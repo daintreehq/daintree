@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { AppPaletteDialog } from "../AppPaletteDialog";
+import { deferPaletteFocusRestore, suppressPaletteFocusRestore } from "../paletteFocusRestore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 
@@ -225,6 +226,92 @@ describe("AppDialog fallback focus with a parent dialog still open", () => {
   });
 });
 
+describe("AppPaletteDialog fallback focus with a parent dialog still open", () => {
+  let root: HTMLElement;
+  let shellButton: HTMLButtonElement;
+
+  beforeEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    root = document.createElement("div");
+    root.id = "root";
+    shellButton = document.createElement("button");
+    shellButton.textContent = "Toolbar";
+    root.appendChild(shellButton);
+    document.body.appendChild(root);
+  });
+
+  afterEach(() => {
+    cleanup();
+    root.remove();
+    vi.useRealTimers();
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  function Settings({
+    paletteOpen,
+    openerMounted,
+    paletteMounted = true,
+  }: {
+    paletteOpen: boolean;
+    openerMounted: boolean;
+    paletteMounted?: boolean;
+  }) {
+    return (
+      <AppDialog isOpen onClose={() => {}} data-testid="outer">
+        <AppDialog.Body>
+          <button type="button">Add account</button>
+          {openerMounted && <button type="button">Pick model</button>}
+        </AppDialog.Body>
+        {paletteMounted && (
+          <AppPaletteDialog
+            isOpen={paletteOpen}
+            onClose={() => {}}
+            ariaLabel="Models"
+            tier="command"
+            zIndex="nested"
+          >
+            <input aria-label="Search models" />
+          </AppPaletteDialog>
+        )}
+      </AppDialog>
+    );
+  }
+
+  async function openPaletteFromRow() {
+    const view = render(<Settings paletteOpen={false} openerMounted />);
+    await act(() => vi.runAllTimersAsync());
+    screen.getByRole("button", { name: "Pick model" }).focus();
+    view.rerender(<Settings paletteOpen openerMounted />);
+    await act(() => vi.runAllTimersAsync());
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Search models");
+    return view;
+  }
+
+  it("lands inside the parent when the palette's opener is gone by its exit", async () => {
+    const view = await openPaletteFromRow();
+
+    view.rerender(<Settings paletteOpen openerMounted={false} />);
+    view.rerender(<Settings paletteOpen={false} openerMounted={false} />);
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement?.textContent).toBe("Add account");
+  });
+
+  it("does the same when the palette's host unmounts with it open", async () => {
+    const view = await openPaletteFromRow();
+
+    view.rerender(<Settings paletteOpen openerMounted={false} />);
+    view.rerender(<Settings paletteOpen openerMounted={false} paletteMounted={false} />);
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement?.textContent).toBe("Add account");
+  });
+});
+
 describe("AppDialog opened by a palette command", () => {
   let opener: HTMLButtonElement;
 
@@ -330,6 +417,38 @@ describe("AppDialog opened by a palette command", () => {
     await act(() => vi.runAllTimersAsync());
 
     expect(document.activeElement).toBe(opener);
+  });
+
+  // Both one-shots are read before the dialog's hold on focus is: left armed,
+  // they would land on whichever palette closes next.
+  it("spends a suppressed restore even though the dialog holds focus", async () => {
+    const view = await openPalette();
+
+    suppressPaletteFocusRestore();
+    view.rerender(<Commands paletteOpen={false} dialogOpen />);
+    await act(() => vi.runAllTimersAsync());
+    view.rerender(<Commands paletteOpen={false} dialogOpen={false} />);
+    await act(() => vi.runAllTimersAsync());
+    expect(document.activeElement).toBe(opener);
+
+    view.rerender(<Commands paletteOpen dialogOpen={false} />);
+    await act(() => vi.runAllTimersAsync());
+    view.rerender(<Commands paletteOpen={false} dialogOpen={false} />);
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("still hands a deferred restore to its receiver while the dialog holds focus", async () => {
+    const view = await openPalette();
+    const receive = vi.fn();
+
+    deferPaletteFocusRestore(receive);
+    view.rerender(<Commands paletteOpen={false} dialogOpen />);
+    await act(() => vi.runAllTimersAsync());
+
+    expect(receive).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("command-dialog").contains(document.activeElement)).toBe(true);
   });
 
   it("returns to the palette field when the palette stays open under the dialog", async () => {

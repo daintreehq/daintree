@@ -30,6 +30,14 @@ function isOpenModal(surface: HTMLElement, closing: Element | null): boolean {
   if (closing && (surface.contains(closing) || closing.contains(surface))) return false;
   if (surface.closest("[hidden], [inert]")) return false;
   if (surface.getAttribute("data-state") === "closed") return false;
+  // A Radix popover can stay `open` while its wrapper hides it (an anchor that
+  // went away). Opacity doesn't count: a surface still fading in is open.
+  if (
+    typeof surface.checkVisibility === "function" &&
+    !surface.checkVisibility({ checkVisibilityCSS: true, checkOpacity: false })
+  ) {
+    return false;
+  }
   // An AppDialog keeps `aria-modal` through its exit; only the Escape marker
   // drops with `isOpen`.
   if (surface.hasAttribute(APP_DIALOG_SURFACE_ATTR)) {
@@ -38,14 +46,20 @@ function isOpenModal(surface: HTMLElement, closing: Element | null): boolean {
   return true;
 }
 
-/** The z-index of the body-level layer a portalled surface paints in. */
+/**
+ * The z-index a surface competes with at the top of the page: its outermost
+ * ancestor (or itself) that sets one. A palette's sits on its scrim, not on
+ * the dialog element; a screen inside `#root` sets its own, since `#root`
+ * sets none.
+ */
 function layerOf(surface: HTMLElement): number {
-  let layer = surface;
-  while (layer.parentElement && layer.parentElement !== document.body) {
-    layer = layer.parentElement;
+  let z = 0;
+  for (let node: HTMLElement | null = surface; node && node !== document.body; ) {
+    const value = Number.parseInt(getComputedStyle(node).zIndex, 10);
+    if (!Number.isNaN(value)) z = value;
+    node = node.parentElement;
   }
-  const z = Number.parseInt(getComputedStyle(layer).zIndex, 10);
-  return Number.isNaN(z) ? 0 : z;
+  return z;
 }
 
 /**
@@ -90,10 +104,15 @@ export function focusAfterOverlayCloses(closing: Element | null): void {
   const modal = topmostOpenModal(closing);
   if (modal) {
     if (modal.contains(document.activeElement)) return;
-    const target =
-      firstDialogFocusTarget(modal) ??
-      (modal.hasAttribute("tabindex") ? modal : modal.querySelector<HTMLElement>("[tabindex]"));
-    target?.focus();
+    // The first control can still refuse focus (one in a disabled fieldset),
+    // so the panel itself is the last resort.
+    const panel = modal.hasAttribute("tabindex")
+      ? modal
+      : modal.querySelector<HTMLElement>("[tabindex]");
+    for (const target of [firstDialogFocusTarget(modal), panel]) {
+      target?.focus();
+      if (target && document.activeElement === target) return;
+    }
     return;
   }
   const root = document.getElementById("root");

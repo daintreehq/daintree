@@ -57,6 +57,22 @@ export function AgentAccountsSection({
   // button about to unmount. Cancelling still returns to the row.
   const [removeConfirmed, setRemoveConfirmed] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
+  // Removing the last account moves Add account from the heading into the
+  // empty row, a different button, so focus on the old one moves with it.
+  const addButtonFocusedRef = useRef(false);
+  const attachAddButton = (node: HTMLButtonElement | null) => {
+    addButtonRef.current = node;
+    if (!node) return;
+    const handOff = addButtonFocusedRef.current;
+    addButtonFocusedRef.current = false;
+    const active = document.activeElement;
+    if (handOff && (!active || active === document.body)) node.focus();
+    return () => {
+      // Runs before the button leaves the document, so it can still be focused.
+      addButtonFocusedRef.current = document.activeElement === node;
+      if (addButtonRef.current === node) addButtonRef.current = null;
+    };
+  };
   const confirmRemove = (account: AgentAccount) => {
     setRemoveConfirmed(false);
     setRemoving(account);
@@ -111,7 +127,7 @@ export function AgentAccountsSection({
   };
 
   const addButton = (
-    <Button ref={addButtonRef} size="sm" variant="outline" onClick={() => setIsAddOpen(true)}>
+    <Button ref={attachAddButton} size="sm" variant="outline" onClick={() => setIsAddOpen(true)}>
       <Plus aria-hidden="true" />
       Add account
     </Button>

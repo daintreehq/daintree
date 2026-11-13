@@ -50,6 +50,33 @@ describe("topmostOpenModal", () => {
     expect(topmostOpenModal(null)).toBe(high);
   });
 
+  it("ranks a surface by the layer around it, as a palette's scrim carries its z-index", () => {
+    const scrim = document.createElement("div");
+    scrim.style.zIndex = "60";
+    document.body.appendChild(scrim);
+    const palette = document.createElement("div");
+    palette.setAttribute("role", "dialog");
+    palette.setAttribute("aria-modal", "true");
+    scrim.appendChild(palette);
+    layer({ z: 50, label: "later" });
+
+    expect(topmostOpenModal(null)).toBe(palette);
+  });
+
+  it("ranks a screen inside a wrapper that sets no z-index by its own", () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    const screen = document.createElement("div");
+    screen.setAttribute("role", "dialog");
+    screen.setAttribute("aria-modal", "true");
+    screen.style.zIndex = "59";
+    root.appendChild(screen);
+    layer({ z: 40, label: "later" });
+
+    expect(topmostOpenModal(null)).toBe(screen);
+  });
+
   it("takes the last opened among equal layers", () => {
     layer({ label: "first" });
     const second = layer({ label: "second" });
@@ -90,6 +117,21 @@ describe("focusAfterOverlayCloses", () => {
     focusAfterOverlayCloses(null);
 
     expect(document.activeElement).toBe(add);
+  });
+
+  it("falls back to the panel when the first control refuses focus", () => {
+    const parent = layer({ appDialog: true, label: "parent" });
+    const panel = document.createElement("div");
+    panel.tabIndex = -1;
+    parent.appendChild(panel);
+    const fieldset = document.createElement("fieldset");
+    fieldset.disabled = true;
+    fieldset.appendChild(document.createElement("input"));
+    panel.appendChild(fieldset);
+
+    focusAfterOverlayCloses(null);
+
+    expect(document.activeElement).toBe(panel);
   });
 
   it("leaves focus that is already inside the open modal", () => {
