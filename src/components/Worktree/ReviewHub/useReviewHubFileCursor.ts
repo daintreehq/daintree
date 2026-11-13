@@ -16,6 +16,61 @@ export interface ReviewHubNavigableItem {
   file: StagingFileEntry;
 }
 
+function cursorKeyOf(item: ReviewHubNavigableItem): string {
+  return `${item.section}:${item.file.path}`;
+}
+
+/**
+ * Where the cursor goes when the file it was on leaves the list: a stage or
+ * unstage moves it to the other section, a filter hides it, a refresh drops it.
+ * The flat index is no anchor, because a stage or unstage shifts the boundary
+ * between the sections and the same number then names a row in the other one.
+ *
+ * So the cursor stays in its own section, on the nearest row of the old list
+ * that is still there: the one below it, else the one above it. Only when that
+ * section has emptied does it cross, to the row next to the boundary.
+ */
+export function resolveDisplacedCursor(
+  previous: readonly ReviewHubNavigableItem[],
+  previousIndex: number,
+  key: string,
+  next: readonly ReviewHubNavigableItem[]
+): number {
+  if (next.length === 0) return -1;
+  const section: FileStageRowSection = key.startsWith("staged:") ? "staged" : "unstaged";
+  const nextIndexByKey = new Map(next.map((item, index) => [cursorKeyOf(item), index]));
+  const found = previous.findIndex((item) => cursorKeyOf(item) === key);
+  // A key the previous list never held has no row to step away from; its old
+  // index is the best position there is, and the row there is a candidate.
+  const from = found !== -1 ? found : Math.min(Math.max(previousIndex, 0), previous.length - 1);
+  const firstBelow = found !== -1 ? from + 1 : from;
+  for (let i = firstBelow; i < previous.length; i++) {
+    const item = previous[i]!;
+    if (item.section !== section) continue;
+    const at = nextIndexByKey.get(cursorKeyOf(item));
+    if (at !== undefined) return at;
+  }
+  for (let i = from - 1; i >= 0; i--) {
+    const item = previous[i]!;
+    if (item.section !== section) continue;
+    const at = nextIndexByKey.get(cursorKeyOf(item));
+    if (at !== undefined) return at;
+  }
+  // Nothing around it survived (a refresh replaced the section wholesale): the
+  // same position within the section, held to its new end.
+  const sectionStart = next.findIndex((item) => item.section === section);
+  if (sectionStart !== -1) {
+    let sectionEnd = sectionStart;
+    while (next[sectionEnd + 1]?.section === section) sectionEnd++;
+    let localIndex = 0;
+    for (let i = 0; i < from; i++) if (previous[i]!.section === section) localIndex++;
+    return Math.min(sectionStart + localIndex, sectionEnd);
+  }
+  // The section emptied. Staged rows render above unstaged ones, so the row
+  // next to the boundary is the last staged one or the first unstaged one.
+  return section === "unstaged" ? next.length - 1 : 0;
+}
+
 interface UseReviewHubFileCursorArgs {
   /** The flat staged-then-unstaged list, in render order. */
   navigableItems: ReviewHubNavigableItem[];
@@ -77,10 +132,16 @@ export function useReviewHubFileCursor({
     setFocusedCursorKey(key);
   }, []);
 
+  // The list the cursor was last reconciled against: where its file sat, and
+  // which rows were its neighbours, once that file has gone from the new one.
+  const reconciledItemsRef = useRef(navigableItems);
+
   // Reconcile `focusedIndex` when the list mutates (filter, sort, stage/unstage,
   // refresh). Preserve focus on the same file by `section:path`; if it left the
-  // list, clamp to the nearest valid index so focus never points off the end.
+  // list, move to its nearest neighbour in the same section.
   useEffect(() => {
+    const previousItems = reconciledItemsRef.current;
+    reconciledItemsRef.current = navigableItems;
     if (navigableItems.length === 0) {
       writeCursorKey(null);
       setFocusedIndex((prev) => (prev === -1 ? prev : -1));
@@ -88,12 +149,12 @@ export function useReviewHubFileCursor({
     }
     const key = focusedItemKeyRef.current;
     if (key === null) return;
-    const nextIdx = navigableItems.findIndex((item) => `${item.section}:${item.file.path}` === key);
+    const nextIdx = navigableItems.findIndex((item) => cursorKeyOf(item) === key);
     if (nextIdx === -1) {
-      const clamped = Math.min(focusedIndex < 0 ? 0 : focusedIndex, navigableItems.length - 1);
-      const clampedItem = navigableItems[clamped];
-      writeCursorKey(clampedItem ? `${clampedItem.section}:${clampedItem.file.path}` : null);
-      setFocusedIndex(clamped);
+      const replacement = resolveDisplacedCursor(previousItems, focusedIndex, key, navigableItems);
+      const replacementItem = navigableItems[replacement];
+      writeCursorKey(replacementItem ? cursorKeyOf(replacementItem) : null);
+      setFocusedIndex(replacement);
     } else if (nextIdx !== focusedIndex) {
       setFocusedIndex(nextIdx);
     }

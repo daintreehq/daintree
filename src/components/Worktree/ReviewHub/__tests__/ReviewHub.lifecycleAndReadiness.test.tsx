@@ -1059,6 +1059,78 @@ describe("ReviewHub", () => {
       expect(unstageFileMock).not.toHaveBeenCalled();
     });
 
+    describe("the cursor after Space restages a row (#16895)", () => {
+      const entry = (path: string) => ({
+        path,
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      });
+      const focused = (path: string) =>
+        screen.getByTestId(`file-stage-row-${path}`).getAttribute("data-focused");
+
+      it("stays in Unstaged on the next row after staging one", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts")],
+            unstaged: [entry("src/b.ts"), entry("src/c.ts")],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByText("b.ts"));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        expect(focused("src/b.ts")).toBe("true");
+
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts"), entry("src/b.ts")],
+            unstaged: [entry("src/c.ts")],
+          })
+        );
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/b.ts"));
+        await waitFor(() => expect(focused("src/c.ts")).toBe("true"));
+
+        // The next Space acts on that row, not on the file that just moved.
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(stageFileMock).toHaveBeenLastCalledWith(WORKTREE_PATH, "src/c.ts")
+        );
+      });
+
+      it("stays in Staged on the row above after unstaging the last staged row", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts"), entry("src/b.ts")],
+            unstaged: [entry("src/c.ts")],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByText("b.ts"));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        expect(focused("src/b.ts")).toBe("true");
+
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts")],
+            unstaged: [entry("src/b.ts"), entry("src/c.ts")],
+          })
+        );
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(unstageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/b.ts")
+        );
+        await waitFor(() => expect(focused("src/a.ts")).toBe("true"));
+
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(unstageFileMock).toHaveBeenLastCalledWith(WORKTREE_PATH, "src/a.ts")
+        );
+      });
+    });
+
     it("Enter opens the diff for the focused row", async () => {
       await renderHub();
       // Focus row 1 (the unstaged file) so a wrong-file bug would be caught.

@@ -1,4 +1,5 @@
 import type React from "react";
+import type { Ref } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import { Badge } from "@/components/ui/badge";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
@@ -10,6 +11,9 @@ import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
 interface BaseBranchFileRowProps {
   file: CrossWorktreeFile;
+  /** Position in the list, which its arrow keys step through. */
+  rowIndex: number;
+  openButtonRef?: Ref<HTMLButtonElement>;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
@@ -17,6 +21,8 @@ interface BaseBranchFileRowProps {
 
 export function BaseBranchFileRow({
   file,
+  rowIndex,
+  openButtonRef,
   onClick,
   unresolvedDecoration,
   onBadgeClick,
@@ -47,8 +53,10 @@ export function BaseBranchFileRow({
         )}
       >
         <button
+          ref={openButtonRef}
           type="button"
           onClick={onClick}
+          data-base-row-index={rowIndex}
           className={cn(
             "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
