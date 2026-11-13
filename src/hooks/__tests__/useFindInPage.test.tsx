@@ -213,12 +213,11 @@ describe("useFindInPage", () => {
 
     it("ignores the guest's forwarded Cmd+F once a modal over the pane has the keys", () => {
       let shortcutCallback: ((payload: { panelId: string; shortcut: string }) => void) | undefined;
-      onFindShortcutMock.mockImplementation(
-        (cb: (payload: { panelId: string; shortcut: string }) => void) => {
-          shortcutCallback = cb;
-          return vi.fn();
-        }
-      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      onFindShortcutMock.mockImplementation((cb: any) => {
+        shortcutCallback = cb;
+        return vi.fn();
+      });
       const grid = document.createElement("div");
       document.body.appendChild(grid);
       mounted.push(grid);
