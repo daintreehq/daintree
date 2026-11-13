@@ -13,7 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { injectSchemeToDOM, resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
+import {
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  resolveProjectScheme,
+  useAppThemeStore,
+} from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { commitAppThemeSelection } from "@/lib/commitAppThemeSelection";
@@ -219,6 +224,9 @@ export function ThemeBrowser() {
   const previewSchemeId = useAppThemeStore((s) => s.previewSchemeId);
   const setPreviewSchemeId = useAppThemeStore((s) => s.setPreviewSchemeId);
   const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
+  // A project with its own theme keeps showing it after Set theme saves the
+  // global one (#13833), and Cancel goes back to it.
+  const projectScheme = useAppThemeStore(resolveProjectScheme);
 
   const [query, setQuery] = useState("");
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
@@ -706,7 +714,9 @@ export function ThemeBrowser() {
             interactive. Saying so is what the scrim alone cannot do — and it
             says it without tinting or blurring the very thing being judged. */}
         <p id={PREVIEW_HINT_ID} className="flex-1 min-w-0 text-2xs text-text-secondary">
-          Live preview — pick a theme, or cancel to go back
+          {projectScheme
+            ? `This project shows its own theme, ${projectScheme.name}. Set theme changes the global theme.`
+            : "Live preview — pick a theme, or cancel to go back"}
         </p>
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel

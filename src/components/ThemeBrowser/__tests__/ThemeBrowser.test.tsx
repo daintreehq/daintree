@@ -983,6 +983,20 @@ describe("ThemeBrowser navigation contract", () => {
         useAppThemeStore.setState({ projectSchemeId: null, projectSnapshotScheme: null });
       });
 
+      // Set theme saves the global theme (#13833), so the window goes back to
+      // the project's after it; the dialog's description says so up front.
+      it("says Set theme changes the global theme while this project keeps its own", () => {
+        const project = schemesOf("dark")[1]!;
+        useAppThemeStore.setState({ projectSchemeId: project.id });
+        render(<Harness />);
+
+        const dialog = screen.getByRole("dialog", { name: "Theme browser" });
+        const description = document.getElementById(dialog.getAttribute("aria-describedby")!)!;
+        expect(description.textContent).toBe(
+          `This project shows its own theme, ${project.name}. Set theme changes the global theme.`
+        );
+      });
+
       // The project's theme is already on screen, but its row must still take the
       // highlight when the cursor lands on it, or the arrows, which step from the
       // highlight, would stall one row short.
