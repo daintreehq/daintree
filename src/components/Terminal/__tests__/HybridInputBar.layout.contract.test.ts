@@ -150,7 +150,10 @@ describe("HybridInputBar layout contract", () => {
     expect(box).not.toMatch(/(^|[\s"])p[xlr]?-/);
     expect(box).not.toMatch(/COMPOSER_CONTROL_/);
 
-    const styles = fs.readFileSync(path.join(path.dirname(BAR), "composerControlStyles.ts"), "utf8");
+    const styles = fs.readFileSync(
+      path.join(path.dirname(BAR), "composerControlStyles.ts"),
+      "utf8"
+    );
     const hover = /COMPOSER_MARKER_HOVER_CLASS =\s*"([^"]*)"/.exec(styles)?.[1] ?? "";
     expect(hover, "the marker's hover class").not.toBe("");
     // Every utility that could size the box: unprefixed or under `hover:`.

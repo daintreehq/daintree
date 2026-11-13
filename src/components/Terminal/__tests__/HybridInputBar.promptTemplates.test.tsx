@@ -797,9 +797,9 @@ describe("HybridInputBar prompt marker", () => {
     expect(marker.tabIndex).toBe(-1);
     // As drawn, whatever the class constants hold: no width of its own and no focus look.
     const drawn = marker.className.split(/\s+/);
-    expect(drawn.filter((c) => /^(min-)?w-|^p[xlr]?-|^(focus-visible|group-hover):/.test(c))).toEqual(
-      []
-    );
+    expect(
+      drawn.filter((c) => /^(min-)?w-|^p[xlr]?-|^(focus-visible|group-hover):/.test(c))
+    ).toEqual([]);
     expect(screen.queryByRole("button", { name: /command picker/i })).toBeNull();
   });
 
