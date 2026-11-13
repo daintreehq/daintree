@@ -2762,6 +2762,31 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
   });
 
+  it("closes the inbox once Mod+Enter's action has run (#16937)", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        actions: [{ actionId: "test.action", label: "Open", actionArgs: { x: 1 } }],
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const row = getRows(container)[0]!;
+
+    act(() => {
+      row.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter", metaKey: isMac(), ctrlKey: !isMac() });
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
   it("does not dispatch on Mod+Enter when the action is unavailable", async () => {
     getMock.mockReturnValue({ enabled: false });
     setEntries([
