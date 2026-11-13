@@ -1,7 +1,8 @@
 /**
- * A pane composer's send held while its agent works (#16379): typed once the
- * pane next waits at its own prompt, for an agent whose CLI isn't declared to
- * queue input mid-turn. Main holds it, in memory only.
+ * A pane composer's send held while its pane has no line to take it (#16379,
+ * #16872): sent at a choice dialog, or mid-turn in a CLI declared to take down
+ * its input line, and typed once the pane next waits at its own prompt. Main
+ * holds it, in memory only.
  */
 
 /** How long a held send waits for its pane's prompt before it is dropped. */

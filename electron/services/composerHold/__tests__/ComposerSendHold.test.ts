@@ -146,6 +146,20 @@ describe("ComposerSendHold", () => {
     expect(wake!.recheck(atPrompt())).toEqual({ kind: "ready" });
   });
 
+  it("waits out a choice dialog it was sent at, keys and all, and goes at the next prompt", () => {
+    const h = setup();
+    const atDialog = atPrompt({ waitingReason: "approval", lastStateChange: 2_000 });
+    h.request("held at a dialog", atDialog);
+    const [wake] = h.wakes;
+    // Keys that answer the dialog are typed input, but never prompt input.
+    expect(wake!.recheck({ ...atDialog, lastTypedInputAt: 3_000 }).kind).toBe("held");
+    expect(wake!.recheck(working({ lastStateChange: 3_500, lastTypedInputAt: 3_000 })).kind).toBe(
+      "held"
+    );
+    expect(wake!.recheck(atPrompt({ lastTypedInputAt: 3_000 }))).toEqual({ kind: "ready" });
+    expect(h.ended()).toEqual([]);
+  });
+
   it("drops on input that reached the prompt after it was held, not before", () => {
     const h = setup();
     h.request("held", working({ lastForeignPromptInputAt: 900 }));

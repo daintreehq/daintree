@@ -28,9 +28,9 @@ export interface ResendReadiness {
 }
 
 /**
- * Why the last message can't go again, or undefined when it can. A working
- * agent that doesn't queue input is no reason: the resend is held for it, as
- * a typed send would be.
+ * Why the last message can't go again, or undefined when it can. A pane with
+ * no line to take it, such as one at a choice dialog, is no reason: the resend
+ * is held for it, as a typed send would be.
  */
 export function resendUnavailableReason(readiness: ResendReadiness): string | undefined {
   if (!readiness.hasSend) return NOTHING_SENT_REASON;

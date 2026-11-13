@@ -75,8 +75,8 @@ export async function handleHold(
       context: { terminalId: id },
     });
   }
-  // Anything that isn't plainly this view's own busy agent is sent as before,
-  // and refused there as before.
+  // Anything that isn't plainly this view's own pane with no line to take the
+  // send is sent as before, and refused there as before.
   const notBusy: ComposerHoldResult = { held: false, reason: "not-busy" };
   const projectId = ctx.projectId;
   const ptyClient = getPtyClient();
