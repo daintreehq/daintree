@@ -284,7 +284,9 @@ export function VoiceInputButton({
     canopyRow,
   ]);
 
-  const shortcut = useEffectiveCombo("voiceInput.toggle");
+  const toggleShortcut = useEffectiveCombo("voiceInput.toggle");
+  const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
+  const shortcut = isPaused ? pauseShortcut : toggleShortcut;
 
   const tooltipText =
     needsSetup && !isFinishing

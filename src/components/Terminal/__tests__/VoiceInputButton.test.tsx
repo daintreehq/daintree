@@ -130,7 +130,9 @@ describe("VoiceInputButton", () => {
     expect(button.getAttribute("aria-label")).toBe("Resume voice recording");
     expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toContain("Paused");
+    const tip = (await screen.findByRole("tooltip")).textContent;
+    expect(tip).toContain("Paused");
+    expect(tip).toContain("Space");
   });
 
   it("clicking while paused calls togglePause instead of toggle", () => {
