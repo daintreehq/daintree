@@ -223,6 +223,30 @@ describe("switchToLastWorkspace", () => {
     expect(peekMock).toHaveBeenCalledTimes(2);
   });
 
+  it("labels the retry `Retry` and leaves the body empty when the error says nothing more than the title", async () => {
+    peekMock.mockRejectedValueOnce(undefined);
+
+    await switchToLastWorkspace();
+
+    const call = notifyMock.mock.calls[0]![0] as {
+      title: string;
+      message: string;
+      actions: Array<{ label: string }>;
+    };
+    expect(call.title).toBe("Couldn't switch workspace");
+    expect(call.message).toBe("");
+    expect(call.actions[0]!.label).toBe("Retry");
+  });
+
+  it("keeps a distinct error message as the body", async () => {
+    peekMock.mockRejectedValueOnce(new Error("bridge gone"));
+
+    await switchToLastWorkspace();
+
+    const call = notifyMock.mock.calls[0]![0] as { message: string };
+    expect(call.message).toBe("bridge gone");
+  });
+
   it("surfaces a failed switch with a retry", async () => {
     peekMock.mockResolvedValue({ workspaceId: TARGET_PROJECT });
     projectState.switchProject.mockRejectedValue(new Error("view crashed"));

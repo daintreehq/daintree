@@ -1504,3 +1504,13 @@ describe("NotificationCenterEntry — go to source", () => {
     expect(getRow(container).getAttribute("data-navigable")).toBeNull();
   });
 });
+
+describe("NotificationCenterEntry empty message", () => {
+  it("renders no body line for a titled entry whose message is empty", () => {
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Couldn't save", message: "" })} isNew />
+    );
+    expect(screen.getByText("Couldn't save")).toBeTruthy();
+    expect(container.querySelectorAll("p.text-text-secondary")).toHaveLength(0);
+  });
+});

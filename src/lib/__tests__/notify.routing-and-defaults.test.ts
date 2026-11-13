@@ -70,6 +70,21 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Task done");
     });
 
+    it("keeps a titled entry with an empty message in the inbox, even inbox-only", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", title: "Couldn't save", message: "", priority: "low" });
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.title).toBe("Couldn't save");
+      expect(entries[0]!.message).toBe("");
+    });
+
+    it("still drops an untitled entry with an empty message", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "error", message: "", priority: "low" });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
+    });
+
     it("prefers inboxMessage over message for history", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({

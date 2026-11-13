@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatErrorMessage, humanizeAppError } from "../errorMessage.js";
+import { distinctDetail, formatErrorMessage, humanizeAppError } from "../errorMessage.js";
 import type { ErrorRecord, ErrorType, GitOperationReason } from "../../types/ipc/errors.js";
 
 describe("formatErrorMessage", () => {
@@ -199,5 +199,16 @@ describe("humanizeAppError", () => {
       );
       expect(result.body).toBe("Check your Git credentials or SSH key configuration.");
     });
+  });
+});
+
+describe("distinctDetail", () => {
+  it("drops a detail that only repeats the title", () => {
+    expect(distinctDetail("Couldn't save", "Couldn't save")).toBe("");
+    expect(distinctDetail(" Couldn't save ", "Couldn't save")).toBe("");
+  });
+
+  it("keeps a detail that adds something", () => {
+    expect(distinctDetail("Disk is full", "Couldn't save")).toBe("Disk is full");
   });
 });

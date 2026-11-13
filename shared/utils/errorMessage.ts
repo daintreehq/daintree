@@ -148,3 +148,13 @@ export function humanizeAppError(
 
   return fallback;
 }
+
+/**
+ * The body for a notification titled `title`: the detail when it says something
+ * the title doesn't, otherwise empty so the title isn't printed twice (a caught
+ * error with no message of its own falls back to the same domain string the
+ * title uses).
+ */
+export function distinctDetail(detail: string, title: string): string {
+  return detail.trim() === title.trim() ? "" : detail;
+}

@@ -6,7 +6,7 @@ import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { projectClient } from "@/clients";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { distinctDetail, formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project } from "@shared/types";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { toSearchableProject, type SearchableProjectContext } from "./ordering";
@@ -137,7 +137,10 @@ export function useProjectSwitcherProjectMutations({
             notify({
               type: "error",
               title: "Couldn't update project",
-              message: formatErrorMessage(retryError, "Couldn't update project"),
+              message: distinctDetail(
+                formatErrorMessage(retryError, "Couldn't update project"),
+                "Couldn't update project"
+              ),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
             });
           }
@@ -145,7 +148,10 @@ export function useProjectSwitcherProjectMutations({
         notify({
           type: "error",
           title: "Couldn't update project",
-          message: formatErrorMessage(error, "Couldn't update project"),
+          message: distinctDetail(
+            formatErrorMessage(error, "Couldn't update project"),
+            "Couldn't update project"
+          ),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
       }
@@ -188,7 +194,10 @@ export function useProjectSwitcherProjectMutations({
           notify({
             type: "error",
             title: "Couldn't stop project",
-            message: formatErrorMessage(retryError, "Couldn't stop project"),
+            message: distinctDetail(
+              formatErrorMessage(retryError, "Couldn't stop project"),
+              "Couldn't stop project"
+            ),
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           });
         }
@@ -196,7 +205,10 @@ export function useProjectSwitcherProjectMutations({
       notify({
         type: "error",
         title: "Couldn't stop project",
-        message: formatErrorMessage(error, "Couldn't stop project"),
+        message: distinctDetail(
+          formatErrorMessage(error, "Couldn't stop project"),
+          "Couldn't stop project"
+        ),
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
     } finally {
@@ -344,8 +356,11 @@ export function useProjectSwitcherProjectMutations({
           notify({
             type: "error",
             title: isActive ? "Couldn't close project" : "Couldn't remove project",
-            message: formatErrorMessage(
-              retryError,
+            message: distinctDetail(
+              formatErrorMessage(
+                retryError,
+                isActive ? "Couldn't close project" : "Couldn't remove project"
+              ),
               isActive ? "Couldn't close project" : "Couldn't remove project"
             ),
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
@@ -355,8 +370,11 @@ export function useProjectSwitcherProjectMutations({
       notify({
         type: "error",
         title: removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project",
-        message: formatErrorMessage(
-          error,
+        message: distinctDetail(
+          formatErrorMessage(
+            error,
+            removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
+          ),
           removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
         ),
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],

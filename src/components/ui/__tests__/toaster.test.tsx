@@ -133,6 +133,18 @@ describe("Toast accessibility", () => {
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
 
+  it("renders no empty body block for a titled toast with an empty message", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ title: "Couldn't save", message: "" });
+      vi.advanceTimersByTime(16);
+    });
+
+    const toast = screen.getByRole("status");
+    expect(toast.textContent).toContain("Couldn't save");
+    expect(toast.querySelector(".text-text-secondary.leading-snug")).toBeNull();
+  });
+
   it("uses inboxMessage as the live-region announcement for ReactNode messages", async () => {
     render(<Toaster />);
     await act(async () => {
