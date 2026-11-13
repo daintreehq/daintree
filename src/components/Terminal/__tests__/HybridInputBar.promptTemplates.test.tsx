@@ -788,21 +788,20 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
 });
 
 describe("HybridInputBar prompt marker", () => {
-  it("draws the `❯` as a glyph, not a control", async () => {
+  it("draws the `❯` at the glyph's own width, with no focus look of its own", async () => {
     const { container } = await renderComposer("");
 
-    const marker = Array.from(container.querySelectorAll<HTMLElement>("*")).find(
-      (el) => el.childElementCount === 0 && el.textContent === "❯"
-    );
-    expect(marker).toBeDefined();
-    expect(marker!.closest("button, [role='button']")).toBeNull();
-    expect(marker!.hasAttribute("tabindex")).toBe(false);
-    // As drawn, whatever the class constants hold: no width of its own and no hover or focus look.
-    const drawn = marker!.className.split(/\s+/);
-    expect(drawn.filter((c) => /^(min-)?w-|^(hover|focus-visible|group-hover):/.test(c))).toEqual(
-      []
-    );
-    expect(marker!.closest("[aria-hidden='true']")).not.toBeNull();
+    const marker = container.querySelector<HTMLElement>("[data-composer-marker]")!;
+    expect(marker.textContent).toBe("❯");
+    // It opens prompt history on a click, but Mod+R is the keyboard path.
+    expect(marker.tabIndex).toBe(-1);
+    // As drawn, whatever the class constants hold: no width of its own and no focus look.
+    const drawn = marker.className.split(/\s+/);
+    expect(
+      drawn.filter((c) =>
+        /^(min-|max-)?w-|^size-|^p[xlr]?-|^(focus|focus-visible|group-hover):/.test(c)
+      )
+    ).toEqual([]);
     expect(screen.queryByRole("button", { name: /command picker/i })).toBeNull();
   });
 
