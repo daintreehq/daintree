@@ -1,11 +1,12 @@
-import { useEffect, useCallback, useId, useRef, useState } from "react";
+import { useEffect, useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays } from "@shared/types";
+import type { ProjectPulse, PulseRangeDays } from "@shared/types";
 import { usePulseStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
 import { XCircle, RefreshCw, GitBranch, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   SegmentedRadioGroup,
   type SegmentedRadioOption,
@@ -18,6 +19,8 @@ import { getCoachLine, getUsableHealth } from "./coachLine";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+import { useDohertyGate, useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
+import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -46,79 +49,57 @@ const SKELETON_WEEKS = 9;
 const SKELETON_CELL = 10;
 const SKELETON_GAP = 3;
 
-function PulseSkeleton({ className }: { className?: string }) {
+// Body only: the card's real header stays mounted above it, so the range
+// control and Refresh never trade places with bones.
+function PulseBodySkeleton() {
   return (
-    <div
-      className={cn(
-        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-border-default min-h-[240px]",
-        className
-      )}
-    >
-      <div className="pulse-card-header animate-pulse-delayed px-3 py-3 border-b border-border-default flex items-center justify-between">
-        <div className="flex items-center gap-2">
+    <div className="px-3 py-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
+      <div
+        className="grid grid-flow-col"
+        style={{
+          gap: `${SKELETON_GAP}px`,
+          gridTemplateRows: `repeat(7, ${SKELETON_CELL}px)`,
+          marginLeft: 24,
+          paddingTop: 14,
+        }}
+      >
+        {Array.from({ length: SKELETON_WEEKS * 7 }).map((_, index) => (
           <div
+            key={index}
             data-skeleton-bone=""
-            className="w-4 h-4 rounded-[var(--radius-xs)] pulse-skeleton-shimmer shrink-0"
+            className="rounded-2xs pulse-skeleton-shimmer shrink-0"
+            style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
           />
-          <div
-            data-skeleton-bone=""
-            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-36"
-          />
-        </div>
+        ))}
+      </div>
+
+      <div
+        data-skeleton-bone=""
+        className="h-3 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-72"
+      />
+
+      <div className="border-t border-border-default pt-3 min-h-9">
         <div className="flex items-center gap-2">
-          <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
-          <div data-skeleton-bone="" className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
+          <div data-skeleton-bone="" className="h-6 w-24 rounded-full pulse-skeleton-shimmer" />
+          <div data-skeleton-bone="" className="h-6 w-20 rounded-full pulse-skeleton-shimmer" />
+          <div data-skeleton-bone="" className="h-6 w-16 rounded-full pulse-skeleton-shimmer" />
         </div>
       </div>
 
-      <div className="px-3 py-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
-        <div
-          className="grid grid-flow-col"
-          style={{
-            gap: `${SKELETON_GAP}px`,
-            gridTemplateRows: `repeat(7, ${SKELETON_CELL}px)`,
-            marginLeft: 24,
-            paddingTop: 14,
-          }}
-        >
-          {Array.from({ length: SKELETON_WEEKS * 7 }).map((_, index) => (
-            <div
-              key={index}
-              data-skeleton-bone=""
-              className="rounded-2xs pulse-skeleton-shimmer shrink-0"
-              style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
-            />
-          ))}
-        </div>
-
-        <div
-          data-skeleton-bone=""
-          className="h-3 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-72"
-        />
-
-        <div className="border-t border-border-default pt-3 min-h-9">
-          <div className="flex items-center gap-2">
-            <div data-skeleton-bone="" className="h-6 w-24 rounded-full pulse-skeleton-shimmer" />
-            <div data-skeleton-bone="" className="h-6 w-20 rounded-full pulse-skeleton-shimmer" />
-            <div data-skeleton-bone="" className="h-6 w-16 rounded-full pulse-skeleton-shimmer" />
-          </div>
-        </div>
-
-        <div className="border-t border-border-default pt-3">
-          <div className="flex items-center gap-4">
-            <div
-              data-skeleton-bone=""
-              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-20"
-            />
-            <div
-              data-skeleton-bone=""
-              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-24"
-            />
-            <div
-              data-skeleton-bone=""
-              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-16"
-            />
-          </div>
+      <div className="border-t border-border-default pt-3">
+        <div className="flex items-center gap-4">
+          <div
+            data-skeleton-bone=""
+            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-20"
+          />
+          <div
+            data-skeleton-bone=""
+            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-24"
+          />
+          <div
+            data-skeleton-bone=""
+            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-16"
+          />
         </div>
       </div>
     </div>
@@ -199,6 +180,12 @@ function PulseHeatmapLegend({ descriptionId }: { descriptionId: string }) {
   );
 }
 
+// `generatedAt` moves on every answer, cached or not, so it says nothing about
+// whether the activity itself changed.
+function isSamePulseData(a: ProjectPulse, b: ProjectPulse): boolean {
+  return deepEqualIgnoringUndefined({ ...a, generatedAt: 0 }, { ...b, generatedAt: 0 });
+}
+
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
   // Filtered once and handed to both the coach line and the chips, so the two
@@ -226,46 +213,71 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const baseId = useId();
   const heatmapDescriptionId = `${baseId}-desc`;
 
-  // Announce silent-refresh completion exactly once via a polite live region.
-  // aria-busy alone does not satisfy WCAG 4.1.3 — assistive tech only re-reads
-  // when a live region changes. The hasEverLoadedRef guard suppresses the
-  // first successful load (no need to announce "updated" when the user hasn't
-  // seen anything yet) and also any successful load that happens while error
-  // is set (failed silent refresh while stale data is retained).
+  // A polite live region outside the busy body: assistive tech can hold back
+  // updates inside an `aria-busy` subtree, and aria-busy alone never satisfies
+  // WCAG 4.1.3. A refresh is announced only once its indicator would show, and
+  // its completion only when the activity actually changed, so the probe every
+  // window focus runs stays silent. The first load is never announced.
   const [refreshAnnouncement, setRefreshAnnouncement] = useState("");
+  // Set by the user's own Refresh press: that spins at once as press feedback.
+  // Background probes (window focus, a range change) wait out the gate instead.
+  const [manualRefresh, setManualRefresh] = useState(false);
+  const refreshGateOpen = useDohertyGate(isLoading);
+  const refreshSpinning = isLoading && (manualRefresh || refreshGateOpen);
+  const showSkeleton = useSkeletonFloor(useSkeletonGate(isLoading && !pulse));
   const wasLoadingRef = useRef(false);
-  const hasEverLoadedRef = useRef(false);
+  const settledPulseRef = useRef<ProjectPulse | null>(null);
   const lastFocusProbeRef = useRef(0);
   const minuteTick = useGlobalMinuteTicker();
   const heatmapScrollerRef = useRef<HTMLDivElement>(null);
+
+  // Declared before the settle effect so a worktree switch drops the baseline
+  // (and any "Refreshing" said about the last worktree) before that effect
+  // compares against it.
   useEffect(() => {
-    const hadPulse = !!pulse;
-    if (isLoading && hadPulse) {
-      setRefreshAnnouncement("Refreshing pulse data");
-    } else if (
-      wasLoadingRef.current &&
-      !isLoading &&
-      hadPulse &&
-      !error &&
-      hasEverLoadedRef.current
-    ) {
-      setRefreshAnnouncement("Pulse data updated");
+    settledPulseRef.current = null;
+    wasLoadingRef.current = false;
+    setRefreshAnnouncement("");
+  }, [worktreeId]);
+
+  useEffect(() => {
+    if (isLoading) {
+      if (!wasLoadingRef.current) setRefreshAnnouncement("");
+      wasLoadingRef.current = true;
+      return;
     }
-    if (!isLoading && hadPulse && !error) {
-      hasEverLoadedRef.current = true;
-    }
-    wasLoadingRef.current = isLoading;
-  }, [isLoading, pulse, error]);
+    const wasLoading = wasLoadingRef.current;
+    wasLoadingRef.current = false;
+    setManualRefresh(false);
+    // A failed refresh keeps the old snapshot up, and a snapshot from another
+    // range is not this range's answer: neither moves the baseline. Settling
+    // clears a lingering "Refreshing" unless there is news to replace it.
+    const settled = pulse && !error && pulse.rangeDays === rangeDays ? pulse : null;
+    const previous = settledPulseRef.current;
+    if (settled) settledPulseRef.current = settled;
+    if (!wasLoading) return;
+    const changed = settled !== null && previous !== null && !isSamePulseData(previous, settled);
+    setRefreshAnnouncement(changed ? "Pulse data updated" : "");
+  }, [worktreeId, isLoading, pulse, error, rangeDays]);
+
+  // `isLoading` too, not the gate alone: the gate only closes in an effect, so
+  // on the render that settles a slow first load it still reads open while the
+  // snapshot has just arrived.
+  const hasPulse = !!pulse;
+  useEffect(() => {
+    if (isLoading && refreshGateOpen && hasPulse) setRefreshAnnouncement("Refreshing pulse data");
+  }, [isLoading, refreshGateOpen, hasPulse]);
 
   // Guard on `error === undefined` (never fetched), not `!error`: a settled
   // null is the deliberate "no commits" outcome, and treating it as falsy would
   // let this effect refetch in a tight loop. A string error self-retries in the
-  // store; an in-flight request is deduped there too.
+  // store; an in-flight request is deduped there too. A snapshot kept from
+  // before a range change counts as missing.
   useEffect(() => {
-    if (!pulse && !isLoading && error === undefined) {
+    if ((!pulse || pulse.rangeDays !== rangeDays) && !isLoading && error === undefined) {
       fetchPulse(worktreeId);
     }
-  }, [worktreeId, pulse, isLoading, error, fetchPulse]);
+  }, [worktreeId, pulse, rangeDays, isLoading, error, fetchPulse]);
 
   // Re-fetch when the window regains focus or the tab becomes visible. The
   // service runs a HEAD-SHA probe under the 60s TTL, so non-forced requests
@@ -288,14 +300,17 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   }, [worktreeId, fetchPulse]);
 
   // If the column is ever narrower than the calendar, open at the newest week
-  // — the days that answer "is this moving right now" — not the oldest.
+  // — the days that answer "is this moving right now" — not the oldest. Keyed
+  // on the skeleton too: data that lands while its floor holds mounts the
+  // scroller a render later than the length change.
   const heatmapLength = pulse?.heatmap.length ?? 0;
   useEffect(() => {
     const scroller = heatmapScrollerRef.current;
     if (scroller) scroller.scrollLeft = scroller.scrollWidth;
-  }, [heatmapLength]);
+  }, [heatmapLength, showSkeleton]);
 
   const handleRefresh = useCallback(() => {
+    setManualRefresh(true);
     fetchPulse(worktreeId, true);
     void refreshHealth({ force: true });
   }, [worktreeId, fetchPulse, refreshHealth]);
@@ -308,151 +323,31 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     [setRangeDays, fetchPulse, worktreeId]
   );
 
-  if (isLoading && !pulse) {
-    return <PulseSkeleton className={className} />;
-  }
+  let body: ReactNode = null;
+  if (showSkeleton) {
+    body = <PulseBodySkeleton />;
+  } else if (pulse) {
+    // minuteTick is read so the freshness label re-renders on each 30s tick.
+    // useGlobalMinuteTicker pauses while hidden and emits on visibility restore.
+    void minuteTick;
+    const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
 
-  if (!pulse && error === null) {
-    return (
-      <div
-        className={cn(
-          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-border-default",
-          // Hold the slot at PulseSkeleton's natural height so the empty-state
-          // column doesn't reflow when the skeleton swaps to this one-liner
-          // (#7671). The card centers its short message inside the reserved
-          // box instead of shrinking and shifting siblings up.
-          "min-h-[240px] flex items-center",
-          className
-        )}
-      >
-        <div className="flex items-center gap-2 text-text-primary">
-          <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
-          <span className="text-xs">
-            New repository — make your first commit to start tracking activity
-          </span>
-        </div>
-      </div>
-    );
-  }
+    // pulse.rangeDays, not the selector's — the chip describes the same snapshot
+    // the coach line above it does. A provider with no `projectHealth`
+    // capability (`unsupported`) is neither an error nor a missing remote —
+    // there is no signal to wait for, so the section stays out instead of
+    // hinting at recovery steps that wouldn't help.
+    const healthSection = health?.unsupported ? null : usableHealth ? (
+      <PulseHealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
+    ) : healthLoading ? (
+      <HealthSectionSkeleton />
+    ) : health && !health.hasRemote ? (
+      <NoRemoteHint />
+    ) : health && health.hasRemote ? (
+      <OfflineHint />
+    ) : null;
 
-  if (error && !pulse) {
-    const isRetrying = retryCount > 0 && retryCount < PULSE_MAX_RETRIES;
-
-    return (
-      <div
-        className={cn(
-          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-border-default",
-          // Match PulseSkeleton height so the error swap doesn't collapse the
-          // card and shift siblings up (#7671).
-          "min-h-[240px] flex items-center",
-          className
-        )}
-      >
-        <div className="flex flex-col gap-2 w-full">
-          <div className="flex items-center gap-2 text-text-primary" role="alert">
-            <XCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
-            <span className="text-xs">{error}</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={handleRefresh}
-              className="pulse-control ml-auto"
-              aria-label="Retry now"
-            >
-              <RefreshCw aria-hidden="true" />
-            </Button>
-          </div>
-          {isRetrying && (
-            <div
-              className="flex items-center gap-2 text-text-secondary"
-              role="status"
-              aria-live="polite"
-            >
-              <Spinner size="xs" />
-              <span className="text-xs">
-                Retrying ({retryCount}/{PULSE_MAX_RETRIES})…
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (!pulse) {
-    return null;
-  }
-
-  // minuteTick is read so the freshness label re-renders on each 30s tick.
-  // useGlobalMinuteTicker pauses while hidden and emits on visibility restore.
-  void minuteTick;
-  const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
-
-  // pulse.rangeDays, not the selector's — the chip describes the same snapshot
-  // the coach line above it does. A provider with no `projectHealth`
-  // capability (`unsupported`) is neither an error nor a missing remote —
-  // there is no signal to wait for, so the section stays out instead of
-  // hinting at recovery steps that wouldn't help.
-  const healthSection = health?.unsupported ? null : usableHealth ? (
-    <PulseHealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
-  ) : healthLoading ? (
-    <HealthSectionSkeleton />
-  ) : health && !health.hasRemote ? (
-    <NoRemoteHint />
-  ) : health && health.hasRemote ? (
-    <OfflineHint />
-  ) : null;
-
-  return (
-    <div
-      className={cn(
-        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-border-default min-h-[240px]",
-        className
-      )}
-      aria-busy={isLoading}
-    >
-      <span role="status" aria-live="polite" className="sr-only">
-        {refreshAnnouncement}
-      </span>
-      {/* `px-3` inside the 1px edge: the card opens under the strip's row, so
-          its content starts on the canvas home's glyph line, not a third one. */}
-      <div className="pulse-card-header px-3 py-3 border-b border-border-default flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-text-primary">{title}</span>
-          {isLoading && <Spinner size="xs" className="text-text-secondary" />}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* `pulse-range` keeps the theme's own range-track hook (a
-              per-theme extension, within ~1.1:1 of the inset track everywhere),
-              so the card's themed header still owns the track colour. */}
-          <SegmentedRadioGroup<RangeKey>
-            className="pulse-range"
-            density="compact"
-            aria-label="Activity range"
-            options={RANGE_OPTIONS}
-            value={`${rangeDays}`}
-            onChange={(next) => handleRangeChange(RANGE_DAYS[next])}
-          />
-
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => {
-              if (!isLoading) handleRefresh();
-            }}
-            // Not `disabled`: pressing it would drop keyboard focus to the page.
-            aria-disabled={isLoading}
-            // `-mr-1.5` takes back the icon button's own padding, so the glyph
-            // ends on the right edge the strip's chevron above it ends on.
-            className="pulse-control -mr-1.5 aria-disabled:cursor-not-allowed"
-            aria-label="Refresh"
-          >
-            <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />
-          </Button>
-        </div>
-      </div>
-
+    body = (
       <div className="px-3 py-4 space-y-4">
         {/* The card obeys the column (it used to be `w-fit`, and a 60-day row
             of cells made the lowest-priority band the widest on the surface).
@@ -508,6 +403,117 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span>Updated {updatedLabel}</span>
           </Button>
         </div>
+      </div>
+    );
+  } else if (!isLoading && error === null) {
+    // A fetch clears the error to null as it starts, so only a settled null is
+    // the "no commits" outcome; under the skeleton's onset gate the shell
+    // holds the slot empty instead.
+    body = (
+      <div className="flex flex-1 items-center gap-2 px-4 text-text-primary">
+        <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
+        <span className="text-xs">
+          New repository — make your first commit to start tracking activity
+        </span>
+      </div>
+    );
+  } else if (error) {
+    const isRetrying = retryCount > 0 && retryCount < PULSE_MAX_RETRIES;
+    body = (
+      <div className="flex flex-1 items-center px-4">
+        <div className="flex flex-col gap-2 w-full">
+          <div className="flex items-center gap-2 text-text-primary" role="alert">
+            <XCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
+            <span className="text-xs">{error}</span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={handleRefresh}
+              className="pulse-control ml-auto"
+              aria-label="Retry now"
+            >
+              <RefreshCw aria-hidden="true" />
+            </Button>
+          </div>
+          {isRetrying && (
+            <div
+              className="flex items-center gap-2 text-text-secondary"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner size="xs" />
+              <span className="text-xs">
+                Retrying ({retryCount}/{PULSE_MAX_RETRIES})…
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // One shell for every state, with the header always mounted: swapping the
+  // whole card for a skeleton or an error box unmounted the range control the
+  // user was on and dropped keyboard focus to the page. `min-h-[240px]` holds
+  // the slot across the body's variants so siblings never shift (#7671).
+  return (
+    <div
+      className={cn(
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-border-default min-h-[240px] flex flex-col",
+        className
+      )}
+    >
+      <span role="status" aria-live="polite" className="sr-only">
+        {refreshAnnouncement}
+      </span>
+      {/* `px-3` inside the 1px edge: the card opens under the strip's row, so
+          its content starts on the canvas home's glyph line, not a third one. */}
+      <div className="pulse-card-header px-3 py-3 border-b border-border-default flex items-center justify-between">
+        <span className="text-sm font-medium text-text-primary">{title}</span>
+
+        <div className="flex items-center gap-2">
+          {/* `pulse-range` keeps the theme's own range-track hook (a
+              per-theme extension, within ~1.1:1 of the inset track everywhere),
+              so the card's themed header still owns the track colour. */}
+          <SegmentedRadioGroup<RangeKey>
+            className="pulse-range"
+            density="compact"
+            aria-label="Activity range"
+            options={RANGE_OPTIONS}
+            value={`${rangeDays}`}
+            onChange={(next) => handleRangeChange(RANGE_DAYS[next])}
+          />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => {
+                  if (!isLoading) handleRefresh();
+                }}
+                // Not `disabled`: pressing it would drop keyboard focus to the page.
+                aria-disabled={isLoading}
+                // `-mr-1.5` takes back the icon button's own padding, so the glyph
+                // ends on the right edge the strip's chevron above it ends on.
+                className="pulse-control -mr-1.5 aria-disabled:cursor-not-allowed"
+                aria-label="Refresh"
+              >
+                <SpinningIcon
+                  icon={RefreshCw}
+                  active={refreshSpinning}
+                  className="w-3 h-3"
+                  aria-hidden="true"
+                />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Refresh</TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col" aria-busy={isLoading}>
+        {body}
       </div>
     </div>
   );
