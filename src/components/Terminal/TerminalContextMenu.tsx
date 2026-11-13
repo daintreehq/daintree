@@ -933,7 +933,7 @@ function TerminalContextMenuBody({
             isArmed={isArmed}
             fleetSize={fleetSize}
             fleetRun={fleetRun}
-            isAgent={Boolean(terminal.agentId || terminal.detectedAgentId)}
+            isAgent={Boolean(terminal.launchAgentId || terminal.detectedAgentId)}
             isWatched={isWatched}
             whenDone={
               terminalPty && !isEphemeralPanel(terminal) ? (whenDoneChoice ?? "keep") : undefined
