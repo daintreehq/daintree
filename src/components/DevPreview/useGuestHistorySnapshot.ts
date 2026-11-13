@@ -71,23 +71,19 @@ export function useGuestHistorySnapshot(
     const refresh = () => {
       scheduled = false;
       if (disposed) return;
-      let webContentsId: number;
-      try {
-        webContentsId = webview.getWebContentsId();
-      } catch {
-        return;
-      }
       const request = ++requestSeq;
-      window.electron.webview.getNavigationHistory(webContentsId).then(
-        (snapshot) => {
+      void (async () => {
+        try {
+          const snapshot = await window.electron.webview.getNavigationHistory(
+            webview.getWebContentsId()
+          );
           if (disposed || request !== requestSeq) return;
           setState({ guest: webview, snapshot });
-        },
-        () => {
-          // Not registered yet, or the guest went away mid-request: the next
-          // commit or dom-ready reads it again.
+        } catch {
+          // Detached, not registered yet, or gone mid-request: the next commit
+          // or dom-ready reads it again.
         }
-      );
+      })();
     };
 
     // A microtask later, so a burst of events reads once and the panel
