@@ -52,10 +52,13 @@ describe("useWorktreePalette focus restore", () => {
 
   it("hands the restore to a worktree picked with Enter", () => {
     const { result } = renderHook(() => useWorktreePalette({ worktrees }));
+    act(() => result.current.selectNext());
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("wt-feature");
 
     act(() => result.current.confirmSelection());
 
-    expect(selectWorktreeMock).toHaveBeenCalledWith("wt-main");
+    expect(selectWorktreeMock).toHaveBeenCalledWith("wt-feature");
+    expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).not.toBeNull();
   });
 
@@ -64,10 +67,13 @@ describe("useWorktreePalette focus restore", () => {
 
     act(() => result.current.confirmSelection());
     expect(selectWorktreeMock).not.toHaveBeenCalled();
+    expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
 
     act(() => usePaletteStore.setState({ activePaletteId: "worktree" }));
+    expect(result.current.isOpen).toBe(true);
     act(() => result.current.close());
+    expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
   });
 });

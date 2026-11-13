@@ -35,6 +35,8 @@ import { usePaletteStore } from "@/store/paletteStore";
 import {
   consumeDeferredPaletteFocusRestore,
   consumePaletteFocusRestoreSuppression,
+  notePaletteOpening,
+  paletteOpeningCount,
 } from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
@@ -95,10 +97,17 @@ export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
   workspace: "w-[880px] max-w-[calc(100vw-2rem)]",
 };
 
+/** Nothing else has taken the keyboard: it is on the body, or still in the palette leaving. */
+function isFocusUnclaimed(dialog: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || (dialog !== null && dialog.contains(active));
+}
+
 /**
  * Hands the keyboard back to the element that opened a palette, or somewhere
  * sensible when that element has gone (a command that closed the panel it was
- * opened from).
+ * opened from) or will not take focus (a pane hidden with the worktree a pick
+ * switched away from).
  */
 function returnFocusToOpener(el: HTMLElement, dialog: HTMLElement | null): void {
   // Palette-to-palette handoff: the next palette will install its own focus,
@@ -116,7 +125,7 @@ function returnFocusToOpener(el: HTMLElement, dialog: HTMLElement | null): void 
   clearDialogOverlays();
   if (document.contains(el)) {
     el.focus();
-    return;
+    if (document.activeElement === el || !isFocusUnclaimed(dialog)) return;
   }
   focusAfterOverlayCloses(dialog);
 }
@@ -190,6 +199,8 @@ export function AppPaletteDialog({
   // gone back to it, so reopening during the exit animation keeps the
   // original opener rather than recording the dialog's own still-focused field.
   const openerCapturedRef = useRef(false);
+  // Palette openings counted when this one last closed; null while it is open.
+  const openingsAtCloseRef = useRef<number | null>(null);
   const autofocusRafRef = useRef<number | null>(null);
   /**
    * The initial-focus target, held behind a ref so the effect below does not
@@ -209,12 +220,18 @@ export function AppPaletteDialog({
 
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
+    const openingsAtClose = openingsAtCloseRef.current;
     previousFocusRef.current = null;
     openerCapturedRef.current = false;
     // Nothing to give back: this palette never opened, or its exit already
     // restored and this is the host unmounting. The one-shots below belong to
     // whichever palette is closing now, so leave them for it.
     if (!el) return;
+    // Another palette took over as this one closed, or opened while it was on
+    // its way out: the keyboard is that palette's, and so is any hand-off its
+    // pick armed — even when it has already closed again (an Action palette
+    // routing `#` to the Panel palette, and a panel picked inside this exit).
+    if (openingsAtClose !== null && paletteOpeningCount() !== openingsAtClose) return;
     // Both are one-shots for this close; read both so a hand-off left behind
     // by a suppressed close can't reach whichever palette is next.
     const suppressed = consumePaletteFocusRestoreSuppression();
@@ -230,13 +247,13 @@ export function AppPaletteDialog({
     if (receive) {
       if (!usePaletteStore.getState().activePaletteId) clearDialogOverlays();
       const dialog = dialogRef.current;
+      const openingsAtHandOff = paletteOpeningCount();
       receive(() => {
-        // Only while nothing else has taken the keyboard meanwhile: focus
-        // still on the body, or still in this palette on its way out.
-        const active = document.activeElement;
-        const unclaimed =
-          !active || active === document.body || (dialog !== null && dialog.contains(active));
-        if (unclaimed) returnFocusToOpener(el, dialog);
+        // Only while nothing else has taken the keyboard meanwhile, and no
+        // palette has opened since: a caller that settles late (a host switch
+        // that stayed) must not reach past one.
+        if (paletteOpeningCount() !== openingsAtHandOff) return;
+        if (isFocusUnclaimed(dialog)) returnFocusToOpener(el, dialog);
       });
       return;
     }
@@ -264,14 +281,22 @@ export function AppPaletteDialog({
     clearDialogOverlays();
     // A palette opening owns the keyboard now: a restore another one handed
     // off on its way out (and never ran) must not take it back later.
-    if (isOpen) consumeDeferredPaletteFocusRestore();
+    if (isOpen) notePaletteOpening();
   }, [isOpen]);
 
   // Read in the insertion phase, before this commit's layout work: the palette
   // mounts in the opening render (`syncEnter`), so a descendant `autoFocus`
   // would otherwise be recorded as the element to restore on close.
+  // The close is counted here too: insertion effects run before any passive
+  // effect in the commit, so a palette opening as this one closes always
+  // counts as opening after it.
   useInsertionEffect(() => {
-    if (!isOpen || openerCapturedRef.current) return;
+    if (!isOpen) {
+      openingsAtCloseRef.current = paletteOpeningCount();
+      return;
+    }
+    openingsAtCloseRef.current = null;
+    if (openerCapturedRef.current) return;
     openerCapturedRef.current = true;
     const el = document.activeElement;
     if (el instanceof HTMLElement) previousFocusRef.current = el;

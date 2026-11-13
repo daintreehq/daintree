@@ -579,6 +579,8 @@ describe("useActionPalette", () => {
 
     act(() => result.current.executeAction(result.current.results[0]!));
 
+    expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+    expect(result.current.isOpen).toBe(false);
     // The hand-off runs the palette's guarded restore, which only refocuses the
     // opener while nothing else holds the keyboard.
     const receive = consumeDeferredPaletteFocusRestore();
@@ -596,9 +598,11 @@ describe("useActionPalette", () => {
     await waitFor(() => expect(result.current.results.length).toBe(1));
 
     act(() => result.current.executeAction(result.current.results[0]!));
+    expect(result.current.isOpen).toBe(true);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
 
     act(() => result.current.close());
+    expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -2042,14 +2046,27 @@ describe("useActionPalette", () => {
     });
 
     it("hands off the focus restore only once the collected arguments dispatch", async () => {
-      paletteArgsMock.mockReturnValue({ fields: [spec.fields[1]] });
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[0], spec.fields[1]] });
       const { result } = await openPalette([pluginEntry()]);
       act(() => result.current.executeAction(result.current.results[0]!));
       // Still open, asking for an answer: nothing has closed the palette yet.
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Environment", step: 1 });
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Force", step: 2 });
+      expect(result.current.isOpen).toBe(true);
+      expect(dispatchMock).not.toHaveBeenCalled();
       expect(consumeDeferredPaletteFocusRestore()).toBeNull();
 
       act(() => result.current.confirmSelection());
       expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "plugin.acme.deploy",
+        { env: "dev", force: true },
+        { source: "user" }
+      );
+      expect(result.current.isOpen).toBe(false);
       expect(consumeDeferredPaletteFocusRestore()).not.toBeNull();
     });
 
