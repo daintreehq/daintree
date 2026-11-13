@@ -30,6 +30,7 @@ const {
   mockTerminalSendKey,
   mockNotifyUserInput,
   mockClearDirectingState,
+  composerProps,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -137,6 +138,10 @@ const {
   mockTerminalSendKey: vi.fn(),
   mockNotifyUserInput: vi.fn(),
   mockClearDirectingState: vi.fn(),
+  composerProps: {} as {
+    submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    ownsHistoryByFocus?: boolean;
+  },
 }));
 
 // Passthrough tooltips: the footer's Radix provider is incidental to these
@@ -215,29 +220,37 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
     onSend,
     onSendKey,
     disabled,
+    submitText,
+    ownsHistoryByFocus,
   }: {
     terminalId: string;
     onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
     onSendKey?: (key: string) => void;
     disabled?: boolean;
-  }) => (
-    <div
-      data-testid="hybrid-input-bar"
-      data-terminal-id={terminalId}
-      data-disabled={disabled ? "true" : "false"}
-    >
-      <button
-        type="button"
-        data-testid="hybrid-input-send"
-        onClick={() => onSend?.({ data: "hello", trackerData: "hello", text: "hello" })}
+    submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    ownsHistoryByFocus?: boolean;
+  }) => {
+    composerProps.submitText = submitText;
+    composerProps.ownsHistoryByFocus = ownsHistoryByFocus;
+    return (
+      <div
+        data-testid="hybrid-input-bar"
+        data-terminal-id={terminalId}
+        data-disabled={disabled ? "true" : "false"}
       >
-        send
-      </button>
-      <button type="button" data-testid="hybrid-input-key" onClick={() => onSendKey?.("escape")}>
-        key
-      </button>
-    </div>
-  ),
+        <button
+          type="button"
+          data-testid="hybrid-input-send"
+          onClick={() => onSend?.({ data: "hello", trackerData: "hello", text: "hello" })}
+        >
+          send
+        </button>
+        <button type="button" data-testid="hybrid-input-key" onClick={() => onSendKey?.("escape")}>
+          key
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/clients", () => ({
@@ -312,6 +325,7 @@ vi.mock("@/lib/notify", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: (...args: unknown[]) => mockLogError(...args),
+  logWarn: vi.fn(),
 }));
 
 vi.mock("@/utils/safeFireAndForget", () => ({
@@ -1123,6 +1137,53 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     expect(mockNotifyUserInput).not.toHaveBeenCalled();
     expect(mockTerminalSubmit).not.toHaveBeenCalled();
     expect(mockTerminalSendKey).not.toHaveBeenCalled();
+  });
+
+  it("submitText says whether the terminal took the text, so a refused send keeps its draft", async () => {
+    setupBoundTerminal();
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    const submitText = composerProps.submitText!;
+
+    await expect(submitText("hello", [])).resolves.toBe(true);
+    expect(mockTerminalSubmit).toHaveBeenCalledWith("term-1", "hello");
+
+    mockTerminalSubmit.mockRejectedValueOnce(new Error("pty gone"));
+    await expect(submitText("again", [])).resolves.toBe(false);
+  });
+
+  it("submitText refuses a send the terminal locked against while it was being composed", async () => {
+    setupBoundTerminal();
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    const submitText = composerProps.submitText!;
+    // The lock lands after the press, while `@` tokens expand: read as the text goes.
+    (panelStoreState.panelsById["term-1"] as { isInputLocked: boolean }).isInputLocked = true;
+
+    await expect(submitText("hello", [])).resolves.toBe(false);
+    expect(mockNotifyUserInput).not.toHaveBeenCalled();
+    expect(mockTerminalSubmit).not.toHaveBeenCalled();
+  });
+
+  it("hands prompt history to the composer by focus only while the aside is on screen", async () => {
+    setupBoundTerminal();
+    let rerender!: ReturnType<typeof render>["rerender"];
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ rerender, container } = render(<HelpPanel width={380} />));
+    });
+    expect(composerProps.ownsHistoryByFocus).toBe(true);
+    // Focus anywhere in the aside is what claims it, the terminal included.
+    expect(
+      container.querySelector("#daintree-assistant-panel")?.hasAttribute("data-prompt-history-host")
+    ).toBe(true);
+
+    await act(async () => {
+      rerender(<HelpPanel width={0} />);
+    });
+    expect(composerProps.ownsHistoryByFocus).toBe(false);
   });
 
   it("renders HybridInputBar as disabled when isInputLocked is true", async () => {

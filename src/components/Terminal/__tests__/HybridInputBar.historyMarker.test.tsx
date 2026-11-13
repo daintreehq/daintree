@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { EditorView } from "@codemirror/view";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { Project } from "@shared/types/project";
 
@@ -12,7 +12,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { GLOBAL_ASSISTANT_HISTORY_ID, useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { usePromptHistoryOwnerStore } from "@/store/promptHistoryOwnerStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { _resetUserPromptTemplateStoreForTest } from "@/store/userPromptTemplateStore";
@@ -82,12 +83,8 @@ beforeEach(() => {
   };
   useProjectStore.setState({ currentProject: project });
   const sent = [{ id: "h1", prompt: SENT, agentId: "claude", addedAt: Date.now() - 60_000 }];
-  useCommandHistoryStore.setState({
-    history: {
-      [hostScopedKey(PROJECT_ID)]: sent,
-      [hostScopedKey(isolatedComposerScope())]: sent,
-    },
-  });
+  useCommandHistoryStore.setState({ history: { [hostScopedKey(PROJECT_ID)]: sent } });
+  usePromptHistoryOwnerStore.setState({ owner: null });
   useCanopyStore.setState({ isOpen: false });
   const panel = {
     id: TERMINAL_ID,
@@ -331,5 +328,216 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     // The chord as spoken: the platform's primary modifier and R, nothing else.
     const spoken = Array.from(tooltip.querySelectorAll(".sr-only")).map((el) => el.textContent);
     expect(spoken).toContainEqual(expect.stringMatching(/^(Command|Ctrl) R$/));
+  });
+});
+
+const OTHER_PROJECT_ID = "proj-b";
+const OTHER_SENT = "Bump the lockfile and push";
+const GLOBAL_ID = "global-1";
+
+type ComposerProps = Partial<React.ComponentProps<typeof HybridInputBar>>;
+
+/**
+ * A grid pane's composer beside one outside the grid, each where it lives: the
+ * pane's in its pane, the other in a host of its own.
+ */
+async function renderBeside(offGrid: ComposerProps & { terminalId: string }) {
+  const { container } = render(
+    <TooltipProvider>
+      <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+        <div data-panel-id={TERMINAL_ID} data-testid="pane">
+          <HybridInputBar terminalId={TERMINAL_ID} cwd={WT_ID} agentId="claude" onSend={vi.fn()} />
+        </div>
+        <section data-prompt-history-host="" data-testid="host">
+          <HybridInputBar cwd="" agentId="claude" onSend={vi.fn()} {...offGrid} />
+        </section>
+      </WorktreeStoreContext.Provider>
+    </TooltipProvider>
+  );
+  await act(async () => {});
+  const viewIn = (testId: string) =>
+    EditorView.findFromDOM(
+      container.querySelector<HTMLElement>(`[data-testid="${testId}"] .cm-content`)!
+    )!;
+  const pane = viewIn("pane");
+  const other = viewIn("host");
+  // Start from the grid, wherever mounting left focus.
+  act(() => pane.contentDOM.focus());
+  return { pane, other };
+}
+
+/** The `:` route in the Action Palette: it opens whichever palette is mounted. */
+async function openFromActionPalette() {
+  const actionSearch = document.createElement("input");
+  document.body.appendChild(actionSearch);
+  act(() => actionSearch.focus());
+  actionSearch.remove();
+  await act(async () => {
+    usePaletteStore.getState().openPalette("prompt-history");
+  });
+}
+
+async function recall(prompt: string) {
+  const option = await screen.findByRole("option", { name: new RegExp(prompt) });
+  await act(async () => {
+    fireEvent.click(option);
+  });
+}
+
+const mountedPalettes = () => screen.queryAllByRole("combobox", { name: "Search prompt history" });
+
+describe("HybridInputBar prompt history has one composer at a time", () => {
+  it("serves the grid pane until focus lands in the global assistant, then it alone", async () => {
+    const { other } = await renderBeside({
+      isolated: true,
+      terminalId: GLOBAL_ID,
+      historyProjectId: GLOBAL_ASSISTANT_HISTORY_ID,
+    });
+
+    await openFromActionPalette();
+    expect(mountedPalettes()).toHaveLength(1);
+    await recall(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput(TERMINAL_ID, PROJECT_ID)).toBe(SENT);
+
+    act(() => other.contentDOM.focus());
+    await openFromActionPalette();
+    expect(mountedPalettes()).toHaveLength(1);
+    await recall(SENT);
+    // Into the assistant's own draft, which stays apart from every project's.
+    expect(useTerminalInputStore.getState().getDraftInput(GLOBAL_ID, isolatedComposerScope())).toBe(
+      SENT
+    );
+    expect(other.state.doc.toString()).toBe(SENT);
+  });
+
+  it("opens the Project Assistant's history by Mod+R and `:`, never the pane's behind it", async () => {
+    const isMac = /Mac/.test(navigator.platform);
+    const { pane, other } = await renderBeside({
+      terminalId: "assistant-1",
+      ownsHistoryByFocus: true,
+    });
+
+    act(() => other.contentDOM.focus());
+    await act(async () => {
+      runScopeHandlers(
+        other,
+        new KeyboardEvent("keydown", { key: "r", metaKey: isMac, ctrlKey: !isMac }),
+        "editor"
+      );
+    });
+    expect(paletteOpen()).toBe(true);
+    expect(mountedPalettes()).toHaveLength(1);
+    await recall(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput("assistant-1", PROJECT_ID)).toBe(SENT);
+    expect(pane.state.doc.toString()).toBe("");
+
+    await openFromActionPalette();
+    expect(mountedPalettes()).toHaveLength(1);
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Search prompt history" }), {
+        key: "Escape",
+      });
+    });
+
+    // The palette hands focus back to the composer it opened over.
+    await waitFor(() => expect(document.activeElement).toBe(other.contentDOM));
+
+    // Back in the grid, the pane's composer holds history again.
+    act(() => pane.contentDOM.focus());
+    await openFromActionPalette();
+    await recall(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput(TERMINAL_ID, PROJECT_ID)).toBe(SENT);
+  });
+
+  it("opens the Project Assistant's history from its marker before focus ever reached it", async () => {
+    await renderBeside({ terminalId: "assistant-1", ownsHistoryByFocus: true });
+    const markers = document.querySelectorAll<HTMLElement>("[data-composer-marker]");
+
+    await act(async () => {
+      fireEvent.click(markers[1]!);
+    });
+
+    expect(paletteOpen()).toBe(true);
+    expect(mountedPalettes()).toHaveLength(1);
+    await recall(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput("assistant-1", PROJECT_ID)).toBe(SENT);
+  });
+
+  it("offers nothing to a composer outside the grid while it is off screen", async () => {
+    const { other } = await renderBeside({ terminalId: "assistant-1", ownsHistoryByFocus: false });
+
+    act(() => other.contentDOM.focus());
+    await openFromActionPalette();
+    await recall(SENT);
+
+    // Not by focus: the grid's focused pane keeps it.
+    expect(useTerminalInputStore.getState().getDraftInput(TERMINAL_ID, PROJECT_ID)).toBe(SENT);
+  });
+
+  it("reads and keeps Canopy's reply history under the run's project, its draft its own", async () => {
+    useCommandHistoryStore.setState({
+      history: {
+        [hostScopedKey(PROJECT_ID)]: [
+          { id: "h1", prompt: SENT, agentId: "claude", addedAt: Date.now() - 60_000 },
+        ],
+        [hostScopedKey(OTHER_PROJECT_ID)]: [
+          { id: "h2", prompt: OTHER_SENT, agentId: "claude", addedAt: Date.now() - 30_000 },
+        ],
+      },
+    });
+    const submitText = vi.fn(async () => true);
+    const { other } = await renderBeside({
+      isolated: true,
+      terminalId: "run-1",
+      historyProjectId: OTHER_PROJECT_ID,
+      submitText,
+    });
+
+    act(() => other.contentDOM.focus());
+    await openFromActionPalette();
+    // This project is the run's, not the window's.
+    await screen.findByRole("option", { name: new RegExp(OTHER_SENT) });
+    expect(screen.queryByRole("option", { name: new RegExp(SENT) })).toBeNull();
+    await recall(OTHER_SENT);
+    expect(useTerminalInputStore.getState().getDraftInput("run-1", isolatedComposerScope())).toBe(
+      OTHER_SENT
+    );
+    expect(useTerminalInputStore.getState().getDraftInput("run-1", OTHER_PROJECT_ID)).toBe("");
+
+    await act(async () => {
+      other.dispatch({ changes: { from: 0, insert: "Rebase onto develop " } });
+    });
+    await act(async () => {
+      runScopeHandlers(other, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    expect(submitText).toHaveBeenCalledTimes(1);
+    const kept = useCommandHistoryStore.getState().history;
+    expect(kept[hostScopedKey(OTHER_PROJECT_ID)]?.[0]?.prompt).toBe(
+      `Rebase onto develop ${OTHER_SENT}`
+    );
+    expect(kept[hostScopedKey(isolatedComposerScope())]).toBeUndefined();
+  });
+
+  it("keeps no history for a reply on another host", async () => {
+    const submitText = vi.fn(async () => true);
+    const { other } = await renderBeside({
+      isolated: true,
+      otherHostId: "studio",
+      terminalId: "run-2",
+      historyProjectId: OTHER_PROJECT_ID,
+      submitText,
+    });
+    const before = useCommandHistoryStore.getState().history;
+
+    act(() => other.contentDOM.focus());
+    await act(async () => {
+      other.dispatch({ changes: { from: 0, insert: "Check the build" } });
+    });
+    await act(async () => {
+      runScopeHandlers(other, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+
+    expect(submitText).toHaveBeenCalledTimes(1);
+    expect(useCommandHistoryStore.getState().history).toEqual(before);
   });
 });

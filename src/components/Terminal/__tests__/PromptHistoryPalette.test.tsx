@@ -62,11 +62,17 @@ function seed(history: Record<string, PromptHistoryEntry[]>) {
   usePaletteStore.getState().openPalette("prompt-history");
 }
 
-function renderPalette() {
+function renderPalette(
+  props: { projectId?: string; draftProjectId?: string } = { projectId: PROJECT }
+) {
   // The scope segments carry tooltips; the app root supplies the provider.
   render(
     <TooltipProvider>
-      <PromptHistoryPalette terminalId="t1" projectId={PROJECT} />
+      <PromptHistoryPalette
+        terminalId="t1"
+        projectId={props.projectId}
+        draftProjectId={props.draftProjectId}
+      />
     </TooltipProvider>
   );
   const input = document.querySelector<HTMLInputElement>('[role="combobox"]')!;
@@ -177,6 +183,43 @@ describe("PromptHistoryPalette", () => {
     const texts = optionTexts();
     expect(texts.find((t) => t.includes("dark mode"))).toContain("Helios");
     expect(texts.find((t) => t.includes("summarise"))).toContain("Daintree");
+  });
+
+  it("opens the global assistant's history on every project's, naming its own prompts", async () => {
+    const { GLOBAL_ASSISTANT_HISTORY_ID } = await import("@/store/commandHistoryStore");
+    useProjectStore.setState({
+      projects: [{ id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 }],
+    });
+    seed({
+      [PROJECT]: [entry("a", "summarise the diff", 1)],
+      [GLOBAL_ASSISTANT_HISTORY_ID]: [entry("b", "which agents are waiting on me", 2)],
+    });
+    const input = renderPalette({ projectId: GLOBAL_ASSISTANT_HISTORY_ID });
+
+    const texts = optionTexts();
+    expect(texts.find((t) => t.includes("summarise"))).toContain("Daintree");
+    expect(texts.find((t) => t.includes("agents are waiting"))).toContain("Global assistant");
+    // No project of its own, so no "This project" to switch to, by click or chord.
+    expect(document.querySelector('[aria-label="History scope"]')).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "r", metaKey: true });
+    });
+    expect(optionTexts()).toHaveLength(2);
+  });
+
+  it("recalls into the composer's own draft when it isn't the history's project", async () => {
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    useTerminalInputStore.setState({ draftInputs: new Map() });
+    seed({ [OTHER]: [entry("a", "rebase onto develop", 1)] });
+    renderPalette({ projectId: OTHER, draftProjectId: "isolated-composer" });
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[role="option"]')!);
+    });
+
+    const inputs = useTerminalInputStore.getState();
+    expect(inputs.getDraftInput("t1", "isolated-composer")).toBe("rebase onto develop");
+    expect(inputs.getDraftInput("t1", OTHER)).toBe("");
   });
 
   describe("in a remote host's view", () => {
