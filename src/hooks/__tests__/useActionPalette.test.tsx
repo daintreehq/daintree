@@ -891,9 +891,14 @@ describe("useActionPalette", () => {
       getEffectiveComboMock.mockImplementation((id) =>
         id === "git.commit" ? "Cmd+K Cmd+C" : id === "worktree.openReviewHub" ? "Cmd+R" : undefined
       );
+      getDisplayComboMock.mockImplementation((id) =>
+        id === "git.commit" ? "⌘K ⌘C" : id === "worktree.openReviewHub" ? "⌘R" : ""
+      );
 
       const { result } = await openOn("commit");
-      expect(rowFor(result.current.results, "git.commit").shortcut).toBe("Cmd+K Cmd+C");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.shortcut).toBe("Cmd+K Cmd+C");
+      expect(row.keybinding).toBe("⌘K ⌘C");
     });
   });
 
@@ -1810,6 +1815,31 @@ describe("useActionPalette", () => {
 
       act(() => result.current.executeAction(row));
       expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("takes a redirect row's enablement from the plugin command it runs", async () => {
+      publishPluginPaletteGates([["acme.review", { enablement: "acme.ready" }]]);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      const { result } = await openWith([
+        {
+          ...makeEntry("builtin.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "acme.review",
+        },
+        pluginCmd("acme.review", "Review"),
+      ]);
+      const commitRow = () => result.current.results.find((r) => r.id === "builtin.commit")!;
+      expect(commitRow().enabled).toBe(false);
+      expect(commitRow().disabledReason).toBeTruthy();
+      act(() => result.current.executeAction(commitRow()));
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ready: true } } });
+      });
+      await waitFor(() => expect(commitRow().enabled).toBe(true));
+      act(() => result.current.executeAction(commitRow()));
+      expect(dispatchMock).toHaveBeenCalledWith("acme.review", {}, { source: "user" });
     });
 
     it("does not dispatch collected arguments once the command's enablement has gone false", async () => {

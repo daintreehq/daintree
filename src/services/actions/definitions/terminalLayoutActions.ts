@@ -43,7 +43,8 @@ export function registerTerminalLayoutActions(
     title: "Move to dock",
     description:
       "Move a panel out of the main grid into the sidebar dock, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, a kind the dock can't show, or one in the trash, background, an overlay or a dialog is refused. Name the target explicitly; the result names where it is now.",
-    paletteDescription: "Move the focused panel into the sidebar dock, keeping it running",
+    paletteDescription:
+      "Move the focused panel and its tab group into the dock, keeping them running",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -90,7 +91,7 @@ export function registerTerminalLayoutActions(
     description:
       "Move a panel from the sidebar dock back into the main grid, keeping its process running; a grouped panel takes its group along. Reversible. A panel not in this view, or one in the trash, background, an overlay or a dialog, is refused. Name the target explicitly; the result names where it is now.",
     paletteDescription:
-      "Move the focused panel from the dock back into the grid, keeping it running",
+      "Move the focused panel and its tab group back into the grid, keeping them running",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -372,7 +373,7 @@ export function registerTerminalLayoutActions(
     title: "Toggle dock",
     description:
       "Move a panel between the grid and the dock, whichever it is not currently in. The move is recorded so the user can undo it. Name the target explicitly — an automated caller cannot see what the user has focused, and this rearranges what they see.",
-    paletteDescription: "Move the focused panel between the grid and the dock",
+    paletteDescription: "Move the focused panel and its tab group between the grid and the dock",
     category: "terminal",
     kind: "command",
     danger: "safe",

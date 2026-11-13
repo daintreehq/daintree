@@ -121,6 +121,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      keywords: ["blocked", "triage"],
       resultSchema: z.object({
         focused: z.boolean(),
         state: z.enum(["waiting", "working", "none"]),

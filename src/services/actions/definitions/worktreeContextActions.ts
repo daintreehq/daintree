@@ -336,7 +336,7 @@ export function registerWorktreeContextActions(
       title: "Open Review Hub",
       description:
         "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
-      paletteDescription: "Open the Review Hub to review uncommitted changes",
+      paletteDescription: "Review uncommitted changes, staging everything if nothing is staged yet",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -451,7 +451,8 @@ export function registerWorktreeContextActions(
       title: "Browse files",
       description:
         "Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.",
-      paletteDescription: "Browse the current worktree or project folder in a read-only panel",
+      paletteDescription:
+        "Browse the current worktree, project or scratch folder in a read-only panel",
       category: "worktree",
       kind: "command",
       danger: "safe",

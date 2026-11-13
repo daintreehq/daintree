@@ -121,7 +121,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "View this project's agents",
     description:
       "Open the agent overview scoped to this project, grouped by worktree, or the whole fleet when this workspace has no worktree axis",
-    paletteDescription: "See this project's agents, grouped by worktree",
+    paletteDescription:
+      "Show or hide this project's agents, or the whole fleet when it has no worktrees",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -403,7 +404,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Sleep project",
     description:
       "Stop a project's terminals to free memory. Its layout, terminal scrollback and agent sessions come back when the project is reopened. Defaults to the current project; sleeping that one returns the window to the project picker. Asks the user to confirm unless the project is in the background with nothing running.",
-    paletteDescription: "Stop this project's terminals to free memory until you reopen it",
+    paletteDescription:
+      "Stop this project's terminals to free memory and go back to the project picker",
     category: "project",
     kind: "command",
     danger: "confirm",
@@ -422,7 +424,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     description:
       "Restart the project open in this window without restarting the app: its terminals and agents stop, its workspace host is replaced, and it reopens here with its layout, scrollback and agent sessions. Other projects keep running. Defaults to the current project and only accepts that one. Always asks the user to confirm.",
     paletteDescription:
-      "Restart this project's terminals, agents and workspace host without restarting the app",
+      "Restart this project's terminals, agents and workspace host after you confirm",
     category: "project",
     kind: "command",
     danger: "confirm",

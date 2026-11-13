@@ -379,6 +379,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["blocked"],
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.focusNextWaiting", args, ctx, callbacks),
   }));

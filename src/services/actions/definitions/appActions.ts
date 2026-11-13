@@ -167,7 +167,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["backup", "config", "settings", "save", "migrate", "transfer"],
+    keywords: ["backup", "config", "settings", "save", "migrate", "transfer", "recipes"],
     nonRepeatable: true,
     run: async () => {
       try {
@@ -209,7 +209,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Import configuration…",
     description:
       "Merge a previously exported Daintree configuration bundle into this installation. Opens a file dialog, then asks the user to confirm what will be replaced before anything is written. Overwrites existing settings, so it takes over the foreground and should not run during other work.",
-    paletteDescription: "Merge settings from an exported configuration file, after you confirm",
+    paletteDescription: "Import settings from an exported file, replacing yours after you confirm",
     category: "app",
     kind: "command",
     // Overwrites configuration that git and reflog cannot recover — destructive

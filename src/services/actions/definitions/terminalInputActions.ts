@@ -558,7 +558,7 @@ export function registerTerminalInputActions(
     title: "Resend last message",
     description:
       "Send a panel's last message from its composer or a fleet broadcast again, with the same text and images, leaving the composer's draft as it is",
-    paletteDescription: "Send the last message again, with the same text and images",
+    paletteDescription: "Resend the focused panel's last message with the same text and images",
     category: "terminal",
     kind: "command",
     danger: "safe",

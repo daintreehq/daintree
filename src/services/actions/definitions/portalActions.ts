@@ -183,7 +183,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     title: "New portal tab",
     description:
       "Open a new tab in the portal browser for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
-    paletteDescription: "Open a new tab in the portal browser",
+    paletteDescription: "Open a portal tab at your default address, or a blank one",
     category: "portal",
     kind: "command",
     danger: "safe",

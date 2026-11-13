@@ -349,7 +349,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Commit",
     description:
       "Commit whatever is currently staged, with a message. Read the staging status first — this commits the index as it stands, including anything staged earlier that you did not intend. The commit stays local until it is pushed, so it is recoverable, but rewriting it afterwards is not something this surface offers.",
-    paletteDescription: "Open the Review Hub to check staged changes and write a commit message",
+    paletteDescription:
+      "Open the Review Hub to write a commit message, staging everything if nothing is staged",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118): the commit stays local
@@ -387,7 +388,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Push",
     description:
       "Publish local commits to the remote branch, making them visible to everyone working from it. This leaves the local repository and cannot be undone from here — confirm the commits are the intended ones first. It fails rather than overwriting when the remote has diverged.",
-    paletteDescription: "Publish local commits to the remote branch",
+    paletteDescription:
+      "Preview the active worktree's local commits, then push them to the remote branch",
     category: "git",
     kind: "command",
     danger: "confirm",
@@ -577,6 +579,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["ssh", "credentials", "authentication"],
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.retryAuthFetch", args, ctx),
   }));
 

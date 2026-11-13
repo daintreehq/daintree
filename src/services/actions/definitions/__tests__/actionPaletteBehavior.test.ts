@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks } from "../../actionTypes";
 import type { ActionDefinition, PaletteBehavior } from "@shared/types/actions";
-import { paletteSummary } from "@/lib/paletteSummary";
 import { createActionRegistryWithRemoteHosts } from "../../__tests__/helpers/wireSurface";
 
 // No vi.mock: action factories are pure object literals — they only touch
@@ -298,25 +297,44 @@ const PALETTE_SUBTITLE_MAX = 100;
 /** Wording that is addressed to an agent about a person, never to the person. */
 const AGENT_VOICE = /\b(the user|caller)\b/i;
 
+/**
+ * Sentence punctuation with more text after it. Stricter than the row's own
+ * `paletteSummary`, which lets "plugin's. Then…" through as an abbreviation; an
+ * abbreviation tripping this instead just means writing a subtitle.
+ */
+const SENTENCE_BREAK = /[.!?]["')\]]*\s/;
+
 describe("palette subtitles", () => {
+  // Every built-in the palette could list: `isVisible`, plugin `when` clauses
+  // and the current context only narrow this, so none of them is evaluated.
   let paletteRows: ActionDefinition[];
+  const unbuildable: string[] = [];
 
   beforeAll(async () => {
     const registry = (await createActionRegistryWithRemoteHosts()) as Map<
       string,
       () => ActionDefinition
     >;
-    paletteRows = [...registry.values()].map((factory) => factory()).filter(isPaletteRunnable);
+    paletteRows = [];
+    for (const [id, factory] of registry) {
+      try {
+        const def = factory();
+        if (isPaletteRunnable(def)) paletteRows.push(def);
+      } catch {
+        unbuildable.push(String(id));
+      }
+    }
   });
 
   // `description` is the MCP tool contract, written for agents. A row whose
   // description runs past one short sentence would show that guidance as its
   // subtitle or as a search excerpt, so it declares a palette subtitle instead.
   it("gives every palette row a one-sentence subtitle written for a person", () => {
+    expect(unbuildable).toEqual([]);
     const offenders = paletteRows.flatMap((def) => {
       const text = (def.paletteDescription ?? def.description).trim().replace(/\.$/, "");
       const problems = [
-        paletteSummary(text) !== text && "more than one sentence",
+        SENTENCE_BREAK.test(text) && "more than one sentence",
         text.length > PALETTE_SUBTITLE_MAX && `${text.length} characters`,
         AGENT_VOICE.test(text) && "addressed to an agent",
       ].filter(Boolean);

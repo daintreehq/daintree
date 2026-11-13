@@ -133,7 +133,7 @@ export function registerTerminalLifecycleActions(
     title: "Close panel",
     description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
-    paletteDescription: "Close the focused panel, usually to the trash",
+    paletteDescription: "Close the focused panel, or the first visible one, usually to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -302,7 +302,8 @@ export function registerTerminalLifecycleActions(
     title: "Send to background",
     description:
       "Hide a panel from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
-    paletteDescription: "Hide the focused panel while its process keeps running",
+    paletteDescription:
+      "Hide the focused panel and its tab group while their processes keep running",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -759,7 +760,7 @@ export function registerTerminalLifecycleActions(
     title: "Close all panels",
     description:
       "Close every panel in the active worktree, not just terminals, including the user's shells and other agents' terminals; prefer closing individually. Most go to the trash; remove-on-exit panels are discarded. Internal and dialog panels are spared.",
-    paletteDescription: "Close every panel in the active worktree, not just terminals",
+    paletteDescription: "Close every panel in the active worktree, most of them to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",

@@ -60,6 +60,7 @@ export function registerDevPreviewActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["stale"],
     palette: {
       mode: "requireContext",
       isReady: () => isDevPreviewFocused(),

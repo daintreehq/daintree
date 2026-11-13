@@ -15,7 +15,8 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     title: "Toggle voice dictation",
     description:
       "Stop dictation wherever it is recording, whatever has focus; when idle, start it in the focused terminal input (or the locked panel)",
-    paletteDescription: "Start dictating into the focused input, or stop if already recording",
+    paletteDescription:
+      "Stop dictation wherever it's recording, or start it in the focused or locked input",
     category: "voice",
     kind: "command",
     danger: "safe",
@@ -48,7 +49,8 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     title: "Rewrite selection by voice",
     description:
       'Record a spoken instruction ("make this shorter", "turn this into a list") and apply it to the text selected in the focused prompt; stops dictation if it is recording',
-    paletteDescription: "Speak an instruction to rewrite the selected prompt text",
+    paletteDescription:
+      "Rewrite the selected prompt text by spoken instruction, or stop active dictation",
     category: "voice",
     kind: "command",
     danger: "safe",

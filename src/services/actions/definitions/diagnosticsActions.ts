@@ -28,6 +28,7 @@ export function registerDiagnosticsActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["logs", "redact"],
     argsSchema,
     run: async (args: unknown) => {
       // Parse rather than cast so the lint ratchet doesn't grow the
@@ -53,6 +54,7 @@ export function registerDiagnosticsActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["performance", "lag", "pty", "webgl"],
     run: async () => {
       useDiagnosticsStore.getState().openDock("whySlow");
     },

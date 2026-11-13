@@ -98,7 +98,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     title: "Open Canopy",
     description:
       "Open Canopy's window, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, or bring it forward. Before Canopy is on, offers to turn it on",
-    paletteDescription: "Open Canopy, the view of every agent across all projects",
+    paletteDescription: "Open Canopy's view of every agent across projects, or offer to turn it on",
     category: "project",
     kind: "command",
     danger: "safe",

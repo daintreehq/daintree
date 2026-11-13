@@ -52,7 +52,8 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       title: "Reload window for plugins",
       description:
         "Replace the project document to clear plugin package and custom-element registrations. Asks for confirmation because unsaved view state may be lost.",
-      paletteDescription: "Reload the project window to clear plugin registrations",
+      paletteDescription:
+        "Reload the project window to clear plugin registrations, after you confirm",
       category: "plugins",
       kind: "command",
       danger: "confirm",
@@ -350,7 +351,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       title: "Reload project plugins",
       description:
         "Re-scan the open project's committed plugins, reconcile what runs with what is on disk, and report every plugin directory found. Picks up a new or rebuilt plugin without reopening the project. Trust rules still apply: an id the project never ran is listed, not executed.",
-      paletteDescription: "Pick up new or rebuilt project plugins without reopening the project",
+      paletteDescription: "Re-scan project plugins, reloading trusted ones and listing new ones",
       category: "plugins",
       kind: "command",
       danger: "safe",

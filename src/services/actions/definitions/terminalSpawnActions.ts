@@ -37,7 +37,7 @@ export function registerTerminalSpawnActions(
     title: "New terminal",
     description:
       "Open a new terminal shell, ready for commands; it uses resources until closed. Defaults to the active worktree, or opens at a chosen directory and runs a command there. To start an AI CLI, launch an agent instead.",
-    paletteDescription: "Open a shell in the active worktree",
+    paletteDescription: "Open a shell in the active worktree or workspace folder",
     category: "terminal",
     kind: "command",
     // Stays statically safe: a plain "New Terminal" must not be gated. An
@@ -218,7 +218,8 @@ export function registerTerminalSpawnActions(
     title: "Reopen last closed panel",
     description:
       "Restore the most recently trashed panel, or resume the most recent journaled agent session once the trash window has lapsed",
-    paletteDescription: "Restore the last closed panel, or resume the last agent session",
+    paletteDescription:
+      "Restore the last trashed panel, or resume the active worktree's last agent session",
     category: "terminal",
     kind: "command",
     danger: "safe",
