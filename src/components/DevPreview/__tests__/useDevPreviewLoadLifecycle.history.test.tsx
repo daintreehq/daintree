@@ -166,12 +166,13 @@ describe("useDevPreviewLoadLifecycle — guest commits (#16910)", () => {
 });
 
 describe("useDevPreviewLoadLifecycle — favicons (#16910)", () => {
-  let updateFavicon: ReturnType<typeof vi.fn>;
-  let original: ReturnType<typeof useUrlHistoryStore.getState>["updateFavicon"];
+  type UpdateFavicon = ReturnType<typeof useUrlHistoryStore.getState>["updateFavicon"];
+  let updateFavicon: ReturnType<typeof vi.fn<UpdateFavicon>>;
+  let original: UpdateFavicon;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    updateFavicon = vi.fn();
+    updateFavicon = vi.fn<UpdateFavicon>();
     original = useUrlHistoryStore.getState().updateFavicon;
     useUrlHistoryStore.setState({ updateFavicon });
   });
