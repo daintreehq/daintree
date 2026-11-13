@@ -298,6 +298,8 @@ export function RecipeEditor({
   // Where focus goes once an add or remove has rendered.
   const pendingFocusIdRef = useRef<string | null>(null);
   const initialStateRef = useRef<string>("");
+  // Set by Discard until the confirm's exit closes the editor.
+  const discardOnConfirmCloseRef = useRef(false);
   const nameMissing = nameAttempted && !recipeName.trim();
 
   useEffect(() => {
@@ -325,6 +327,9 @@ export function RecipeEditor({
   }, [error]);
 
   useEffect(() => {
+    // A discard still waiting on the confirm's exit belongs to the draft it was
+    // asked of: a close or a new draft in the meantime supersedes it.
+    discardOnConfirmCloseRef.current = false;
     if (!isOpen) return;
     typeStashRef.current.clear();
     setLeftTypes({});
@@ -412,10 +417,19 @@ export function RecipeEditor({
     if (onBeforeClose()) onClose();
   }, [onBeforeClose, onClose]);
 
+  // Discard closes the confirm first and the editor only once the confirm has
+  // handed focus back into it. Closed together, the confirm's restore lands on
+  // an editor control just as it unmounts, and focus falls out of the dialog
+  // that opened the editor (Settings, #16906).
   const handleDiscard = useCallback(() => {
+    discardOnConfirmCloseRef.current = true;
     closeConfirm();
+  }, [closeConfirm]);
+  const handleConfirmCloseComplete = useCallback(() => {
+    if (!discardOnConfirmCloseRef.current) return;
+    discardOnConfirmCloseRef.current = false;
     onClose();
-  }, [closeConfirm, onClose]);
+  }, [onClose]);
 
   const handleAddTerminal = () => {
     if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
@@ -1124,6 +1138,7 @@ export function RecipeEditor({
         description="Your edits to this recipe won't be saved"
         confirmLabel="Discard changes"
         onConfirm={handleDiscard}
+        onCloseComplete={handleConfirmCloseComplete}
       />
     </>
   );
