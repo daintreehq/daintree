@@ -142,6 +142,96 @@ describe("useFindInPage", () => {
     expect(result.current.isOpen).toBe(false);
   });
 
+  // #16877: a panel dialog's pane and the grid pane under it are both focused;
+  // only the one inside the modal that holds the keys may open its find bar.
+  describe("while an app modal holds the keyboard", () => {
+    const mounted: HTMLElement[] = [];
+    afterEach(() => {
+      mounted.splice(0).forEach((el) => el.remove());
+    });
+
+    function webviewIn(parent: HTMLElement): Electron.WebviewTag & MockWebview {
+      const el = Object.assign(document.createElement("div"), createMockWebview());
+      parent.appendChild(el);
+      return el as unknown as Electron.WebviewTag & MockWebview;
+    }
+
+    function focusedModal(): HTMLDivElement {
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      const button = document.createElement("button");
+      modal.appendChild(button);
+      document.body.appendChild(modal);
+      mounted.push(modal);
+      button.focus();
+      return modal;
+    }
+
+    it("keeps the background pane's find bar shut", () => {
+      const grid = document.createElement("div");
+      document.body.appendChild(grid);
+      mounted.push(grid);
+      const webview = webviewIn(grid);
+      focusedModal();
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it("opens the find bar of the pane inside that modal", () => {
+      const modal = focusedModal();
+      const webview = webviewIn(modal);
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    // An evicted webview, or one waiting on a remote forward, is not mounted;
+    // the pane root still places the pane.
+    it("reads the modal from the pane root while the webview isn't mounted", () => {
+      const modal = focusedModal();
+      const pane = document.createElement("div");
+      modal.appendChild(pane);
+      const paneRef = { current: pane };
+      const { result } = renderHook(() => useFindInPage("panel-1", null, false, true, paneRef));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it("ignores the guest's forwarded Cmd+F once a modal over the pane has the keys", () => {
+      let shortcutCallback: ((payload: { panelId: string; shortcut: string }) => void) | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      onFindShortcutMock.mockImplementation((cb: any) => {
+        shortcutCallback = cb;
+        return vi.fn();
+      });
+      const grid = document.createElement("div");
+      document.body.appendChild(grid);
+      mounted.push(grid);
+      const webview = webviewIn(grid);
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+      focusedModal();
+
+      act(() => shortcutCallback?.({ panelId: "panel-1", shortcut: "find" }));
+
+      expect(shortcutCallback).toBeDefined();
+      expect(result.current.isOpen).toBe(false);
+    });
+  });
+
   it("handles find shortcut for open/close", () => {
     const webview = createMockWebview();
     let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;

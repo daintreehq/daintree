@@ -1007,11 +1007,13 @@ export function BrowserPane({
     isEvicted ? null : webviewElement,
     isWebviewReady && !isEvicted
   );
+  const paneRef = useRef<HTMLDivElement>(null);
   const findInPage = useFindInPage(
     id,
     isEvicted ? null : webviewElement,
     isWebviewReady && !isEvicted,
-    isFocused
+    isFocused,
+    paneRef
   );
 
   const handleOpenExternal = useCallback(() => {
@@ -1078,6 +1080,7 @@ export function BrowserPane({
 
   return (
     <ContentPanel
+      ref={paneRef}
       id={id}
       title={displayTitle}
       kind="browser"

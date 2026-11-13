@@ -516,6 +516,35 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     expect(openSearchMock).toHaveBeenCalledTimes(1);
   });
 
+  // #16877: a modal over the panel holds the keyboard, so the focused panel
+  // under it keeps its find bar shut while the one in the modal opens.
+  it("leaves the find bar shut while a modal that doesn't hold the panel has the keys", async () => {
+    openSearchMock.mockClear();
+    const { container } = renderViewer("/repo/src/notes.txt", { isFocused: true });
+    await screen.findByTestId("code-viewer-mock");
+
+    const outside = document.createElement("div");
+    outside.setAttribute("role", "dialog");
+    outside.setAttribute("aria-modal", "true");
+    const button = document.createElement("button");
+    outside.appendChild(button);
+    document.body.appendChild(outside);
+    try {
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(openSearchMock).not.toHaveBeenCalled();
+
+      // The same panel hosted inside the modal answers.
+      outside.appendChild(container);
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(openSearchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.appendChild(container);
+      outside.remove();
+    }
+  });
+
   // #16642: Markdown opens rendered, and Cmd+F there used to reach no viewer at
   // all, so the default view of the most-read document type had no find.
   it("hands Cmd+F to the rendered Markdown document, leaving the mode alone", async () => {

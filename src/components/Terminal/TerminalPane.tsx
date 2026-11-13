@@ -26,11 +26,14 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 
 import { TerminalSearchBar } from "./TerminalSearchBar";
+import { focusPaneSearchInput } from "./paneSearchFocus";
+import { targetOwnsCopy } from "./terminalCopyKey";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
 import { useGridScrollRoot } from "./GridScrollRootContext";
@@ -987,7 +990,7 @@ function TerminalPaneComponent({
     const handleFindInPanel = () => {
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
-      if (!isFocused || isHeldPane) return;
+      if (!isFocused || isHeldPane || !canPanelTakeFind(containerRef.current)) return;
       // Remembered only on the way in, so a second Cmd+F from the search
       // field doesn't make the field the place to return to.
       if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {
@@ -995,7 +998,8 @@ function TerminalPaneComponent({
       }
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
-        document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
+        // A modal that opened within the frame keeps the keys.
+        if (canPanelTakeFind(containerRef.current)) focusPaneSearchInput(containerRef.current);
       });
     };
 
@@ -1010,16 +1014,14 @@ function TerminalPaneComponent({
 
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.
     // This is needed because agent terminals focus the hybrid input bar, so
-    // xterm's built-in copy handler never receives the copy event.
-    if (e.metaKey && e.key === "c") {
+    // xterm's built-in copy handler never receives the copy event. Text the
+    // user selected in a field or the composer copies itself instead.
+    if (e.metaKey && e.key === "c" && !targetOwnsCopy(e.target)) {
       const managed = peekTerminalService()?.get(id) ?? null;
       if (managed?.terminal.hasSelection()) {
-        const nativeSelection = window.getSelection()?.toString() ?? "";
-        if (nativeSelection.length === 0) {
-          e.preventDefault();
-          void navigator.clipboard.writeText(managed.terminal.getSelection());
-          return;
-        }
+        e.preventDefault();
+        void navigator.clipboard.writeText(managed.terminal.getSelection());
+        return;
       }
     }
 

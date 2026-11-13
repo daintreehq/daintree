@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { render, act, cleanup, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -263,12 +263,14 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
   ),
   MarkdownTextSizeMenuItems: () => null,
 }));
+const codeOpenSearchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
   // tell a stale settle apart from a fresh one (#11451).
-  CodeViewer: (props: { content?: string }) => (
-    <div data-testid="code-viewer-mock" data-content={props.content ?? ""} />
-  ),
+  CodeViewer: (props: { content?: string; ref?: Ref<{ openSearch: () => void }> }) => {
+    useImperativeHandle(props.ref, () => ({ openSearch: codeOpenSearchMock }));
+    return <div data-testid="code-viewer-mock" data-content={props.content ?? ""} />;
+  },
 }));
 // Typed rather than bare vi.fn() so reading .mock.calls needs no `as` cast
 // (which would regress the no-unsafe-type-assertion ratchet).
@@ -1629,6 +1631,48 @@ describe("FilePane rendered-swap height hold (#11255)", () => {
 
     expect(setFileViewModeMock).toHaveBeenLastCalledWith("file-1", "rendered");
     expect(body.style.minHeight).toBe("");
+  });
+});
+
+// #16877: a viewer dialog's pane and the grid pane under it are both focused,
+// so only the one inside the modal that holds the keys may open its find bar.
+describe("FilePane Cmd+F under a modal (#16877)", () => {
+  it("keeps a covered pane's find bar shut and opens the one inside the modal", async () => {
+    codeOpenSearchMock.mockClear();
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/a.ts" };
+    const { container } = render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="a.ts"
+          isFocused={true}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    await screen.findByTestId("code-viewer-mock");
+
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const button = document.createElement("button");
+    modal.appendChild(button);
+    document.body.appendChild(modal);
+    try {
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(codeOpenSearchMock).not.toHaveBeenCalled();
+
+      modal.appendChild(container);
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(codeOpenSearchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.appendChild(container);
+      modal.remove();
+    }
   });
 });
 

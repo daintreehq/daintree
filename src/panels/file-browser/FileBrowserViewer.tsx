@@ -78,6 +78,7 @@ import {
 import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { SVG_DRAW_ERROR, sanitizeSvgForPreview } from "@/lib/svg";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
@@ -529,10 +530,11 @@ export function FileBrowserViewer({
   // Cmd+F opens the open file's find bar while this panel has focus, as it does
   // in the file panel: CodeMirror's in Source, the document's own in rendered
   // Markdown. Media, rendered HTML and Diff mount neither, so it does nothing
-  // there.
+  // there. A modal over the panel keeps it out.
   useEffect(() => {
     if (!isFocused) return;
     const handleFindInPanel = () => {
+      if (!canPanelTakeFind(bodyRef.current)) return;
       markdownViewerRef.current?.openSearch();
       codeViewerRef.current?.openSearch();
     };
