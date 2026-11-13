@@ -343,7 +343,7 @@ describe("dropdown close that hands focus off", () => {
       overlay = useOverlayFocusRestore();
       return null;
     }
-    render(
+    const { unmount } = render(
       <DropdownMenu>
         <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
         <DropdownMenuContent>
@@ -352,8 +352,18 @@ describe("dropdown close that hands focus off", () => {
       </DropdownMenu>
     );
     const trigger = document.querySelector("button") as HTMLButtonElement;
-    return { trigger, expectHandoff: () => overlay!.expectHandoff() };
+    return { trigger, unmount, expectHandoff: () => overlay!.expectHandoff() };
   }
+
+  // Item click (detail 1 for a pointer, 0 for Radix's Enter/Space), then for the
+  // keyboard the keydown that bubbles to the content after the item's click.
+  const pick = {
+    pointer: () => contentProps().onClick(itemClick(1)),
+    keyboard: () => {
+      contentProps().onClick(itemClick(0));
+      contentProps().onKeyDown();
+    },
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -387,6 +397,47 @@ describe("dropdown close that hands focus off", () => {
     panel.remove();
   });
 
+  it.each(["pointer", "keyboard"] as const)(
+    "keeps focus on a surface a %s-picked handoff reached after the close",
+    (gesture) => {
+      const { trigger, expectHandoff } = renderHandoffDropdown();
+      const focusSpy = vi.spyOn(trigger, "focus");
+      const panel = document.createElement("textarea");
+      document.body.appendChild(panel);
+
+      act(() => {
+        expectHandoff();
+        pick[gesture]();
+      });
+      act(() => contentProps().onCloseAutoFocus(closeEvent()));
+      panel.focus();
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(focusSpy).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(panel);
+      panel.remove();
+    }
+  );
+
+  it("leaves a trigger that unmounted before the fallback alone", () => {
+    const { trigger, unmount, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      pick.pointer();
+    });
+    act(() => contentProps().onCloseAutoFocus(closeEvent()));
+    unmount();
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
   it("returns focus ringless when a pointer-picked handoff never came", () => {
     const { trigger, expectHandoff } = renderHandoffDropdown();
     const focusSpy = vi.spyOn(trigger, "focus");
@@ -415,11 +466,11 @@ describe("dropdown close that hands focus off", () => {
 
     act(() => {
       expectHandoff();
-      contentProps().onClick(itemClick(0));
-      contentProps().onKeyDown();
+      pick.keyboard();
     });
     const event = closeEvent();
     act(() => contentProps().onCloseAutoFocus(event));
+    expect(focusSpy).not.toHaveBeenCalled();
     act(() => {
       vi.runAllTimers();
     });

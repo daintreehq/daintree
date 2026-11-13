@@ -37,6 +37,9 @@ let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | n
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 let contextCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let contextPointerDownOutsideSpy: (() => void) | null = null;
+// The policy the mocked dropdown root provides, as the real one does: only
+// what renders under the root can reach it.
+let dropdownFocusRestore: OverlayFocusRestore | null = null;
 // Track the chevron dropdown's controlled-open contract (issue #10720): the
 // mock forwards the live `open` prop and `onOpenChange` so tests can open the
 // menu, then assert a gutter click keeps it open while a label click closes it.
@@ -206,7 +209,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => {
     dropdownOpenState = open;
     dropdownOnOpenChange = onOpenChange ?? null;
-    return <>{children}</>;
+    return (
+      <OverlayFocusRestoreContext.Provider value={dropdownFocusRestore}>
+        {children}
+      </OverlayFocusRestoreContext.Provider>
+    );
   },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
@@ -525,6 +532,7 @@ describe("AgentButton preset UX", () => {
     dropdownPointerDownOutsideSpy = null;
     contextCloseAutoFocusSpy = null;
     contextPointerDownOutsideSpy = null;
+    dropdownFocusRestore = null;
     dropdownOpenState = undefined;
     dropdownOnOpenChange = null;
     mockProjectPresetsByAgent = {};
@@ -2218,13 +2226,11 @@ describe("AgentButton preset UX", () => {
   });
 
   describe("close-time focus (issues #6119, #16922)", () => {
-    function renderSplitButton(wrap: (children: React.ReactNode) => React.ReactNode = (c) => c) {
+    function renderSplitButton() {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
       return render(
-        wrap(
-          <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-        )
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
     }
 
@@ -2276,7 +2282,7 @@ describe("AgentButton preset UX", () => {
       // than claiming it outright (which stranded a launch that never moved focus).
       function renderWithOverlay() {
         const expectHandoff = vi.fn();
-        const focusRestore = {
+        dropdownFocusRestore = {
           setRestoreTarget: () => {},
           resetForOpen: () => {},
           deferToRadix: () => {},
@@ -2288,11 +2294,7 @@ describe("AgentButton preset UX", () => {
           onContentClick: () => {},
           onContentCloseAutoFocus: () => {},
         } satisfies OverlayFocusRestore;
-        const utils = renderSplitButton((children) => (
-          <OverlayFocusRestoreContext.Provider value={focusRestore}>
-            {children}
-          </OverlayFocusRestoreContext.Provider>
-        ));
+        const utils = renderSplitButton();
         const row = (text: string) =>
           (utils.getAllByTestId("preset-item") as HTMLElement[]).find((el) =>
             el.textContent?.includes(text)

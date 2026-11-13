@@ -126,13 +126,18 @@ function assignForwardedRef<T>(forwardedRef: React.ForwardedRef<T>, value: T | n
 }
 
 /**
- * Callback ref for a trigger: records the node as the overlay's restore target
+ * Callback ref for a trigger: records the node as `overlay`'s restore target
  * and still honours whatever ref the caller forwarded.
+ *
+ * Takes the overlay rather than reading the nearest provider: a trigger often
+ * sits inside another overlay's root nested under its own (the plugin tray's
+ * menu button is also a context-menu trigger), and the nearest provider is then
+ * that one's, which leaves the trigger's own overlay nothing to restore to.
  */
 export function useOverlayTriggerRef<T extends HTMLElement>(
-  forwardedRef: React.ForwardedRef<T>
+  forwardedRef: React.ForwardedRef<T>,
+  overlay: OverlayFocusRestore | null
 ): React.RefCallback<T> {
-  const overlay = useOverlayFocusRestore();
   return React.useCallback(
     (node: T | null) => {
       overlay?.setRestoreTarget(node);

@@ -50,10 +50,10 @@ vi.mock("@/hooks", () => ({
   useShortcutHintHover: () => ({}),
 }));
 
-vi.mock("@/components/ui/context-menu", () => ({
-  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuContent: () => null,
+// The real context menu stays: the tray's dropdown trigger sits inside its
+// root, and the trigger has to register with the dropdown's policy regardless.
+vi.mock("../ToolbarContextMenuItems", () => ({
+  ToolbarContextMenuItems: () => null,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
