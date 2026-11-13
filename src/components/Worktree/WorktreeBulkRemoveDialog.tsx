@@ -37,6 +37,7 @@ import {
 } from "./useWorktreeBulkRemove";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -319,10 +320,13 @@ function PanelCloseLine({ worktreeId }: { worktreeId: string }) {
       {/* Closing an idle shell is cheap; interrupting an agent mid-work is
           not, so that subset is named as the single delete names it. */}
       {runningAgents > 0 && (
-        <span className="font-medium text-text-primary">
-          {" · "}
-          {pluralize(runningAgents, "running agent")}
-        </span>
+        <>
+          {" "}
+          <FactSeparator />{" "}
+          <span className="font-medium text-text-primary">
+            {pluralize(runningAgents, "running agent")}
+          </span>
+        </>
       )}
     </p>
   );

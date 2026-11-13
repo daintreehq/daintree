@@ -66,6 +66,17 @@ function sleep(ms: number): Promise<void> {
 
 type PanelStoreSnapshot = Pick<PanelGridState, "panelIds" | "panelsById">;
 
+function isLiveWorktreePanel(
+  panel: PanelInstance | undefined,
+  worktreeId: string
+): panel is PanelInstance {
+  return (
+    panel?.worktreeId === worktreeId &&
+    panel.location !== "trash" &&
+    (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
+  );
+}
+
 /**
  * Every panel a worktree delete closes: all of the worktree's live panels, not
  * only its terminals, less trash and ephemeral PTYs. Shared with the bulk
@@ -78,19 +89,14 @@ export function selectLivePanelsForWorktree(
   const panels: PanelInstance[] = [];
   for (const id of state.panelIds) {
     const panel = state.panelsById[id];
-    if (
-      panel?.worktreeId === worktreeId &&
-      panel.location !== "trash" &&
-      (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
-    ) {
-      panels.push(panel);
-    }
+    if (isLiveWorktreePanel(panel, worktreeId)) panels.push(panel);
   }
   return panels;
 }
 
 export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
-  return selectLivePanelsForWorktree(usePanelStore.getState(), worktreeId).map((p) => p.id);
+  const state = usePanelStore.getState();
+  return state.panelIds.filter((id) => isLiveWorktreePanel(state.panelsById[id], worktreeId));
 }
 
 /**
