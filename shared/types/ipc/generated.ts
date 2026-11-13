@@ -4952,6 +4952,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./webviewEmulation.js").DeviceEmulationRequest];
     result: { applied: boolean };
   };
+  "webview:set-find-open": {
+    args: [panelId: string, open: boolean];
+    result: void;
+  };
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;

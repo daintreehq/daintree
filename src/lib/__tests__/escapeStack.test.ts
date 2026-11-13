@@ -150,7 +150,7 @@ describe("escape fallbacks", () => {
   it("hand each fallback the keypress being dispatched", () => {
     const seen = vi.fn((_event?: KeyboardEvent) => false);
     registerEscapeFallback(seen);
-    const event = new KeyboardEvent("keydown", { key: "Escape" });
+    const event = { key: "Escape" } as KeyboardEvent;
 
     dispatchEscapeFallback(event);
 

@@ -18,6 +18,11 @@ export interface FindInPageState {
   toggleMatchCase: () => void;
 }
 
+function publishFindOpen(panelId: string, open: boolean): void {
+  // Best effort: missing it only costs the page seeing that one Escape too.
+  window.electron.webview.setFindOpen(panelId, open).catch(() => {});
+}
+
 export function useFindInPage(
   panelId: string,
   webviewElement: Electron.WebviewTag | null,
@@ -235,6 +240,15 @@ export function useFindInPage(
     });
     return cleanup;
   }, [panelId, open, close, goNext, goPrev, isOpen, paneRef, webviewElement]);
+
+  // While the bar is open, main keeps the guest's Escape for it alone: the one
+  // that closes the bar must not also reach the page under it. Said only while
+  // open, and unsaid on close, unmount or a pane switch.
+  useEffect(() => {
+    if (!isOpen) return;
+    publishFindOpen(panelId, true);
+    return () => publishFindOpen(panelId, false);
+  }, [panelId, isOpen]);
 
   // Clean up on unmount, webview detach, or a pane switch that keeps the webview
   useEffect(() => {

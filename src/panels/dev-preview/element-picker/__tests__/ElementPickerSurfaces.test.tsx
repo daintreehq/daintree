@@ -59,6 +59,8 @@ import { createFakeHost, verifyAll, workspaceClosedError, type FakeHost } from "
 
 let host: FakeHost;
 let uninstall: () => void;
+/** What the dev preview's close would do: turn the tool off. */
+const closePicker = vi.fn();
 
 function hostContext() {
   return {
@@ -99,7 +101,7 @@ function PickerHarness() {
   const handle = useDevPreviewToolSessionHandle("preview-1", ELEMENT_PICKER_TOOL_ID);
   const live = (handle?.session ?? null) as InspectorController | null;
   if (live === null) return null;
-  const props = { ...hostContext(), session: live, onClose: () => {} };
+  const props = { ...hostContext(), session: live, onClose: closePicker };
   return (
     <>
       <ElementPickerToolbar {...props} />
@@ -399,6 +401,46 @@ describe("page verdicts", () => {
       })
     );
     expect(screen.getByRole("alert").textContent).toContain("inside the page");
+  });
+});
+
+describe("Escape", () => {
+  beforeEach(() => {
+    closePicker.mockClear();
+  });
+
+  it("turns the picker off when the page's Escape finds nothing selected", async () => {
+    await mountBound();
+
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(closePicker).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the picker on for a request from another session, or from Browse", async () => {
+    await mountBound();
+    act(() => host.pushEvent({ type: "dismissRequested" }, undefined, "session-0"));
+
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Browse" }).getAttribute("aria-checked")).toBe(
+        "true"
+      )
+    );
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(closePicker).not.toHaveBeenCalled();
+  });
+
+  it("lets go of the selection on the chrome's Escape, and leaves the next one to the host", async () => {
+    await mountSelected();
+
+    expect(session().handleEscape()).toBe(true);
+    await waitFor(() =>
+      expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" })
+    );
+    expect(session().getSnapshot().selection.status).toBe("none");
+    expect(session().handleEscape()).toBe(false);
   });
 });
 

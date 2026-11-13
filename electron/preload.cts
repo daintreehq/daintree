@@ -161,6 +161,7 @@ import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCaptur
 import { buildSitePreviewPreloadBindings } from "./ipc/handlers/sitePreview.preload.js";
 import { buildElementPickerPreloadBindings } from "./ipc/handlers/elementPicker.preload.js";
 import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
+import { buildWebviewFindPreloadBindings } from "./ipc/handlers/webviewFind.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -2463,6 +2464,7 @@ function buildElectronApi(): ElectronAPI {
       ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
       ...buildWebviewCapturePreloadBindings(_unwrappingInvoke),
       ...buildWebviewEmulationPreloadBindings(_unwrappingInvoke),
+      ...buildWebviewFindPreloadBindings(_unwrappingInvoke),
     },
 
     // Hibernation API

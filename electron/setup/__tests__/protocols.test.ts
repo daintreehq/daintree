@@ -936,6 +936,84 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     });
   });
 
+  describe("Escape while the view's find bar is open", () => {
+    function pressEscape(
+      findOpen: boolean,
+      input: { isComposing?: boolean } = {},
+      embedderDestroyed = false
+    ) {
+      const send = vi.fn();
+      const setFindOpen = vi.fn();
+      const isFindOpen = vi.fn(() => findOpen);
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-a"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+        cancelPendingForGuest: vi.fn(),
+        storeOAuthSessionStorage: vi.fn(),
+        isFindOpen,
+        setFindOpen,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(
+        send,
+        embedderDestroyed
+      );
+      simulateWebContentsCreated(contents);
+      const event = { preventDefault: vi.fn() };
+      getEventHandlers(contents, "before-input-event")[0](event, {
+        type: "keyDown",
+        key: "Escape",
+        meta: false,
+        control: false,
+        alt: false,
+        shift: false,
+        isComposing: false,
+        ...input,
+      });
+      return { event, send, isFindOpen, setFindOpen };
+    }
+
+    it("keeps the Escape from the page, so closing the bar is all it does", () => {
+      const { event, send, isFindOpen, setFindOpen } = pressEscape(true);
+
+      expect(isFindOpen).toHaveBeenCalledWith(99, "panel-a");
+      expect(send).toHaveBeenCalledWith("webview:find-shortcut", {
+        panelId: "panel-a",
+        shortcut: "close",
+      });
+      expect(event.preventDefault).toHaveBeenCalled();
+      // The bar is closing: the next Escape is the page's again.
+      expect(setFindOpen).toHaveBeenCalledWith(99, "panel-a", false);
+    });
+
+    it("leaves Escape to the page while the bar is shut", () => {
+      const { event, send, setFindOpen } = pressEscape(false);
+
+      expect(send).toHaveBeenCalledWith("webview:find-shortcut", {
+        panelId: "panel-a",
+        shortcut: "close",
+      });
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(setFindOpen).not.toHaveBeenCalled();
+    });
+
+    it("leaves a composing Escape to the page's IME", () => {
+      const { event, setFindOpen } = pressEscape(true, { isComposing: true });
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(setFindOpen).not.toHaveBeenCalled();
+    });
+
+    it("leaves Escape to the page when no view is there to close the bar", () => {
+      const { event, send, setFindOpen } = pressEscape(true, {}, true);
+
+      expect(send).not.toHaveBeenCalled();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(setFindOpen).not.toHaveBeenCalled();
+    });
+  });
+
   describe("dialog dismissal on navigation, crash, and destroy (#9943)", () => {
     function setupGuestWithDialogService(): {
       contents: MockWebContents;

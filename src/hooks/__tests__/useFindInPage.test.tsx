@@ -10,6 +10,7 @@ vi.mock("@/components/Browser/browserUtils", () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const onFindShortcutMock: Mock<any> = vi.fn(() => vi.fn());
+const setFindOpenMock = vi.fn((_panelId: string, _open: boolean) => Promise.resolve());
 
 vi.mock("@/hooks/useFindInPage", async (importOriginal) => {
   return importOriginal();
@@ -21,6 +22,7 @@ beforeEach(() => {
     value: {
       webview: {
         onFindShortcut: onFindShortcutMock,
+        setFindOpen: setFindOpenMock,
       },
     },
     writable: true,
@@ -31,6 +33,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   onFindShortcutMock.mockClear();
+  setFindOpenMock.mockClear();
   focusWebviewPageMock.mockClear();
 });
 
@@ -64,6 +67,32 @@ function createMockWebview(): Electron.WebviewTag & MockWebview {
 }
 
 describe("useFindInPage", () => {
+  it("tells main the bar is open only while it is, so main can keep its Escape from the page", () => {
+    const webview = createMockWebview();
+    const { result, rerender, unmount } = renderHook(
+      ({ panelId }) => useFindInPage(panelId, webview, true, true),
+      { initialProps: { panelId: "panel-1" } }
+    );
+    expect(setFindOpenMock).not.toHaveBeenCalled();
+
+    act(() => result.current.open());
+    expect(setFindOpenMock.mock.calls).toEqual([["panel-1", true]]);
+
+    act(() => result.current.close());
+    expect(setFindOpenMock.mock.calls.at(-1)).toEqual(["panel-1", false]);
+
+    act(() => result.current.open());
+    setFindOpenMock.mockClear();
+    // A tab switch reuses the hook for another pane, whose bar starts shut.
+    rerender({ panelId: "panel-2" });
+    expect(setFindOpenMock.mock.calls).toEqual([["panel-1", false]]);
+
+    act(() => result.current.open());
+    setFindOpenMock.mockClear();
+    unmount();
+    expect(setFindOpenMock.mock.calls).toEqual([["panel-2", false]]);
+  });
+
   it("opens and closes the find bar", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));

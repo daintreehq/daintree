@@ -108,6 +108,7 @@ import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerElementPickerHandlers } from "./handlers/elementPicker.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
+import { registerWebviewFindHandlers } from "./handlers/webviewFind.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
 import { registerWhySlowHandlers } from "./handlers/whySlow.js";
@@ -281,6 +282,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerSitePreviewHandlers(deps));
     register(() => registerElementPickerHandlers());
     register(() => registerWebviewEmulationHandlers(deps));
+    register(() => registerWebviewFindHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));
     register(() => registerWhySlowHandlers(deps));

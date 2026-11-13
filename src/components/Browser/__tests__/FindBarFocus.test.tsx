@@ -23,6 +23,7 @@ beforeEach(() => {
             shortcutCallback = null;
           };
         },
+        setFindOpen: () => Promise.resolve(),
       },
     },
     writable: true,
