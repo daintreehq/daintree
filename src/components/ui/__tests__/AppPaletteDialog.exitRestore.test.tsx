@@ -50,7 +50,9 @@ describe("AppPaletteDialog restore at the end of the exit animation", () => {
   let fallback: HTMLButtonElement;
 
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Fake time only: the overlap cases depend on which exit timer is due
+    // first, and real time leaking in on a loaded machine reorders them.
+    vi.useFakeTimers();
     usePaletteStore.setState({ activePaletteId: null });
     const root = document.createElement("div");
     root.id = "root";
@@ -169,13 +171,13 @@ describe("AppPaletteDialog restore at the end of the exit animation", () => {
     usePaletteStore.setState({ activePaletteId: "panel" });
     rerender(<Palettes first={false} second />);
     await settleOpen();
+    // The replaced palette finishes leaving while the incoming one is open.
+    await finishExits();
     usePaletteStore.setState({ activePaletteId: null });
     // Escape in the incoming palette: it restores rather than skipping on the
     // suppression meant for the palette it replaced. Its opener was that
-    // palette's field, gone once that exit has rendered, so the app shell
-    // takes the keyboard.
+    // palette's field, gone with it, so the app shell takes the keyboard.
     rerender(<Palettes first={false} second={false} />);
-    await act(() => vi.advanceTimersByTimeAsync(UI_PALETTE_EXIT_DURATION - 10));
     await finishExits();
 
     expect(consumePaletteFocusRestoreSuppression()).toBe(false);
