@@ -194,6 +194,13 @@ export interface AppDialogProps {
    */
   preferRestoreFocusTo?: boolean;
   /**
+   * False for a close that takes the user somewhere else: the dialog leaves
+   * focus where it is when it finishes closing, and `onCloseComplete` moves it.
+   * Restoring first would send focus back to the opener on its way to the
+   * destination, a second jump the user sees. Read when the close finishes.
+   */
+  restoreFocusOnClose?: boolean;
+  /**
    * Runs once the dialog has finished closing and handed focus back. A
    * follow-up dialog opened from here captures the control the user was on as
    * its opener; opened any earlier, it would capture a closing control and
@@ -313,6 +320,7 @@ export function AppDialog({
   focusResetKey,
   restoreFocusTo,
   preferRestoreFocusTo = false,
+  restoreFocusOnClose = true,
   onCloseComplete,
   "data-testid": dataTestId,
 }: AppDialogProps) {
@@ -371,16 +379,19 @@ export function AppDialog({
   // would fire mid-open and restore focus prematurely.
   const restoreFocusToRef = useRef(restoreFocusTo);
   const preferRestoreFocusToRef = useRef(preferRestoreFocusTo);
+  const restoreFocusOnCloseRef = useRef(restoreFocusOnClose);
   useEffect(() => {
     restoreFocusToRef.current = restoreFocusTo;
     preferRestoreFocusToRef.current = preferRestoreFocusTo;
-  }, [restoreFocusTo, preferRestoreFocusTo]);
+    restoreFocusOnCloseRef.current = restoreFocusOnClose;
+  }, [restoreFocusTo, preferRestoreFocusTo, restoreFocusOnClose]);
 
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
     previousActiveElement.current = null;
     openerCapturedRef.current = false;
-    if (!el) return;
+    // The opener is let go all the same: the next opening records its own.
+    if (!el || !restoreFocusOnCloseRef.current) return;
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
     // through Radix's focus path, and this runs an exit animation after

@@ -46,6 +46,12 @@ import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
 import { showMcpRequester, useMcpRequesterLiveState } from "@/lib/mcpConfirmRequester";
+import { hasAppModal } from "@/lib/appModal";
+import { isInPaneDialog } from "@/lib/paneDialog";
+import {
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
+  radixLayerWasOpenWhenEscapePressed,
+} from "@/lib/dialogEscapeBackstop";
 import type { McpRequester } from "@shared/types/ipc/mcpServer";
 import {
   WORKTREE_DELETE_BLOCK_COPY,
@@ -155,7 +161,17 @@ export function derivePreviewState(current: PendingMcpConfirm): PreviewState {
  * its cost in vertical space is what pushed the evidence down before.
  */
 export function McpConfirmDialog() {
-  const current = useMcpConfirmStore((state) => state.current);
+  const live = useMcpConfirmStore((state) => state.current);
+  // The request that settled last stays on screen while the dialog animates out
+  // (#16950). Swapped at once for an empty placeholder, the controls in its body
+  // and the header's close button left the page under whatever had focus, which
+  // fell to the document before the close could hand it back. Answers still go
+  // by the live store, so nothing held here can be answered again.
+  const [lastShown, setLastShown] = useState<PendingMcpConfirm | null>(null);
+  useLayoutEffect(() => {
+    if (live !== null) setLastShown(live);
+  }, [live]);
+  const current = live ?? lastShown;
   const queueDepth = useMcpConfirmStore((state) => state.queue.length);
   const resolveCurrent = useMcpConfirmStore((state) => state.resolveCurrent);
   const markShown = useMcpConfirmStore((state) => state.markShown);
@@ -193,7 +209,7 @@ export function McpConfirmDialog() {
   // and not while a view the page reports hidden (a host's project in the
   // background, a minimised window, on macOS one covered by others) holds it.
   // A timeout before then means nobody saw it, not that anyone declined.
-  const currentRequestId = current?.requestId ?? null;
+  const currentRequestId = live?.requestId ?? null;
   useEffect(() => {
     if (currentRequestId === null) return;
     const observe = () => {
@@ -279,21 +295,68 @@ export function McpConfirmDialog() {
   // words, and a dialog reopened from beside the requester mounts with them
   // already there. Said again each time it comes back into view.
   const promotedByExpiry =
-    current?.followsExpired !== undefined && !current.expired && !inspecting
-      ? `${followsExpiredText(current.followsExpired)}. Now asking: ${confirmTitle(current)}`
+    live?.followsExpired !== undefined && !live.expired && !inspecting
+      ? `${followsExpiredText(live.followsExpired)}. Now asking: ${confirmTitle(live)}`
       : null;
   useEffect(() => {
     if (promotedByExpiry === null) return;
     useAnnouncerStore.getState().announce(promotedByExpiry, "polite");
   }, [currentRequestId, promotedByExpiry]);
+
+  // Where the user was while the request stood aside: whatever last took focus
+  // other than the pill. A request brought back and answered returns them
+  // there, not to whatever opened the dialog before they left (#16950).
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const returnFocusTarget = useCallback(() => returnFocusRef.current, []);
+
   // Where to go once the dialog has finished closing. Not before: the close
   // hands focus back to wherever it was when the dialog opened, which would
   // pull it straight out of the pane the user asked to see.
   const pendingShowRef = useRef<{ requestId: string; identity: McpRequester } | null>(null);
   const showRequester = useCallback((requestId: string, identity: McpRequester) => {
     pendingShowRef.current = { requestId, identity };
+    returnFocusRef.current = null;
     setInspectingId(requestId);
   }, []);
+
+  useEffect(() => {
+    if (!inspecting) return;
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && !pillRef.current?.contains(target)) {
+        returnFocusRef.current = target;
+      }
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+      // Settled while it stood aside: no opening is coming back to use it.
+      if (useMcpConfirmStore.getState().current === null) returnFocusRef.current = null;
+    };
+  }, [inspecting]);
+
+  // Timed out while it stood aside, the pill is a notice with nothing left to
+  // answer, so Escape puts it away from wherever the user is, the pane they went
+  // to see included (#16950). Only then: a request still waiting leaves Escape
+  // to the pane, and the pill never takes focus from it.
+  const expiredAside = inspecting && live?.expired === true;
+  useEffect(() => {
+    if (!expiredAside || currentRequestId === null) return;
+    const requestId = currentRequestId;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!escapeDismissesPill(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // The pill goes with it, so focus it held goes back to where the user was.
+      if (pillRef.current?.contains(document.activeElement)) returnFocusRef.current?.focus();
+      dismiss(requestId);
+    };
+    // Capture, ahead of the terminal under focus, which consumes Escape itself.
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [expiredAside, currentRequestId, dismiss]);
+
   const reviewRequest = useCallback(() => {
     // Reopened before the exit finished: the close that would have navigated
     // never completes, and a later one, after an answer, must not go instead.
@@ -301,9 +364,15 @@ export function McpConfirmDialog() {
     setInspectingId(null);
   }, []);
   const handleCloseComplete = useCallback(() => {
+    // Off screen now, so a settled request has nothing left to hold up.
+    if (useMcpConfirmStore.getState().current === null) setLastShown(null);
     const pending = pendingShowRef.current;
     pendingShowRef.current = null;
-    if (pending === null) return;
+    if (pending === null) {
+      // The close has handed focus back; the next opening starts afresh.
+      returnFocusRef.current = null;
+      return;
+    }
     // Settled while the dialog was closing: there is nothing left to come back to.
     if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
     // Nothing left to look at brings the request straight back, rather than
@@ -385,12 +454,33 @@ export function McpConfirmDialog() {
   // points, so a preview landing re-arms the same moment rather than renewing
   // it, and the cooldown that follows a promotion always fits inside a window
   // that only starts on screen.
-  const endsAt = current === null || current.expired ? undefined : confirmationEndsAt(current);
+  const endsAt = live === null || live.expired ? undefined : confirmationEndsAt(live);
   useEffect(() => {
     if (currentRequestId === null || endsAt === undefined) return;
     const timer = setTimeout(() => expire(currentRequestId), Math.max(0, endsAt - Date.now()));
     return () => clearTimeout(timer);
   }, [currentRequestId, endsAt, expire]);
+
+  const requesterLive = useMcpRequesterLiveState(current?.requester);
+
+  // The body control that last held focus, and the request it was on. A commit
+  // that takes it away while the dialog stays up on the same request (expiry
+  // retiring "Show panel" or a refusal's Retry, the requester closing) would
+  // leave focus on the page behind the modal (#16950), so it goes to Cancel.
+  const bodyFocusRef = useRef<{ element: HTMLElement; requestId: string } | null>(null);
+  useLayoutEffect(() => {
+    const last = bodyFocusRef.current;
+    if (last === null || last.element.isConnected) return;
+    bodyFocusRef.current = null;
+    // A promoted request takes its focus from the dialog's own reset.
+    if (last.requestId !== currentRequestId || inspecting) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    bodyRef.current
+      ?.closest<HTMLElement>('[role="dialog"],[role="alertdialog"]')
+      ?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')
+      ?.focus();
+  });
 
   if (current === null) {
     return (
@@ -458,8 +548,13 @@ export function McpConfirmDialog() {
   );
 
   const sharedProps = {
-    isOpen: !inspecting,
+    isOpen: live !== null && !inspecting,
     onCloseComplete: handleCloseComplete,
+    // Stepping aside hands focus to the requester once the close completes; a
+    // restore first would flash it back through the opener on the way.
+    restoreFocusOnClose: !inspecting,
+    restoreFocusTo: returnFocusTarget,
+    preferRestoreFocusTo: true,
     // One width for every request, so a promotion never re-centres the buttons
     // sideways; wide enough that a file path or commit subject stays on one line
     // and the scoped session label still leaves the footer hint room to read.
@@ -535,7 +630,15 @@ export function McpConfirmDialog() {
   // rationale: some actions carry a warning in one that the other doesn't
   // repeat (forge.dismissReview's merge-safety note).
   const body = (
-    <div ref={bodyRef} className="space-y-4">
+    <div
+      ref={bodyRef}
+      className="space-y-4"
+      onFocus={(event) => {
+        if (event.target instanceof HTMLElement) {
+          bodyFocusRef.current = { element: event.target, requestId: current.requestId };
+        }
+      }}
+    >
       {/* Mounted for the whole request, so the expiry is a change a screen
           reader announces rather than a live region that arrived already full. */}
       <span role="status" className="sr-only">
@@ -550,16 +653,20 @@ export function McpConfirmDialog() {
 
       <RequesterRow
         current={current}
+        live={requesterLive}
         onShowRequester={
           expired ? undefined : (identity) => showRequester(current.requestId, identity)
         }
       />
 
-      <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
-
-      {current.dangerRationale && (
-        <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
-      )}
+      {/* One description holding both, so the dialog's aria-describedby points
+          at a single element rather than an id two paragraphs share. */}
+      <AppDialog.Description as="div" className="space-y-4">
+        <p>{current.actionDescription}</p>
+        {current.dangerRationale && (
+          <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
+        )}
+      </AppDialog.Description>
 
       {selectableTargets !== undefined && (
         <TargetChecklist
@@ -653,7 +760,12 @@ export function McpConfirmDialog() {
           branches and is reused, not remounted, when a request arrives on an
           empty queue. A portal, so where it sits here is not where it shows. */}
       {inspecting && (
-        <ReturnToRequest title={confirmTitle(current)} expired={expired} onReview={reviewRequest} />
+        <ReturnToRequest
+          regionRef={pillRef}
+          title={confirmTitle(current)}
+          expired={expired}
+          onReview={reviewRequest}
+        />
       )}
     </ErrorBoundary>
   );
@@ -723,14 +835,15 @@ export function confirmTitle(current: PendingMcpConfirm): string {
  */
 function RequesterRow({
   current,
+  live,
   onShowRequester,
 }: {
   current: PendingMcpConfirm;
+  live: ReturnType<typeof useMcpRequesterLiveState>;
   onShowRequester?: (identity: McpRequester) => void;
 }) {
   const { callerInfo, sessionOrigin, requester } = current;
   const isAssistant = sessionOrigin === "help";
-  const live = useMcpRequesterLiveState(requester);
 
   let Icon = ShieldAlert;
   let name = "Unidentified client";
@@ -823,18 +936,22 @@ function LaterRequests({ children }: { children: React.ReactNode }) {
  * question is still open and still on its clock, so it says what is waiting and
  * brings it back. Nonmodal and unfocused, so the pane the user went to see keeps
  * the keyboard; it never closes on its own, because closing is not an answer.
+ * Once timed out there is no answer left to give, and Escape puts it away.
  */
 function ReturnToRequest({
+  regionRef,
   title,
   expired,
   onReview,
 }: {
+  regionRef: React.Ref<HTMLDivElement>;
   title: string;
   expired: boolean;
   onReview: () => void;
 }) {
   return createPortal(
     <div
+      ref={regionRef}
       role="region"
       aria-label="Approval request"
       className="fixed bottom-6 left-1/2 z-[var(--z-modal)] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-overlay)] bg-surface-panel-elevated py-2 pr-2 pl-3 shadow-[var(--theme-shadow-floating)]"
@@ -1109,16 +1226,14 @@ function ConsequenceNote({
   children: React.ReactNode;
 }) {
   if (!isDestructive) {
-    return <AppDialog.Description className="break-words">{children}</AppDialog.Description>;
+    return <p className="break-words">{children}</p>;
   }
 
   // The glyph and tint carry the severity; the words stay on the neutral ramp,
   // which is the only ramp with a contrast floor in every theme.
   return (
     <Callout severity="danger" title="What this does">
-      <AppDialog.Description className="text-xs text-text-primary break-words">
-        {children}
-      </AppDialog.Description>
+      <p className="text-xs text-text-primary break-words">{children}</p>
     </Callout>
   );
 }
@@ -1455,6 +1570,23 @@ function gateHintText(
     parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }
   return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
+ * Whether an Escape is the expired pill's to take: a plain press that nothing
+ * open above the page claims first (a modal or palette, a menu, popover or
+ * tooltip, a page's own dialog, or a drag it would cancel).
+ */
+function escapeDismissesPill(event: KeyboardEvent): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  if (document.documentElement.dataset.dragging === "true") return false;
+  return !(
+    hasAppModal() ||
+    document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null ||
+    radixLayerWasOpenWhenEscapePressed() ||
+    isInPaneDialog(event.target)
+  );
 }
 
 /** The caller's name, with the raw user agent behind it for anyone checking. */
