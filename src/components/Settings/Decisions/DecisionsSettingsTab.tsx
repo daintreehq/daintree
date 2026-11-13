@@ -159,12 +159,16 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
         </>
       )}
 
+      {/* Open until main answers, so focus goes back to a switch that takes it again. */}
       <DecisionsConsentDialog
         isOpen={consentOpen}
+        saving={pending !== null}
         onCancel={() => setConsentOpen(false)}
         onAccept={() => {
-          setConsentOpen(false);
-          void decisions.setEnabled({ enabled: true, consent: true });
+          if (locked) return;
+          void decisions
+            .setEnabled({ enabled: true, consent: true })
+            .then(() => setConsentOpen(false));
         }}
       />
     </div>

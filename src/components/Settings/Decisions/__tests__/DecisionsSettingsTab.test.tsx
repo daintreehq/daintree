@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
@@ -44,7 +44,7 @@ async function renderTab() {
   await act(async () => {});
 }
 
-describe("DecisionsSettingsTab recovery kit", () => {
+describe("DecisionsSettingsTab", () => {
   beforeEach(() => {
     getStatus.mockReset();
     setEnabled.mockReset();
@@ -84,6 +84,41 @@ describe("DecisionsSettingsTab recovery kit", () => {
   });
   afterEach(() => {
     cleanup();
+  });
+
+  it("keeps the agreement open and locked until main answers, then hands focus back to the switch", async () => {
+    getStatus.mockResolvedValue({ state: "off" });
+    let answer!: (status: DecisionsStatus) => void;
+    setEnabled.mockReturnValue(
+      new Promise<DecisionsStatus>((resolve) => {
+        answer = resolve;
+      })
+    );
+    await renderTab();
+    const enable = () =>
+      screen.getByRole("switch", { name: "Enable Decisions" }) as HTMLButtonElement;
+
+    enable().focus();
+    fireEvent.click(enable());
+    const accept = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Turn on Decisions",
+    });
+    act(() => accept.focus());
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    expect(setEnabled).toHaveBeenCalledExactlyOnceWith({ enabled: true, consent: true });
+    // Past any exit animation, still open over a switch that can't take focus yet.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(enable().disabled).toBe(true);
+
+    await act(async () => answer({ state: "not-connected", consentedAt: 1, revision: 1 }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(enable().disabled).toBe(false);
+    await vi.waitFor(() => expect(document.activeElement).toBe(enable()));
   });
 
   it("asks for the kit's passphrase as soon as a claim records the relay", async () => {
