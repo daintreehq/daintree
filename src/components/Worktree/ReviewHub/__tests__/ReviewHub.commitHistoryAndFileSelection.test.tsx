@@ -1822,11 +1822,15 @@ describe("ReviewHub", () => {
       };
 
       // What DiffPane's sidebar and stepper do.
-      const stepPanelTo = (path: string, side: "staged" | "unstaged") =>
+      const stepPanelTo = (
+        path: string,
+        side: "staged" | "unstaged",
+        status: "modified" | "added" = "modified"
+      ) =>
         act(() =>
           usePanelStore
             .getState()
-            .setDiffPanelFile(HUB_PANEL_ID, path, "modified", workingTreeViewedKey(path), side)
+            .setDiffPanelFile(HUB_PANEL_ID, path, status, workingTreeViewedKey(path), side)
         );
 
       it("keeps the file the user stepped to when a poll refreshes the hub's file", async () => {
@@ -1921,19 +1925,33 @@ describe("ReviewHub", () => {
         );
       });
 
+      // Stepping away suspends following rather than ending it for good.
       it("follows its own file again once the user steps back to it", async () => {
         await openDiffFor("index.ts");
         stepPanelTo("src/app.ts", "unstaged");
-        stepPanelTo("src/index.ts", "staged");
-
         await poll(
           makeStatus({
             staged: [{ path: "src/index.ts", status: "added", insertions: 5, deletions: 2 }],
           })
         );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+        expect(shownFile().filePath).toBe("src/app.ts");
 
-        await waitFor(() => expect(shownFile().fileStatus).toBe("added"));
-        expect(shownFile().filePath).toBe("src/index.ts");
+        // What DiffPane does from its sidebar: the entry's live status.
+        stepPanelTo("src/index.ts", "staged", "added");
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "deleted", insertions: 0, deletions: 7 }],
+          })
+        );
+
+        await waitFor(() =>
+          expect(shownFile()).toEqual({
+            filePath: "src/index.ts",
+            fileStatus: "deleted",
+            fileSide: "staged",
+          })
+        );
       });
     });
 

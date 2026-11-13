@@ -27,8 +27,7 @@ const navigableItems: ReviewHubNavigableItem[] = [
 type OpenDiff = "working-tree" | "base-branch" | "since-review";
 
 interface HarnessProps {
-  openDiff: OpenDiff;
-  diffMode: DiffMode;
+  openDiff: OpenDiff | null;
   spies: ReturnType<typeof makeSpies>;
 }
 
@@ -46,7 +45,14 @@ function makeSpies() {
   };
 }
 
-function Harness({ openDiff, diffMode, spies }: HarnessProps) {
+const baseFile: CrossWorktreeFile = {
+  path: "src/app.ts",
+  status: "M",
+  insertions: 1,
+  deletions: 0,
+};
+
+function Harness({ openDiff, spies }: HarnessProps) {
   const cursor = useReviewHubFileCursor({
     navigableItems,
     stagedCount: 0,
@@ -55,7 +61,6 @@ function Harness({ openDiff, diffMode, spies }: HarnessProps) {
   const selection = useReviewHubRowSelection(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const commitShortcutRef = useRef<CommitShortcutHandler | null>(spies.commit);
-  const baseFile: CrossWorktreeFile = { path: "src/app.ts", status: "M" };
   useReviewHubKeyboard({
     isOpen: true,
     keyboardScope: document,
@@ -73,7 +78,10 @@ function Harness({ openDiff, diffMode, spies }: HarnessProps) {
     selectedSinceReviewPath: openDiff === "since-review" ? file.path : null,
     setSelectedSinceReviewPath: spies.setSelectedSinceReviewPath,
     fileListExpanded: true,
-    diffMode,
+    // The working-tree list stays on screen whichever diff is open (a
+    // since-review diff also opens from the review line), so only the overlay
+    // guard stands between these keys and the rows beneath.
+    diffMode: "working-tree" satisfies DiffMode,
     openFileDiff: spies.openFileDiff,
     handleToggleStaged: spies.handleToggleStaged,
     handleToggleUnstaged: spies.handleToggleUnstaged,
@@ -84,13 +92,29 @@ function Harness({ openDiff, diffMode, spies }: HarnessProps) {
   });
   return (
     <div ref={rootRef}>
-      <div ref={cursor.fileListRef} role="listbox" tabIndex={0} data-testid="list" />
+      <div
+        ref={cursor.fileListRef}
+        role="listbox"
+        tabIndex={0}
+        data-testid="list"
+        data-focused-index={cursor.focusedIndex}
+      />
       <button type="button" data-testid="control">
         Refresh
       </button>
     </div>
   );
 }
+
+function press(target: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+  act(() => {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })
+    );
+  });
+}
+
+const COMMIT_CHORD: KeyboardEventInit = { metaKey: true, ctrlKey: true };
 
 const clearerOf = (spies: ReturnType<typeof makeSpies>, openDiff: OpenDiff) =>
   ({
@@ -99,8 +123,38 @@ const clearerOf = (spies: ReturnType<typeof makeSpies>, openDiff: OpenDiff) =>
     "since-review": spies.setSelectedSinceReviewPath,
   })[openDiff];
 
+/** Renders with the cursor on the first row, placed the way a user would. */
+function renderWithCursor(spies: ReturnType<typeof makeSpies>) {
+  const view = render(<Harness openDiff={null} spies={spies} />);
+  const list = view.getByTestId("list");
+  press(list, "ArrowDown");
+  expect(list.getAttribute("data-focused-index")).toBe("0");
+  return { ...view, list };
+}
+
 afterEach(() => {
   cleanup();
+});
+
+// Proves each key below reaches the branch the overlay guard has to stop.
+describe("useReviewHubKeyboard with no diff open", () => {
+  it("acts on the list, commits and closes the hub", () => {
+    const spies = makeSpies();
+    const { list, getByTestId } = renderWithCursor(spies);
+
+    press(list, "ArrowDown");
+    expect(list.getAttribute("data-focused-index")).toBe("1");
+    press(list, "Enter");
+    expect(spies.openFileDiff).toHaveBeenCalledTimes(1);
+    press(list, " ");
+    expect(spies.handleToggleUnstaged).toHaveBeenCalledTimes(1);
+    press(list, "v");
+    expect(spies.handleViewedChange).toHaveBeenCalledTimes(1);
+    press(getByTestId("control"), "Enter", COMMIT_CHORD);
+    expect(spies.commit).toHaveBeenCalledTimes(1);
+    press(list, "Escape");
+    expect(spies.onClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The diff layers over the hub, and the hub's capture listener still hears
@@ -111,15 +165,9 @@ describe.each<OpenDiff>(["working-tree", "base-branch", "since-review"])(
   (openDiff) => {
     it("closes the diff on Escape, not the hub", () => {
       const spies = makeSpies();
-      const { getByTestId } = render(
-        <Harness openDiff={openDiff} diffMode="working-tree" spies={spies} />
-      );
+      const { getByTestId } = render(<Harness openDiff={openDiff} spies={spies} />);
 
-      act(() => {
-        getByTestId("list").dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
-        );
-      });
+      press(getByTestId("list"), "Escape");
 
       expect(clearerOf(spies, openDiff)).toHaveBeenCalledWith(null);
       expect(spies.onClose).not.toHaveBeenCalled();
@@ -127,48 +175,28 @@ describe.each<OpenDiff>(["working-tree", "base-branch", "since-review"])(
 
     it("leaves the commit chord to the diff", () => {
       const spies = makeSpies();
-      const { getByTestId } = render(
-        <Harness openDiff={openDiff} diffMode="working-tree" spies={spies} />
-      );
+      const { getByTestId } = render(<Harness openDiff={openDiff} spies={spies} />);
 
-      act(() => {
-        getByTestId("control").dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Enter",
-            metaKey: true,
-            ctrlKey: true,
-            bubbles: true,
-            cancelable: true,
-          })
-        );
-      });
+      press(getByTestId("control"), "Enter", COMMIT_CHORD);
 
       expect(spies.commit).not.toHaveBeenCalled();
     });
 
-    it("doesn't move, open, stage or mark the list beneath it", () => {
+    it.each([
+      ["ArrowDown", () => undefined],
+      ["Enter", (spies: ReturnType<typeof makeSpies>) => spies.openFileDiff],
+      [" ", (spies: ReturnType<typeof makeSpies>) => spies.handleToggleUnstaged],
+      ["v", (spies: ReturnType<typeof makeSpies>) => spies.handleViewedChange],
+    ] as const)("doesn't act on the row beneath it for %j", (key, actionOf) => {
       const spies = makeSpies();
-      const { getByTestId } = render(
-        <Harness openDiff={openDiff} diffMode="working-tree" spies={spies} />
-      );
-      const list = getByTestId("list");
-      const press = (key: string) =>
-        act(() => {
-          list.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
-          );
-        });
+      const { list, rerender } = renderWithCursor(spies);
+      rerender(<Harness openDiff={openDiff} spies={spies} />);
 
-      press("ArrowDown");
-      press("Enter");
-      press(" ");
-      press("v");
+      press(list, key);
 
-      expect(list.getAttribute("aria-activedescendant")).toBeNull();
-      expect(spies.openFileDiff).not.toHaveBeenCalled();
-      expect(spies.handleToggleStaged).not.toHaveBeenCalled();
-      expect(spies.handleToggleUnstaged).not.toHaveBeenCalled();
-      expect(spies.handleViewedChange).not.toHaveBeenCalled();
+      expect(list.getAttribute("data-focused-index")).toBe("0");
+      const action = actionOf(spies);
+      if (action) expect(action).not.toHaveBeenCalled();
     });
   }
 );
