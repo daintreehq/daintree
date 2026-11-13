@@ -16,7 +16,7 @@ import {
   isDemandBand,
   WORKING_FILTER_BANDS,
 } from "@/lib/fleetAttention";
-import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
+import { agoPhrase, formatWaitAge, formatWakeTime } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -445,6 +445,22 @@ function ageOf(
       agePhrase: `quiet for ${age}`,
       secondaryPhrase:
         run.since === undefined ? null : `working for ${formatWaitAge(run.since, nowMs)}`,
+    };
+  }
+
+  // A snooze answers "when does it come back", not "how long ago": the wake
+  // time is what Canopy's snoozed row says, and an open-ended snooze has none.
+  if (band === "snoozed") {
+    const until = run.snooze?.snoozedUntil;
+    if (until === undefined) {
+      return { age: "", ageLabel: "Snoozed", agePhrase: "Snoozed", secondaryPhrase: null };
+    }
+    const wake = formatWakeTime(until);
+    return {
+      age: wake,
+      ageLabel: "Snoozed until",
+      agePhrase: `Snoozed until ${wake}`,
+      secondaryPhrase: null,
     };
   }
 
