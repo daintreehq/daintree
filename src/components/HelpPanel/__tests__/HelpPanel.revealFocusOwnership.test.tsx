@@ -334,6 +334,13 @@ vi.mock("@/store/macroFocusStore", () => {
   };
 });
 
+// Whether main has this project view cached, per test.
+let viewCached = false;
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => viewCached,
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
@@ -365,6 +372,46 @@ function flushFrame(): void {
 
 // A focusable element standing in for Ask Codex's CodeMirror in another pane.
 let foreignEditor: HTMLTextAreaElement;
+
+// Undone in afterEach, so a failed assertion can't leak a handler, an element or a
+// region into the next test.
+const cleanups: (() => void)[] = [];
+
+function mountFocusable<T extends HTMLElement>(el: T): T {
+  document.body.appendChild(el);
+  cleanups.push(() => el.remove());
+  return el;
+}
+
+function mountGridRegion(): HTMLDivElement {
+  const grid = document.createElement("div");
+  grid.tabIndex = -1;
+  mountFocusable(grid);
+  useMacroFocusStore.getState().setRegionRef("grid", grid);
+  cleanups.push(() => useMacroFocusStore.getState().setRegionRef("grid", null));
+  return grid;
+}
+
+function registerFocusedPane(id: string, input: HTMLElement): ReturnType<typeof vi.fn> {
+  const handler = vi.fn(() => {
+    input.focus();
+    return document.activeElement === input;
+  });
+  panelStoreState.focusedId = id;
+  cleanups.push(registerPanelFocusHandler(id, handler));
+  return handler;
+}
+
+/** Mount closed, open, and settle the open grab inside the assistant. */
+function renderOpenedAndSettled() {
+  helpPanelState.isOpen = false;
+  const view = render(<HelpPanel width={380} />);
+  helpPanelState.isOpen = true;
+  view.rerender(<HelpPanel width={380} />);
+  act(() => flushFrame());
+  act(() => flushFrame());
+  return view;
+}
 
 function focusForeignEditor(): void {
   act(() => {
@@ -453,6 +500,8 @@ beforeEach(() => {
   terminalInputState.hybridInputAutoFocus = true;
   setPanel("t-1");
   panelStoreState.focusedId = null;
+  viewCached = false;
+  useMacroFocusStore.setState({ focusedRegion: null });
 
   foreignEditor = document.createElement("textarea");
   foreignEditor.className = "cm-editor";
@@ -476,6 +525,7 @@ beforeEach(() => {
 
 afterEach(() => {
   foreignEditor.remove();
+  for (const undo of cleanups.splice(0).reverse()) undo();
 });
 
 /** Render, settle the authorized open grab, then hand focus to the other pane. */
@@ -906,64 +956,49 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
     });
 
     it("hands focus to the focused panel when the opener can no longer take it", () => {
-      const opener = document.createElement("button");
-      document.body.appendChild(opener);
+      const opener = mountFocusable(document.createElement("button"));
       opener.focus();
-      const paneInput = document.createElement("textarea");
-      document.body.appendChild(paneInput);
-      panelStoreState.focusedId = "pane-1";
-      const unregister = registerPanelFocusHandler("pane-1", () => {
-        paneInput.focus();
-        return document.activeElement === paneInput;
-      });
+      const paneInput = mountFocusable(document.createElement("textarea"));
+      registerFocusedPane("pane-1", paneInput);
 
-      helpPanelState.isOpen = false;
-      const { rerender } = render(<HelpPanel width={380} />);
-      helpPanelState.isOpen = true;
-      rerender(<HelpPanel width={380} />);
-      act(() => flushFrame());
-      act(() => flushFrame());
-
+      const { rerender } = renderOpenedAndSettled();
       // Still connected, but a `.focus()` on it is a silent no-op.
       opener.disabled = true;
       helpPanelState.isOpen = false;
       rerender(<HelpPanel width={380} />);
 
       expect(document.activeElement).toBe(paneInput);
-      unregister();
-      paneInput.remove();
-      opener.remove();
+    });
+
+    it("still prefers the opener over the focused panel", () => {
+      const opener = mountFocusable(document.createElement("button"));
+      opener.focus();
+      const paneInput = mountFocusable(document.createElement("textarea"));
+      const handler = registerFocusedPane("pane-1", paneInput);
+
+      const { rerender } = renderOpenedAndSettled();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(opener);
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("lands on the grid's region when it opened from nowhere and no panel is focused", () => {
-      const grid = document.createElement("div");
-      grid.tabIndex = -1;
-      document.body.appendChild(grid);
-      useMacroFocusStore.getState().setRegionRef("grid", grid);
+      const grid = mountGridRegion();
       (document.activeElement as HTMLElement | null)?.blur();
       expect(document.activeElement).toBe(document.body);
 
-      helpPanelState.isOpen = false;
-      const { rerender } = render(<HelpPanel width={380} />);
-      helpPanelState.isOpen = true;
-      rerender(<HelpPanel width={380} />);
-      act(() => flushFrame());
-      act(() => flushFrame());
+      const { rerender } = renderOpenedAndSettled();
       expect(document.activeElement).not.toBe(document.body);
-
       helpPanelState.isOpen = false;
       rerender(<HelpPanel width={380} />);
 
       expect(document.activeElement).toBe(grid);
-      useMacroFocusStore.getState().setRegionRef("grid", null);
-      grid.remove();
     });
 
     it("moves nothing when the panel mounts closed", () => {
-      const grid = document.createElement("div");
-      grid.tabIndex = -1;
-      document.body.appendChild(grid);
-      useMacroFocusStore.getState().setRegionRef("grid", grid);
+      mountGridRegion();
       (document.activeElement as HTMLElement | null)?.blur();
 
       helpPanelState.isOpen = false;
@@ -974,8 +1009,40 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       rerender(<HelpPanel width={380} />);
 
       expect(document.activeElement).toBe(document.body);
-      useMacroFocusStore.getState().setRegionRef("grid", null);
-      grid.remove();
+    });
+
+    it("hands focus back once per close, not again on a re-run while closed", () => {
+      const grid = mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      const { rerender } = renderOpenedAndSettled();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+      expect(document.activeElement).toBe(grid);
+
+      act(() => grid.blur());
+      helpPanelState.terminalId = "t-2";
+      setPanel("t-2");
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves a cached view's keyboard alone", () => {
+      const dismissed = vi.fn();
+      cleanups.push(registerTooltipDismiss(dismissed));
+      mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      const { rerender } = renderOpenedAndSettled();
+      const settled = document.activeElement;
+      expect(settled).not.toBe(document.body);
+      viewCached = true;
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(settled);
+      expect(dismissed).not.toHaveBeenCalled();
     });
 
     it("leaves tooltips alone when it declines to restore focus", () => {
