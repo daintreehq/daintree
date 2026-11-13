@@ -5,7 +5,7 @@ import { notify } from "@/lib/notify";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { scratchClient } from "@/clients";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { distinctDetail, formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project, Scratch } from "@shared/types";
 import type {
   DeleteAllScratchesSnapshot,
@@ -362,7 +362,10 @@ export function useProjectSwitcherScratchMutations({
         notify({
           type: "error",
           title: "Couldn't save scratch as project",
-          message: formatErrorMessage(error, "Couldn't save scratch as project"),
+          message: distinctDetail(
+            formatErrorMessage(error, "Couldn't save scratch as project"),
+            "Couldn't save scratch as project"
+          ),
         });
       }
     },

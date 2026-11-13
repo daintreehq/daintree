@@ -3,7 +3,7 @@ import type { ProjectGroup, ProjectListSortMode } from "@shared/types/project";
 import { projectGroupsClient } from "@/clients/projectGroupsClient";
 import { sortProjectGroups } from "@/lib/projectGroupBands";
 import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { distinctDetail, formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import { onHostResync } from "@/store/hostResyncSignal";
 
@@ -67,7 +67,7 @@ async function withRetry(title: string, operation: () => Promise<unknown>): Prom
     notify({
       type: "error",
       title,
-      message: formatErrorMessage(error, title),
+      message: distinctDetail(formatErrorMessage(error, title), title),
       actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       // Filing is organisation the user chose, routed like any other saved
       // preference that failed to stick.

@@ -1,5 +1,6 @@
 import { notify } from "./notify";
 import { clientErrorText } from "@/utils/clientAppError";
+import { distinctDetail } from "@shared/utils/errorMessage";
 import { followSwitchResult, notifyHostSwitchFailure } from "@/components/Hosts/hostSwitching";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { useProjectStore } from "@/store/projectStore";
@@ -98,10 +99,13 @@ export async function switchToLastWorkspace(): Promise<void> {
     notify({
       type: "error",
       title: "Couldn't switch workspace",
-      message: clientErrorText(error, "Couldn't switch workspace"),
+      message: distinctDetail(
+        clientErrorText(error, "Couldn't switch workspace"),
+        "Couldn't switch workspace"
+      ),
       actions: [
         {
-          label: "Try again",
+          label: "Retry",
           variant: "primary",
           onClick: () => {
             void switchToLastWorkspace();

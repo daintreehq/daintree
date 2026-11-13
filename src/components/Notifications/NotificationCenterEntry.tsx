@@ -406,19 +406,21 @@ export function NotificationCenterEntry({
         {/* Untitled, the message is the row's headline, so it takes the
             title's ink and its unread weight; in secondary ink it read as the
             supporting line of a row that had none. */}
-        <p
-          className={cn(
-            "text-xs leading-snug break-words",
-            entry.title
-              ? "col-span-2 row-start-2 text-text-secondary"
-              : cn(
-                  "col-start-1 row-start-1 min-w-0 text-text-primary",
-                  isNew ? "font-semibold" : "font-normal"
-                )
-          )}
-        >
-          {entry.message}
-        </p>
+        {entry.title && entry.message === "" ? null : (
+          <p
+            className={cn(
+              "text-xs leading-snug break-words",
+              entry.title
+                ? "col-span-2 row-start-2 text-text-secondary"
+                : cn(
+                    "col-start-1 row-start-1 min-w-0 text-text-primary",
+                    isNew ? "font-semibold" : "font-normal"
+                  )
+            )}
+          >
+            {entry.message}
+          </p>
+        )}
         {showChip && !entry.title && (
           <CountBadge
             key={bumpKey}
