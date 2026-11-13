@@ -40,6 +40,7 @@ const focusRestoreStub = {
   setRestoreTarget: setRestoreTargetMock,
   resetForOpen: () => {},
   deferToRadix: () => {},
+  expectHandoff: () => {},
   onContentPointerDown: () => {},
   onContentPointerDownOutside: () => {},
   onContentInteractOutside: () => {},

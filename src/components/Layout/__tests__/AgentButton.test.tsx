@@ -35,6 +35,11 @@ const readUsageLimitedPaneIdsMock = vi.fn().mockResolvedValue([]);
 let radioGroupOnValueChange: ((value: string) => void) | null = null;
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
+let contextCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let contextPointerDownOutsideSpy: (() => void) | null = null;
+// The policy the mocked dropdown root provides, as the real one does: only
+// what renders under the root can reach it.
+let dropdownFocusRestore: OverlayFocusRestore | null = null;
 // Track the chevron dropdown's controlled-open contract (issue #10720): the
 // mock forwards the live `open` prop and `onOpenChange` so tests can open the
 // menu, then assert a gutter click keeps it open while a label click closes it.
@@ -204,7 +209,11 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => {
     dropdownOpenState = open;
     dropdownOnOpenChange = onOpenChange ?? null;
-    return <>{children}</>;
+    return (
+      <OverlayFocusRestoreContext.Provider value={dropdownFocusRestore}>
+        {children}
+      </OverlayFocusRestoreContext.Provider>
+    );
   },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
@@ -306,9 +315,19 @@ vi.mock("../AccountSwitchNotice", async (importOriginal) => ({
 vi.mock("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="context-menu-content">{children}</div>
-  ),
+  ContextMenuContent: ({
+    children,
+    onCloseAutoFocus,
+    onPointerDownOutside,
+  }: {
+    children: React.ReactNode;
+    onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
+    onPointerDownOutside?: () => void;
+  }) => {
+    contextCloseAutoFocusSpy = onCloseAutoFocus ?? null;
+    contextPointerDownOutsideSpy = onPointerDownOutside ?? null;
+    return <div data-testid="context-menu-content">{children}</div>;
+  },
   ContextMenuItem: ({
     children,
     onSelect,
@@ -511,6 +530,9 @@ describe("AgentButton preset UX", () => {
     mockExternalLinks = undefined;
     dropdownCloseAutoFocusSpy = null;
     dropdownPointerDownOutsideSpy = null;
+    contextCloseAutoFocusSpy = null;
+    contextPointerDownOutsideSpy = null;
+    dropdownFocusRestore = null;
     dropdownOpenState = undefined;
     dropdownOnOpenChange = null;
     mockProjectPresetsByAgent = {};
@@ -2115,6 +2137,7 @@ describe("AgentButton preset UX", () => {
           setRestoreTarget: () => {},
           resetForOpen: () => {},
           deferToRadix: () => {},
+          expectHandoff: () => {},
           onContentPointerDown: () => {},
           onContentPointerDownOutside: () => {},
           onContentInteractOutside: () => {},
@@ -2202,7 +2225,7 @@ describe("AgentButton preset UX", () => {
     });
   });
 
-  describe("chevron focus ring after dropdown dismissal (issue #6119)", () => {
+  describe("close-time focus (issues #6119, #16922)", () => {
     function renderSplitButton() {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
@@ -2222,31 +2245,90 @@ describe("AgentButton preset UX", () => {
       expect(preventDefault).not.toHaveBeenCalled();
     });
 
-    it("calls preventDefault on pointer close so the chevron does not keep its focus ring", () => {
-      // Pointer-driven dismissal must suppress focus restoration to the chevron;
-      // otherwise Radix re-focuses it and :focus-visible repaints the accent
-      // ring even though the user clicked elsewhere.
+    // The shared policy already cancels Radix's ringed restore on a click-away
+    // and hands focus back ringless when nothing took it. Preventing the
+    // default here first skipped that check and stranded focus on
+    // document.body after a click on bare chrome.
+    it("leaves the dropdown's pointer dismissal to the shared focus policy", () => {
       renderSplitButton();
       expect(dropdownCloseAutoFocusSpy).toBeTruthy();
-      expect(dropdownPointerDownOutsideSpy).toBeTruthy();
 
-      dropdownPointerDownOutsideSpy!();
-      const preventDefault = vi.fn();
-      dropdownCloseAutoFocusSpy!({ preventDefault });
-      expect(preventDefault).toHaveBeenCalledTimes(1);
-    });
-
-    it("resets the pointer flag so a later keyboard close still returns focus", () => {
-      renderSplitButton();
-      expect(dropdownCloseAutoFocusSpy).toBeTruthy();
-      expect(dropdownPointerDownOutsideSpy).toBeTruthy();
-
-      dropdownPointerDownOutsideSpy!();
-      dropdownCloseAutoFocusSpy!({ preventDefault: vi.fn() });
-
+      dropdownPointerDownOutsideSpy?.();
       const preventDefault = vi.fn();
       dropdownCloseAutoFocusSpy!({ preventDefault });
       expect(preventDefault).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["split", () => [{ id: "user-blue", name: "Blue" }]],
+      ["single", () => []],
+    ])("leaves the %s button's context-menu dismissal to the shared focus policy", (_, presets) => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = presets;
+      render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(contextCloseAutoFocusSpy).toBeTruthy();
+
+      contextPointerDownOutsideSpy?.();
+      const preventDefault = vi.fn();
+      contextCloseAutoFocusSpy!({ preventDefault });
+      expect(preventDefault).not.toHaveBeenCalled();
+    });
+
+    describe("preset launch", () => {
+      // A launch sends focus to the panel it opens, which may land before or
+      // after the menu closes, so the row marks the close as a handoff rather
+      // than claiming it outright (which stranded a launch that never moved focus).
+      function renderWithOverlay() {
+        const expectHandoff = vi.fn();
+        dropdownFocusRestore = {
+          setRestoreTarget: () => {},
+          resetForOpen: () => {},
+          deferToRadix: () => {},
+          expectHandoff,
+          onContentPointerDown: () => {},
+          onContentPointerDownOutside: () => {},
+          onContentInteractOutside: () => {},
+          onContentKeyDown: () => {},
+          onContentClick: () => {},
+          onContentCloseAutoFocus: () => {},
+        } satisfies OverlayFocusRestore;
+        const utils = renderSplitButton();
+        const row = (text: string) =>
+          (utils.getAllByTestId("preset-item") as HTMLElement[]).find((el) =>
+            el.textContent?.includes(text)
+          )!;
+        return { expectHandoff, row };
+      }
+
+      it.each([
+        ["a named preset", "Blue", "user-blue"],
+        ["the agent default", "Agent default", null],
+      ])("marks a launch of %s as a handoff before it dispatches", (_, text, presetId) => {
+        const { expectHandoff, row } = renderWithOverlay();
+
+        fireEvent.click(row(text).querySelector('[data-zone="label"]') as HTMLElement);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "agent.launch",
+          { agentId: "claude", presetId },
+          { source: "user" }
+        );
+        expect(expectHandoff).toHaveBeenCalledTimes(1);
+        expect(expectHandoff.mock.invocationCallOrder[0]).toBeLessThan(
+          dispatchMock.mock.invocationCallOrder[0]!
+        );
+      });
+
+      it("does not mark a gutter click, which keeps the menu open", () => {
+        const { expectHandoff, row } = renderWithOverlay();
+
+        fireEvent.click(row("Blue").querySelector('[data-zone="gutter"]') as HTMLElement);
+
+        expect(dispatchMock).not.toHaveBeenCalled();
+        expect(expectHandoff).not.toHaveBeenCalled();
+      });
     });
   });
 

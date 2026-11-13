@@ -28,6 +28,14 @@ import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
  *   stranded. Take the restoration over and ask for focus WITHOUT the visible
  *   state.
  * - **Keyboard.** Leave it alone. Radix restores, and the ring is correct.
+ * - **Handed off.** The picked item sends focus somewhere else — a launch
+ *   focusing the panel it opens — and may get there before the close or after
+ *   it. Restoring at close would steal focus back from a surface that already
+ *   took it; restoring nothing strands it on `document.body` when the handoff
+ *   never comes (a declined launch, one that leaves focus where it was). So a
+ *   consumer that knows calls `expectHandoff()`, and the close restores only if
+ *   nothing has taken focus a task later: ringless after a pointer pick, ringed
+ *   after a keyboard one, as Radix would.
  *
  * Telling the pointer cases apart is the fiddly half. Radix implements
  * Enter/Space selection by calling `.click()` on the item, and a synthetic
@@ -68,6 +76,11 @@ export interface OverlayFocusRestore {
    * tooltip suppression still fires — that half is never a policy choice.
    */
   deferToRadix: () => void;
+  /**
+   * Mark the item being picked as a focus handoff (see "Handed off" above).
+   * Call it from the item's own activation, before anything closes the overlay.
+   */
+  expectHandoff: () => void;
   onContentPointerDown: () => void;
   onContentPointerDownOutside: () => void;
   onContentInteractOutside: (event: { defaultPrevented: boolean }) => void;
@@ -113,13 +126,18 @@ function assignForwardedRef<T>(forwardedRef: React.ForwardedRef<T>, value: T | n
 }
 
 /**
- * Callback ref for a trigger: records the node as the overlay's restore target
+ * Callback ref for a trigger: records the node as `overlay`'s restore target
  * and still honours whatever ref the caller forwarded.
+ *
+ * Takes the overlay rather than reading the nearest provider: a trigger often
+ * sits inside another overlay's root nested under its own (the plugin tray's
+ * menu button is also a context-menu trigger), and the nearest provider is then
+ * that one's, which leaves the trigger's own overlay nothing to restore to.
  */
 export function useOverlayTriggerRef<T extends HTMLElement>(
-  forwardedRef: React.ForwardedRef<T>
+  forwardedRef: React.ForwardedRef<T>,
+  overlay: OverlayFocusRestore | null
 ): React.RefCallback<T> {
-  const overlay = useOverlayFocusRestore();
   return React.useCallback(
     (node: T | null) => {
       overlay?.setRestoreTarget(node);
@@ -152,12 +170,15 @@ export function useOverlayFocusRestoreValue(
   const wasPointerSelectRef = React.useRef(false);
   // Whether a pointer has been pressed inside the content during this opening.
   const pointerInsideRef = React.useRef(false);
+  // Set when the picked item sends focus to another surface.
+  const handoffRef = React.useRef(false);
 
   return React.useMemo<OverlayFocusRestore>(() => {
     const resetForOpen = () => {
       wasPointerCloseRef.current = false;
       wasPointerSelectRef.current = false;
       pointerInsideRef.current = false;
+      handoffRef.current = false;
     };
 
     return {
@@ -166,6 +187,9 @@ export function useOverlayFocusRestoreValue(
       },
       resetForOpen,
       deferToRadix: resetForOpen,
+      expectHandoff: () => {
+        handoffRef.current = true;
+      },
       onContentPointerDown: () => {
         pointerInsideRef.current = true;
       },
@@ -187,6 +211,9 @@ export function useOverlayFocusRestoreValue(
         // a press on padding — leaves its flags armed, and the Escape or Enter
         // that finally does close gets treated as a pointer close: the ring a
         // keyboard user is owed goes missing, or focus is dropped outright.
+        // The handoff is not a pointer gesture and stays: Radix selects on
+        // Enter/Space by calling `.click()` from the item's own keydown, so this
+        // keydown reaches the content only after the item has armed it.
         wasPointerCloseRef.current = false;
         wasPointerSelectRef.current = false;
         pointerInsideRef.current = false;
@@ -206,12 +233,13 @@ export function useOverlayFocusRestoreValue(
 
         const pointerClose = wasPointerCloseRef.current;
         const pointerSelect = wasPointerSelectRef.current;
+        const handoff = handoffRef.current;
         resetForOpen();
 
         // A consumer that already decided (an anchored palette suppressing its
         // own restoration, say) owns the outcome.
         if (event.defaultPrevented) return;
-        if (!pointerClose && !pointerSelect) return;
+        if (!pointerClose && !pointerSelect && !handoff) return;
 
         // Both pointer closes take the restoration over from Radix: its own is
         // a bare `.focus()`, and Chromium paints `:focus-visible` on a
@@ -221,6 +249,10 @@ export function useOverlayFocusRestoreValue(
         // focus at all.
         event.preventDefault();
         const target = restoreTargetRef.current;
+        if (handoff) {
+          restoreIfStranded(target, pointerSelect);
+          return;
+        }
         if (!pointerClose || restoreFocusOnPointerClose) {
           target?.focus({ preventScroll: true, focusVisible: false });
           return;
@@ -230,21 +262,28 @@ export function useOverlayFocusRestoreValue(
         // but for a MODAL overlay it often does not. Radix disables outside
         // pointer events while one is open, so the press that dismissed it
         // never reached what was under it and focus lands on `document.body`,
-        // which restarts the next Tab from the top of the document. Checked a
-        // task later, once the layer has torn down and whatever did take focus
-        // has taken it; a target that took focus, or a trigger that unmounted
-        // with the thing it belonged to, leaves this alone.
-        setTimeout(() => {
-          if (document.activeElement !== null && document.activeElement !== document.body) return;
-          if (!target?.isConnected) return;
-          // Re-armed, not merely inherited: the arm at the top of this handler
-          // disarms on its own zero-delay timer, which was queued BEFORE this
-          // one and therefore fires first. Without this the deferred focus
-          // lands unguarded and reopens the very tooltip the close suppressed.
-          armTooltipFocusSuppression();
-          target.focus({ preventScroll: true, focusVisible: false });
-        }, 0);
+        // which restarts the next Tab from the top of the document.
+        restoreIfStranded(target, true);
       },
     };
   }, [restoreFocusOnPointerClose]);
+}
+
+/**
+ * Focus `target` a task from now, but only if nothing else has taken focus by
+ * then: the layer has torn down, and whatever was going to take focus (the
+ * clicked control, the surface a handoff sent it to) has taken it. A trigger
+ * that unmounted with the thing it belonged to is left alone too.
+ */
+function restoreIfStranded(target: HTMLElement | null, ringless: boolean): void {
+  setTimeout(() => {
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    if (!target?.isConnected) return;
+    // Re-armed, not merely inherited: the arm at the top of the close handler
+    // disarms on its own zero-delay timer, which was queued BEFORE this one and
+    // therefore fires first. Without this the deferred focus lands unguarded
+    // and reopens the very tooltip the close suppressed.
+    armTooltipFocusSuppression();
+    target.focus(ringless ? { preventScroll: true, focusVisible: false } : { preventScroll: true });
+  }, 0);
 }

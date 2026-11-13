@@ -17,12 +17,18 @@ import {
   useOverlayFocusRestore,
   useOverlayFocusRestoreValue,
   useOverlayTriggerRef,
+  type OverlayFocusRestore,
 } from "./overlay-focus-restore";
 import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks/useKeybinding";
 import { KbdChord } from "./Kbd";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const DropdownMenuIntentContext = React.createContext<((next: boolean) => void) | null>(null);
+
+// This menu's own focus policy, for its trigger to register with. The shared
+// provider is the nearest overlay's, and a trigger can sit inside another
+// overlay's root nested under this menu (see `useOverlayTriggerRef`).
+const DropdownMenuFocusRestoreContext = React.createContext<OverlayFocusRestore | null>(null);
 
 type DropdownMenuRootProps = React.ComponentProps<typeof DropdownMenuPrimitiveType.Root>;
 
@@ -72,21 +78,23 @@ const DropdownMenu = ({
   return (
     <MenuActionSourceContext.Provider value="menu">
       <OverlayFocusRestoreContext.Provider value={focusRestore}>
-        <Root
-          open={open}
-          defaultOpen={effectiveDefaultOpen}
-          onOpenChange={(next) => {
-            // Every opening starts from a clean slate. The content wrapper
-            // stays mounted across open/close, so a close that never reaches
-            // `onCloseAutoFocus` would otherwise leak its gesture flags here.
-            if (next) focusRestore.resetForOpen();
-            if (!isControlled) setPendingOpen(undefined);
-            onOpenChange?.(next);
-          }}
-          {...rest}
-        >
-          {children}
-        </Root>
+        <DropdownMenuFocusRestoreContext.Provider value={focusRestore}>
+          <Root
+            open={open}
+            defaultOpen={effectiveDefaultOpen}
+            onOpenChange={(next) => {
+              // Every opening starts from a clean slate. The content wrapper
+              // stays mounted across open/close, so a close that never reaches
+              // `onCloseAutoFocus` would otherwise leak its gesture flags here.
+              if (next) focusRestore.resetForOpen();
+              if (!isControlled) setPendingOpen(undefined);
+              onOpenChange?.(next);
+            }}
+            {...rest}
+          >
+            {children}
+          </Root>
+        </DropdownMenuFocusRestoreContext.Provider>
       </OverlayFocusRestoreContext.Provider>
     </MenuActionSourceContext.Provider>
   );
@@ -117,7 +125,8 @@ const DropdownMenuTrigger = React.forwardRef<
     const radix = useRadixPrimitives();
     const requestOpen = React.useContext(DropdownMenuIntentContext);
     // Where focus goes back to after a pointer selection closes the menu.
-    const setTriggerRef = useOverlayTriggerRef(ref);
+    const ownFocusRestore = React.useContext(DropdownMenuFocusRestoreContext);
+    const setTriggerRef = useOverlayTriggerRef(ref, ownFocusRestore);
 
     const handlePointerEnter: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       primeOnEvent();
