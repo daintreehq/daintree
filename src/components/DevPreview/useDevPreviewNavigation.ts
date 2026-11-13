@@ -209,11 +209,12 @@ export function useDevPreviewNavigation({
       webview.goBack();
       return;
     }
-    if (history.past.length === 0) return;
+    const previousUrl = history.past.at(-1);
+    if (previousUrl === undefined) return;
     clearRetryState();
-    guestHistoryIntentRef.current.pruneOnCommit = true;
+    guestHistoryIntentRef.current.pruneOnCommitOf = previousUrl;
     setHistory((prev) => goBackBrowserHistory(prev));
-  }, [guestCanGo, history.past.length, clearRetryState, guestHistoryIntentRef, setHistory]);
+  }, [guestCanGo, history.past, clearRetryState, guestHistoryIntentRef, setHistory]);
 
   const handleForward = useCallback(() => {
     const webview = guestCanGo(1);
@@ -261,6 +262,8 @@ export function useDevPreviewNavigation({
   }, [clearRetryState, setWebviewLoadError, webviewRef]);
 
   const handleCancelLoad = useCallback(() => {
+    // A stopped saved-history Back never commits, so nothing is left to prune.
+    guestHistoryIntentRef.current.pruneOnCommitOf = null;
     clearLoadTimers();
     setIsLoading(false);
     try {
@@ -269,7 +272,7 @@ export function useDevPreviewNavigation({
       // Webview detached
     }
     setWebviewLoadError({ code: "aborted", message: STOPPED_LOAD_MESSAGE });
-  }, [clearLoadTimers, setIsLoading, setWebviewLoadError, webviewRef]);
+  }, [clearLoadTimers, setIsLoading, setWebviewLoadError, webviewRef, guestHistoryIntentRef]);
 
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);

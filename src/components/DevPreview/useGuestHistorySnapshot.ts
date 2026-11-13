@@ -13,15 +13,15 @@ export interface GuestHistoryIntent {
   /** The step Back, Forward or a history-menu jump asked the guest to take. */
   stepOffset: number | null;
   /**
-   * A Back the guest couldn't take itself loaded the saved entry instead, which
-   * the guest records as a fresh entry on top of the one Back left. Its commit
-   * prunes the guest's history, or the next Back would return there.
+   * The saved entry a Back loaded because the guest had nothing behind it. The
+   * guest records that load as a fresh entry on top of the page Back left, so
+   * its commit prunes the guest's history, or the next Back would return there.
    */
-  pruneOnCommit: boolean;
+  pruneOnCommitOf: string | null;
 }
 
 export function createGuestHistoryIntent(): GuestHistoryIntent {
-  return { stepOffset: null, pruneOnCommit: false };
+  return { stepOffset: null, pruneOnCommitOf: null };
 }
 
 /** The guest entry one step away, by Chromium's own index: the menu's entries are sparse. */
@@ -67,22 +67,34 @@ export function useGuestHistorySnapshot(
     let disposed = false;
     let scheduled = false;
     let requestSeq = 0;
+    // Moving the <webview> in the DOM replaces its guest under the same element,
+    // and the old guest's entries mean nothing to the new one.
+    let guestId: number | null = null;
 
     const refresh = () => {
       scheduled = false;
       if (disposed) return;
-      const request = ++requestSeq;
+      let webContentsId: number;
+      try {
+        webContentsId = webview.getWebContentsId();
+      } catch {
+        return;
+      }
+      requestSeq += 1;
+      const request = requestSeq;
+      if (guestId !== null && guestId !== webContentsId) setState(null);
+      guestId = webContentsId;
       void (async () => {
+        let snapshot: BrowserNavigationHistorySnapshot;
         try {
-          const snapshot = await window.electron.webview.getNavigationHistory(
-            webview.getWebContentsId()
-          );
-          if (disposed || request !== requestSeq) return;
-          setState({ guest: webview, snapshot });
+          snapshot = await window.electron.webview.getNavigationHistory(webContentsId);
         } catch {
-          // Detached, not registered yet, or gone mid-request: the next commit
-          // or dom-ready reads it again.
+          // Not registered yet, or gone mid-request: the next commit or
+          // dom-ready reads it again.
+          return;
         }
+        if (disposed || request !== requestSeq) return;
+        setState({ guest: webview, snapshot });
       })();
     };
 

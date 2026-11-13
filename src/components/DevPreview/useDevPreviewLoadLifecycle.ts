@@ -224,7 +224,7 @@ export function useDevPreviewLoadLifecycle({
     // Moves the history to the entry the guest just committed, as a step through
     // its own session history when it was one: Back, Forward, a menu jump or the
     // page's own history.back() never leave a fresh entry behind.
-    const followCommit = (navigatedUrl: string) => {
+    const followCommit = (navigatedUrl: string, sameDocument: boolean) => {
       const intent = guestHistoryIntentRef.current;
       const offset = intent.stepOffset;
       intent.stepOffset = null;
@@ -235,15 +235,21 @@ export function useDevPreviewLoadLifecycle({
       } catch {
         // Detached guest: treat the commit as a fresh entry.
       }
-      if (intent.pruneOnCommit) {
-        intent.pruneOnCommit = false;
+      // The saved-history load commits as a new document — or in place when only
+      // its fragment differs. The old document's own same-document commits while
+      // it is still loading leave the prune for it.
+      const pruneTarget = intent.pruneOnCommitOf;
+      if (pruneTarget !== null && (!sameDocument || navigatedUrl === pruneTarget)) {
+        intent.pruneOnCommitOf = null;
         try {
           webview.clearHistory();
         } catch {
           // Detached guest: its replacement starts with no history to prune.
         }
       }
-      if (navigatedUrl !== lastSetUrlRef.current) {
+      // A step the host asked for is followed even onto the URL already showing:
+      // the guest may have moved between two entries for it.
+      if (offset !== null || navigatedUrl !== lastSetUrlRef.current) {
         setHistory((prev) => followGuestCommit(prev, navigatedUrl, { offset, traversed }));
         lastSetUrlRef.current = navigatedUrl;
       }
@@ -665,7 +671,7 @@ export function useDevPreviewLoadLifecycle({
           failLoadRetryRef.current = null;
         }
       }
-      followCommit(navigatedUrl);
+      followCommit(navigatedUrl, false);
       recordVisit(navigatedUrl);
     };
 
@@ -673,7 +679,7 @@ export function useDevPreviewLoadLifecycle({
       if (!e.isMainFrame) return;
       setBlockedNav({ type: "DISMISS" });
       const navigatedUrl = e.url;
-      followCommit(navigatedUrl);
+      followCommit(navigatedUrl, true);
       recordVisit(navigatedUrl);
     };
 

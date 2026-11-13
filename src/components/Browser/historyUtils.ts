@@ -163,11 +163,14 @@ export function followGuestCommit(
   { offset, traversed }: GuestCommit
 ): BrowserHistory {
   const normalizedUrl = url.trim();
-  if (!normalizedUrl || normalizedUrl === history.present) return history;
+  if (!normalizedUrl) return history;
 
+  // Ahead of the same-URL check: a jump between two entries for one URL moves
+  // the guest all the same.
   if (offset && entryAtOffset(history, offset) === normalizedUrl) {
     return stepBrowserHistory(history, offset);
   }
+  if (normalizedUrl === history.present) return history;
 
   if (traversed) {
     const reach = Math.max(history.past.length, history.future.length);

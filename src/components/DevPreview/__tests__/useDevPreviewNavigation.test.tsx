@@ -312,6 +312,7 @@ describe("useDevPreviewNavigation — history handlers", () => {
       )
     );
     act(() => saved.current.handleBack());
+    expect(clearRetryState).toHaveBeenCalledTimes(1);
     act(() => saved.current.handleForward());
     expect(clearRetryState).toHaveBeenCalledTimes(2);
 
@@ -325,6 +326,7 @@ describe("useDevPreviewNavigation — history handlers", () => {
       )
     );
     act(() => native.current.handleBack());
+    expect(clearRetryState).toHaveBeenCalledTimes(3);
     act(() => native.current.handleForward());
     expect(clearRetryState).toHaveBeenCalledTimes(4);
   });
@@ -712,7 +714,7 @@ describe("useDevPreviewNavigation — guest session history", () => {
     // The commit listeners move the history once the guest gets there.
     expect(setHistory).not.toHaveBeenCalled();
     expect(webview.loadURL).not.toHaveBeenCalled();
-    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(false);
+    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBeNull();
   });
 
   it("falls back to the saved history while the guest isn't ready", () => {
@@ -742,12 +744,22 @@ describe("useDevPreviewNavigation — guest session history", () => {
     const { result } = renderHook(() => useDevPreviewNavigation(params));
 
     act(() => result.current.handleForward());
-    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(false);
+    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBeNull();
     expect(setHistory.mock.calls[0]![0](params.history).present).toBe(PAGE_B);
 
     act(() => result.current.handleBack());
-    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(true);
+    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBe(PAGE_A);
     expect(setHistory.mock.calls[1]![0](params.history).present).toBe(PAGE_A);
+  });
+
+  it("disarms the prune when the saved-history load is stopped", () => {
+    const params = baseParams({ history: { past: [PAGE_A], present: ROOT, future: [] } });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleBack());
+    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBe(PAGE_A);
+    act(() => result.current.handleCancelLoad());
+    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBeNull();
   });
 
   it("jumps to a history-menu entry by its own index, the list being sparse", () => {
@@ -775,11 +787,17 @@ describe("useDevPreviewNavigation — guest session history", () => {
     expect(params.guestHistoryIntentRef.current.stepOffset).toBe(-3);
     expect(clearRetryState).toHaveBeenCalledTimes(1);
 
+    // Index 2 sits at array position 1: the step is measured by index.
+    act(() => result.current.handleGoToHistoryIndex(2));
+    expect(webview.goToIndex).toHaveBeenLastCalledWith(2);
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBe(-1);
+    expect(clearRetryState).toHaveBeenCalledTimes(2);
+
     // Neither an index the menu doesn't hold nor the current entry goes anywhere.
     act(() => result.current.handleGoToHistoryIndex(1));
     act(() => result.current.handleGoToHistoryIndex(3));
-    expect(webview.goToIndex).toHaveBeenCalledTimes(1);
-    expect(clearRetryState).toHaveBeenCalledTimes(1);
+    expect(webview.goToIndex).toHaveBeenCalledTimes(2);
+    expect(clearRetryState).toHaveBeenCalledTimes(2);
   });
 
   it("leaves everything alone when the guest refuses a history-menu jump", () => {

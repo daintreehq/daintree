@@ -139,6 +139,8 @@ describe("historyUtils", () => {
       expect(stepBrowserHistory(history, -3)).toBe(history);
       expect(stepBrowserHistory(history, 3)).toBe(history);
       expect(stepBrowserHistory(history, 0)).toBe(history);
+      expect(stepBrowserHistory(history, 0.5)).toBe(history);
+      expect(stepBrowserHistory(history, Number.NaN)).toBe(history);
     });
   });
 
@@ -147,9 +149,13 @@ describe("historyUtils", () => {
 
     it("takes the step the host asked for while it lands on the committed URL", () => {
       expect(followGuestCommit(history, "/b", { offset: -1, traversed: true }).present).toBe("/b");
-      // The same URL further back, where the requested step really went.
+      // Between two entries for one URL: the guest moved even though the URL didn't.
       const repeated: BrowserHistory = { past: ["/x", "/y"], present: "/x", future: [] };
-      expect(followGuestCommit(repeated, "/x", { offset: -2, traversed: true })).toBe(repeated);
+      expect(followGuestCommit(repeated, "/x", { offset: -2, traversed: true })).toEqual({
+        past: [],
+        present: "/x",
+        future: ["/y", "/x"],
+      });
       const stepped = followGuestCommit(
         { past: ["/x", "/y", "/x"], present: "/z", future: [] },
         "/x",
@@ -177,6 +183,13 @@ describe("historyUtils", () => {
         present: "/d",
         future: ["/e"],
       });
+      // A nearer duplicate wins over the oldest one.
+      const duplicated: BrowserHistory = { past: ["/x", "/y", "/x"], present: "/z", future: [] };
+      expect(followGuestCommit(duplicated, "/x", { traversed: true })).toEqual({
+        past: ["/x", "/y"],
+        present: "/x",
+        future: ["/z"],
+      });
       // Equally far either way: history.back() is the likelier call.
       const tie: BrowserHistory = { past: ["/x"], present: "/y", future: ["/x", "/z"] };
       expect(followGuestCommit(tie, "/x", { traversed: true }).future).toEqual(["/y", "/x", "/z"]);
@@ -186,6 +199,13 @@ describe("historyUtils", () => {
       expect(followGuestCommit(history, "/new", { traversed: false })).toEqual({
         past: ["/a", "/b", "/c"],
         present: "/new",
+        future: [],
+      });
+      // A fresh entry for a URL already behind is still a fresh entry.
+      const revisited: BrowserHistory = { past: ["/root"], present: "/a", future: [] };
+      expect(followGuestCommit(revisited, "/root", { traversed: false })).toEqual({
+        past: ["/root", "/a"],
+        present: "/root",
         future: [],
       });
       // A traversal to somewhere this history never saw is recorded as an entry too.
@@ -202,6 +222,7 @@ describe("historyUtils", () => {
 
     it("leaves the history alone for the entry already showing", () => {
       expect(followGuestCommit(history, "/c", { offset: 1, traversed: true })).toBe(history);
+      expect(followGuestCommit(history, "/c", { traversed: false })).toBe(history);
       expect(followGuestCommit(history, "  ", { traversed: false })).toBe(history);
     });
   });

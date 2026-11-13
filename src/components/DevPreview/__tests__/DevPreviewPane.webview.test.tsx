@@ -3972,6 +3972,49 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(webview.loadURL).not.toHaveBeenCalled();
     });
 
+    it("records fresh entries for a URL already behind as fresh entries", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, ROOT);
+
+      expect(webview.nav.entries).toEqual([ROOT, PAGE_A, ROOT]);
+      expect(lastPersistedHistory()).toEqual({ past: [ROOT, PAGE_A], present: ROOT, future: [] });
+    });
+
+    it("follows a menu jump between two entries for the same URL", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, ROOT);
+
+      act(() => {
+        (latestToolbarProps().onGoToHistoryIndex as (index: number) => void)(0);
+      });
+      await commitInPage(webview);
+
+      expect(webview.nav.index).toBe(0);
+      expect(lastPersistedHistory()).toEqual({ past: [], present: ROOT, future: [PAGE_A, ROOT] });
+      // The saved history agrees with the guest, so Back has nowhere left to go.
+      expect(latestToolbarProps().canGoBack).toBe(false);
+    });
+
+    it("jumps by the step it asked for, not to the nearest entry for the URL", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, ROOT);
+      await guestPushes(webview, PAGE_B);
+
+      act(() => {
+        (latestToolbarProps().onGoToHistoryIndex as (index: number) => void)(0);
+      });
+      await commitInPage(webview);
+
+      expect(lastPersistedHistory()).toEqual({
+        past: [],
+        present: ROOT,
+        future: [PAGE_A, ROOT, PAGE_B],
+      });
+    });
+
     it("follows a multi-step history.go() through the guest's history", async () => {
       const { webview } = await renderReadyPane();
       await guestPushes(webview, PAGE_A);
@@ -4050,6 +4093,8 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         await Promise.resolve();
       });
       expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_B);
+      // Nothing is pruned before the load commits.
+      expect(webview.clearHistory).not.toHaveBeenCalled();
       await act(async () => {
         emitWebviewEvent(webview, "did-navigate", { url: PAGE_B });
         await Promise.resolve();
@@ -4059,6 +4104,13 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // Back from returning there.
       expect(webview.nav.entries).toEqual([PAGE_B]);
       expect(lastPersistedHistory()).toEqual({ past: [PAGE_A], present: PAGE_B, future: [ROOT] });
+
+      // Pruned once: the page's own entries from here on stay.
+      await guestPushes(webview, PAGE_C);
+      expect(webview.nav.entries).toEqual([PAGE_B, PAGE_C]);
+      expect(webview.clearHistory).toHaveBeenCalledTimes(1);
+      webview.guestGo(-1);
+      await commitInPage(webview);
 
       await act(async () => {
         (latestToolbarProps().onBack as () => void)();
