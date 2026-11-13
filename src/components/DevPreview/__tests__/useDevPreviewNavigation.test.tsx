@@ -780,9 +780,17 @@ describe("useDevPreviewNavigation — guest session history", () => {
     expect(params.guestHistoryIntentRef.current).toEqual(forgotten);
   });
 
+  // A guest standing on `activeIndex` of `length` entries.
+  function guestAt(activeIndex: number, length: number) {
+    return guestWithHistory((offset) => {
+      const target = activeIndex + offset;
+      return target >= 0 && target < length;
+    });
+  }
+
   it("jumps to a history-menu entry by its own index, the list being sparse", () => {
     const clearRetryState = vi.fn();
-    const webview = guestWithHistory(() => true);
+    const webview = guestAt(3, 4);
     const params = baseParams({
       clearRetryState,
       webviewRef: { current: webview },
@@ -818,9 +826,42 @@ describe("useDevPreviewNavigation — guest session history", () => {
     expect(clearRetryState).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves everything alone when a stale menu no longer matches the guest", () => {
+    const clearRetryState = vi.fn();
+    // The menu was read on entry 2 of 3; the guest has since moved on to a fresh
+    // entry, dropping the one ahead.
+    const webview = guestAt(2, 3);
+    const params = baseParams({
+      clearRetryState,
+      webviewRef: { current: webview },
+      navSnapshot: {
+        entries: [
+          { index: 0, url: ROOT, title: "" },
+          { index: 1, url: PAGE_A, title: "" },
+          { index: 2, url: PAGE_B, title: "" },
+        ],
+        activeIndex: 1,
+        canGoBack: true,
+        canGoForward: true,
+      },
+    });
+    params.guestHistoryIntentRef.current.pruneOnCommitOf = ROOT;
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleGoToHistoryIndex(0));
+    act(() => result.current.handleGoToHistoryIndex(2));
+    expect(webview.goToIndex).not.toHaveBeenCalled();
+    expect(clearRetryState).not.toHaveBeenCalled();
+    expect(params.guestHistoryIntentRef.current).toEqual({
+      stepOffset: null,
+      pruneOnCommitOf: ROOT,
+    });
+  });
+
   it("leaves everything alone when the guest refuses a history-menu jump", () => {
     const clearRetryState = vi.fn();
     const webview = makeWebview({
+      canGoToOffset: vi.fn((offset: number) => offset >= -1 && offset <= 0),
       goToIndex: vi.fn(() => {
         throw new Error("The WebView must be attached to the DOM");
       }),

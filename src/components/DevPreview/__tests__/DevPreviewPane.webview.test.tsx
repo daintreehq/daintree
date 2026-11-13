@@ -4203,6 +4203,48 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(webview.nav.entries).toEqual([PAGE_B, PAGE_C]);
     });
 
+    it("keeps a pending prune when a stale menu pick can't be taken", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [PAGE_A], present: ROOT, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_B);
+      await guestPushes(webview, PAGE_C);
+      for (let step = 0; step < 2; step++) {
+        await act(async () => {
+          (latestToolbarProps().onBack as () => void)();
+          await Promise.resolve();
+        });
+        await commitInPage(webview);
+      }
+      expect(webview.nav).toEqual({ entries: [ROOT, PAGE_B, PAGE_C], index: 0 });
+      const staleMenu = latestToolbarProps();
+      expect(staleMenu.navSnapshot).toMatchObject({ activeIndex: 0 });
+
+      // The saved-history Back to A has committed in the guest, but its event has
+      // not arrived yet, so the menu still offers C.
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.nav).toEqual({ entries: [ROOT, PAGE_A], index: 1 });
+      act(() => {
+        (staleMenu.onGoToHistoryIndex as (index: number) => void)(2);
+      });
+      expect(webview.goToIndex).not.toHaveBeenCalled();
+
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate", { url: PAGE_A });
+        await Promise.resolve();
+      });
+      expect(webview.nav.entries).toEqual([PAGE_A]);
+    });
+
     it("never reads a stopped jump into the reload that follows it", async () => {
       const { webview } = await renderReadyPane();
       await guestPushes(webview, PAGE_A);

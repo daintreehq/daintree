@@ -237,18 +237,24 @@ export function useDevPreviewNavigation({
   }, [guestCanGo, history.future.length, clearRetryState, guestHistoryIntentRef, setHistory]);
 
   // The Back and Forward menus list the guest's own entries by Chromium's index.
-  // The list is sparse, so the entry is matched on `.index`, and the jump goes by
-  // that index rather than an offset, which a snapshot a commit behind would skew.
+  // The list is sparse, so the entry is matched on `.index`. It is also read
+  // asynchronously, so the jump goes ahead only while the guest still stands on
+  // the entry the menu says and still has the one picked; Chromium ignores a jump
+  // to an index it no longer has, and a stale pick waits for the next read.
   const handleGoToHistoryIndex = useCallback(
     (index: number) => {
       if (!navSnapshot?.entries.some((entry) => entry.index === index)) return;
-      const offset = index - navSnapshot.activeIndex;
+      const activeIndex = navSnapshot.activeIndex;
+      const offset = index - activeIndex;
       const webview = webviewRef.current;
       if (offset === 0 || !webview || !isWebviewReady) return;
       try {
+        const standsThere =
+          webview.canGoToOffset(-activeIndex) && !webview.canGoToOffset(-activeIndex - 1);
+        if (!standsThere || !webview.canGoToOffset(offset)) return;
         webview.goToIndex(index);
       } catch {
-        // Detached guest, or the entry is gone: nothing navigated.
+        // Detached guest: nothing navigated.
         return;
       }
       clearRetryState();
