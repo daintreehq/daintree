@@ -108,9 +108,9 @@ export function BaseBranchFileList({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (keyBelongsToField(e)) return;
-    const target = e.target as HTMLElement;
+    const { target } = e;
     let from: number;
-    if (target.dataset.baseRowIndex !== undefined) {
+    if (target instanceof HTMLElement && target.dataset.baseRowIndex !== undefined) {
       from = Number(target.dataset.baseRowIndex);
     } else if (target === e.currentTarget && pendingFocusPathRef.current !== null) {
       // Parked while a row mounts: keep stepping from where the last key went.
