@@ -451,10 +451,6 @@ export function WorktreeCard({
   const hasPauseCommand = !!worktree.hasPauseCommand;
   const hasResumeCommand = !!worktree.hasResumeCommand;
   const hasTeardownCommand = !!worktree.hasTeardownCommand;
-  const teardownCommands =
-    worktree.worktreeMode && worktree.worktreeMode !== "local"
-      ? (resourceEnvironments?.[worktree.worktreeMode]?.teardown ?? [])
-      : [];
   const hasStatusCommand = !!worktree.hasStatusCommand;
   const hasProvisionCommand = !!worktree.hasProvisionCommand;
 
@@ -477,10 +473,7 @@ export function WorktreeCard({
     handleResourceTeardown,
     handleResourceOpenOnHost,
     confirmAttachmentMove,
-  } = useWorktreeActions({
-    worktree,
-    teardownCommands,
-  });
+  } = useWorktreeActions({ worktree });
 
   const handleRetryDelete = () => {
     // A retry that has to see the tree again goes back through the dialog,

@@ -24,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
 import {
   cancelScheduleRunConfirmations,
@@ -87,6 +88,7 @@ import {
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
   LazyProjectSleepConfirmDialog,
+  LazyWorktreeResourceTeardownConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -301,6 +303,7 @@ export function ModalHostLayer({
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
+  const resourceTeardownConfirmKey = useWorktreeResourceTeardownConfirmStore((s) => s.requestSeq);
 
   // Both palette activation paths (click and Enter) launch the same way, and
   // through the same seam the dock uses, so a kind can't behave differently
@@ -1043,6 +1046,23 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyProjectSleepConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="WorktreeResourceTeardownConfirmDialog"
+          resetKeys={[resourceTeardownConfirmKey]}
+          // A failed lazy import never reaches the dialog's own boundary; settle
+          // the request the action is awaiting rather than leave it to hang.
+          onError={() =>
+            useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false)
+          }
+        >
+          <Suspense fallback={null}>
+            <LazyWorktreeResourceTeardownConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

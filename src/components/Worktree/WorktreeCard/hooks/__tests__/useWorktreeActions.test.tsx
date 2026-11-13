@@ -63,7 +63,6 @@ function renderActions(overrides: Partial<WorktreeState> = {}) {
   return renderHook(() =>
     useWorktreeActions({
       worktree: makeWorktree(overrides),
-      teardownCommands: [],
     })
   );
 }
@@ -97,7 +96,7 @@ describe("useWorktreeActions — running a recipe from the card (#16381)", () =>
   it("runs with the issue the worktree is linked to now, not at first render", async () => {
     const { result, rerender } = renderHook(
       ({ worktree }: { worktree: WorktreeState }) =>
-        useWorktreeActions({ worktree, teardownCommands: [] }),
+        useWorktreeActions({ worktree }),
       { initialProps: { worktree: makeWorktree({ issueNumber: 42 }) } }
     );
     rerender({
@@ -135,6 +134,7 @@ describe("useWorktreeActions — session-wide destructive items defer to the act
     ["handleCloseAll", "worktree.sessions.trashAll"],
     ["handleTerminateAll", "worktree.sessions.endAll"],
     ["handleClearHistory", "worktree.sessions.clearHistory"],
+    ["handleResourceTeardown", "worktree.resource.teardown"],
   ] as const;
 
   it.each(ITEMS)("%s never confirms on the user's behalf", (handler, actionId) => {

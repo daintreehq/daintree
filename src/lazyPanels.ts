@@ -312,6 +312,11 @@ export const LazyProjectSleepConfirmDialog = lazyWithPreload(
   (m) => m.ProjectSleepConfirmDialog
 );
 
+export const LazyWorktreeResourceTeardownConfirmDialog = lazyWithPreload(
+  () => import("./components/Worktree/WorktreeResourceTeardownConfirmDialog"),
+  (m) => m.WorktreeResourceTeardownConfirmDialog
+);
+
 export const LazyRecipeConflictDialog = lazyWithPreload(
   () => import("./components/TerminalRecipe/RecipeConflictDialog"),
   (m) => m.RecipeConflictDialog

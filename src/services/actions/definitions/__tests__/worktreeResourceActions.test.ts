@@ -21,13 +21,26 @@ vi.mock("@/lib/notify", () => ({
 
 const mockResourceAction = vi.fn();
 const mockOnAddTerminal = vi.fn();
+const mockGetDeleteTeardownPreview = vi.fn();
 
 // Stub all external imports that worktreeActions.ts pulls in
 vi.mock("@/clients", () => ({
   copyTreeClient: {},
   systemClient: {},
-  worktreeClient: { resourceAction: mockResourceAction },
+  worktreeClient: {
+    resourceAction: mockResourceAction,
+    getDeleteTeardownPreview: mockGetDeleteTeardownPreview,
+  },
   projectClient: {},
+}));
+
+const mockRequestTeardownConfirmation = vi.fn<(request: unknown) => Promise<boolean>>();
+vi.mock("@/store/worktreeResourceTeardownConfirmStore", () => ({
+  useWorktreeResourceTeardownConfirmStore: {
+    getState: () => ({
+      requestConfirmation: (request: unknown) => mockRequestTeardownConfirmation(request),
+    }),
+  },
 }));
 
 const mockWorktrees = new Map<string, Record<string, unknown>>();
@@ -93,6 +106,12 @@ describe("worktree resource action definitions", () => {
     mockOnAddTerminal.mockReset();
     mockNotify.mockReset();
     mockOpenResourceBoxOnHost.mockReset();
+    // The shared cases below run teardown as a person would, so they pass
+    // through its confirm; approving it keeps them about what follows.
+    mockRequestTeardownConfirmation.mockReset();
+    mockRequestTeardownConfirmation.mockResolvedValue(true);
+    mockGetDeleteTeardownPreview.mockReset();
+    mockGetDeleteTeardownPreview.mockResolvedValue({ phases: [] });
   });
 
   it("openOnHost is gated on the window, not on the focused worktree, and stays out of the palette", () => {
@@ -463,6 +482,137 @@ describe("worktree resource action definitions", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Pause failed", message: "Resource pause failed" })
     );
+  });
+
+  describe("worktree.resource.teardown asks before it runs (#16948)", () => {
+    const BOX = {
+      id: "/box",
+      path: "/box",
+      name: "box",
+      branch: "feature/box",
+      hasTeardownCommand: true,
+    };
+
+    it.each(["user", "keybinding", "menu", "context-menu", undefined] as const)(
+      "a %s dispatch waits for the person's answer before running anything",
+      async (dispatchSource) => {
+        mockWorktrees.set("/box", BOX);
+        let answer!: (ok: boolean) => void;
+        mockRequestTeardownConfirmation.mockReturnValueOnce(
+          new Promise<boolean>((resolve) => (answer = resolve))
+        );
+        const def = registry.get("worktree.resource.teardown")!();
+
+        const run = def.run!({}, { activeWorktreeId: "/box", dispatchSource });
+        await vi.waitFor(() => expect(mockRequestTeardownConfirmation).toHaveBeenCalledOnce());
+        expect(mockResourceAction).not.toHaveBeenCalled();
+
+        answer(true);
+        await run;
+        expect(mockResourceAction).toHaveBeenCalledWith("/box", "teardown");
+      }
+    );
+
+    it("shows the host's resource-teardown commands, not the delete's other phases", async () => {
+      mockWorktrees.set("/box", { ...BOX, issueTitle: "Fix the devbox" });
+      mockGetDeleteTeardownPreview.mockResolvedValueOnce({
+        phases: [
+          { phase: "attachment-detach", attachment: "db", commands: ["db detach"], approved: true },
+          { phase: "resource-teardown", commands: ["devbox rm box"], approved: false },
+          { phase: "teardown", commands: ["rm -rf .cache"], approved: true },
+        ],
+      });
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await def.run!({ worktreeId: "/box" }, { dispatchSource: "user" });
+
+      expect(mockGetDeleteTeardownPreview).toHaveBeenCalledWith("/box");
+      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith({
+        worktreeId: "/box",
+        label: "Fix the devbox",
+        commands: ["devbox rm box"],
+        approved: false,
+      });
+    });
+
+    it("runs nothing and reports nothing when the person cancels", async () => {
+      mockWorktrees.set("/box", BOX);
+      mockRequestTeardownConfirmation.mockResolvedValueOnce(false);
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await expect(
+        def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" })
+      ).resolves.toBeUndefined();
+
+      expect(mockResourceAction).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
+    });
+
+    it("still asks, saying the commands couldn't be read, when the preview read fails", async () => {
+      mockWorktrees.set("/box", BOX);
+      mockGetDeleteTeardownPreview.mockRejectedValueOnce(new Error("port closed"));
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" });
+
+      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ label: "feature/box", commands: null, approved: true })
+      );
+      expect(mockResourceAction).toHaveBeenCalledWith("/box", "teardown");
+    });
+
+    it("says it found no commands when the host previews none", async () => {
+      mockWorktrees.set("/box", BOX);
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" });
+
+      expect(mockRequestTeardownConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ commands: [], approved: true })
+      );
+    });
+
+    it.each([
+      ["the renderer has no such worktree", () => undefined],
+      [
+        "the host no longer monitors it",
+        () => {
+          mockWorktrees.set("/box", BOX);
+          mockGetDeleteTeardownPreview.mockResolvedValueOnce(null);
+        },
+      ],
+    ])("never asks, and reports it, when %s", async (_case, seed) => {
+      seed();
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await expect(
+        def.run!({}, { activeWorktreeId: "/box", dispatchSource: "user" })
+      ).rejects.toThrow("Worktree not found");
+
+      expect(mockRequestTeardownConfirmation).not.toHaveBeenCalled();
+      expect(mockResourceAction).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Teardown failed" })
+      );
+    });
+
+    it("doesn't ask again for an agent dispatch the MCP bridge already confirmed", async () => {
+      mockWorktrees.set("/box", BOX);
+      const def = registry.get("worktree.resource.teardown")!();
+
+      await def.run!(
+        { worktreeId: "/box" },
+        { dispatchSource: "agent", hostConfirmed: true }
+      );
+
+      expect(mockRequestTeardownConfirmation).not.toHaveBeenCalled();
+      expect(mockGetDeleteTeardownPreview).not.toHaveBeenCalled();
+      expect(mockResourceAction).toHaveBeenCalledWith("/box", "teardown");
+    });
+
+    it("is titled with the verb", () => {
+      expect(registry.get("worktree.resource.teardown")!().title).toBe("Tear down resource");
+    });
   });
 
   it("copy details action writes the error message to the clipboard", async () => {

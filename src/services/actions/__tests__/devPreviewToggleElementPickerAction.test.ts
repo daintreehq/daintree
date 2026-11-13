@@ -90,7 +90,7 @@ describe("devPreview.toggleElementPicker", () => {
 
   it("is a neutral, described command an agent can find", () => {
     const action = definition();
-    expect(action.title).toBe("Toggle Element Picker");
+    expect(action.title).toBe("Toggle element picker");
     expect(Buffer.byteLength(action.description ?? "")).toBeLessThanOrEqual(400);
     for (const word of ["sveltekit", "builder", "plugin"]) {
       expect(`${action.id} ${action.title} ${action.description}`.toLowerCase()).not.toContain(

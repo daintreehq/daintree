@@ -94,6 +94,9 @@ const AUDITED_LEAKY_IDS: readonly string[] = [
   "idleTerminalNotify.updateConfig",
   "agentSettings.reset",
   "fleet.reject",
+  // Both silently no-oped with nothing focused (#16948).
+  "terminal.viewInfo",
+  "terminal.info.open",
   // D1 confirm-bypasses: danger:"confirm" whose confirm was wired only at the
   // component call site, so a source:"user" palette pick ran them unconfirmed.
   // (`worktree.sessions.endAll` now also self-gates in run() per #11345, but stays
@@ -155,6 +158,16 @@ describe("action palette behavior", () => {
       .map(([key, ids]) => `${key}: ${ids.join(", ")}`);
 
     expect(collisions).toEqual([]);
+  });
+
+  it("lists the terminal info dialog once, not once per id that opens it (#16948)", () => {
+    // Different titles, so the collision check above can't see the pair; both
+    // ids stay registered because MCP callers and specs name each of them.
+    const rows = ["terminal.viewInfo", "terminal.info.open"].filter((id) => {
+      const def = definitions.get(id);
+      return def !== undefined && isPaletteRunnable(def);
+    });
+    expect(rows).toEqual(["terminal.viewInfo"]);
   });
 
   it("every palette redirect points at a registered, palette-runnable command", () => {

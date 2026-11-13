@@ -110,7 +110,6 @@ const CONFIRMED_WIRED = [
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
-  "worktree.resource.teardown",
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
@@ -156,6 +155,7 @@ const BYPASS_WIRED = new Set([
   "project.sleepIdle", // same store and dialog
   "project.restart", // same store and dialog
   "schedules.runNow", // deferred-promise via scheduleRunConfirmStore; ScheduleRunConfirmDialog resolves it
+  "worktree.resource.teardown", // deferred-promise via worktreeResourceTeardownConfirmStore (#16948); WorktreeResourceTeardownConfirmDialog resolves it
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on

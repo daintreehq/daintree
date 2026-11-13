@@ -286,7 +286,7 @@ export function registerDevServerActions(
 
   actions.set("devPreview.toggleElementPicker", () => ({
     id: "devPreview.toggleElementPicker",
-    title: "Toggle Element Picker",
+    title: "Toggle element picker",
     description:
       "Switch the Element Picker on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. The picker lets the user select an element on the page and send it to an agent. Returns the panel it acted on and whether the picker is now on.",
     category: "devServer",

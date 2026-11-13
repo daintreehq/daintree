@@ -1,4 +1,4 @@
-import { createElement, useCallback, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import type { WorktreeState } from "@/types";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
@@ -8,7 +8,6 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { recipeIssueContext } from "@/utils/recipeVariables";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 export type ConfirmDialogState =
   | { isOpen: false }
@@ -50,10 +49,8 @@ export interface UseWorktreeActionsResult {
 
 export function useWorktreeActions({
   worktree,
-  teardownCommands,
 }: {
   worktree: WorktreeState;
-  teardownCommands: string[];
 }): UseWorktreeActionsResult {
   const runRecipeWithResults = useRecipeStore((state) => state.runRecipeWithResults);
 
@@ -184,46 +181,15 @@ export function useWorktreeActions({
     );
   }, [worktree.id]);
 
+  // Unconfirmed, like the session-wide items above: the action's own gate
+  // shows the one teardown confirm every entry point shares.
   const handleResourceTeardown = useCallback(() => {
-    const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;
-    const hasCommands = teardownCommands.length > 0;
-    const preview = createElement(
-      "div",
-      { className: "space-y-1.5" },
-      createElement(
-        "span",
-        {
-          className: SECTION_LABEL_CLASS,
-        },
-        hasCommands ? "Commands that will run" : "Teardown commands"
-      ),
-      createElement(
-        "pre",
-        {
-          className:
-            "text-xs text-text-primary bg-daintree-bg/50 p-3 rounded border border-border-default font-mono whitespace-pre-wrap break-all",
-        },
-        hasCommands ? teardownCommands.join("\n") : "No teardown commands found."
-      )
+    void actionService.dispatch(
+      "worktree.resource.teardown",
+      { worktreeId: worktree.id },
+      { source }
     );
-    setConfirmDialog({
-      isOpen: true,
-      title: `Tear down resource for '${label}'?`,
-      description:
-        "This runs the project's resource-teardown commands for this worktree. Tearing down a remote or shared environment may require manual steps to recreate.",
-      confirmLabel: "Tear down resource",
-      variant: "destructive",
-      children: preview,
-      onConfirm: () => {
-        void actionService.dispatch(
-          "worktree.resource.teardown",
-          { worktreeId: worktree.id },
-          { source }
-        );
-        setConfirmDialog({ isOpen: false });
-      },
-    });
-  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands, source]);
+  }, [worktree.id, source]);
 
   // Adding a host and, from there, installing and starting Daintree on the box
   // are bundled, so the one confirmation names each step (D2, bundled operations).
