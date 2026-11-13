@@ -3833,6 +3833,19 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
   });
 
   /**
+   * The app shell's first control: the last-resort target, kept distinct from
+   * every expected one so a test can't pass by landing there.
+   */
+  function addShell(): HTMLButtonElement {
+    const root = add(document.createElement("div"));
+    root.id = "root";
+    const shellControl = document.createElement("button");
+    shellControl.textContent = "Toggle sidebar";
+    root.appendChild(shellControl);
+    return shellControl;
+  }
+
+  /**
    * Opens the manager the way a menu item's select handler does: the item
    * holds focus as the action runs, and unmounts with its menu right after.
    */
@@ -3868,7 +3881,10 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
     );
   }
 
+  const nextFrame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
   it("hands focus back to the menu's trigger once the item that opened it has unmounted", async () => {
+    addShell();
     const trigger = openFromMenuItem();
     await renderOpenedView();
 
@@ -3877,12 +3893,32 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it("waits a frame, until the workspace behind it is no longer inert, to hand focus back", async () => {
+    addShell();
+    const trigger = openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    // The overlay claim's release, which lifts `inert` off the workspace,
+    // commits after the closing commit's effects.
+    expect(document.activeElement).not.toBe(trigger);
+    await nextFrame();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("hands focus to the focused panel when the palette that opened it is gone", async () => {
-    const panelInput = add(document.createElement("textarea"));
-    const unregister = registerPanelFocusHandler("panel-1", () => {
+    addShell();
+    const panel = add(document.createElement("div"));
+    panel.dataset.panelId = "panel-1";
+    panel.dataset.panelLocation = "grid";
+    const panelInput = document.createElement("textarea");
+    panel.appendChild(panelInput);
+    const focusPanel = vi.fn(() => {
       panelInput.focus();
       return document.activeElement === panelInput;
     });
+    const unregister = registerPanelFocusHandler("panel-1", focusPanel);
     usePanelStore.setState({ focusedId: "panel-1" });
     try {
       openFromPaletteInput();
@@ -3891,17 +3927,14 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
       act(() => usePluginManagerStore.getState().close());
 
       await waitFor(() => expect(document.activeElement).toBe(panelInput));
+      expect(focusPanel).toHaveBeenCalledTimes(1);
     } finally {
       unregister();
     }
   });
 
   it("falls back to the app shell's first control rather than the body", async () => {
-    const root = add(document.createElement("div"));
-    root.id = "root";
-    const shellControl = document.createElement("button");
-    shellControl.textContent = "Toggle sidebar";
-    root.appendChild(shellControl);
+    const shellControl = addShell();
     openFromPaletteInput();
     await renderOpenedView();
 
@@ -3911,7 +3944,8 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
   });
 
   it("leaves focus the user has already moved somewhere usable", async () => {
-    const trigger = openFromMenuItem();
+    addShell();
+    openFromMenuItem();
     const elsewhere = add(document.createElement("button"));
     await renderOpenedView();
 
@@ -3919,22 +3953,23 @@ describe("PluginManagerView — return focus and keyboard containment (#16942)",
       usePluginManagerStore.getState().close();
       elsewhere.focus();
     });
-    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    await nextFrame();
 
     expect(document.activeElement).toBe(elsewhere);
-    expect(document.activeElement).not.toBe(trigger);
   });
 
   it("restores nothing when it reopens before the hand-back lands", async () => {
-    openFromMenuItem();
+    addShell();
+    const trigger = openFromMenuItem();
     await renderOpenedView();
 
-    act(() => {
-      usePluginManagerStore.getState().close();
-      usePluginManagerStore.getState().open();
-    });
-    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    act(() => usePluginManagerStore.getState().close());
+    expect(document.activeElement).not.toBe(trigger);
+    act(() => usePluginManagerStore.getState().open());
+    await nextFrame();
+    await nextFrame();
 
+    expect(document.activeElement).not.toBe(trigger);
     expect(screen.getByTestId("plugin-manager-view").contains(document.activeElement)).toBe(true);
   });
 

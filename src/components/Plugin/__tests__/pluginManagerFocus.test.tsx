@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPortal } from "react-dom";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { containTab, isFocusStranded } from "../pluginManagerFocus";
+import { containTab, handFocusBack, isFocusStranded } from "../pluginManagerFocus";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
+import { usePanelStore } from "@/store/panelStore";
 
 function View({ children }: { children?: React.ReactNode }) {
   return (
@@ -68,12 +71,16 @@ describe("containTab", () => {
   });
 
   it("keeps focus on the view when nothing in it takes focus", () => {
-    render(<View />);
-    const view = screen.getByTestId("view");
-    view.focus();
+    render(
+      <View>
+        <div data-testid="note" tabIndex={-1} />
+      </View>
+    );
+    const note = screen.getByTestId("note");
+    note.focus();
 
-    expect(fireEvent.keyDown(view, { key: "Tab" })).toBe(false);
-    expect(document.activeElement).toBe(view);
+    expect(fireEvent.keyDown(note, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByTestId("view"));
   });
 
   it("leaves modified Tab alone", () => {
@@ -85,7 +92,106 @@ describe("containTab", () => {
     const only = screen.getByRole("button", { name: "Only" });
     only.focus();
 
-    expect(fireEvent.keyDown(only, { key: "Tab", ctrlKey: true })).toBe(true);
+    for (const modifier of ["altKey", "ctrlKey", "metaKey"] as const) {
+      expect(fireEvent.keyDown(only, { key: "Tab", [modifier]: true })).toBe(true);
+    }
+  });
+
+  it("treats a radio group as one stop, landing on its checked option", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <input type="radio" name="mode" aria-label="Fast" defaultChecked />
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const checked = screen.getByRole("radio", { name: "Fast" });
+    const first = screen.getByRole("button", { name: "First" });
+    checked.focus();
+
+    expect(fireEvent.keyDown(checked, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(checked);
+  });
+
+  it("counts a details summary as a stop", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <button type="button">View logs</button>
+        <details>
+          <summary>Technical details</summary>
+          <pre>stack</pre>
+        </details>
+      </View>
+    );
+    const logs = screen.getByRole("button", { name: "View logs" });
+    logs.focus();
+
+    expect(fireEvent.keyDown(logs, { key: "Tab" })).toBe(true);
+  });
+});
+
+describe("handFocusBack", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    usePanelStore.setState({ focusedId: null });
+  });
+
+  function shell(): { root: HTMLElement; control: HTMLButtonElement } {
+    const root = document.createElement("div");
+    root.id = "root";
+    const control = document.createElement("button");
+    control.textContent = "Toggle sidebar";
+    root.appendChild(control);
+    document.body.appendChild(root);
+    return { root, control };
+  }
+
+  it("keeps the fallback's tooltip from opening on the focus it hands over", () => {
+    const { control } = shell();
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(control);
+    expect(isTooltipSuppressedForElement(control)).toBe(true);
+  });
+
+  it("passes over a focused panel that sits behind an inert overlay", () => {
+    const { root, control } = shell();
+    const panel = document.createElement("div");
+    panel.dataset.panelId = "panel-1";
+    panel.dataset.panelLocation = "grid";
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("inert", "");
+    wrapper.appendChild(panel);
+    root.appendChild(wrapper);
+    const focusPanel = vi.fn(() => true);
+    const unregister = registerPanelFocusHandler("panel-1", focusPanel);
+    usePanelStore.setState({ focusedId: "panel-1" });
+    try {
+      handFocusBack(null);
+
+      expect(focusPanel).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(control);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("reaches past an app shell that's still inert under the theme browser", () => {
+    const { root } = shell();
+    root.setAttribute("inert", "");
+    const sheet = document.createElement("div");
+    const sheetSearch = document.createElement("input");
+    sheet.appendChild(sheetSearch);
+    document.body.appendChild(sheet);
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(sheetSearch);
   });
 });
 

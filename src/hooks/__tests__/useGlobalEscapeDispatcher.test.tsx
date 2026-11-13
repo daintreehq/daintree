@@ -64,6 +64,11 @@ describe("useGlobalEscapeDispatcher — layers open inside the plugin manager (#
     });
 
     expect(closeManager).not.toHaveBeenCalled();
+
+    // The next press is a fresh event, and nothing is open over the manager.
+    pressEscape();
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
   });
 
   it("closes the manager when nothing is open over it", () => {
