@@ -14,7 +14,10 @@ import {
 import Anser from "anser";
 import { ChevronDown, GripVertical, Send } from "lucide-react";
 import type { ActionDanger, ActionId } from "@shared/types/actions";
-import type { PluginAgentPaneObservation, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type {
+  PluginAgentPaneObservation,
+  PluginSendToAgentRefusalReason,
+} from "@shared/types/plugin";
 import type {
   PluginActionButtonProps,
   PluginActionDispatchOutcome,

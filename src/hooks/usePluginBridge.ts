@@ -8,7 +8,10 @@ import type {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
 import type { PluginPanelReloadResponse } from "@shared/types/pluginPanelReload";
-import { pluginManifestIdFromInstanceKey, type PluginAgentPaneObservation } from "@shared/types/plugin";
+import {
+  pluginManifestIdFromInstanceKey,
+  type PluginAgentPaneObservation,
+} from "@shared/types/plugin";
 import { listAgentPanes } from "@/services/agentHandoff/agentDraft";
 
 /**

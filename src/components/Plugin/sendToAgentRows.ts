@@ -1,5 +1,8 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
-import type { PluginAgentPaneObservation, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type {
+  PluginAgentPaneObservation,
+  PluginSendToAgentRefusalReason,
+} from "@shared/types/plugin";
 import { pickPreselectedPane } from "@/services/agentHandoff/draftTarget";
 
 /** The agent a "new agent" row would start. */

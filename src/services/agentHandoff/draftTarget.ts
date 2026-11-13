@@ -5,7 +5,10 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import type { PluginAgentPaneObservation, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type {
+  PluginAgentPaneObservation,
+  PluginSendToAgentRefusalReason,
+} from "@shared/types/plugin";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { BackendStatus } from "@/store/panelStore";
 import { getBuiltInRuntimeAgentId, getRuntimeAgentId, isAgentTerminal } from "@/utils/terminalType";
