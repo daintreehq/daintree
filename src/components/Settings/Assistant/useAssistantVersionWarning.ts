@@ -9,7 +9,10 @@ export function useAssistantVersionWarning(preferredAgentId: string | null) {
   // outdated CLI (HelpPanelVersionGate), but the user can pick a too-old agent
   // here with no warning. Probe the selected agent's version (12h cached in
   // AgentVersionService, so cheap) and surface a non-blocking hint inline.
+  // Carries the agent it was read for, so the banner's link opens the settings
+  // of the agent it names even on the render before a switch's probe clears it.
   const [versionWarning, setVersionWarning] = useState<{
+    agentId: string;
     agentName: string;
     installed: string;
     required: string;
@@ -53,7 +56,9 @@ export function useAssistantVersionWarning(preferredAgentId: string | null) {
         }
         try {
           setVersionWarning(
-            semver.lt(installed, required) ? { agentName, installed, required } : null
+            semver.lt(installed, required)
+              ? { agentId: preferredAgentId, agentName, installed, required }
+              : null
           );
         } catch (err) {
           setVersionWarning(null);

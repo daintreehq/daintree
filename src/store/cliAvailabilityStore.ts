@@ -41,6 +41,13 @@ interface CliAvailabilityActions {
    */
   refresh: (force?: boolean) => Promise<void>;
   /**
+   * Probe again with a check that starts after this call, waiting out one that
+   * is already running instead of joining it: for when what the probe checks has
+   * changed, such as a reloaded configuration's agents. Calls made while it
+   * waits share the one check.
+   */
+  recheck: () => Promise<void>;
+  /**
    * Take the host's latest check without probing again, for when the host has
    * just checked, such as after the copy an agent launches changed.
    */
@@ -134,6 +141,7 @@ function saveCache(availability: CliAvailability, lastCheckedAt: number) {
 let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
+let recheckPromise: Promise<void> | null = null;
 let syncSeq = 0;
 
 // Fetch availability and details in one pass so the UI never renders a
@@ -286,6 +294,21 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       return refreshPromise;
     },
 
+    recheck: () => {
+      if (recheckPromise) return recheckPromise;
+      if (!initPromise && !refreshPromise) return get().refresh(true);
+      const myEpoch = epoch;
+      const run: Promise<void> = Promise.allSettled([initPromise, refreshPromise]).then(() => {
+        // Cleared before its own check starts, so a call made from here on waits
+        // for that check rather than sharing it.
+        if (recheckPromise === run) recheckPromise = null;
+        if (epoch !== myEpoch) return;
+        return get().refresh(true);
+      });
+      recheckPromise = run;
+      return run;
+    },
+
     syncFromHost: () => {
       if (!isElectronAvailable()) return Promise.resolve();
       const mySeq = ++syncSeq;
@@ -293,8 +316,9 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       const isCurrent = () => mySeq === syncSeq && epoch === myEpoch;
       const run = (async () => {
         // A check begun before the host's would answer after this read and put
-        // back what launched before.
-        await Promise.allSettled([initPromise, refreshPromise]);
+        // back what launched before. A waiting recheck probes after this read
+        // would start, so this read would put its older answer back over it.
+        await Promise.allSettled([initPromise, refreshPromise, recheckPromise]);
         if (!isCurrent()) return;
         try {
           const [availability, details] = await Promise.all([
@@ -321,6 +345,7 @@ export function cleanupCliAvailabilityStore() {
   epoch++;
   initPromise = null;
   refreshPromise = null;
+  recheckPromise = null;
   resetCliHostSync();
   useCliAvailabilityStore.setState({
     availability: defaultAvailability(),
