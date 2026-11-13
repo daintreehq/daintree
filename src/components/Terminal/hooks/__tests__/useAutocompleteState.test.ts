@@ -154,20 +154,23 @@ describe("useAutocompleteState", () => {
       expect(setSelectedIndex).toHaveBeenCalledWith(0);
     });
 
-    it("keeps a `#` menu unselected when its rows turn disabled", () => {
+    it("drops a chosen `#` row back to no selection when it turns disabled", () => {
       const hash: ActiveCompletionContext = { triggerChar: "#", start: 0, tokenEnd: 2, query: "1" };
+      const rows = [item("r1"), item("r2")];
       const { rerender } = render(
-        base({ activeCompletionContext: hash, autocompleteItems: [item("r1")], selectedIndex: -1 })
+        base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: -1 })
       );
+      // The reader arrows onto r1: that is the row the session remembers.
+      rerender(base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: 0 }));
       setSelectedIndex.mockClear();
       rerender(
         base({
           activeCompletionContext: hash,
           autocompleteItems: [{ ...item("r1"), disabled: true }, item("r2")],
-          selectedIndex: -1,
+          selectedIndex: 0,
         })
       );
-      expect(setSelectedIndex).not.toHaveBeenCalled();
+      expect(setSelectedIndex).toHaveBeenCalledWith(-1);
     });
   });
 
