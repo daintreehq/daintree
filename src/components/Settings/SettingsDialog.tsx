@@ -1409,6 +1409,7 @@ function SettingsDialogInner({
                               onSubtabChange={(id) =>
                                 setActiveSubtabs((prev) => ({ ...prev, general: id }))
                               }
+                              onClose={handleClose}
                             />
                             <SettingsTabScrollEffect
                               isActive={isActive && !panelsHidden}
