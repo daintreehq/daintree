@@ -283,6 +283,26 @@ describe("GitHubListItem", () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it("clears an earlier tick when a later copy is refused", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(<GitHubListItem item={baseIssue} type="issue" />);
+    const copyButton = screen.getByLabelText("Copy number 42");
+
+    await act(async () => {
+      fireEvent.click(copyButton);
+    });
+    expect(copyButton.querySelector("svg.lucide-check")).not.toBeNull();
+
+    writeMainClipboardMock.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => {
+      fireEvent.click(copyButton);
+    });
+
+    // The tick would otherwise claim the refused copy succeeded.
+    expect(copyButton.querySelector("svg.lucide-check")).toBeNull();
+    expect(warn).toHaveBeenCalled();
+  });
+
   it("does not carry a copy tick onto a different item handed to the same row", async () => {
     const { rerender } = render(<GitHubListItem item={baseIssue} type="issue" />);
 
@@ -298,6 +318,33 @@ describe("GitHubListItem", () => {
     const reused = screen.getByLabelText("Copy number 43");
     expect(reused.querySelector("svg.lucide-check")).toBeNull();
     expect(reused.textContent).toBe("#43");
+
+    // And it copies its own number, not the one it was first handed.
+    await act(async () => {
+      fireEvent.click(reused);
+    });
+    expect(writeMainClipboardMock).toHaveBeenLastCalledWith("#43");
+    expect(reused.querySelector("svg.lucide-check")).not.toBeNull();
+  });
+
+  it("does not show a tick for a copy that lands after the row moved to another item", async () => {
+    let finishWrite: () => void = () => {};
+    writeMainClipboardMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishWrite = resolve))
+    );
+    const { rerender } = render(<GitHubListItem item={baseIssue} type="issue" />);
+
+    act(() => {
+      fireEvent.click(screen.getByLabelText("Copy number 42"));
+    });
+    rerender(<GitHubListItem item={{ ...baseIssue, number: 43 }} type="issue" />);
+
+    // #42's write lands now, after the reset for #43 has already run.
+    await act(async () => {
+      finishWrite();
+    });
+
+    expect(screen.getByLabelText("Copy number 43").querySelector("svg.lucide-check")).toBeNull();
   });
 
   it("shows check icon after copy then reverts after timeout", async () => {
@@ -327,6 +374,9 @@ describe("GitHubListItem", () => {
     await act(async () => {
       fireEvent.click(screen.getByLabelText("Copy number 42"));
     });
+    expect(
+      screen.getByLabelText("Copy number 42").querySelector("svg.lucide-check")
+    ).not.toBeNull();
 
     rerender(<GitHubListItem item={{ ...baseIssue, number: 43 }} type="issue" />);
     rerender(<GitHubListItem item={baseIssue} type="issue" />);

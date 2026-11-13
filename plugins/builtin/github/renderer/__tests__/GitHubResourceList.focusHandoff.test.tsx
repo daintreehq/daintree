@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import type { Issue, Page } from "@shared/types/forge";
 import { _resetForTests } from "@/lib/forgeResourceCache";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
-import { useGitHubFilterStore } from "../stores/githubFilterStore";
+import { resetGitHubFilterStore } from "../stores/githubFilterStore";
 
 /**
  * The toolbar's forge dropdown hands the user off to a modal (a new worktree,
@@ -225,10 +225,18 @@ function ToolbarHarness({
 
 const page = (items: Issue[]): Page<Issue> => ({ items, nextCursor: null, hasMore: false });
 
-/** Radix hands focus back from a closed menu on a zero-delay timer; let every one run. */
+/**
+ * Radix hands focus back from a closed menu on a zero-delay timer, and its
+ * content unmounts a commit after the close. Drain the zero-delay turns, then a
+ * frame's worth of time for anything queued on one, then the turns that frame
+ * may have scheduled.
+ */
 const settle = () =>
   act(async () => {
-    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    const turn = () => new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 5; i++) await turn();
+    await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 5; i++) await turn();
   });
 
 beforeAll(() => whenPluginUiReady(), 30_000);
@@ -238,9 +246,7 @@ beforeEach(() => {
   dialogStore.set(false);
   selection.items = new Map();
   mockListIssues.mockReset().mockResolvedValue(page([makeIssue(1), makeIssue(2)]));
-  const filters = useGitHubFilterStore.getState();
-  filters.setIssueSearchQuery("");
-  filters.setIssueFilter("open");
+  resetGitHubFilterStore();
 });
 
 afterEach(() => {
@@ -283,6 +289,26 @@ describe("GitHubResourceList hand-off to a dialog", () => {
 
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(document.activeElement).toBe(screen.getByLabelText("Branch name"));
+  });
+
+  it("does not pull focus into a panel that a row menu's choice has closed", async () => {
+    render(<ToolbarHarness />);
+    const search = screen.getByPlaceholderText(/search issues/i);
+    const trigger = await screen.findByLabelText("Actions for #1");
+    act(() => {
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    });
+    const item = await screen.findByRole("menuitem", { name: /open on github/i });
+
+    // A hand-off to the browser: no dialog, the panel just closes.
+    act(() => {
+      fireEvent.click(item);
+    });
+    await settle();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).not.toBe(search);
   });
 
   it("keeps focus in the bulk create dialog opened from the selection bar", async () => {
