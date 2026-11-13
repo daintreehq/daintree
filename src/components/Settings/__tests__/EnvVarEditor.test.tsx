@@ -1371,7 +1371,9 @@ describe("unsaved drafts", () => {
 
   describe("closing Settings", () => {
     it("saves an edit no blur reached", async () => {
-      renderInSettings(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />);
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
       fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "2" } });
       expect(onChange).not.toHaveBeenCalled();
 
@@ -1412,7 +1414,9 @@ describe("unsaved drafts", () => {
     });
 
     it("has nothing to do while the table is what is saved", async () => {
-      renderInSettings(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />);
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
       expect(await flushSettings()).toEqual([]);
       expect(onChange).not.toHaveBeenCalled();
     });
@@ -1464,7 +1468,9 @@ describe("unsaved drafts", () => {
       fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
       first.unmount();
 
-      render(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />);
+      render(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />
+      );
       expect(keys()).toEqual(["FOO", ""]);
       expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
     });

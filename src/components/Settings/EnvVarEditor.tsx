@@ -1216,7 +1216,12 @@ export function EnvVarEditor({
           </SettingsInlineError>
         )}
         {hasBlockingError && hasUnsavedDraft && (
-          <Button variant="outline" size="sm" onClick={handleDiscard} data-testid="env-editor-discard">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDiscard}
+            data-testid="env-editor-discard"
+          >
             Discard changes
           </Button>
         )}
