@@ -17,7 +17,7 @@ export {
   ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike; also moves a project group down the switcher
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowDownWideNarrow, // largest-first sort order — the Worktrees overview ordered by size on disk
-  ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
+  ArrowLeftRight, // swap two sides — the compare dialog's Base and Compare; also a settings search hit that lives in the other scope, where following it switches scope
   ArrowUp, // move a project group up the switcher — paired with ArrowDown
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt

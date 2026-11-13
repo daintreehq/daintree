@@ -19,6 +19,7 @@ import {
   RefreshCw,
   WrapText,
 } from "lucide-react";
+import { ArrowLeftRight } from "@/components/icons";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -725,6 +726,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const baseLabel = leftWorktree ? worktreeOptionLabel(leftWorktree) : null;
   const compareLabel = rightWorktree ? worktreeOptionLabel(rightWorktree) : null;
 
+  // Focus stays on the button, so the two selectors changing underneath it is
+  // announced rather than left for the user to find.
+  const swapSides = () => {
+    setLeftId(rightId);
+    setRightId(leftId);
+    useAnnouncerStore
+      .getState()
+      .announce(
+        `Base is now ${rightBranch ?? "not chosen"}, Compare is now ${leftBranch ?? "not chosen"}`
+      );
+  };
+
   const fileListToggle = (
     <FileViewerToolbar.IconButton
       label="Toggle file list"
@@ -916,9 +929,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             onChange={setLeftId}
           />
         </div>
-        <span aria-hidden="true" className="pb-2 text-xs text-text-secondary">
-          vs
-        </span>
+        {/* Each selector disables the other's pick, so with two worktrees this
+            is the only way to reverse the direction. */}
+        <div className="pb-1">
+          <FileViewerToolbar.IconButton
+            label="Swap Base and Compare"
+            tooltipSide="top"
+            disabled={leftId === null && rightId === null}
+            onClick={swapSides}
+          >
+            <ArrowLeftRight className={TOOLBAR_ICON_CLASS} />
+          </FileViewerToolbar.IconButton>
+        </div>
         <div className="flex-1 min-w-0">
           <WorktreeSelector
             label="Compare"
