@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { LogFilters } from "../LogFilters";
@@ -94,6 +95,12 @@ describe("LogFilters accessibility", () => {
 
     expect(onClear).toHaveBeenCalled();
     expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Search logs" }));
+  });
+
+  it("exposes the real search input through searchInputRef", () => {
+    const ref = React.createRef<HTMLInputElement>();
+    render(<LogFilters {...baseProps} searchInputRef={ref} />);
+    expect(ref.current).toBe(screen.getByRole("searchbox", { name: "Search logs" }));
   });
 
   it("keeps focus in the search box when its clear button is pressed", () => {

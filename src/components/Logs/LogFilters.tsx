@@ -28,6 +28,11 @@ const LOG_LEVELS: { level: LogLevel; label: string; dot: string }[] = [
   { level: "error", label: "Error", dot: "bg-status-error" },
 ];
 
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
+  if (typeof ref === "function") ref(value);
+  else if (ref) (ref as React.RefObject<T | null>).current = value;
+}
+
 export function LogFilters({
   filters,
   onFiltersChange,
@@ -42,8 +47,7 @@ export function LogFilters({
   const setSearchRefs = useCallback(
     (el: HTMLInputElement | null) => {
       localSearchRef.current = el;
-      if (typeof searchInputRef === "function") searchInputRef(el);
-      else if (searchInputRef) (searchInputRef as React.RefObject<HTMLInputElement | null>).current = el;
+      assignRef(searchInputRef, el);
     },
     [searchInputRef]
   );
