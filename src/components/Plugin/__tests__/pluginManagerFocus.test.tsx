@@ -208,7 +208,7 @@ describe("isFocusStranded", () => {
     const usable = document.createElement("button");
     document.body.append(view, workspace, usable);
 
-    (document.activeElement as HTMLElement | null)?.blur();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     expect(isFocusStranded(view)).toBe(true);
     inside.focus();
     expect(isFocusStranded(view)).toBe(true);
