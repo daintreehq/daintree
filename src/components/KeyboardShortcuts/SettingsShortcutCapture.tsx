@@ -263,8 +263,7 @@ export function SettingsShortcutCapture({
       // waiting they end the chord window on it, and Enter does too, so a quick
       // Enter meant for Save is not taken as the second key.
       const navigationTab = e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey;
-      const bareEnter =
-        e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+      const bareEnter = e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
       if (pendingStepsRef.current.length > 0 && (navigationTab || bareEnter)) {
         finishRecording(pendingStepsRef.current);
         return;

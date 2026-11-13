@@ -321,9 +321,7 @@ describe("KeyboardShortcutsTab — failed reset all", () => {
 
     expect(resetAll.disabled).toBe(true);
     await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole("textbox", { name: "Search shortcuts" })
-      )
+      expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Search shortcuts" }))
     );
   });
 });
