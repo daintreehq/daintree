@@ -3,6 +3,11 @@ import { renderHook, act } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useFindInPage } from "../useFindInPage";
 
+const focusWebviewPageMock = vi.hoisted(() => vi.fn(() => true));
+vi.mock("@/components/Browser/browserUtils", () => ({
+  focusWebviewPage: focusWebviewPageMock,
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const onFindShortcutMock: Mock<any> = vi.fn(() => vi.fn());
 
@@ -26,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   onFindShortcutMock.mockClear();
+  focusWebviewPageMock.mockClear();
 });
 
 interface MockWebview {
@@ -434,16 +440,143 @@ describe("useFindInPage", () => {
     });
   });
 
-  it("resets matchCase on close", () => {
+  it("keeps the query and matchCase across a close and reopen", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
     act(() => result.current.open());
     act(() => result.current.toggleMatchCase());
-    expect(result.current.matchCase).toBe(true);
+    act(() => result.current.setQuery("hello"));
 
     act(() => result.current.close());
-    expect(result.current.matchCase).toBe(false);
+    expect(result.current.isOpen).toBe(false);
+    expect(result.current.query).toBe("hello");
+    expect(result.current.matchCase).toBe(true);
+
+    act(() => result.current.open());
+    expect(result.current.query).toBe("hello");
+    expect(result.current.matchCase).toBe(true);
+  });
+
+  it("clears the page's find session and the counts on close", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 2, matches: 5, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(5);
+    webview.stopFindInPage.mockClear();
+
+    act(() => result.current.close());
+    expect(webview.stopFindInPage).toHaveBeenCalledWith("clearSelection");
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.activeMatch).toBe(0);
+  });
+
+  it("searches again with the kept query and matchCase when the bar reopens", () => {
+    const webview = createMockWebview();
+    webview.findInPage.mockReturnValueOnce(1).mockReturnValueOnce(2);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.toggleMatchCase());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    webview.findInPage.mockClear();
+
+    act(() => result.current.open());
+    expect(webview.findInPage).toHaveBeenCalledTimes(1);
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: true });
+
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 2, activeMatchOrdinal: 1, matches: 4, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(4);
+  });
+
+  it("does not search on reopen when no query was kept", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.toggleMatchCase());
+    act(() => result.current.close());
+    act(() => result.current.open());
+
+    expect(webview.findInPage).not.toHaveBeenCalled();
+    expect(result.current.matchCase).toBe(true);
+  });
+
+  it("does not search on reopen while an IME composition is in progress", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    webview.findInPage.mockClear();
+    result.current.isComposingRef.current = true;
+
+    act(() => result.current.open());
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("does not search again when open is called on a bar that is already open", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    webview.findInPage.mockClear();
+
+    act(() => result.current.open());
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("hands the keyboard back to the webview page on close", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    expect(focusWebviewPageMock).not.toHaveBeenCalled();
+
+    act(() => result.current.close());
+    expect(focusWebviewPageMock).toHaveBeenCalledTimes(1);
+    expect(focusWebviewPageMock).toHaveBeenCalledWith(webview);
+  });
+
+  it("hands the keyboard back when the guest forwards the close shortcut", () => {
+    const webview = createMockWebview();
+    let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFindShortcutMock.mockImplementation((cb: any) => {
+      shortcutCallback = cb;
+      return vi.fn();
+    });
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "find" }));
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "close" }));
+
+    expect(result.current.isOpen).toBe(false);
+    expect(focusWebviewPageMock).toHaveBeenCalledWith(webview);
+  });
+
+  it("still closes when there is no webview to hand the keyboard to", () => {
+    focusWebviewPageMock.mockReturnValueOnce(false);
+    const { result } = renderHook(() => useFindInPage("panel-1", null, false, true));
+
+    act(() => result.current.open());
+    act(() => result.current.close());
+
+    expect(result.current.isOpen).toBe(false);
   });
 
   it("empty query + toggle does not call findInPage", () => {

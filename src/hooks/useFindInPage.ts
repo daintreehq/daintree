@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type RefObject } from "react";
 import { canPanelTakeFind } from "@/lib/findInPanel";
+import { focusWebviewPage } from "@/components/Browser/browserUtils";
 
 export interface FindInPageState {
   isOpen: boolean;
@@ -73,15 +74,17 @@ export function useFindInPage(
     setIsOpen(true);
   }, [isOpen]);
 
+  // The query and matchCase outlive the bar, so Cmd+F again picks up where the
+  // user left off; only the page's find session and its counts end here.
   const close = useCallback(() => {
     setIsOpen(false);
-    setQueryState("");
     setActiveMatch(0);
     setMatchCount(0);
-    setMatchCase(false);
     latestRequestIdRef.current = null;
     safeStopFind();
-  }, [safeStopFind]);
+    // Unmounting the bar would leave the keyboard on `document.body`.
+    focusWebviewPage(webviewElement);
+  }, [safeStopFind, webviewElement]);
 
   const setQuery = useCallback(
     (q: string) => {
@@ -165,6 +168,16 @@ export function useFindInPage(
     setMatchCount(0);
     if (query && !isComposingRef.current) safeFind(query, { findNext: true });
   }, [webviewElement, isWebviewReady, isOpen, query, safeFind]);
+
+  // Close ended the page's find session, so a reopened bar with a kept query
+  // starts one again; otherwise its counter would read "No matches". Declared
+  // after the found-in-page listener so the listener is attached first.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    const reopened = isOpen && !wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (reopened && query && !isComposingRef.current) safeFind(query, { findNext: true });
+  }, [isOpen, query, safeFind]);
 
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
