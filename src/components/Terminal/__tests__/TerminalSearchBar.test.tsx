@@ -988,4 +988,79 @@ describe("TerminalSearchBar", () => {
     cleanup();
     expect(mock._resultsListeners).toHaveLength(0);
   });
+
+  describe("leaving a terminal (#16878)", () => {
+    function mockTerminals() {
+      const managed = { a: createMockManaged(true), b: createMockManaged(true) };
+      vi.mocked(terminalInstanceService.get).mockImplementation(
+        (id) =>
+          managed[id as keyof typeof managed] as unknown as ReturnType<
+            typeof terminalInstanceService.get
+          >
+      );
+      return managed;
+    }
+
+    async function searchFor(term: string) {
+      const input = screen.getByPlaceholderText("Find in terminal…");
+      await act(() => {
+        fireEvent.change(input, { target: { value: term } });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+    }
+
+    it("clears the terminal it leaves, not the one it moves to", async () => {
+      const managed = mockTerminals();
+      const view = render(<TerminalSearchBar terminalId="a" onClose={vi.fn()} />);
+      await searchFor("hello");
+      expect(managed.a.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      managed.a.searchAddon.clearDecorations.mockClear();
+
+      view.rerender(<TerminalSearchBar terminalId="b" onClose={vi.fn()} />);
+      await act(async () => {});
+
+      expect(managed.a.searchAddon.clearDecorations).toHaveBeenCalled();
+      expect(managed.b.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      expect(managed.b.searchAddon.clearDecorations).not.toHaveBeenCalled();
+    });
+
+    it("clears its own highlights when it unmounts without a close", async () => {
+      const managed = mockTerminals();
+      const view = render(<TerminalSearchBar terminalId="a" onClose={vi.fn()} />);
+      await searchFor("hello");
+      managed.a.searchAddon.clearDecorations.mockClear();
+
+      view.unmount();
+
+      expect(managed.a.searchAddon.clearDecorations).toHaveBeenCalled();
+      expect(managed.b.searchAddon.clearDecorations).not.toHaveBeenCalled();
+    });
+
+    it("drops a search whose addon loads after the bar has left that terminal", async () => {
+      const managed = mockTerminals();
+      let resolveA: (addon: unknown) => void = () => {};
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation((id) =>
+        id === "a"
+          ? (new Promise((resolve) => {
+              resolveA = resolve;
+            }) as ReturnType<typeof terminalInstanceService.ensureSearchAddon>)
+          : Promise.resolve(
+              managed.b.searchAddon as unknown as Awaited<
+                ReturnType<typeof terminalInstanceService.ensureSearchAddon>
+              >
+            )
+      );
+      const view = render(<TerminalSearchBar terminalId="a" onClose={vi.fn()} />);
+      await searchFor("hello");
+
+      view.rerender(<TerminalSearchBar terminalId="b" onClose={vi.fn()} />);
+      await act(async () => {});
+      await act(async () => resolveA(managed.a.searchAddon));
+
+      expect(managed.a.searchAddon.findNext).not.toHaveBeenCalled();
+      expect(managed.b.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+    });
+  });
 });

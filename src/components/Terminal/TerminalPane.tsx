@@ -516,6 +516,13 @@ function TerminalPaneComponent({
     processStartTimeRef.current = Date.now();
   }, [restartKey, inputTracker]);
 
+  // Half-typed input and a restart backoff belong to the terminal they came
+  // from, not to the tab the pane shows next (#16878).
+  useEffect(() => {
+    inputTracker.reset();
+    autoRestartAttemptRef.current = 0;
+  }, [id, inputTracker]);
+
   const updateVisibility = usePanelStore((state) => state.updateVisibility);
   const getTerminal = usePanelStore((state) => state.getTerminal);
   const restartTerminal = usePanelStore((state) => state.restartTerminal);
@@ -873,7 +880,17 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting, sessionPreservingExit]);
+    // `id` re-runs it on a tab switch, so the terminal left behind takes its
+    // pending restart with it, as an unmount would.
+  }, [
+    id,
+    isExited,
+    exitBehavior,
+    exitCode,
+    isTrashedOrRemoved,
+    isRestarting,
+    sessionPreservingExit,
+  ]);
 
   const isDragging = useIsDragging();
 
@@ -1411,6 +1428,23 @@ function TerminalPaneComponent({
   const relayRemovalCopy = relayRemoval ? describeRelayRemoval(relayRemoval) : null;
   // A dismissal holds until what the banner says changes.
   const [relayRemovalDismissed, setRelayRemovalDismissed] = useState<string | null>(null);
+
+  // A tab group shows each of its tabs in this one pane, so what the user
+  // opened or waved away here belongs to the tab they did it on: the terminal
+  // the pane moves to starts with none of it (#16878). Reset while rendering,
+  // so no frame of the new tab ever shows the old tab's state.
+  const [shownTerminalId, setShownTerminalId] = useState(id);
+  if (shownTerminalId !== id) {
+    setShownTerminalId(id);
+    setDismissedRestartPrompt(false);
+    setIsSearchOpen(false);
+    setIsUpdateCwdOpen(false);
+    setIsAutoRestarting(false);
+    setBlockedBannerDismissed(false);
+    setRelayDeployBannerDismissed(false);
+    setRelayUpdateBannerDismissed(false);
+    setRelayRemovalDismissed(null);
+  }
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
   const keepBlockedNoticeFocus = (label: string) => {
@@ -1613,8 +1647,11 @@ function TerminalPaneComponent({
       {/* The pane's notices, failures first, then what needs acting on, then
           advisories. The stack never takes more than a little under half the
           pane: past that it scrolls, so a pile of notices cannot squeeze the
-          terminal they are about out of view. */}
+          terminal they are about out of view. Keyed, so a tab switch swaps the
+          notices outright rather than fading the last tab's out, live
+          callbacks and all, over the next one. */}
       <div
+        key={id}
         data-pane-banners
         className="flex shrink-0 flex-col max-h-[45%] overflow-y-auto overscroll-contain"
       >
@@ -1927,6 +1964,7 @@ function TerminalPaneComponent({
             />
           ) : spawnStatus === "missing-cli" && agentId ? (
             <MissingCliGate
+              key={id}
               agentId={agentId}
               detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
               onRunAnyway={runMissingCliAnyway}
@@ -2002,7 +2040,7 @@ function TerminalPaneComponent({
                       hasBottomBar={showHybridInputBar}
                     />
                   </Suspense>
-                  <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+                  <ArtifactOverlay key={id} terminalId={id} worktreeId={worktreeId} cwd={cwd} />
                   {isSearchOpen && (
                     <TerminalSearchBar
                       terminalId={id}
@@ -2049,6 +2087,7 @@ function TerminalPaneComponent({
 
               {/* Outlives the composer: an agent that exited still says what became of the send. */}
               <HeldComposerSendRow
+                key={id}
                 terminalId={id}
                 agentId={effectiveAgentId}
                 canEdit={showHybridInputBar && !isHybridInputDisabled}
@@ -2100,6 +2139,7 @@ function TerminalPaneComponent({
       </div>
 
       <UpdateCwdDialog
+        key={id}
         isOpen={isUpdateCwdOpen}
         terminalId={id}
         currentCwd={cwd}
