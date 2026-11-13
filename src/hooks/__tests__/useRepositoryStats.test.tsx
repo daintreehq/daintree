@@ -185,6 +185,60 @@ describe("useRepositoryStats", () => {
     });
   });
 
+  it("asks for the stats again when this project's forge binding is saved", async () => {
+    const listeners = new Set<(payload: { projectId: string }) => void>();
+    const previousElectron = window.electron;
+    Object.defineProperty(window, "electron", {
+      writable: true,
+      configurable: true,
+      value: {
+        forge: {
+          onRemoteChanged: (callback: (payload: { projectId: string }) => void) => {
+            listeners.add(callback);
+            return () => listeners.delete(callback);
+          },
+        },
+      },
+    });
+    try {
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      } satisfies ForgeRepositoryStats);
+
+      const { unmount } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Another project's save says nothing about this one's counts.
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "other-project" });
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "test-project" });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2));
+
+      unmount();
+      expect(listeners.size).toBe(0);
+    } finally {
+      Object.defineProperty(window, "electron", {
+        writable: true,
+        configurable: true,
+        value: previousElectron,
+      });
+    }
+  });
+
   it("force-fetches when daintree:refresh-sidebar event is dispatched", async () => {
     const project = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockResolvedValue(project);

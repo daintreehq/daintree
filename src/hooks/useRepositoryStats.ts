@@ -985,6 +985,22 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     void polling.refresh();
   }, [providerId, stats, polling, isWorkerInstance]);
 
+  // A saved forge binding — remote, code provider, or issues provider (#13700)
+  // — changes whose counts and failures the last poll carried: until the next
+  // scheduled poll the issues pill would show one tracker's count or failure
+  // under another's name (#16944). Main announces the save as
+  // `forge:remote-changed`, the event provider resolution re-runs on, so the
+  // stats are asked again then.
+  useEffect(() => {
+    if (isWorkerInstance || !currentProjectId) return;
+    const forge = window.electron?.forge;
+    if (typeof forge?.onRemoteChanged !== "function") return;
+    return forge.onRemoteChanged((payload) => {
+      if (payload.projectId !== currentProjectId) return;
+      void polling.refresh();
+    });
+  }, [currentProjectId, isWorkerInstance, polling]);
+
   // Cold-start hydration: before the first poll completes, ask main for the
   // disk-persisted first page so the very first dropdown click after launch
   // resolves against real rows. Entries older than the disk cache's freshness

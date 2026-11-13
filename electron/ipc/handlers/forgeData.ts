@@ -21,6 +21,7 @@ import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { sanitizeErrorMessage } from "../transportSafeError.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
   CheckRun,
@@ -576,7 +577,13 @@ async function handleForgeGetRepoStats(payload: {
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
   if (snapshot.source) stats.countsSource = snapshot.source;
-  if (split && overrideIssues.error) stats.issueError = overrideIssues.error;
+  if (split) {
+    // A successful payload skips the error envelope's scrubbing, and a
+    // tracker's message can echo a setting back verbatim (a server URL with
+    // credentials in it), so it is scrubbed here.
+    if (overrideIssues.error) stats.issueError = sanitizeErrorMessage(overrideIssues.error);
+    if (!overrideIssues.clean) stats.issueStale = true;
+  }
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
   if (!split) stats.repoKey = repoKeyOf(repoRef);

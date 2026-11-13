@@ -1523,6 +1523,7 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
     expect(stats).not.toHaveProperty("issueError");
+    expect(stats).not.toHaveProperty("issueStale");
     // No one repository reported both counts, so there is nothing to match
     // across hosts (#14199).
     expect(stats).not.toHaveProperty("repoKey");
@@ -1623,6 +1624,27 @@ describe("issues bound to a separate provider (#13700)", () => {
     expect(stats).toMatchObject({ error: undefined });
   });
 
+  it("scrubs credentials a tracker's message echoes back before it leaves the process", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(
+      new Error(
+        'The Beads server URL "https://alice:hunter2@beads.test" isn\'t an http(s) address.'
+      )
+    );
+    registerForgeDataHandlers();
+
+    const stats = (await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" })) as {
+      issueError?: string;
+    };
+
+    expect(stats.issueError).toContain("Beads server URL");
+    expect(stats.issueError).not.toContain("hunter2");
+  });
+
   it("carries an error the issues provider reported in its snapshot", async () => {
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "fake.provider",
@@ -1652,7 +1674,11 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 3, issueError: "Tracker rejected the API key" });
+    expect(stats).toMatchObject({
+      issueCount: 3,
+      issueError: "Tracker rejected the API key",
+      issueStale: true,
+    });
     expect(stats).toMatchObject({ error: undefined });
   });
 
@@ -1707,7 +1733,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4, issueStale: true });
+    expect(stats).not.toHaveProperty("issueError");
     expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
       "/repo",
       expect.not.objectContaining({ forge: expect.anything() })
@@ -1726,6 +1753,7 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     expect(stats).toMatchObject({ issueCount: 99, prCount: 4 });
     expect(stats).not.toHaveProperty("issueError");
+    expect(stats).not.toHaveProperty("issueStale");
   });
 });
 

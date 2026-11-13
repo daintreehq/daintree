@@ -21,7 +21,7 @@ import { classifyTokenError, type ForgeTokenErrorKind } from "@/lib/forgeErrors"
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useRepositoryStats } from "@/hooks/useRepositoryStats";
+import { useRepositoryStats, type FreshnessLevel } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useCanOpenForgeRepo } from "@/hooks/useCanOpenForgeRepo";
@@ -235,6 +235,7 @@ export const ForgeStatsToolbarButton = memo(
         )
       : tokenMissingLabel("issues");
     const issuesSettingsProviderId = issuesSplit ? issuesProviderId : providerId;
+    const issuesOnTracker = issuesSplit ? ` on ${issuesProviderName}` : "";
 
     // Drives the tooltip aging copy ("updated 3m ago") without per-component
     // intervals — the ticker is shared, paused on hidden tabs, and tears down
@@ -311,6 +312,19 @@ export const ForgeStatsToolbarButton = memo(
     const statsRecencyFallback = stats?.stale ? null : lastUpdated;
     const issueCountRefreshedAt = stats?.issueCountRefreshedAt ?? statsRecencyFallback;
     const prCountRefreshedAt = stats?.prCountRefreshedAt ?? statsRecencyFallback;
+    // A split issues pill is as fresh as the tracker's own read: the code
+    // forge's outage or cached snapshot says nothing about whether the tracker
+    // answered. Ageing still follows the poll, since a poll that never landed
+    // re-read neither.
+    const issuesFreshnessLevel: FreshnessLevel = !issuesSplit
+      ? freshnessLevel
+      : issueError !== null
+        ? "errored"
+        : stats?.issueStale
+          ? "stale-disk"
+          : freshnessLevel === "aging"
+            ? "aging"
+            : "fresh";
 
     // List-loaded counts reported by each dropdown's `onCountUpdate`. These
     // track what the dropdown actually lists (loaded first-page length +
@@ -1200,15 +1214,11 @@ export const ForgeStatsToolbarButton = memo(
       const present = notes.filter((n): n is string => n !== null);
       return present.length > 0 ? ` · ${present.join(" · ")}` : "";
     };
+    // A split issues pill's failure is the tracker's, and its freshness suffix
+    // already says so; the code forge's notes are the PR pill's.
     const issuesStatusSuffix = statusSuffix([
       showIssuesChip ? "count increased recently" : null,
-      ...(issuesSplit
-        ? [
-            issueError !== null && !issuesTokenError
-              ? `${issuesProviderName} data unavailable`
-              : null,
-          ]
-        : forgeStatusNotes),
+      ...(issuesSplit ? [] : forgeStatusNotes),
     ]);
     const prsStatusSuffix = statusSuffix([
       showPrsChip ? "count increased recently" : null,
@@ -1250,14 +1260,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               issuesTokenError
                 ? issuesTokenMissingLabel
-                : `${countName(issueDisplayCount, "open issue", "open issues", "open issues")}${issuesSplit ? ` on ${issuesProviderName}` : ""}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                : `${countName(issueDisplayCount, "open issue", "open issues", "open issues")}${issuesOnTracker}${freshnessSuffix(issuesFreshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               issuesTokenError
                 ? issuesTokenMissingLabel
-                : freshnessLevel === "fresh" && (issueDisplayCount !== null || statsLoading)
+                : issuesFreshnessLevel === "fresh" && (issueDisplayCount !== null || statsLoading)
                   ? `Browse ${issuesProviderName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
-                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${issuesOnTracker}${freshnessSuffix(issuesFreshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={

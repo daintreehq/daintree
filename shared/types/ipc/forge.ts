@@ -192,6 +192,13 @@ export interface ForgeRepositoryStats {
    * when the issue count read cleanly or no issues provider is bound.
    */
   issueError?: string;
+  /**
+   * The issues provider's count is not a fresh observation (it failed, or was
+   * served stale) when the project binds its issues to a provider other than
+   * the code forge. {@link stale} folds it in with the code forge's; this says
+   * which half it was, so the issues pill dates only its own count.
+   */
+  issueStale?: boolean;
   /** Whether the stats are from cache and may be outdated. */
   stale?: boolean;
   /** Epoch ms when stats were last successfully fetched from the forge. */

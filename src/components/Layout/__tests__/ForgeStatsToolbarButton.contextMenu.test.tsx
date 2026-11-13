@@ -9,7 +9,7 @@
  * one bubbling out of an open menu's portal, only ever opens one menu.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ForgeProviderEntry } from "@shared/types/forge";
 import type { Project } from "@shared/types";
 
@@ -34,12 +34,16 @@ const statsState = vi.hoisted(
     isTokenError: boolean;
     error: string | null;
     issueError: string | undefined;
+    issueStale: boolean | undefined;
+    freshnessLevel: "fresh" | "aging" | "stale-disk" | "errored";
     rateLimitResetAt: number | null;
     rateLimitKind: "primary" | "secondary" | null;
   } => ({
     isTokenError: false,
     error: null,
     issueError: undefined,
+    issueStale: undefined,
+    freshnessLevel: "fresh",
     rateLimitResetAt: null,
     rateLimitKind: null,
   })
@@ -57,7 +61,13 @@ vi.mock("@/clients/forgeClient", () => ({
 
 vi.mock("@/hooks/useRepositoryStats", () => ({
   useRepositoryStats: () => ({
-    stats: { issueCount: 3, prCount: 2, commitCount: 5, issueError: statsState.issueError },
+    stats: {
+      issueCount: 3,
+      prCount: 2,
+      commitCount: 5,
+      issueError: statsState.issueError,
+      issueStale: statsState.issueStale,
+    },
     loading: false,
     error: statsState.error,
     isTokenError: statsState.isTokenError,
@@ -66,7 +76,7 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
     lastUpdated: Date.now(),
     rateLimitResetAt: statsState.rateLimitResetAt,
     rateLimitKind: statsState.rateLimitKind,
-    freshnessLevel: "fresh" as const,
+    freshnessLevel: statsState.freshnessLevel,
   }),
 }));
 
@@ -158,6 +168,8 @@ beforeEach(() => {
   statsState.isTokenError = false;
   statsState.error = null;
   statsState.issueError = undefined;
+  statsState.issueStale = undefined;
+  statsState.freshnessLevel = "fresh";
   statsState.rateLimitResetAt = null;
   statsState.rateLimitKind = null;
   worktrees.set("wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" });
@@ -470,12 +482,41 @@ describe("ForgeStatsToolbarButton with issues on another tracker (#16944)", () =
     );
   });
 
-  it("says the tracker's data is unavailable when it fails for another reason", async () => {
+  it("says the tracker couldn't refresh when it fails for another reason", async () => {
     statsState.issueError = "Couldn't reach Linear";
     await renderStats();
 
-    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toContain(
-      "Linear data unavailable"
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toBe(
+      "3 open issues on Linear · couldn't refresh"
+    );
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toBe(
+      "2 open pull requests"
+    );
+  });
+
+  it("dates a tracker's stale read on its own pill alone", async () => {
+    statsState.issueStale = true;
+    statsState.freshnessLevel = "stale-disk";
+    await renderStats();
+
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toBe(
+      "3 open issues on Linear · cached from previous session"
+    );
+  });
+
+  it("keeps a healthy tracker's pill fresh while the code forge's poll fails", async () => {
+    statsState.error = "Cannot reach GitHub. Check your internet connection.";
+    statsState.freshnessLevel = "errored";
+    await renderStats();
+    const issues = screen.getByTestId("forge-stat-pill-issues");
+
+    expect(issues.getAttribute("aria-label")).toBe("3 open issues on Linear");
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toContain(
+      "couldn't refresh"
+    );
+    fireEvent.focus(issues);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Browse Linear issues (3 open)"
     );
   });
 
@@ -507,5 +548,12 @@ describe("ForgeStatsToolbarButton with issues on another tracker (#16944)", () =
     ).toBeNull();
     expect(callout.textContent).toContain("restore pull request counts.");
     expect(callout.textContent).not.toContain("issue");
+
+    // Dismissed from inside, it hands focus back to the pill it points at.
+    const close = screen.getByRole("button", { name: "Dismiss GitHub token warning" });
+    close.focus();
+    fireEvent.keyDown(close, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("forge-token-callout")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTestId("forge-stat-pill-prs"));
   });
 });
