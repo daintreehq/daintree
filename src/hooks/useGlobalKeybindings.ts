@@ -13,6 +13,7 @@ import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
 import { isInPaneDialog } from "@/lib/paneDialog";
 import { hasAppModal } from "@/lib/appModal";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
+import { codeViewerOwnsKey } from "@/lib/codeViewerKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
@@ -377,6 +378,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // as Cmd+W → terminal.close instead of deleting a word). A pending
       // chord still wins: the user explicitly opened it.
       if (isInTerminal && !pendingChord && isTerminalReservedKey(e)) {
+        return;
+      }
+
+      // A code viewer's go to line shares its combo with the Assistant toggle.
+      if (!pendingChord && codeViewerOwnsKey(e, target)) {
         return;
       }
 

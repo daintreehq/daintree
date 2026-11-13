@@ -19,6 +19,7 @@ import { editorSearchHighlightTheme, editorSearchPanelTheme } from "./editorSear
 import { createEditorSearchPanel } from "./editorSearchPanel";
 import { matchCodeMirrorLanguage } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
+import { CODE_VIEWER_OWNER_ATTR } from "@/lib/codeViewerKeys";
 
 export interface CodeViewerHandle {
   openSearch: () => void;
@@ -70,11 +71,16 @@ const highlightLineTheme = EditorView.baseTheme({
 // else makes `.cm-content` focusable: closing find handed focus to a node that
 // refused it and stranded it on `body`, and the keymap below never saw a key
 // unless the find field was open. The tabindex keeps the surface focusable
-// without a caret. CodeMirror's own dotted outline is dropped for the ring on
-// the scroll wrapper below, which shows for keyboard focus only.
+// without a caret. The focus ring is the scroll wrapper's below, so the two
+// outlines CodeMirror's content would otherwise wear are dropped: its dotted
+// editor outline, and the global focus-visible ring, which forced-colors makes
+// important and which would trace the whole file's height.
 const focusableSurface = [
   EditorView.contentAttributes.of({ tabindex: "0" }),
-  EditorView.theme({ "&.cm-focused": { outline: "none" } }),
+  EditorView.theme({
+    "&.cm-focused": { outline: "none" },
+    ".cm-content:focus-visible": { outline: "none !important" },
+  }),
 ];
 
 const BASE_EXTENSIONS: Extension[] = [
@@ -330,11 +336,12 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   );
 
   return (
-    <div className={cn("flex min-h-0 flex-col", className)}>
+    <div {...{ [CODE_VIEWER_OWNER_ATTR]: "" }} className={cn("flex min-h-0 flex-col", className)}>
       <div ref={mountPanelHost} className="sticky top-0 z-10 shrink-0" />
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        data-code-viewer-scroll=""
         // `isolate` keeps CodeMirror's own stacking (its gutters sit at z-index
         // 200) from painting over the sticky find bar as the document scrolls.
         // The ring sits on this wrapper, which stays put while the document
@@ -342,7 +349,6 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
         // the file.
         className={cn(
           "isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
-          "[&_.cm-content:focus-visible]:outline-hidden",
           "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:-outline-offset-2 has-[.cm-content:focus-visible]:outline-accent-primary"
         )}
       >
