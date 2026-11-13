@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
-import { nestedLayerOwnsEscape, _resetForTests as resetOwnedEscape } from "@/lib/pluginManagerEscape";
+import {
+  nestedLayerOwnsEscape,
+  _resetForTests as resetOwnedEscape,
+} from "@/lib/pluginManagerEscape";
 import { useGlobalEscapeDispatcher } from "../useGlobalEscapeDispatcher";
 
 function Host() {
