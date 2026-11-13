@@ -121,6 +121,8 @@ function nextAgentScan(prev: AgentScan | null, state: PanelState, checkLaunch: b
 
 export interface GettingStartedChecklistState {
   visible: boolean;
+  /** Shown because the user asked (Help > Getting Started), not by the usual rules. */
+  forced: boolean;
   collapsed: boolean;
   checklist: ChecklistState | null;
   dismiss: () => void;
@@ -169,6 +171,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   // scoped so Help > Getting Started can always reopen it: a forced show sets
   // the latch (below) so it won't be re-collapsed against the user's intent.
   const hasAutoCollapsed = useRef(false);
+  // Bumped by every show and dismiss, so a reopen still in flight when the
+  // user dismisses can't bring the checklist back.
+  const visibilityRequest = useRef(0);
 
   useEffect(() => {
     checklistRef.current = checklist;
@@ -196,6 +201,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
   const dismiss = useCallback(() => {
     if (!isElectronAvailable()) return;
+    visibilityRequest.current += 1;
     safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
       context: "Dismissing onboarding checklist (user action)",
     });
@@ -342,23 +348,32 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   // Listen for Help > Getting Started menu action
   useEffect(() => {
     const handleShow = () => {
-      setForceShow(true);
+      if (!isElectronAvailable() || !window.electron?.onboarding) return;
+      const request = ++visibilityRequest.current;
       setCollapsed(false);
       // The user explicitly opened the checklist — don't auto-collapse it out
       // from under them for the rest of this mount.
       hasAutoCollapsed.current = true;
-      if (isElectronAvailable() && window.electron?.onboarding) {
-        window.electron.onboarding
-          .getChecklist()
-          .then((state) => {
-            setChecklist({ ...state, dismissed: false });
-          })
-          .catch((err) => logError("Failed to show getting started checklist", err));
-      }
+      window.electron.onboarding
+        .reopenChecklist()
+        .then((state) => {
+          if (request !== visibilityRequest.current) return;
+          // Published before the reconcile reads it: nothing was tracked while
+          // the checklist was dismissed, so steps finished since then are
+          // credited from what the stores hold now, and the live subscriptions
+          // pick up from here.
+          checklistRef.current = state;
+          setChecklist(state);
+          reconcileCurrentState(markItem, () => checklistRef.current);
+          // After the reconcile: crediting the last step there must not hide
+          // what the user just asked to see. A later completion still does.
+          setForceShow(true);
+        })
+        .catch((err) => logError("Failed to show getting started checklist", err));
     };
     window.addEventListener("daintree:show-getting-started", handleShow);
     return () => window.removeEventListener("daintree:show-getting-started", handleShow);
-  }, []);
+  }, [markItem]);
 
   // Notify when onboarding completes — show checklist in the same session
   const notifyOnboardingComplete = useCallback(() => {
@@ -392,6 +407,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
   return {
     visible,
+    forced: visible && forceShow,
     collapsed,
     checklist,
     dismiss,

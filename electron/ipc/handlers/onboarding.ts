@@ -268,6 +268,13 @@ export const onboardingNamespace = defineIpcNamespace({
     dismissChecklist: op(ONBOARDING_METHOD_CHANNELS.dismissChecklist, (): void => {
       store.set("onboarding.checklist.dismissed", true);
     }),
+    // Help > Getting Started undoes the dismissal for good, not just in the
+    // view that asked: every other project view, and the next launch, read it
+    // from here.
+    reopenChecklist: op(ONBOARDING_METHOD_CHANNELS.reopenChecklist, (): ChecklistState => {
+      store.set("onboarding.checklist.dismissed", false);
+      return { ...getChecklistState(), dismissed: false };
+    }),
     markChecklistItem: op(
       ONBOARDING_METHOD_CHANNELS.markChecklistItem,
       (item: ChecklistItemId): void => {

@@ -2698,6 +2698,10 @@ export interface GeneratedIpcInvokeMap {
     args: [item: import("./maps.js").ChecklistItemId];
     result: void;
   };
+  "onboarding:checklist-reopen": {
+    args: [];
+    result: import("./maps.js").ChecklistState;
+  };
   "onboarding:complete": {
     args: [];
     result: void;
