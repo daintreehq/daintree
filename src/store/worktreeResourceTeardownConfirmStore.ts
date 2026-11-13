@@ -34,8 +34,8 @@ interface WorktreeResourceTeardownConfirmState {
  * one dialog every one of them waits on. A second request while one is pending
  * cancels the first.
  */
-export const useWorktreeResourceTeardownConfirmStore = create<WorktreeResourceTeardownConfirmState>()(
-  (set, get) => ({
+export const useWorktreeResourceTeardownConfirmStore =
+  create<WorktreeResourceTeardownConfirmState>()((set, get) => ({
     pendingConfirm: null,
     requestSeq: 0,
 
@@ -55,5 +55,4 @@ export const useWorktreeResourceTeardownConfirmStore = create<WorktreeResourceTe
       pending.resolve(ok);
       set({ pendingConfirm: null });
     },
-  })
-);
+  }));

@@ -600,10 +600,7 @@ describe("worktree resource action definitions", () => {
       mockWorktrees.set("/box", BOX);
       const def = registry.get("worktree.resource.teardown")!();
 
-      await def.run!(
-        { worktreeId: "/box" },
-        { dispatchSource: "agent", hostConfirmed: true }
-      );
+      await def.run!({ worktreeId: "/box" }, { dispatchSource: "agent", hostConfirmed: true });
 
       expect(mockRequestTeardownConfirmation).not.toHaveBeenCalled();
       expect(mockGetDeleteTeardownPreview).not.toHaveBeenCalled();

@@ -95,8 +95,7 @@ describe("useWorktreeActions — running a recipe from the card (#16381)", () =>
 
   it("runs with the issue the worktree is linked to now, not at first render", async () => {
     const { result, rerender } = renderHook(
-      ({ worktree }: { worktree: WorktreeState }) =>
-        useWorktreeActions({ worktree }),
+      ({ worktree }: { worktree: WorktreeState }) => useWorktreeActions({ worktree }),
       { initialProps: { worktree: makeWorktree({ issueNumber: 42 }) } }
     );
     rerender({
