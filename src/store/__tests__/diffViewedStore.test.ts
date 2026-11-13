@@ -471,6 +471,26 @@ describe("diffViewedStore", () => {
         expect(viewed(KEY)).toBe(false);
       });
 
+      it("keeps the mark while a new binary file is staged", () => {
+        // Untracked binaries carry no counts; staged ones get the producer's 0s.
+        observe([change("a.png", { status: "untracked", insertions: null, deletions: null })]);
+        mark("working-tree:a.png");
+
+        observe([change("a.png", { status: "added", insertions: 0, deletions: 0 })]);
+        reconcile();
+        expect(viewed("working-tree:a.png")).toBe(true);
+      });
+
+      it("lapses the mark when the file is deleted, even with the same mtime and counts", () => {
+        // `git rm --cached` on a modified binary: the file on disk is untouched.
+        observe([change("a.png", { insertions: 0, deletions: 0 })]);
+        mark("working-tree:a.png");
+
+        observe([change("a.png", { status: "deleted", insertions: 0, deletions: 0 })]);
+        reconcile();
+        expect(viewed("working-tree:a.png")).toBe(false);
+      });
+
       it("lapses the mark when the file is deleted from under it", () => {
         observe([change("a.ts")]);
         mark(KEY);

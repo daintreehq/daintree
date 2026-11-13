@@ -20,10 +20,12 @@ function entryFreshnessKey(entry: FileChangeDetail): string {
 // Status moves with the index, not the file: staging takes a new file from
 // `untracked` to `added`, and a file added or renamed then edited reads
 // `modified` until the rest is staged (simple-git lists `AM` and `RM` under
-// both). So status stays out, and an untracked file's missing deletion count
-// reads as the 0 numstat gives it once staged.
+// both). So status stays out, except deletion, which reads the same staged or
+// not. Counts git can't give (an untracked file's deletions, a binary's lines)
+// read as the 0 the producer fills in once the file is staged.
 function stagingAgnosticKey(entry: FileChangeDetail): string {
-  return `${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? 0}`;
+  const deleted = entry.status === "deleted" ? "deleted:" : "";
+  return `${deleted}${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? 0}:${entry.deletions ?? 0}`;
 }
 
 export function findWorktreeByPath(
