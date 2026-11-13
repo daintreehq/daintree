@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Project } from "@shared/types";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 
@@ -16,6 +16,14 @@ const workspaceRoot = vi.fn<() => WorkspaceRoot | null>(() => null);
 let currentProject: Project | null = null;
 
 vi.mock("@/hooks/useWorkspaceRoot", () => ({ useWorkspaceRoot: () => workspaceRoot() }));
+let remoteCopies = false;
+vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useHostPlatform")>()),
+  revealCopiesHostPath: () => remoteCopies,
+  hostFileManagerRevealLabel: () => (remoteCopies ? "Copy host path" : "Show in Finder"),
+}));
+vi.mock("@/lib/copyWithToast", () => ({ copyWithToast: vi.fn() }));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: { currentProject: Project | null }) => unknown) =>
     selector({ currentProject }),
@@ -77,8 +85,21 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
   ),
   // View ▸ ends with the plain Collapse / Expand all rows, which are Radix
   // items and so need a Menu ancestor the stubbed content does not provide.
-  ContextMenuItem: ({ disabled, children }: { disabled?: boolean; children: ReactNode }) => (
-    <div role="menuitem" data-plain-item="" aria-disabled={disabled ? "true" : undefined}>
+  ContextMenuItem: ({
+    disabled,
+    onSelect,
+    children,
+  }: {
+    disabled?: boolean;
+    onSelect?: () => void;
+    children: ReactNode;
+  }) => (
+    <div
+      role="menuitem"
+      data-plain-item=""
+      aria-disabled={disabled ? "true" : undefined}
+      onClick={onSelect}
+    >
       {children}
     </div>
   ),
@@ -99,6 +120,7 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 
 const { Sidebar } = await import("../Sidebar");
 const { hostFileManagerRevealLabel } = await import("@/hooks/useHostPlatform");
+const { copyWithToast } = await import("@/lib/copyWithToast");
 const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
 
 const GIT_PROJECT: WorkspaceRoot = {
@@ -137,6 +159,7 @@ function renderedActionIds(): string[] {
 beforeEach(() => {
   vi.clearAllMocks();
   currentProject = null;
+  remoteCopies = false;
   workspaceRoot.mockReturnValue(null);
 });
 
@@ -292,5 +315,108 @@ describe("Sidebar resize handle", () => {
     expect(handle.className).toMatch(/(^|\s)-right-1\.5(\s|$)/);
     expect(aside.className).not.toMatch(/(^|\s)overflow-(hidden|auto|scroll)(\s|$)/);
     expect(aside.className).toMatch(/\[overflow-clip-margin:6px\]/);
+  });
+});
+
+describe("Sidebar resize handle pointer handling (#16887)", () => {
+  function setup() {
+    workspaceRoot.mockReturnValue(PLAIN_FOLDER);
+    const onResizeStart = vi.fn();
+    const onResizeEnd = vi.fn();
+    const onResize = vi.fn();
+    render(
+      <Sidebar
+        width={280}
+        onResize={onResize}
+        onResizeStart={onResizeStart}
+        onResizeEnd={onResizeEnd}
+      />
+    );
+    const handle = screen.getByRole("separator", { name: /^Resize sidebar/ });
+    return { handle, onResizeStart, onResizeEnd, onResize };
+  }
+
+  it("does not start a drag from the secondary button", () => {
+    const { handle, onResizeStart } = setup();
+    fireEvent.mouseDown(handle, { button: 2 });
+    expect(onResizeStart).not.toHaveBeenCalled();
+    expect(handle.getAttribute("data-resizing")).toBeNull();
+  });
+
+  it("lets the contextmenu event bubble past the handle to the sidebar menu", () => {
+    // The sidebar's menu trigger is an ancestor of the handle, so a React-level
+    // stopPropagation on the handle is what would swallow the menu.
+    workspaceRoot.mockReturnValue(PLAIN_FOLDER);
+    const seen = vi.fn();
+    render(
+      <div onContextMenu={seen}>
+        <Sidebar width={280} onResize={() => {}} />
+      </div>
+    );
+    fireEvent.contextMenu(screen.getByRole("separator", { name: /^Resize sidebar/ }));
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a drag from Control-click on a Mac client", () => {
+    const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const { handle, onResizeStart } = setup();
+      fireEvent.mouseDown(handle, { button: 0, ctrlKey: true });
+      expect(onResizeStart).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("ends the drag once when a release, blur and mouseup land before React flushes", () => {
+    const { handle, onResizeEnd, onResize } = setup();
+    fireEvent.mouseDown(handle, { button: 0 });
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mousemove", { buttons: 0, clientX: 300 }));
+      window.dispatchEvent(new Event("blur"));
+      document.dispatchEvent(new MouseEvent("mouseup"));
+      document.dispatchEvent(new MouseEvent("mousemove", { buttons: 1, clientX: 320 }));
+    });
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
+  it("starts on the primary button and releases when a move reports no buttons held", () => {
+    const { handle, onResizeStart, onResizeEnd, onResize } = setup();
+    fireEvent.mouseDown(handle, { button: 0 });
+    expect(onResizeStart).toHaveBeenCalledTimes(1);
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 300 });
+    expect(onResize).toHaveBeenCalledTimes(1);
+    fireEvent.mouseMove(document, { buttons: 0, clientX: 400 });
+    expect(onResize).toHaveBeenCalledTimes(1);
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
+    expect(handle.getAttribute("data-resizing")).toBeNull();
+  });
+
+  it("releases the drag when the window loses focus", () => {
+    const { handle, onResizeEnd } = setup();
+    fireEvent.mouseDown(handle, { button: 0 });
+    fireEvent.blur(window);
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
+    expect(handle.getAttribute("data-resizing")).toBeNull();
+  });
+});
+
+describe("Sidebar reveal row on a remote host (#16887)", () => {
+  it("offers Copy project path, not an action-backed reveal, and copies the path", () => {
+    remoteCopies = true;
+    workspaceRoot.mockReturnValue(GIT_PROJECT);
+    renderSidebar();
+    expect(renderedActionIds()).not.toContain("system.openPath");
+    const row = screen.getByText("Copy project path");
+    fireEvent.click(row);
+    expect(copyWithToast).toHaveBeenCalledWith("Path", GIT_PROJECT.path);
+  });
+
+  it("names a scratch's row for the workspace", () => {
+    remoteCopies = true;
+    workspaceRoot.mockReturnValue(SCRATCH);
+    renderSidebar();
+    expect(screen.getByText("Copy workspace path")).toBeTruthy();
   });
 });
