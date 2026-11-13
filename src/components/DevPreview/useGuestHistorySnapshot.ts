@@ -74,14 +74,20 @@ export function useGuestHistorySnapshot(
     const refresh = () => {
       scheduled = false;
       if (disposed) return;
+      // Ahead of the lookup, so a request still out for a guest that has since
+      // gone can't publish.
+      requestSeq += 1;
+      const request = requestSeq;
       let webContentsId: number;
       try {
         webContentsId = webview.getWebContentsId();
       } catch {
+        // Detached mid-move: its entries go with it, and the next dom-ready reads
+        // the replacement's.
+        guestId = null;
+        setState(null);
         return;
       }
-      requestSeq += 1;
-      const request = requestSeq;
       if (guestId !== null && guestId !== webContentsId) setState(null);
       guestId = webContentsId;
       void (async () => {

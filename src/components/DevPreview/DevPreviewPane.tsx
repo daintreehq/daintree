@@ -573,6 +573,7 @@ export function DevPreviewPane({
     if (!webview) return false;
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     // The cache-ignoring reload runs in the main process against a *registered*
     // panel, and registration is itself gated on the guest reaching dom-ready
     // (useWebviewDialog). For a guest that never got there the IPC resolves

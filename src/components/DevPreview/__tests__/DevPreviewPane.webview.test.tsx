@@ -4121,6 +4121,60 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(latestToolbarProps().url).toBe(PAGE_A);
     });
 
+    it("still prunes when a stopped saved-history Back is loaded again", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [PAGE_A, PAGE_B], present: ROOT, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+      const { webview } = await renderReadyPane();
+
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      act(() => {
+        (latestToolbarProps().onStop as () => void)();
+      });
+      // Retry loads the saved entry again, and that load is what commits.
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate", { url: PAGE_B });
+        await Promise.resolve();
+      });
+
+      expect(webview.nav.entries).toEqual([PAGE_B]);
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_A);
+    });
+
+    it("never reads a stopped jump into the reload that follows it", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, ROOT);
+      // The jump starts a new document, and Stop cancels it before it commits.
+      webview.goToIndex.mockImplementation(() => {});
+
+      act(() => {
+        (latestToolbarProps().onGoToHistoryIndex as (index: number) => void)(0);
+      });
+      act(() => {
+        (latestToolbarProps().onStop as () => void)();
+      });
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate", { url: ROOT });
+        await Promise.resolve();
+      });
+
+      expect(lastPersistedHistory()).toEqual({ past: [ROOT, PAGE_A], present: ROOT, future: [] });
+    });
+
     it("records the page's favicon against the URL it was showing", async () => {
       const { webview } = await renderReadyPane();
       const updateFavicon = vi.fn();

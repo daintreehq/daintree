@@ -752,14 +752,32 @@ describe("useDevPreviewNavigation — guest session history", () => {
     expect(setHistory.mock.calls[1]![0](params.history).present).toBe(PAGE_A);
   });
 
-  it("disarms the prune when the saved-history load is stopped", () => {
-    const params = baseParams({ history: { past: [PAGE_A], present: ROOT, future: [] } });
+  it("forgets a pending step on Stop, reload, retry and a new address, but keeps a prune", () => {
+    const params = baseParams();
     const { result } = renderHook(() => useDevPreviewNavigation(params));
+    const arm = () => {
+      params.guestHistoryIntentRef.current = { stepOffset: -2, pruneOnCommitOf: PAGE_A };
+    };
+    const forgotten = { stepOffset: null, pruneOnCommitOf: PAGE_A };
 
-    act(() => result.current.handleBack());
-    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBe(PAGE_A);
+    arm();
     act(() => result.current.handleCancelLoad());
-    expect(params.guestHistoryIntentRef.current.pruneOnCommitOf).toBeNull();
+    expect(params.guestHistoryIntentRef.current).toEqual(forgotten);
+
+    arm();
+    act(() => result.current.handleReload());
+    expect(params.guestHistoryIntentRef.current).toEqual(forgotten);
+
+    arm();
+    act(() => result.current.handleRetryWebviewLoad());
+    expect(params.guestHistoryIntentRef.current).toEqual(forgotten);
+
+    // Re-submitting the page already showing loads nothing, so nothing is superseded.
+    arm();
+    act(() => result.current.handleNavigate(ROOT));
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBe(-2);
+    act(() => result.current.handleNavigate(PAGE_B));
+    expect(params.guestHistoryIntentRef.current).toEqual(forgotten);
   });
 
   it("jumps to a history-menu entry by its own index, the list being sparse", () => {

@@ -151,6 +151,26 @@ describe("useGuestHistorySnapshot (#16910)", () => {
     expect(result.current.backEntry).toBeNull();
   });
 
+  it("drops the old guest's entries, and its answer, when the guest detaches mid-move", async () => {
+    const guest = makeGuest(1);
+    const { result } = renderHook(() => useGuestHistorySnapshot(guest, true));
+    await flush();
+    await settle(pending[0]!, snapshotOf(["/a", "/b"], 1));
+    emit(guest, "did-navigate");
+    await flush();
+    const departed = pending[1]!;
+
+    guest.getWebContentsId.mockImplementation(() => {
+      throw new Error("The WebView must be attached to the DOM");
+    });
+    emit(guest, "dom-ready");
+    await flush();
+    expect(result.current.navSnapshot).toBeNull();
+
+    await settle(departed, snapshotOf(["/a", "/b", "/c"], 2));
+    expect(result.current.navSnapshot).toBeNull();
+  });
+
   it("publishes nothing after unmount", async () => {
     const guest = makeGuest();
     const { result, unmount } = renderHook(() => useGuestHistorySnapshot(guest, true));

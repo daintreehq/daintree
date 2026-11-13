@@ -174,13 +174,15 @@ export function useDevPreviewNavigation({
         // them — silently cancelling a 502's overlay and its auto-recovery.
         if (normalized.url !== currentUrl) {
           clearRetryState();
+          // A new load supersedes any step still on its way to the guest.
+          guestHistoryIntentRef.current.stepOffset = null;
         }
         // Push history only; the imperative navigation effect drives loadURL now
         // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [currentUrl, clearRetryState, setHistory, validateUrl]
+    [currentUrl, clearRetryState, guestHistoryIntentRef, setHistory, validateUrl]
   );
 
   // Back and Forward step through the guest's own session history, so the page
@@ -258,12 +260,15 @@ export function useDevPreviewNavigation({
   const handleReload = useCallback(() => {
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     webviewRef.current?.reload();
-  }, [clearRetryState, setWebviewLoadError, webviewRef]);
+  }, [clearRetryState, guestHistoryIntentRef, setWebviewLoadError, webviewRef]);
 
+  // A stopped step never commits, and the next commit — a reload of the page
+  // still showing — must not be read as that step. A pending prune stays armed:
+  // the guest's entries behind it are still out of order, whatever commits next.
   const handleCancelLoad = useCallback(() => {
-    // A stopped saved-history Back never commits, so nothing is left to prune.
-    guestHistoryIntentRef.current.pruneOnCommitOf = null;
+    guestHistoryIntentRef.current.stepOffset = null;
     clearLoadTimers();
     setIsLoading(false);
     try {
@@ -277,6 +282,7 @@ export function useDevPreviewNavigation({
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
@@ -288,7 +294,14 @@ export function useDevPreviewNavigation({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl, clearRetryState, setWebviewLoadError, setIsLoading, webviewRef]);
+  }, [
+    currentUrl,
+    clearRetryState,
+    guestHistoryIntentRef,
+    setWebviewLoadError,
+    setIsLoading,
+    webviewRef,
+  ]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
