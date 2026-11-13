@@ -111,8 +111,14 @@ function focusProbe() {
 
 // The card's own polite region comes first; the error state's "Retrying"
 // status sits inside the body after it.
+function liveRegion() {
+  const [region] = screen.getAllByRole("status");
+  if (!region) throw new Error("live region missing");
+  return region;
+}
+
 function liveRegionText() {
-  return screen.getAllByRole("status")[0].textContent ?? "";
+  return liveRegion().textContent ?? "";
 }
 
 function refreshIconSpins() {
@@ -282,10 +288,11 @@ describe("ProjectPulseCard first load", () => {
       advance(UI_SKELETON_GATE_MS);
       expect(hasSkeleton()).toBe(true);
       await answer(request, makePulse(60));
+      advance(UI_SKELETON_FLOOR_MS - 1);
       expect(hasSkeleton()).toBe(true);
       expect(screen.queryByTestId("pulse-heatmap")).toBeNull();
 
-      advance(UI_SKELETON_FLOOR_MS);
+      advance(1);
       expect(hasSkeleton()).toBe(false);
       expect(screen.getByTestId("pulse-heatmap")).toBeTruthy();
       expect(setScrollLeft).toHaveBeenLastCalledWith(640);
@@ -416,7 +423,7 @@ describe("ProjectPulseCard background refresh", () => {
     focusProbe();
 
     expect(screen.getByTestId("pulse-heatmap").closest('[aria-busy="true"]')).not.toBeNull();
-    expect(screen.getAllByRole("status")[0].closest('[aria-busy="true"]')).toBeNull();
+    expect(liveRegion().closest('[aria-busy="true"]')).toBeNull();
     expect(
       screen.getByRole("radiogroup", { name: "Activity range" }).closest('[aria-busy="true"]')
     ).toBeNull();
