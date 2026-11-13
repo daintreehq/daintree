@@ -9,7 +9,12 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import { useAppThemeStore, injectSchemeToDOM, resolveCommittedScheme } from "@/store/appThemeStore";
+import {
+  useAppThemeStore,
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  resolveProjectScheme,
+} from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { commitAppThemeSelection } from "@/lib/commitAppThemeSelection";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
@@ -26,6 +31,7 @@ interface ThemePaletteProps {
 }
 
 const SAVED_NAME_MAX = 28;
+const PROJECT_NOTE_ID = "theme-palette-project-note";
 
 function clampName(name: string): string {
   return name.length > SAVED_NAME_MAX ? `${name.slice(0, SAVED_NAME_MAX - 1).trimEnd()}…` : name;
@@ -37,6 +43,7 @@ function ThemeListItem({
   scheme,
   isSelected,
   isCurrent,
+  currentLabel,
   matches,
   onClick,
   onHover,
@@ -44,6 +51,7 @@ function ThemeListItem({
   scheme: AppColorScheme;
   isSelected: boolean;
   isCurrent: boolean;
+  currentLabel: string;
   matches: readonly FuseResultMatch[] | undefined;
   onClick: () => void;
   onHover: () => void;
@@ -100,7 +108,7 @@ function ThemeListItem({
         {isCurrent && (
           <>
             <Check className="w-4 h-4 text-text-primary" aria-hidden="true" />
-            <span className="sr-only">Current theme</span>
+            <span className="sr-only">{currentLabel}</span>
           </>
         )}
       </span>
@@ -121,6 +129,9 @@ function committedScheme(): AppColorScheme {
 export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
+  // A project with its own theme keeps showing it: picks here change the
+  // global theme (#13833), and Escape goes back to the project's.
+  const projectScheme = useAppThemeStore(resolveProjectScheme);
   const themePaletteShortcut = useEffectiveCombo("app.theme.pick");
 
   const allSchemes = useMemo(
@@ -160,6 +171,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   // causing a visible "flash" to the wrong theme and, if the user hit Enter
   // without navigating, silently committing the wrong theme.
   const livePreviewReadyRef = useRef(false);
+  // The row the cursor opened on, until it first moves. Opening on the saved
+  // global theme paints nothing: in a project with its own theme that theme is
+  // not the one on screen, and opening a picker must not change the window.
+  const openedOnIdRef = useRef<string | null>(null);
 
   // Capture original theme on open; revert on close if not committed.
   useEffect(() => {
@@ -169,6 +184,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       committedRef.current = false;
       wasOpenRef.current = true;
       livePreviewReadyRef.current = false;
+      openedOnIdRef.current = currentSchemeId;
       // Reset search state: the palette is opened via paletteStore.openPalette
       // (from the daintree:open-theme-palette event), bypassing useSearchablePalette's
       // own open() which resets query + selectedIndex.
@@ -186,6 +202,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     if (!isOpen && wasOpenRef.current) {
       wasOpenRef.current = false;
       livePreviewReadyRef.current = false;
+      openedOnIdRef.current = null;
       if (!committedRef.current && originalSchemeIdRef.current) {
         injectSchemeToDOM(committedScheme());
       }
@@ -212,7 +229,12 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       return;
     }
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    injectSchemeToDOM(results[selectedIndex]!);
+    const scheme = results[selectedIndex]!;
+    if (openedOnIdRef.current !== null) {
+      if (scheme.id === openedOnIdRef.current) return;
+      openedOnIdRef.current = null;
+    }
+    injectSchemeToDOM(scheme);
   }, [isOpen, results, selectedIndex]);
 
   const commit = useCallback(
@@ -238,6 +260,22 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     (scheme: AppColorScheme | null) => {
       if (!scheme) return null;
       const onSaved = scheme.id === savedScheme?.id;
+      if (projectScheme) {
+        // Enter changes a theme this window does not show, so it says which;
+        // Escape goes back to the project's theme, not the saved global one.
+        const hints: PaletteFooterHint[] = [];
+        if (query !== "") hints.push({ keys: "Escape", label: "to clear search" });
+        else if (scheme.id !== projectScheme.id) {
+          hints.push({ keys: "Escape", label: `to go back to ${clampName(projectScheme.name)}` });
+        }
+        const primaryHint = {
+          keys: "Enter",
+          label: onSaved
+            ? `to keep ${scheme.name} as the global theme`
+            : `to set ${scheme.name} as the global theme`,
+        };
+        return <PaletteFooterHints primaryHint={primaryHint} hints={hints} />;
+      }
       const primaryHint = {
         keys: "Enter",
         label: onSaved ? `to keep ${scheme.name}` : `to switch to ${scheme.name}`,
@@ -254,7 +292,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       }
       return <PaletteFooterHints primaryHint={primaryHint} hints={hints} />;
     },
-    [savedScheme, query]
+    [savedScheme, query, projectScheme]
   );
 
   const handleConfirm = useCallback(() => {
@@ -283,12 +321,19 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       getFooter={getThemeFooter}
       getSectionLabel={getThemeSectionLabel}
       matchesById={matchesById}
+      headerTrailing={
+        projectScheme ? (
+          <span id={PROJECT_NOTE_ID}>This project shows its own theme, {projectScheme.name}</span>
+        ) : undefined
+      }
+      searchAriaDescribedBy={projectScheme ? PROJECT_NOTE_ID : undefined}
       renderItem={(scheme, index, isSelected, onHover, matches) => (
         <ThemeListItem
           key={scheme.id}
           scheme={scheme}
           isSelected={isSelected}
           isCurrent={scheme.id === selectedSchemeId}
+          currentLabel={projectScheme ? "Global theme" : "Current theme"}
           matches={matches}
           onClick={() => commit(scheme)}
           onHover={() => onHover(index)}

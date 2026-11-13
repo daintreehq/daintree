@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { flushPendingTheme, useAppThemeStore } from "@/store/appThemeStore";
+import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 
 vi.mock("@/clients/appThemeClient", () => ({
   appThemeClient: {
@@ -35,6 +36,8 @@ describe("ThemePalette", () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
     useAppThemeStore.setState({ selectedSchemeId: COMMITTED.id, customSchemes: [] });
+    // The window shows the saved theme when the palette opens; opening paints nothing.
+    injectSchemeToDOM(COMMITTED, { immediate: true });
   });
   afterEach(() => cleanup());
 
@@ -177,5 +180,89 @@ describe("ThemePalette", () => {
     expect(appThemeClient.setRecentSchemeIds).toHaveBeenCalledWith(
       expect.arrayContaining([targetId])
     );
+  });
+
+  // The palette edits the global theme, as Settings does (#13833), while a
+  // project with its own theme keeps showing it. Every hint has to say which.
+  describe("in a project that shows its own theme", () => {
+    const PROJECT = BUILT_IN_APP_SCHEMES.find((s) => s.type !== "light")!;
+    const shownTheme = () => {
+      flushPendingTheme();
+      return document.documentElement.dataset.theme;
+    };
+    const cursorScheme = () => {
+      const id = rows()
+        .find((o) => o.getAttribute("aria-selected") === "true")!
+        .id.replace("theme-option-", "");
+      return BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+    };
+
+    beforeEach(() => {
+      useAppThemeStore.setState({
+        projectSchemeId: PROJECT.id,
+        projectSnapshotScheme: null,
+        followSystem: false,
+      });
+      injectSchemeToDOM(PROJECT, { immediate: true });
+    });
+    afterEach(() => {
+      useAppThemeStore.setState({ projectSchemeId: null, projectSnapshotScheme: null });
+    });
+
+    it("leaves the project's theme on screen until the cursor moves", async () => {
+      renderOpen();
+      await act(async () => {});
+      expect(shownTheme()).toBe(PROJECT.id);
+
+      fireEvent.keyDown(input(), { key: "ArrowDown" });
+      await act(async () => {});
+      expect(shownTheme()).toBe(cursorScheme().id);
+    });
+
+    it("says Enter sets the global theme and Escape goes back to the project's", async () => {
+      renderOpen();
+      await act(async () => {});
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain(`This project shows its own theme, ${PROJECT.name}`);
+      expect(dialog.textContent).toContain(`to keep ${COMMITTED.name} as the global theme`);
+      const saved = rows().find((o) => o.getAttribute("aria-current"))!;
+      expect(saved.textContent).toContain("Global theme");
+
+      fireEvent.keyDown(input(), { key: "ArrowDown" });
+      await act(async () => {});
+      expect(dialog.textContent).toContain(`to set ${cursorScheme().name} as the global theme`);
+      expect(dialog.textContent).toContain(`to go back to ${PROJECT.name}`);
+      expect(dialog.textContent).not.toContain(`to go back to ${COMMITTED.name}`);
+    });
+
+    it("goes back to the project's theme when closed without a pick", async () => {
+      const { rerender } = renderOpen();
+      await act(async () => {});
+      fireEvent.keyDown(input(), { key: "ArrowDown" });
+      await act(async () => {});
+      expect(shownTheme()).not.toBe(PROJECT.id);
+
+      rerender(<ThemePalette isOpen={false} onClose={() => {}} />);
+      await act(async () => {});
+      expect(shownTheme()).toBe(PROJECT.id);
+    });
+
+    it("saves the pick as the global theme and keeps showing the project's", async () => {
+      function Harness() {
+        const [open, setOpen] = useState(true);
+        return <ThemePalette isOpen={open} onClose={() => setOpen(false)} />;
+      }
+      render(<Harness />, { wrapper: TooltipProvider });
+      await act(async () => {});
+      fireEvent.keyDown(input(), { key: "ArrowDown" });
+      await act(async () => {});
+      const target = cursorScheme();
+
+      fireEvent.keyDown(input(), { key: "Enter" });
+      await act(async () => {});
+
+      expect(useAppThemeStore.getState().selectedSchemeId).toBe(target.id);
+      expect(shownTheme()).toBe(PROJECT.id);
+    });
   });
 });
