@@ -80,6 +80,7 @@ import {
   COMPOSER_CONTROL_FOCUS_CLASS,
   COMPOSER_CONTROL_HOVER_BG_CLASS,
   COMPOSER_CONTROL_TEXT_CLASS,
+  COMPOSER_MARKER_HOVER_CLASS,
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import {
@@ -485,6 +486,13 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
+/** The `❯`'s box: as wide as the glyph, as tall as the controls (#15309). */
+const COMPOSER_MARKER_CLASS = cn(
+  "ml-2 flex h-6 shrink-0 select-none items-center font-mono text-xs font-semibold leading-5",
+  COMPOSER_MARKER_TEXT_CLASS
+);
+/** Mod+R in the editor keymap (`inputEditorExtensions/base.ts`); not a rebindable action. */
+const PROMPT_HISTORY_SHORTCUT = "Cmd+R";
 /** The `❯` and trailing controls of an unavailable composer: inactive, one family. */
 const DISABLED_CONTROL_MIX = "45%";
 const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
@@ -2034,6 +2042,52 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (readComposerSelection(draftKeyRef.current, currentDraft()) === null) caretToEnd(view);
     };
 
+    // One palette per id: while Canopy is open its own composer's is the one,
+    // not the grid pane's behind it. History spans this machine's projects,
+    // whose prompts name its files: none is offered for a terminal on another
+    // host. A grid pane mounts its palette only while focused, but its `❯`
+    // offers history either way, since the press that clicks it selects it.
+    const historyAvailable = isolated ? !thisMachineOff : !canopyOpen;
+    const historyPaletteMounted = historyAvailable && (isolated || isFocusedTerminal);
+    const historyOffered = historyAvailable && !disabled;
+    const pendingHistoryOpenRef = useRef(false);
+
+    const openHistoryPalette = (open: () => void) => {
+      const view = editorViewRef.current;
+      // The palette restores focus to whatever held it on opening: make that
+      // the editor, and end any frame-late refocus still owed to an earlier
+      // press so it cannot pull focus back out of the palette's search field.
+      if (view && !editorOwnsDomFocus(view)) view.focus();
+      focusGenerationRef.current++;
+      open();
+    };
+
+    const openHistoryFromMarker = () => {
+      const open = historyPaletteOpenRef.current;
+      if (open) {
+        openHistoryPalette(open);
+        return;
+      }
+      // A click with no press before it (assistive technology) reaches an
+      // unselected pane, whose palette is not mounted yet. Select it, and open
+      // once that commit registers the palette; a request that commit did not
+      // answer is dropped rather than left to open on some later focus.
+      pendingHistoryOpenRef.current = true;
+      onActivate?.();
+      requestAnimationFrame(() => {
+        pendingHistoryOpenRef.current = false;
+      });
+    };
+
+    // Runs after the palette's own effect in the same commit, so the opener it
+    // registers is already in the ref.
+    useEffect(() => {
+      if (!historyPaletteMounted || !pendingHistoryOpenRef.current) return;
+      pendingHistoryOpenRef.current = false;
+      const open = historyPaletteOpenRef.current;
+      if (open) openHistoryPalette(open);
+    }, [historyPaletteMounted]);
+
     const focusEditor = () => {
       const view = editorViewRef.current;
       if (!view) return;
@@ -2826,21 +2880,48 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            {/* A prompt marker, not a control: it is what makes the box read as
-                somewhere to type. A press on it focuses the editor through the
-                root's handlers, like one anywhere else in the shell. `h-6` keeps
-                it centred on the draft's last 24px row; `ml-2` is the shell's
-                left inset, so the box is only as wide as the glyph. */}
-            <span
-              aria-hidden="true"
-              data-composer-marker=""
-              className={cn(
-                "ml-2 flex h-6 shrink-0 select-none items-center font-mono text-xs font-semibold leading-5",
-                COMPOSER_MARKER_TEXT_CLASS
-              )}
-            >
-              ❯
-            </span>
+            {/* The prompt marker is what makes the box read as somewhere to
+                type. `h-6` keeps it centred on the draft's last 24px row; `ml-2`
+                is the shell's left inset, so the box is only as wide as the
+                glyph. Where this composer offers prompt history, a click on it
+                opens the palette Mod+R opens; the press still focuses the editor
+                through the root's handlers first, so the palette records the
+                editor as where focus goes back. Out of the Tab order: Mod+R is
+                the keyboard path. */}
+            {historyOffered ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-composer-marker=""
+                    aria-label="Search prompt history"
+                    // Keeps the button from taking focus, so the editor stays
+                    // the palette's opener and the tooltip opens on hover only.
+                    onMouseDown={(e) => e.preventDefault()}
+                    // Radix opens a tooltip on focus too; a focus that arrives
+                    // some other way is not a hover.
+                    onFocus={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      // The root's click would focus the editor again under
+                      // the palette that is opening.
+                      e.stopPropagation();
+                      openHistoryFromMarker();
+                    }}
+                    className={cn(COMPOSER_MARKER_CLASS, COMPOSER_MARKER_HOVER_CLASS)}
+                  >
+                    ❯
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {createTooltipContent("Search prompt history", PROMPT_HISTORY_SHORTCUT)}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span aria-hidden="true" data-composer-marker="" className={COMPOSER_MARKER_CLASS}>
+                ❯
+              </span>
+            )}
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
@@ -3193,11 +3274,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             )}
           </div>
         </AppDialog>
-        {/* One palette per id: while Canopy is open its own composer's is the
-            one, not the grid pane's behind it. */}
-        {/* History spans this machine's projects, whose prompts name its files:
-            none is offered for a terminal on another host. */}
-        {((isFocusedTerminal && !canopyOpen) || (isolated && !thisMachineOff)) && (
+        {historyPaletteMounted && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}
