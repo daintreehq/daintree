@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createRef, useRef } from "react";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 
@@ -529,15 +530,30 @@ describe("render sites", () => {
     return out;
   }
 
-  /** Where `<Tag` appears in code, by file, with comments stripped. */
+  /** Where a `<Tag>` element is rendered, by file, read from the parsed source. */
   function renderSites(tag: string): Record<string, number> {
-    const pattern = new RegExp(`<${tag}[\\s/>]`, "g");
     const sites: Record<string, number> = {};
     for (const file of productionSources(SRC)) {
-      const code = readFileSync(file, "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/(^|[^:])\/\/.*$/gm, "$1");
-      const count = code.match(pattern)?.length ?? 0;
+      const text = readFileSync(file, "utf8");
+      if (!text.includes(tag)) continue;
+      const source = ts.createSourceFile(
+        file,
+        text,
+        ts.ScriptTarget.Latest,
+        true,
+        file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+      );
+      let count = 0;
+      const visit = (node: ts.Node) => {
+        if (
+          (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+          node.tagName.getText(source) === tag
+        ) {
+          count++;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
       if (count > 0) sites[path.relative(SRC, file).split(path.sep).join("/")] = count;
     }
     return sites;
