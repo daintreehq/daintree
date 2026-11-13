@@ -142,6 +142,60 @@ describe("useFindInPage", () => {
     expect(result.current.isOpen).toBe(false);
   });
 
+  // #16877: a panel dialog's pane and the grid pane under it are both focused;
+  // only the one inside the modal that holds the keys may open its find bar.
+  describe("while an app modal holds the keyboard", () => {
+    const mounted: HTMLElement[] = [];
+    afterEach(() => {
+      mounted.splice(0).forEach((el) => el.remove());
+    });
+
+    function webviewIn(parent: HTMLElement): Electron.WebviewTag & MockWebview {
+      const el = Object.assign(document.createElement("div"), createMockWebview());
+      parent.appendChild(el);
+      return el as unknown as Electron.WebviewTag & MockWebview;
+    }
+
+    function focusedModal(): HTMLDivElement {
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      const button = document.createElement("button");
+      modal.appendChild(button);
+      document.body.appendChild(modal);
+      mounted.push(modal);
+      button.focus();
+      return modal;
+    }
+
+    it("keeps the background pane's find bar shut", () => {
+      const grid = document.createElement("div");
+      document.body.appendChild(grid);
+      mounted.push(grid);
+      const webview = webviewIn(grid);
+      focusedModal();
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it("opens the find bar of the pane inside that modal", () => {
+      const modal = focusedModal();
+      const webview = webviewIn(modal);
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(true);
+    });
+  });
+
   it("handles find shortcut for open/close", () => {
     const webview = createMockWebview();
     let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;

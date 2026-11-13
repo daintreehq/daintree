@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -989,7 +990,7 @@ function TerminalPaneComponent({
     const handleFindInPanel = () => {
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
-      if (!isFocused || isHeldPane) return;
+      if (!isFocused || isHeldPane || !canPanelTakeFind(containerRef.current)) return;
       // Remembered only on the way in, so a second Cmd+F from the search
       // field doesn't make the field the place to return to.
       if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {

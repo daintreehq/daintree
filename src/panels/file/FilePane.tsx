@@ -37,6 +37,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { SVG_DRAW_ERROR } from "@/lib/svg";
 import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
@@ -540,10 +541,11 @@ export function FilePane({
 
   // Route Cmd+F to the open file's find bar while this pane is focused, in the
   // grid and the viewer dialog alike: CodeMirror's in Source, the document's
-  // own in rendered Markdown.
+  // own in rendered Markdown. A grid pane under the viewer dialog stays out.
   useEffect(() => {
     if (!isFocused) return;
     const handleFindInPanel = () => {
+      if (!canPanelTakeFind(heightHoldBodyRef.current)) return;
       markdownViewerRef.current?.openSearch();
       codeViewerRef.current?.openSearch();
     };

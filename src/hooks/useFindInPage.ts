@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 
 export interface FindInPageState {
   isOpen: boolean;
@@ -166,10 +167,13 @@ export function useFindInPage(
   useEffect(() => {
     if (!isFocused) return;
 
-    const handler = () => open();
+    // The webview anchors the pane in the DOM: a modal over it keeps it out.
+    const handler = () => {
+      if (canPanelTakeFind(webviewElement)) open();
+    };
     window.addEventListener("daintree:find-in-panel", handler);
     return () => window.removeEventListener("daintree:find-in-panel", handler);
-  }, [isFocused, open]);
+  }, [isFocused, open, webviewElement]);
 
   // Listen for find shortcuts forwarded from webview guest via main process IPC
   useEffect(() => {
