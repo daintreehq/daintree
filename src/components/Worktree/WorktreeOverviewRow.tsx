@@ -32,7 +32,8 @@ import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { fileManagerRevealLabel } from "@/lib/platform";
+import { hostFileManagerRevealLabel, revealCopiesHostPath } from "@/hooks/useHostPlatform";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
   ContextMenu,
@@ -872,14 +873,23 @@ export function WorktreeOverviewRow({
             <ExternalLink data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Open in editor
           </ContextMenuActionItem>
-          <ContextMenuActionItem
-            actionId="worktree.reveal"
-            args={menuArgs}
-            onSelect={onBeforeMenuAction}
-          >
-            <FolderOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            {fileManagerRevealLabel()}
-          </ContextMenuActionItem>
+          {/* A file manager on a remote host's screen is no use here, so the
+              reveal becomes a copy of the host path there. */}
+          {revealCopiesHostPath() ? (
+            <ContextMenuItem onSelect={() => copyWithToast("Path", worktree.path)}>
+              <FolderOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              {hostFileManagerRevealLabel()}
+            </ContextMenuItem>
+          ) : (
+            <ContextMenuActionItem
+              actionId="worktree.reveal"
+              args={menuArgs}
+              onSelect={onBeforeMenuAction}
+            >
+              <FolderOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              {hostFileManagerRevealLabel()}
+            </ContextMenuActionItem>
+          )}
           <ContextMenuActionItem
             actionId="worktree.openReviewHub"
             args={menuArgs}
