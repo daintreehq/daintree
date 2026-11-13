@@ -24,6 +24,7 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   "src/components/EventInspector/EventFilters.tsx": "checkable popover rows",
   // Show/hide value: the eye glyph is the state, the established reveal idiom.
   "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx": "reveal toggle",
+  "src/components/Settings/Decisions/DecisionsRelaySetup.tsx": "reveal toggle",
   "src/components/Settings/EnvVarRow.tsx": "reveal toggle",
   "src/components/Settings/ImportEnvDialog.tsx": "reveal toggle",
   "src/components/Settings/McpServerSettingsTab.tsx": "reveal toggle",
