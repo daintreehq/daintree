@@ -911,6 +911,14 @@ describe("ActionPalette", () => {
       expect(close).toHaveBeenCalledTimes(1);
     });
 
+    it("keeps a typed answer through Escape, which only a search clears first", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} argPrompt={prompt} query="pro" />);
+      expect(lastSearchablePaletteProps.current?.clearQueryOnEscape).toBe(false);
+
+      rerender(<ActionPalette {...baseProps} query="pro" />);
+      expect(lastSearchablePaletteProps.current?.clearQueryOnEscape).not.toBe(false);
+    });
+
     it("doesn't treat prefix characters as mode routes while answering", () => {
       render(<ActionPalette {...baseProps} argPrompt={prompt} query="" />);
       expect(fireKey(">")).toBe(false);

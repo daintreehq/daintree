@@ -329,6 +329,26 @@ describe("CommandPalette", () => {
     expect(screen.getByRole("dialog", { hidden: true }).getAttribute("aria-modal")).toBe("false");
   });
 
+  it("pages over disabled rows toward the cursor instead of wrapping to the far end", async () => {
+    const paged = Array.from({ length: 25 }, (_, index) => ({
+      id: `row-${index}`,
+      label: `Row ${String(index).padStart(2, "0")}`,
+      disabled: index < 15,
+    }));
+    render(inViewport(createElement(Harness, { items: paged })));
+    const input = await screen.findByRole("combobox");
+    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+    await screen.findByText("Row 15");
+    expect(active()?.textContent).toBe("Row 15");
+    for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(active()?.textContent).toBe("Row 20");
+
+    fireEvent.keyDown(input, { key: "PageUp" });
+    expect(active()?.textContent).toBe("Row 15");
+    fireEvent.keyDown(input, { key: "PageDown" });
+    expect(active()?.textContent).toBe("Row 24");
+  });
+
   it("skips disabled rows with the arrow keys", async () => {
     const onSelect = vi.fn();
     render(inViewport(createElement(Harness, { onSelect })));
