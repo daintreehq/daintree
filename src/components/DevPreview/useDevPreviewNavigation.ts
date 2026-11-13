@@ -203,11 +203,14 @@ export function useDevPreviewNavigation({
     [isWebviewReady, webviewRef]
   );
 
+  // A step the guest takes itself supersedes a saved-history Back that hasn't
+  // committed (stopped, or still loading): the guest's entries are still in order,
+  // and pruning on the step's commit would throw away the ones it can still reach.
   const handleBack = useCallback(() => {
     const webview = guestCanGo(-1);
     if (webview) {
       clearRetryState();
-      guestHistoryIntentRef.current.stepOffset = -1;
+      guestHistoryIntentRef.current = { stepOffset: -1, pruneOnCommitOf: null };
       webview.goBack();
       return;
     }
@@ -222,7 +225,7 @@ export function useDevPreviewNavigation({
     const webview = guestCanGo(1);
     if (webview) {
       clearRetryState();
-      guestHistoryIntentRef.current.stepOffset = 1;
+      guestHistoryIntentRef.current = { stepOffset: 1, pruneOnCommitOf: null };
       webview.goForward();
       return;
     }
@@ -249,7 +252,7 @@ export function useDevPreviewNavigation({
         return;
       }
       clearRetryState();
-      guestHistoryIntentRef.current.stepOffset = offset;
+      guestHistoryIntentRef.current = { stepOffset: offset, pruneOnCommitOf: null };
     },
     [navSnapshot, webviewRef, isWebviewReady, clearRetryState, guestHistoryIntentRef]
   );

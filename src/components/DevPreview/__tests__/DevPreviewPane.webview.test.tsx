@@ -76,7 +76,11 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let inLoadURL = false;
   const setAttributeDirect = element.setAttribute.bind(element);
   element.setAttribute = (name: string, value: string) => {
-    if (name === "src" && !inLoadURL) record.srcWrites.push(value);
+    if (name === "src" && !inLoadURL) {
+      record.srcWrites.push(value);
+      // The seed is the guest's first entry.
+      if (nav.entries.length === 1) nav.entries = [value];
+    }
     setAttributeDirect(name, value);
   };
 
@@ -4152,6 +4156,51 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
       expect(webview.goBack).not.toHaveBeenCalled();
       expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_A);
+    });
+
+    it("keeps the guest's history when its own step supersedes a stopped saved-history Back", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [PAGE_A], present: PAGE_B, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+      const { webview } = await renderReadyPane();
+      // The guest starts on B, visits C, and steps back to B itself.
+      await guestPushes(webview, PAGE_C);
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      await commitInPage(webview);
+      expect(webview.nav).toEqual({ entries: [PAGE_B, PAGE_C], index: 0 });
+
+      // The saved-history Back to A never commits: it is stopped mid-load.
+      webview.loadURL.mockImplementation(() => {});
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_A);
+      act(() => {
+        (latestToolbarProps().onStop as () => void)();
+      });
+
+      // Forward is still the guest's own step to C, and leaves B behind it.
+      await act(async () => {
+        (latestToolbarProps().onForward as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.goForward).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate", { url: PAGE_C });
+        await Promise.resolve();
+      });
+
+      expect(webview.clearHistory).not.toHaveBeenCalled();
+      expect(webview.nav.entries).toEqual([PAGE_B, PAGE_C]);
     });
 
     it("never reads a stopped jump into the reload that follows it", async () => {
