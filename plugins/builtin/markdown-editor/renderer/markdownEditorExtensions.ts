@@ -80,8 +80,14 @@ export function buildMarkdownEditorExtensions(options: {
   wrapLines: boolean;
   ariaLabel: string;
   callbacks: MarkdownEditorCallbacks;
+  /**
+   * The height of chrome pinned over the document's top edge as it scrolls
+   * (the view's sticky strip). With the open top panels' own height it is the
+   * scroll margin, so the cursor and search matches never land beneath either.
+   */
+  pinnedTopInset?: () => number;
 }): Extension[] {
-  const { language, polarity, wrapLines, ariaLabel, callbacks } = options;
+  const { language, polarity, wrapLines, ariaLabel, callbacks, pinnedTopInset } = options;
   return [
     // Save is a DOM-level handler rather than a keymap entry: a keymap that
     // runs preventDefaults but lets the event bubble, and the panel around
@@ -118,6 +124,15 @@ export function buildMarkdownEditorExtensions(options: {
     crosshairCursor(),
     highlightSelectionMatches(),
     search({ top: true, createPanel: createEditorSearchPanel }),
+    pinnedTopInset
+      ? EditorView.scrollMargins.of((view) => ({
+          // CodeMirror's own margin for a docked panel measures from the
+          // window's top, not from the pane that scrolls here.
+          top:
+            pinnedTopInset() +
+            (view.dom.querySelector<HTMLElement>(".cm-panels-top")?.offsetHeight ?? 0),
+        }))
+      : [],
     keymap.of([
       ...searchKeymap,
       ...markdownKeymap,

@@ -144,7 +144,11 @@ describe("MarkdownEditorView (#12323)", () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    await waitFor(() => expect(button.disabled).toBe(true));
+    // Unavailable, Save moves into its tooltip's hover wrapper, so the
+    // disabled button is a new node: read it afresh.
+    await waitFor(() =>
+      expect((screen.getByTestId("markdown-editor-save") as HTMLButtonElement).disabled).toBe(true)
+    );
     expect(editorView().hasFocus).toBe(true);
   });
 
@@ -373,6 +377,38 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(query).not.toBeNull();
     expect(document.activeElement).toBe(query);
     expect(document.querySelector(".cm-search input.cm-textfield[name=replace]")).not.toBeNull();
+  });
+
+  it("pins the strip in a header outside the scrolled document, leaving find in the editor", async () => {
+    await renderReady();
+    await act(async () => {
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+    });
+    const header = screen.getByTestId("markdown-editor-header");
+    expect(header.contains(screen.getByTestId("markdown-editor-status"))).toBe(true);
+    expect(header.contains(screen.getByTestId("markdown-editor-host"))).toBe(false);
+    // Inside `.cm-editor` is where the find bar's horizontal-scroll follow and
+    // the find-mode highlight rules (`:has(.cm-search)`) can reach it.
+    const search = document.querySelector(".cm-search");
+    expect(search).not.toBeNull();
+    expect(editorView().dom.contains(search)).toBe(true);
+    expect(header.contains(search)).toBe(false);
+  });
+
+  it("keeps the cursor from scrolling under the pinned strip or an open find bar", async () => {
+    await renderReady();
+    const header = screen.getByTestId("markdown-editor-header");
+    Object.defineProperty(header, "offsetHeight", { configurable: true, get: () => 28 });
+    const cm = editorView();
+    const topMargin = () =>
+      Math.max(0, ...cm.state.facet(EditorView.scrollMargins).map((f) => f(cm)?.top ?? 0));
+    expect(topMargin()).toBe(28);
+    await act(async () => {
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+    });
+    const panels = cm.dom.querySelector<HTMLElement>(".cm-panels-top")!;
+    Object.defineProperty(panels, "offsetHeight", { configurable: true, get: () => 36 });
+    expect(topMargin()).toBe(64);
   });
 
   it("unmounting the view keeps the draft — it is document state", async () => {
