@@ -286,6 +286,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { usePanelStore } from "@/store/panelStore";
 import { getCachedStagingStatus, resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -1673,6 +1674,57 @@ describe("ReviewHub", () => {
       expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
       expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     }
+
+    it("opens a partially staged file's twin by side and follows it when the rest is staged (#16897)", async () => {
+      const dual = (insertions: number) => ({
+        path: "src/dual.ts",
+        status: "modified" as const,
+        insertions,
+        deletions: 0,
+      });
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [dual(1)], unstaged: [dual(2)] })
+      );
+      const setDiffPanelFile = vi.fn();
+      const realSetDiffPanelFile = usePanelStore.getState().setDiffPanelFile;
+      usePanelStore.setState({ setDiffPanelFile });
+      try {
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getAllByText("dual.ts"));
+        openPanelDialogMock.mockClear();
+        const unstagedRow = within(
+          screen.getByTestId("review-hub-file-section-unstaged")
+        ).getByTestId("file-stage-row-src/dual.ts");
+        await act(async () => {
+          fireEvent.click(within(unstagedRow).getByText("dual.ts").closest("button")!);
+        });
+        await act(async () => {});
+
+        expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+        expect(openPanelDialogMock.mock.calls[0]![0]).toMatchObject({
+          filePath: "src/dual.ts",
+          viewedKey: "working-tree:src/dual.ts",
+          fileSide: "unstaged",
+        });
+
+        getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [dual(3)], unstaged: [] }));
+        await act(async () => {
+          capturedUpdateCallback!(makeWorktreeState());
+          await Promise.resolve();
+        });
+        await waitFor(() =>
+          expect(setDiffPanelFile).toHaveBeenLastCalledWith(
+            HUB_PANEL_ID,
+            "src/dual.ts",
+            "modified",
+            "working-tree:src/dual.ts",
+            "staged"
+          )
+        );
+      } finally {
+        usePanelStore.setState({ setDiffPanelFile: realSetDiffPanelFile });
+      }
+    });
 
     it("does not reopen the dialog the user just closed", async () => {
       await openDiffFor("index.ts");

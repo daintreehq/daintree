@@ -496,6 +496,37 @@ describe("DiffPane — current-file resolution", () => {
     expect(sourcesFor("unstaged")[0]).toBe("unstaged");
   });
 
+  it("moves between a partially staged file's twins in a mounted pane as only the side changes", () => {
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "unstaged" },
+    ];
+    const seedSide = (fileSide: "staged" | "unstaged") =>
+      seedPanel({
+        filePath: "a.ts",
+        fileStatus: "modified",
+        viewedKey: "working-tree:a.ts",
+        fileSide,
+        changeSet,
+      });
+    const currentSide = () => ({
+      index: screen.getByTestId("diff-sidebar-mock").getAttribute("data-current-index"),
+      source: useDiffContentMock.mock.calls.at(-1)![0]?.source,
+    });
+
+    seedSide("staged");
+    const { rerender } = renderPane();
+    expect(currentSide()).toEqual({ index: "0", source: "staged" });
+
+    seedSide("unstaged");
+    rerender(paneElement());
+    expect(currentSide()).toEqual({ index: "1", source: "unstaged" });
+
+    seedSide("staged");
+    rerender(paneElement());
+    expect(currentSide()).toEqual({ index: "0", source: "staged" });
+  });
+
   it("steps between a partially staged file's twins, carrying each one's side", () => {
     const changeSet: DiffChangeSetEntry[] = [
       { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },

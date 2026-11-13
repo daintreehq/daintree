@@ -41,9 +41,12 @@ describe("diff panel cursor (#16897)", () => {
     actions = createDiffPanelActions(set as never);
   });
 
-  it("moves to the other twin when only the side differs", () => {
+  it("moves between twins when only the side differs, in both directions", () => {
     actions.setDiffPanelFile("p", "a.ts", "modified", KEY, "unstaged");
-    expect(panel().fileSide).toBe("unstaged");
+    expect([panel().viewedKey, panel().fileSide]).toEqual([KEY, "unstaged"]);
+
+    actions.setDiffPanelFile("p", "a.ts", "modified", KEY, "staged");
+    expect([panel().viewedKey, panel().fileSide]).toEqual([KEY, "staged"]);
   });
 
   it("bails when nothing about the cursor changed", () => {

@@ -17,15 +17,13 @@ function entryFreshnessKey(entry: FileChangeDetail): string {
   return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
 }
 
-// Staging a new file flips git's `untracked` to `added` and moves its line
-// count from Daintree's own newline count to numstat, which can disagree on
-// big, binary or filtered files, so for a new file only the mtime speaks to
-// its content. Everything else reads as `entryFreshnessKey` does.
+// Status moves with the index, not the file: staging takes a new file from
+// `untracked` to `added`, and a file added or renamed then edited reads
+// `modified` until the rest is staged (simple-git lists `AM` and `RM` under
+// both). So status stays out, and an untracked file's missing deletion count
+// reads as the 0 numstat gives it once staged.
 function stagingAgnosticKey(entry: FileChangeDetail): string {
-  if (entry.status === "untracked" || entry.status === "added") {
-    return `new:${entry.mtimeMs ?? entry.mtime ?? ""}`;
-  }
-  return entryFreshnessKey(entry);
+  return `${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? 0}`;
 }
 
 export function findWorktreeByPath(

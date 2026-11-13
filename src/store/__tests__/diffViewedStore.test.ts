@@ -201,7 +201,6 @@ describe("diffViewedStore", () => {
       ["new content", change("a.ts", { mtimeMs: 200 })],
       ["new insertions with the same mtime", change("a.ts", { insertions: 5 })],
       ["new deletions with the same mtime", change("a.ts", { deletions: 5 })],
-      ["a status change", change("a.ts", { status: "added" })],
     ])("lapses on %s", (_label, next) => {
       observe([change("a.ts")]);
       mark("modified:a.ts");
@@ -441,7 +440,38 @@ describe("diffViewedStore", () => {
         expect(viewed(KEY)).toBe(false);
       });
 
-      it("still lapses on a status change that isn't staging a new file", () => {
+      it.each([
+        // simple-git lists AM and RM under `modified` too, which wins until the
+        // rest of the file is staged.
+        ["an added-then-edited file", "added"],
+        ["a renamed-then-edited file", "renamed"],
+      ] as const)(
+        "keeps the mark when staging the rest of %s flips its status",
+        (_label, after) => {
+          observe([change("a.ts", { insertions: 4 })]);
+          staging([{ path: "a.ts", status: after, insertions: 3, deletions: 0 }], [row("a.ts")]);
+          mark(KEY);
+
+          observe([change("a.ts", { status: after, insertions: 4 })]);
+          staging([{ path: "a.ts", status: after, insertions: 4, deletions: 0 }], []);
+          reconcile();
+          expect(viewed(KEY)).toBe(true);
+        }
+      );
+
+      it.each([
+        ["untracked", { status: "untracked" as const, deletions: null }],
+        ["added", { status: "added" as const, deletions: 0 }],
+      ])("lapses the mark when a new file is edited while %s", (_label, fields) => {
+        observe([change("a.ts", { ...fields, insertions: 4 })]);
+        mark(KEY);
+
+        observe([change("a.ts", { ...fields, insertions: 4, mtimeMs: 200 })]);
+        reconcile();
+        expect(viewed(KEY)).toBe(false);
+      });
+
+      it("lapses the mark when the file is deleted from under it", () => {
         observe([change("a.ts")]);
         mark(KEY);
 

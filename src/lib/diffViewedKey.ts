@@ -8,10 +8,11 @@
 export const WORKING_TREE_VIEWED_SECTION = "working-tree";
 
 /**
- * The Viewed key for a working-tree file, from its worktree-relative path.
- * Separators are normalised because git reports forward slashes while a path
- * stripped from a Windows absolute path may not have been.
+ * The Viewed key for a working-tree file, from its forward-slash
+ * worktree-relative path: git's own spelling, which the change list's
+ * `relativePath` already normalises to. Taken verbatim, since a backslash is a
+ * legal filename character on POSIX.
  */
 export function workingTreeViewedKey(relativePath: string): string {
-  return `${WORKING_TREE_VIEWED_SECTION}:${relativePath.replace(/\\/g, "/")}`;
+  return `${WORKING_TREE_VIEWED_SECTION}:${relativePath}`;
 }
