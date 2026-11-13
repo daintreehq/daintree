@@ -94,4 +94,27 @@ describe("useTerminalLogic", () => {
     expect(result.current.isExited).toBe(true);
     expect(result.current.exitCode).toBe(2);
   });
+
+  it("never shows the next tab, or the next run, the exit heard on the last (#16878)", () => {
+    usePanelStore.setState({ panelsById: {} });
+    const seen: Array<{ id: string; restartKey: number; isExited: boolean }> = [];
+    const { result, rerender } = renderHook(
+      ({ id, restartKey }: { id: string; restartKey: number }) => {
+        const logic = useTerminalLogic({ id, removeError: vi.fn(), restartKey });
+        seen.push({ id, restartKey, isExited: logic.isExited });
+        return logic;
+      },
+      { initialProps: { id: "tab-a", restartKey: 0 } }
+    );
+    const exitOnA = result.current.handleExit;
+    act(() => exitOnA(1));
+    expect(result.current.isExited).toBe(true);
+
+    rerender({ id: "tab-b", restartKey: 0 });
+    act(() => exitOnA(1));
+    expect(seen.filter((r) => r.id === "tab-b").some((r) => r.isExited)).toBe(false);
+
+    rerender({ id: "tab-a", restartKey: 1 });
+    expect(seen.filter((r) => r.restartKey === 1).some((r) => r.isExited)).toBe(false);
+  });
 });

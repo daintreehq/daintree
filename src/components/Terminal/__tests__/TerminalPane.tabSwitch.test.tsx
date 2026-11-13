@@ -179,4 +179,42 @@ describe("TerminalPane reused across a tab group's tabs (#16878)", () => {
     expect(screen.getByTestId("missing-cli").textContent).toBe("gate:off");
     expect(mounts.panel).toBe(1);
   });
+
+  it("takes the last tab's banner away at once rather than fading it over the next", async () => {
+    exits.exited.add("a");
+    const view = render(<Pane id="a" />);
+    expect(await screen.findByText("Dismiss exit banner")).toBeTruthy();
+
+    view.rerender(<Pane id="b" />);
+    expect(screen.queryByText("Dismiss exit banner")).toBeNull();
+  });
+
+  describe("auto-restart", () => {
+    const restartTerminal = vi.fn();
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      restartTerminal.mockClear();
+      seedPanels({ exitBehavior: "restart" });
+      usePanelStore.setState({
+        restartTerminal,
+      } as unknown as Partial<ReturnType<typeof usePanelStore.getState>>);
+      exits.exited.add("a");
+      exits.exited.add("b");
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts the tab the pane moved to, not the one it left", () => {
+      const view = render(<Pane id="a" />);
+      view.rerender(<Pane id="b" />);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(restartTerminal.mock.calls).toEqual([["b"]]);
+    });
+  });
 });

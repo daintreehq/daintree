@@ -1038,29 +1038,49 @@ describe("TerminalSearchBar", () => {
       expect(managed.b.searchAddon.clearDecorations).not.toHaveBeenCalled();
     });
 
-    it("drops a search whose addon loads after the bar has left that terminal", async () => {
-      const managed = mockTerminals();
-      let resolveA: (addon: unknown) => void = () => {};
+    type LoadedAddon = Awaited<ReturnType<typeof terminalInstanceService.ensureSearchAddon>>;
+
+    // One load for "a", shared by everything that asks for it, as the service
+    // shares it; "b" loads at once.
+    function deferLoadOnA(managed: ReturnType<typeof mockTerminals>) {
+      let settle!: { resolve: (addon: LoadedAddon) => void; reject: (error: Error) => void };
+      const loadOnA = new Promise<LoadedAddon>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
       vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation((id) =>
-        id === "a"
-          ? (new Promise((resolve) => {
-              resolveA = resolve;
-            }) as ReturnType<typeof terminalInstanceService.ensureSearchAddon>)
-          : Promise.resolve(
-              managed.b.searchAddon as unknown as Awaited<
-                ReturnType<typeof terminalInstanceService.ensureSearchAddon>
-              >
-            )
+        id === "a" ? loadOnA : Promise.resolve(managed.b.searchAddon as unknown as LoadedAddon)
       );
+      return settle;
+    }
+
+    async function leaveAWithASearchLoading(managed: ReturnType<typeof mockTerminals>) {
       const view = render(<TerminalSearchBar terminalId="a" onClose={vi.fn()} />);
       await searchFor("hello");
-
       view.rerender(<TerminalSearchBar terminalId="b" onClose={vi.fn()} />);
       await act(async () => {});
-      await act(async () => resolveA(managed.a.searchAddon));
+      expect(managed.b.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      managed.a.searchAddon.clearDecorations.mockClear();
+    }
+
+    it("drops a search whose addon loads after the bar has left that terminal", async () => {
+      const managed = mockTerminals();
+      const loadOnA = deferLoadOnA(managed);
+      await leaveAWithASearchLoading(managed);
+
+      await act(async () => loadOnA.resolve(managed.a.searchAddon as unknown as LoadedAddon));
 
       expect(managed.a.searchAddon.findNext).not.toHaveBeenCalled();
-      expect(managed.b.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+    });
+
+    it("keeps a late failure on the terminal it left out of the next one's results", async () => {
+      const managed = mockTerminals();
+      const loadOnA = deferLoadOnA(managed);
+      await leaveAWithASearchLoading(managed);
+
+      await act(async () => loadOnA.reject(new Error("addon failed to load")));
+
+      expect(screen.queryByText("No matches")).toBeNull();
+      expect(managed.a.searchAddon.clearDecorations).not.toHaveBeenCalled();
     });
   });
 });
