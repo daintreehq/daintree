@@ -101,22 +101,23 @@ if (typeof window !== "undefined") {
   );
 }
 
+/**
+ * Every open Radix primitive that mounts a DismissableLayer with an Escape
+ * handler: Popover, Select, DropdownMenu, ContextMenu, HoverCard, Tooltip.
+ * Dialogs are matched separately (`role="dialog"` without `aria-modal`) —
+ * modal Dialogs are AppDialog/AppPaletteDialog and live in the backstop stack,
+ * not the Radix-layer category. An aria-modal popover dialog counts only when
+ * it opts in via ESCAPE_RADIX_LAYER_ATTR.
+ */
+export const OPEN_ESCAPE_LAYER_SELECTOR =
+  '[role="listbox"][data-state="open"], ' +
+  '[role="menu"][data-state="open"], ' +
+  '[role="tooltip"][data-state="open"], ' +
+  '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
+  `[${ESCAPE_RADIX_LAYER_ATTR}][role="dialog"][data-state="open"]`;
+
 function isAnyRadixLayerOpen(): boolean {
-  // Match every Radix primitive that mounts a DismissableLayer with an
-  // Escape handler: Popover, Select, DropdownMenu, ContextMenu, HoverCard,
-  // Tooltip. Dialogs are matched separately (`role="dialog"` without
-  // `aria-modal`) — modal Dialogs are AppDialog/AppPaletteDialog and live
-  // in the backstop stack, not the Radix-layer category. An aria-modal
-  // popover dialog counts only when it opts in via ESCAPE_RADIX_LAYER_ATTR.
-  return (
-    document.querySelector(
-      '[role="listbox"][data-state="open"], ' +
-        '[role="menu"][data-state="open"], ' +
-        '[role="tooltip"][data-state="open"], ' +
-        '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
-        `[${ESCAPE_RADIX_LAYER_ATTR}][role="dialog"][data-state="open"]`
-    ) !== null
-  );
+  return document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR) !== null;
 }
 
 export function radixLayerWasOpenWhenEscapePressed(): boolean {

@@ -20,6 +20,7 @@ import {
   INTERACTIVE_CONTROL_SELECTOR,
   TRUNCATION_DISCLOSURE_ATTR,
 } from "@/lib/accessibility";
+import { resolveFocusOpener } from "@/lib/focusOpener";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
@@ -85,24 +86,6 @@ type DialogPlacement = "center" | "right" | "left" | "window";
  * identity changes while the dialog is open, e.g. the next row after a delete).
  */
 type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
-
-/**
- * A dialog opened from a menu item is recorded against the menu's trigger. The
- * item's select handler runs before the menu closes, so the item still holds
- * focus when the opener is read — and it unmounts with the menu, which would
- * leave the close nothing to restore to but the app shell.
- */
-function resolveOpener(active: HTMLElement | null): HTMLElement | null {
-  let opener = active;
-  // A submenu is labelled by its sub-trigger, itself an item of the parent menu.
-  for (let depth = 0; depth < 4; depth++) {
-    const triggerId = opener?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
-    const trigger = triggerId ? document.getElementById(triggerId) : null;
-    if (!trigger || trigger === opener) break;
-    opener = trigger;
-  }
-  return opener;
-}
 
 /**
  * Resolve a {@link RestoreFocusTarget} to an element. Tolerates a throwing
@@ -503,7 +486,7 @@ export function AppDialog({
     focusAtOpenRef.current = active;
     if (openerCapturedRef.current) return;
     openerCapturedRef.current = true;
-    previousActiveElement.current = resolveOpener(active);
+    previousActiveElement.current = resolveFocusOpener(active);
   }, [isOpen]);
 
   useEffect(() => {

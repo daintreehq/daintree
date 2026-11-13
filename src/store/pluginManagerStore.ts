@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { resolveFocusOpener } from "@/lib/focusOpener";
 
 /**
  * Where a plugin's settings live. Each plugin has one home per scope and a deep
@@ -59,11 +60,17 @@ interface PluginManagerState {
 
 let nextSettingsNonce = 1;
 
-/** The element to return to when the manager closes, captured as it opens. */
+/**
+ * The element to return to when the manager closes, captured as it opens. A
+ * menu item that opened it is about to unmount with its menu, so it is
+ * recorded as the menu's trigger.
+ */
 function captureReturnFocus(wasOpen: boolean, current: HTMLElement | null): HTMLElement | null {
   if (wasOpen || typeof document === "undefined") return current;
   const active = document.activeElement;
-  return active instanceof HTMLElement && active !== document.body ? active : null;
+  return active instanceof HTMLElement && active !== document.body
+    ? resolveFocusOpener(active)
+    : null;
 }
 
 export const usePluginManagerStore = create<PluginManagerState>()((set, get) => ({

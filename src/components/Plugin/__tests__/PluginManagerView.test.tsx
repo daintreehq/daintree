@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -24,6 +24,10 @@ import type {
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
+import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { usePanelStore } from "@/store/panelStore";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -3804,6 +3808,172 @@ describe("PluginManagerView settings deep link", () => {
     const field = await screen.findByLabelText("API key");
     await waitFor(() => expect(document.activeElement).toBe(field));
     await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+  });
+});
+
+describe("PluginManagerView — return focus and keyboard containment (#16942)", () => {
+  const added: HTMLElement[] = [];
+  function add<T extends HTMLElement>(el: T): T {
+    document.body.appendChild(el);
+    added.push(el);
+    return el;
+  }
+
+  beforeEach(() => {
+    usePluginManagerStore.setState({
+      isOpen: false,
+      settingsRequest: null,
+      returnFocusTarget: null,
+    });
+  });
+
+  afterEach(() => {
+    added.splice(0).forEach((el) => el.remove());
+    usePanelStore.setState({ focusedId: null });
+  });
+
+  /**
+   * Opens the manager the way a menu item's select handler does: the item
+   * holds focus as the action runs, and unmounts with its menu right after.
+   */
+  function openFromMenuItem(): HTMLButtonElement {
+    const trigger = add(document.createElement("button"));
+    trigger.id = "plugins-menu-trigger";
+    trigger.textContent = "Plugins";
+    const menu = add(document.createElement("div"));
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-labelledby", trigger.id);
+    const item = document.createElement("div");
+    item.setAttribute("role", "menuitem");
+    item.tabIndex = -1;
+    menu.appendChild(item);
+    item.focus();
+    act(() => usePluginManagerStore.getState().open());
+    menu.remove();
+    return trigger;
+  }
+
+  /** Opens it from a palette's input, which unmounts with the palette. */
+  function openFromPaletteInput() {
+    const input = add(document.createElement("input"));
+    input.focus();
+    act(() => usePluginManagerStore.getState().open());
+    input.remove();
+  }
+
+  async function renderOpenedView() {
+    renderDialog();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
+    );
+  }
+
+  it("hands focus back to the menu's trigger once the item that opened it has unmounted", async () => {
+    const trigger = openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("hands focus to the focused panel when the palette that opened it is gone", async () => {
+    const panelInput = add(document.createElement("textarea"));
+    const unregister = registerPanelFocusHandler("panel-1", () => {
+      panelInput.focus();
+      return document.activeElement === panelInput;
+    });
+    usePanelStore.setState({ focusedId: "panel-1" });
+    try {
+      openFromPaletteInput();
+      await renderOpenedView();
+
+      act(() => usePluginManagerStore.getState().close());
+
+      await waitFor(() => expect(document.activeElement).toBe(panelInput));
+    } finally {
+      unregister();
+    }
+  });
+
+  it("falls back to the app shell's first control rather than the body", async () => {
+    const root = add(document.createElement("div"));
+    root.id = "root";
+    const shellControl = document.createElement("button");
+    shellControl.textContent = "Toggle sidebar";
+    root.appendChild(shellControl);
+    openFromPaletteInput();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    await waitFor(() => expect(document.activeElement).toBe(shellControl));
+  });
+
+  it("leaves focus the user has already moved somewhere usable", async () => {
+    const trigger = openFromMenuItem();
+    const elsewhere = add(document.createElement("button"));
+    await renderOpenedView();
+
+    act(() => {
+      usePluginManagerStore.getState().close();
+      elsewhere.focus();
+    });
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+    expect(document.activeElement).toBe(elsewhere);
+    expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it("restores nothing when it reopens before the hand-back lands", async () => {
+    openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => {
+      usePluginManagerStore.getState().close();
+      usePluginManagerStore.getState().open();
+    });
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+    expect(screen.getByTestId("plugin-manager-view").contains(document.activeElement)).toBe(true);
+  });
+
+  it("wraps Tab and Shift+Tab at its edges instead of walking out of the view", async () => {
+    add(document.createElement("button")).textContent = "Outside";
+    usePluginManagerStore.setState({ isOpen: true });
+    await renderOpenedView();
+    const view = screen.getByTestId("plugin-manager-view");
+    const tabbables = getVisibleTabbableElements(view);
+    const first = tabbables[0]!;
+    const last = tabbables[tabbables.length - 1]!;
+    expect(first).not.toBe(last);
+
+    last.focus();
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+
+    // Between the edges the browser moves focus as usual.
+    first.focus();
+    expect(fireEvent.keyDown(first, { key: "Tab" })).toBe(true);
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("marks itself open for nested layers' Escape only while it is open", async () => {
+    const listbox = add(document.createElement("div"));
+    listbox.setAttribute("role", "listbox");
+    listbox.setAttribute("data-state", "open");
+    const escape = () => new KeyboardEvent("keydown", { key: "Escape" });
+    usePluginManagerStore.setState({ isOpen: true });
+    await renderOpenedView();
+
+    expect(nestedLayerOwnsEscape(escape())).toBe(true);
+
+    act(() => usePluginManagerStore.getState().close());
+
+    expect(nestedLayerOwnsEscape(escape())).toBe(false);
   });
 });
 

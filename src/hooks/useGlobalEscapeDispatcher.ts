@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { dispatchEscape, dispatchEscapeFallback } from "@/lib/escapeStack";
 import { backstopAlreadyConsumedEscape } from "@/lib/dialogEscapeBackstop";
+import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
 
 export function useGlobalEscapeDispatcher(): void {
   useEffect(() => {
@@ -18,6 +19,9 @@ export function useGlobalEscapeDispatcher(): void {
       // the dialog from the escape stack mid-event — so dispatching now
       // would walk one layer deeper and close the dialog underneath.
       if (backstopAlreadyConsumedEscape()) return;
+      // A layer open inside the plugin manager owned this Escape, whether or
+      // not it is still open by now.
+      if (nestedLayerOwnsEscape(e)) return;
       if (dispatchEscape() || dispatchEscapeFallback()) {
         e.preventDefault();
       }
