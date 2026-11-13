@@ -1651,7 +1651,7 @@ function TerminalPaneComponent({
           notices outright rather than fading the last tab's out, live
           callbacks and all, over the next one. */}
       <div
-        key={id}
+        key={`${id}-banners`}
         data-pane-banners
         className="flex shrink-0 flex-col max-h-[45%] overflow-y-auto overscroll-contain"
       >
