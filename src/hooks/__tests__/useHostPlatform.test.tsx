@@ -31,8 +31,10 @@ import {
   isHostMac,
   isRemoteWindow,
   resolveHostTmpDir,
+  revealCopiesHostPath,
   setHostPlatformInfo,
 } from "../useHostPlatform";
+import { sshConnection, wslConnection } from "@shared/types/remoteHosts";
 import { Copy } from "lucide-react";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
@@ -63,6 +65,7 @@ describe("host platform on a local window", () => {
     expect(isHostMac()).toBe(true);
     expect(hostShellDialect()).toBeUndefined();
     expect(hostFileManagerRevealLabel()).toBe("Show in Finder");
+    expect(revealCopiesHostPath()).toBe(false);
     expect(revealCopy().label).toBe("Reveal in Finder");
     expect(getHostPlatformInfo()).toEqual({
       platform: "darwin",
@@ -148,6 +151,19 @@ describe("a remote window", () => {
       icon: Copy,
       copiedAnnouncement: "Host path copied",
     });
+  });
+
+  it("names the reveal for what it does, whichever connection main reports", () => {
+    const cases = [
+      { connection: null, copies: true, label: "Copy host path" },
+      { connection: sshConnection("greg@studio-01"), copies: true, label: "Copy host path" },
+      { connection: wslConnection("Ubuntu"), copies: false, label: "Show in Explorer" },
+    ];
+    for (const { connection, copies, label } of cases) {
+      setHostPlatformInfo({ platform: "linux", connection });
+      expect(revealCopiesHostPath()).toBe(copies);
+      expect(hostFileManagerRevealLabel()).toBe(label);
+    }
   });
 
   it("carries @<host> on terminal titles once the host is named", () => {

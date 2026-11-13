@@ -415,7 +415,7 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
       press(await screen.findByRole("menuitem", { name: "Review" }));
       // A direct row at the menu's root, and the only one of that name: the
       // Review submenu no longer repeats it.
-      press(await screen.findByRole("menuitem", { name: /Review worktree/ }));
+      press(await screen.findByRole("menuitem", { name: /Open Review Hub/ }));
       expect(dispatch).toHaveBeenCalledWith("worktree.openReviewHub", { worktreeId: WORKTREE.id });
       expect(onSelect).not.toHaveBeenCalled();
     });
