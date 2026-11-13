@@ -5,6 +5,7 @@ import PQueue from "p-queue";
 
 const worktreeClientMock = vi.hoisted(() => ({
   delete: vi.fn(),
+  getAll: vi.fn(),
   getFreshChanges: vi.fn(),
   getSubmoduleDeleteRisk: vi.fn(),
 }));
@@ -12,6 +13,11 @@ const notifyMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
 const devPreviewGetByWorktreeMock = vi.hoisted(() => vi.fn());
 const devPreviewStopByWorktreeMock = vi.hoisted(() => vi.fn());
+const panelCloseMock = vi.hoisted(() => ({
+  captureWorktreeTerminalSnapshot: vi.fn(),
+  closeTerminalsForWorktree: vi.fn(),
+  restoreClosedTerminals: vi.fn(),
+}));
 
 vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock }));
 // `worktreeDeletePreview` imports the barrel, not the module. Both specifiers
@@ -22,6 +28,7 @@ vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock 
 vi.mock("@/clients", () => ({ worktreeClient: worktreeClientMock }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/utils/logger", () => ({ logError: logErrorMock }));
+vi.mock("../worktreeDeleteHelper", () => panelCloseMock);
 
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
 (window as unknown as Record<string, unknown>).electron = {
@@ -153,6 +160,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   devPreviewGetByWorktreeMock.mockResolvedValue(null);
   devPreviewStopByWorktreeMock.mockResolvedValue(undefined);
+  // Reset, not cleared: a test that makes the close hang or the relaunch
+  // reject must not carry that into the next one.
+  panelCloseMock.captureWorktreeTerminalSnapshot.mockReset().mockReturnValue([]);
+  panelCloseMock.closeTerminalsForWorktree.mockReset().mockResolvedValue(undefined);
+  panelCloseMock.restoreClosedTerminals.mockReset().mockResolvedValue(undefined);
+  worktreeClientMock.getAll.mockReset().mockResolvedValue([]);
   // Default: every target previews clean and verified. A `null` submodule risk
   // would read as `unverified` and block every target, so the clean default has
   // to be a completed inventory.
@@ -1381,6 +1394,259 @@ describe("useWorktreeBulkRemove — the evidence is re-read before anything runs
     const b = hook.result.current.targets.find((t) => t.id === "b")!;
     expect(isBulkRemoveEligible(b)).toBe(false);
     expect(hook.result.current.eligibleCount).toBe(1);
+  });
+});
+
+describe("useWorktreeBulkRemove — a held run says so (#16892)", () => {
+  function holdNextConfirm() {
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      Promise.resolve(id === "b" ? fresh(id, [change("/repo/b/new.ts", "modified")]) : fresh(id))
+    );
+  }
+
+  it("flags a held confirm until the next attempt", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    expect(hook.result.current.hasRecheckChanges).toBe(false);
+
+    holdNextConfirm();
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+    expect(hook.result.current.hasRecheckChanges).toBe(true);
+    // Shown as well as spoken, never instead of it.
+    expect(useAnnouncerStore.getState().assertive?.msg).toBe(
+      "Something changed since the check. Review the list and confirm again."
+    );
+
+    // The next attempt re-reads against what is now on screen, so the notice
+    // about the last one is spent the moment it starts.
+    const reads = deferFreshChanges();
+    let pending!: Promise<void>;
+    act(() => {
+      pending = hook.result.current.handleConfirm();
+    });
+    expect(hook.result.current.hasRecheckChanges).toBe(false);
+    await act(async () => {
+      reads.resolve("a", fresh("a"));
+      reads.resolve("b", fresh("b", [change("/repo/b/new.ts", "modified")]));
+      await pending;
+    });
+    expect(worktreeClientMock.delete).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.hasRecheckChanges).toBe(false);
+  });
+
+  it.each([
+    ["retry", (h: BulkRemoveHook) => h.result.current.handleRetryPreviews()],
+    ["cancel", (h: BulkRemoveHook) => h.result.current.handleCancel()],
+  ])("clears the flag on %s", async (_label, leave) => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    holdNextConfirm();
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+    expect(hook.result.current.hasRecheckChanges).toBe(true);
+
+    act(() => leave(hook));
+    expect(hook.result.current.hasRecheckChanges).toBe(false);
+    await flush();
+  });
+});
+
+describe("useWorktreeBulkRemove — a target's panels close before its delete (#16892)", () => {
+  const snapshot = (id: string) => [{ id: `term-${id}`, worktreeId: id, location: "grid" as const }];
+
+  async function confirm(hook: BulkRemoveHook) {
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+  }
+
+  it("closes each target's panels, then stops its dev server, then deletes it", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    let releaseClose!: () => void;
+    panelCloseMock.closeTerminalsForWorktree.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        })
+    );
+    const { hook } = setup(["a"], [wt("a")]);
+    await openAndSettle(hook);
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = hook.result.current.handleConfirm();
+    });
+    await flush();
+    // A live shell rooted in the directory locks it on Windows, so the order
+    // is the point: neither the stop nor the delete may start under it.
+    expect(panelCloseMock.closeTerminalsForWorktree).toHaveBeenCalledWith("a");
+    expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseClose();
+      await pending;
+    });
+    const order = (fn: { mock: { invocationCallOrder: number[] } }) =>
+      fn.mock.invocationCallOrder[0]!;
+    expect(order(panelCloseMock.captureWorktreeTerminalSnapshot)).toBeLessThan(
+      order(panelCloseMock.closeTerminalsForWorktree)
+    );
+    expect(order(devPreviewStopByWorktreeMock)).toBeLessThan(order(worktreeClientMock.delete));
+    expect(panelCloseMock.restoreClosedTerminals).not.toHaveBeenCalled();
+  });
+
+  it("closes nothing when the re-read holds the run", async () => {
+    const { hook } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await openAndSettle(hook);
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      Promise.resolve(id === "b" ? fresh(id, [change("/repo/b/new.ts", "modified")]) : fresh(id))
+    );
+
+    await confirm(hook);
+
+    expect(panelCloseMock.captureWorktreeTerminalSnapshot).not.toHaveBeenCalled();
+    expect(panelCloseMock.closeTerminalsForWorktree).not.toHaveBeenCalled();
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+  });
+
+  it("relaunches the closed terminals when the delete fails and the worktree is still there", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "a" ? Promise.reject(new Error("Directory locked")) : Promise.resolve()
+    );
+    worktreeClientMock.getAll.mockResolvedValue([{ id: "a" }]);
+    const { hook } = setup(["a", "b"], [wt("a", { branch: "feature/a" }), wt("b")]);
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalledTimes(1);
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalledWith(snapshot("a"));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "warning", message: "feature/a: Directory locked" })
+    );
+  });
+
+  it("relaunches nothing into a worktree the host already removed", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    worktreeClientMock.delete.mockRejectedValue(new Error("Branch cleanup failed"));
+    worktreeClientMock.getAll.mockResolvedValue([]);
+    const { hook } = setup(["a"], [wt("a")]);
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(worktreeClientMock.getAll).toHaveBeenCalled();
+    expect(panelCloseMock.restoreClosedTerminals).not.toHaveBeenCalled();
+  });
+
+  it("treats a failed existence lookup as the worktree still being there", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    worktreeClientMock.delete.mockRejectedValue(new Error("Directory locked"));
+    worktreeClientMock.getAll.mockRejectedValue(new Error("port closed"));
+    const { hook } = setup(["a"], [wt("a")]);
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalledWith(snapshot("a"));
+  });
+
+  it("fails a target whose terminals won't close, without deleting it, and relaunches them", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    panelCloseMock.closeTerminalsForWorktree.mockImplementation((id: string) =>
+      id === "a"
+        ? Promise.reject(new Error("Timed out waiting for 1 terminal(s) to close"))
+        : Promise.resolve()
+    );
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    worktreeClientMock.getAll.mockResolvedValue([{ id: "a" }]);
+    const { hook } = setup(["a", "b"], [wt("a", { branch: "feature/a" }), wt("b")]);
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(worktreeClientMock.delete.mock.calls.map((c) => c[0])).toEqual(["b"]);
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalledWith(snapshot("a"));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        message: "feature/a: Timed out waiting for 1 terminal(s) to close",
+      })
+    );
+  });
+
+  it("reports the delete's failure when the relaunch fails too", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    panelCloseMock.restoreClosedTerminals.mockRejectedValue(new Error("spawn failed"));
+    worktreeClientMock.delete.mockRejectedValue(new Error("Directory locked"));
+    worktreeClientMock.getAll.mockResolvedValue([{ id: "a" }]);
+    const { hook } = setup(["a"], [wt("a", { branch: "feature/a" })]);
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", message: "feature/a: Directory locked" })
+    );
+  });
+
+  it("keeps the run busy until the relaunch settles", async () => {
+    panelCloseMock.captureWorktreeTerminalSnapshot.mockImplementation(snapshot);
+    let finishRestore!: () => void;
+    panelCloseMock.restoreClosedTerminals.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        })
+    );
+    worktreeClientMock.delete.mockRejectedValue(new Error("Directory locked"));
+    worktreeClientMock.getAll.mockResolvedValue([{ id: "a" }]);
+    const { hook, selectOnly } = setup(["a"], [wt("a")]);
+    await openAndSettle(hook);
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = hook.result.current.handleConfirm();
+    });
+    await flush();
+    await flush();
+    // Still running: a retry from the selection it leaves would start closing
+    // the terminals this is still relaunching.
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalled();
+    expect(hook.result.current.isExecuting).toBe(true);
+    expect(selectOnly).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishRestore();
+      await pending;
+    });
+    expect(hook.result.current.isExecuting).toBe(false);
+    expect(selectOnly).toHaveBeenCalledWith(["a"]);
+  });
+
+  it("leaves an ancestor's panels open when a nested worktree inside it fails", async () => {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "child" ? Promise.reject(new Error("Filesystem busy")) : Promise.resolve()
+    );
+    const { hook } = setup(
+      ["parent", "child"],
+      [
+        wt("parent", { path: "/repo/parent" }),
+        wt("child", { path: "/repo/parent/child" }),
+      ]
+    );
+    await openAndSettle(hook);
+
+    await confirm(hook);
+
+    expect(panelCloseMock.closeTerminalsForWorktree.mock.calls.map((c) => c[0])).toEqual([
+      "child",
+    ]);
   });
 });
 

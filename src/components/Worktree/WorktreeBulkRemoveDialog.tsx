@@ -1,9 +1,14 @@
 import { AlertTriangle, GitBranch, Trash2 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
+import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { PathText } from "./PathText";
+import { selectLivePanelsForWorktree } from "./worktreeDeleteHelper";
 import { WorktreeDeleteNotes } from "./WorktreeDeleteNotes";
 import {
   buildSubmoduleCommitRows,
@@ -276,6 +281,50 @@ function EligibleBody({ target }: { target: BulkRemoveTarget }) {
   );
 }
 
+/**
+ * The panels this row's delete closes before the directory goes: every live
+ * panel in the worktree, as the run selects them. Read live rather than from
+ * the preview, so a terminal opened while the dialog is up is named too.
+ */
+function PanelCloseLine({ worktreeId }: { worktreeId: string }) {
+  const [terminals, others, runningAgents] = usePanelStore(
+    useShallow((state) => {
+      let pty = 0;
+      let rest = 0;
+      let running = 0;
+      for (const panel of selectLivePanelsForWorktree(state, worktreeId)) {
+        if (!isPtyPanel(panel)) {
+          rest += 1;
+          continue;
+        }
+        pty += 1;
+        if (terminalHasRunningAgentSession(panel)) running += 1;
+      }
+      return [pty, rest, running] as const;
+    })
+  );
+  if (terminals + others === 0) return null;
+  const closed =
+    terminals === 0
+      ? pluralize(others, "panel")
+      : others === 0
+        ? pluralize(terminals, "terminal")
+        : `${pluralize(terminals, "terminal")} and ${pluralize(others, "other panel")}`;
+  return (
+    <p className={cn(DETAIL, "text-xs text-text-secondary")} data-testid="bulk-remove-panels">
+      {closed} will be closed
+      {/* Closing an idle shell is cheap; interrupting an agent mid-work is
+          not, so that subset is named as the single delete names it. */}
+      {runningAgents > 0 && (
+        <span className="font-medium text-text-primary">
+          {" · "}
+          {pluralize(runningAgents, "running agent")}
+        </span>
+      )}
+    </p>
+  );
+}
+
 function exclusionReason(exclusion: BulkRemoveExclusion): string {
   if (exclusion.kind === "gone") return "Already deleted";
   if (exclusion.kind === "verify-failed") return "Couldn't read this worktree's changes";
@@ -476,14 +525,14 @@ export function WorktreeBulkRemoveDialog({
       : `Delete ${titleCount} worktrees?`;
 
   // States the consequence, not generic irreversibility copy: what leaves the
-  // disk is the working tree, the dev server goes with it (the run stops it
-  // first), and the branch is explicitly what does not.
+  // disk is the working tree, its panels and dev server go with it (the run
+  // closes and stops them first), and the branch is explicitly what does not.
   // Once nothing can run there is no deletion left to describe, only why.
   const description = nothingToRun
     ? "None of the selected worktrees can be deleted. Each one below says why."
     : `${
         titleCount === 1 ? "The worktree's directory is" : "Each worktree directory is"
-      } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules, and a running dev server is stopped first. Branches are kept.`;
+      } deleted from disk. Uncommitted and untracked files are discarded, including files inside submodules. Open panels are closed and a running dev server is stopped first. Branches are kept.`;
 
   // A count on the button is a promise, so it only carries one once the
   // previews have settled on it.
@@ -494,17 +543,30 @@ export function WorktreeBulkRemoveDialog({
         ? `Delete ${eligibleCount} worktrees`
         : "Delete worktrees";
 
+  // A confirm the re-read held: the count the user typed is gone and nothing
+  // ran, so the reason sits beside the button they just pressed, not only in
+  // the announcer. Not a live region: the hold already announced it.
+  const showRecheckNotice = bulkRemove.hasRecheckChanges && !isExecuting && !isPreviewPending;
+
   // Says what the primary is waiting on, in the place the user is looking when
   // they ask. The typed gate's own hint comes from `ConfirmDialog`.
-  const hint = bulkRemove.isRechecking
-    ? "Checking current work before deleting"
-    : isExecuting
-      ? `Deleting ${pluralize(eligibleCount, "worktree")}`
-      : isPreviewPending
-        ? "Checking each worktree for uncommitted work"
-        : nothingToRun && (targets.length > 0 || excludedMainCount > 0)
-          ? "Every selected worktree was excluded"
-          : null;
+  const hint = bulkRemove.isRechecking ? (
+    "Checking current work before deleting"
+  ) : isExecuting ? (
+    `Deleting ${pluralize(eligibleCount, "worktree")}`
+  ) : isPreviewPending ? (
+    "Checking each worktree for uncommitted work"
+  ) : showRecheckNotice ? (
+    <span
+      className="flex min-w-0 items-start gap-1.5 text-text-primary"
+      data-testid="bulk-remove-recheck-notice"
+    >
+      <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0 text-status-warning" aria-hidden="true" />
+      <span>Something changed since the check. Review the list and confirm again.</span>
+    </span>
+  ) : nothingToRun && (targets.length > 0 || excludedMainCount > 0) ? (
+    "Every selected worktree was excluded"
+  ) : null;
 
   // The typed attestation is for the work listed above it, so it names that
   // work rather than repeating that the action is irreversible.
@@ -583,6 +645,9 @@ export function WorktreeBulkRemoveDialog({
       cooldownKey={consentKey}
       confirmDisabled={!bulkRemove.canConfirm}
       hint={hint}
+      // Its own row, so the sentence isn't squeezed into a column beside the
+      // buttons.
+      hintPlacement={showRecheckNotice ? "above" : "inline"}
       onConfirm={bulkRemove.handleConfirm}
       isConfirmLoading={isExecuting}
     >
@@ -636,6 +701,7 @@ export function WorktreeBulkRemoveDialog({
                 <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
                   <TargetName target={target} />
                   <EligibleBody target={target} />
+                  <PanelCloseLine worktreeId={target.id} />
                   {/* Plugin notes (#13805), asked per row once it is in the
                       batch. Outside the consent key on purpose: a note
                       arriving must not reset what the user agreed to. */}

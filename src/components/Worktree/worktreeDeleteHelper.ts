@@ -1,5 +1,5 @@
-import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
@@ -64,16 +64,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
-  const state = usePanelStore.getState();
-  return state.panelIds.filter((id) => {
+type PanelStoreSnapshot = Pick<PanelGridState, "panelIds" | "panelsById">;
+
+/**
+ * Every panel a worktree delete closes: all of the worktree's live panels, not
+ * only its terminals, less trash and ephemeral PTYs. Shared with the bulk
+ * confirm so the count it states is the population the run closes.
+ */
+export function selectLivePanelsForWorktree(
+  state: PanelStoreSnapshot,
+  worktreeId: string
+): PanelInstance[] {
+  const panels: PanelInstance[] = [];
+  for (const id of state.panelIds) {
     const panel = state.panelsById[id];
-    return (
+    if (
       panel?.worktreeId === worktreeId &&
       panel.location !== "trash" &&
       (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
-    );
-  });
+    ) {
+      panels.push(panel);
+    }
+  }
+  return panels;
+}
+
+export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
+  return selectLivePanelsForWorktree(usePanelStore.getState(), worktreeId).map((p) => p.id);
 }
 
 /**
