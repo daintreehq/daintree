@@ -22,7 +22,12 @@ describe("KitLoadMoreFooter loading gate", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe("");
 
     act(() => {
-      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS);
+      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS - 1);
+    });
+    expect(button.hasAttribute("data-loading")).toBe(false);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
     expect(button.hasAttribute("data-loading")).toBe(true);
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading more");
