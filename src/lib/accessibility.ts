@@ -64,16 +64,23 @@ export function getVisibleTabbableElements(root: ParentNode): HTMLElement[] {
  * focus inside a shadow tree is reported at the document level as the host.
  */
 export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]): void {
+  focusFirstAccepting(candidates);
+}
+
+function focusFirstAccepting(
+  candidates: (HTMLElement | null | undefined)[],
+  options?: FocusOptions
+): void {
   for (const candidate of candidates) {
     if (!candidate || candidate === document.body) continue;
     if (!document.contains(candidate)) continue;
 
-    candidate.focus();
+    candidate.focus(options);
     if (document.activeElement === candidate) return;
   }
 
   const root = document.getElementById("root");
-  getVisibleTabbableElements(root ?? document.body)[0]?.focus();
+  getVisibleTabbableElements(root ?? document.body)[0]?.focus(options);
 }
 
 /**
@@ -87,16 +94,13 @@ export function handFocusOff(
   from: Element,
   ...candidates: (HTMLElement | null | undefined)[]
 ): void {
-  const options: FocusOptions = from.matches(":focus-visible")
-    ? { preventScroll: true }
-    : { preventScroll: true, focusVisible: false };
   armTooltipFocusSuppression();
-  for (const candidate of candidates) {
-    if (!candidate || candidate === document.body || !document.contains(candidate)) continue;
-    candidate.focus(options);
-    if (document.activeElement === candidate) return;
-  }
-  restoreFocusTo();
+  focusFirstAccepting(
+    candidates,
+    from.matches(":focus-visible")
+      ? { preventScroll: true }
+      : { preventScroll: true, focusVisible: false }
+  );
 }
 
 /**

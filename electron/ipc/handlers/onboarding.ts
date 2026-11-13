@@ -2,6 +2,8 @@
 import { store } from "../../store.js";
 import type { StoreSchema } from "../../store.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 import { ONBOARDING_METHOD_CHANNELS } from "./onboarding.preload.js";
 import { setOnboardingCompleteTag } from "../../services/TelemetryService.js";
 import type {
@@ -265,15 +267,20 @@ export const onboardingNamespace = defineIpcNamespace({
     getChecklist: op(ONBOARDING_METHOD_CHANNELS.getChecklist, (): ChecklistState =>
       getChecklistState()
     ),
+    // Dismissing and reopening are pushed to every view, so a cached project
+    // view hides the checklist, or picks it back up, along with the one that
+    // changed it.
     dismissChecklist: op(ONBOARDING_METHOD_CHANNELS.dismissChecklist, (): void => {
       store.set("onboarding.checklist.dismissed", true);
+      broadcastToRenderer(CHANNELS.ONBOARDING_CHECKLIST_PUSH, getChecklistState());
     }),
     // Help > Getting Started undoes the dismissal for good, not just in the
-    // view that asked: every other project view, and the next launch, read it
-    // from here.
+    // view that asked: every other view, and the next launch, read it from here.
     reopenChecklist: op(ONBOARDING_METHOD_CHANNELS.reopenChecklist, (): ChecklistState => {
       store.set("onboarding.checklist.dismissed", false);
-      return { ...getChecklistState(), dismissed: false };
+      const state = { ...getChecklistState(), dismissed: false };
+      broadcastToRenderer(CHANNELS.ONBOARDING_CHECKLIST_PUSH, state);
+      return state;
     }),
     markChecklistItem: op(
       ONBOARDING_METHOD_CHANNELS.markChecklistItem,

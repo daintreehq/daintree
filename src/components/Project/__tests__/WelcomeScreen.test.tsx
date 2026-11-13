@@ -550,7 +550,8 @@ describe("WelcomeScreen", () => {
   });
 
   it("hands focus to the first quick action when hidden from its own header", () => {
-    storeState = { ...storeState, projects: [] };
+    // Recent projects sit above the quick actions, so a fallback to the first
+    // tabbable element would land on a project instead.
     const gettingStarted = makeGettingStarted(allIncomplete);
     render(<WelcomeScreen gettingStarted={gettingStarted} />);
     const hide = screen.getByRole("button", { name: "Hide getting started" });
@@ -559,6 +560,7 @@ describe("WelcomeScreen", () => {
     fireEvent.click(hide);
 
     const quickActions = screen.getByTestId("quick-actions");
+    expect(screen.getByText("Your projects")).toBeTruthy();
     expect(document.activeElement).toBe(quickActions.querySelector("button"));
     expect(gettingStarted.dismiss).toHaveBeenCalledTimes(1);
   });

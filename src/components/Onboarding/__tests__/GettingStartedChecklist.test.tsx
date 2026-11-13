@@ -326,6 +326,8 @@ describe("GettingStartedChecklist", () => {
     }
 
     it("hands focus back to where it came from when the card goes away", () => {
+      // First in the document, so it is what a fallback would pick.
+      const fallback = addOutsideButton();
       const outside = addOutsideButton();
       const { unmount } = render(
         <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
@@ -336,6 +338,7 @@ describe("GettingStartedChecklist", () => {
       unmount();
 
       expect(document.activeElement).toBe(outside);
+      fallback.remove();
       outside.remove();
     });
 

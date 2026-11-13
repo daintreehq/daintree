@@ -787,8 +787,22 @@ describe("useGettingStartedChecklist", () => {
       celebrationShown: false,
     };
 
+    let pushHandler: ((next: ChecklistStateLike) => void) | null = null;
+    const withPush = onboardingMock as typeof onboardingMock & {
+      onChecklistPush?: (fn: (next: ChecklistStateLike) => void) => () => void;
+    };
+
     beforeEach(() => {
       onboardingMock.getChecklist.mockResolvedValue(dismissedChecklist);
+      pushHandler = null;
+      withPush.onChecklistPush = (fn) => {
+        pushHandler = fn;
+        return () => {};
+      };
+    });
+
+    afterEach(() => {
+      delete withPush.onChecklistPush;
     });
 
     function showGettingStarted() {
@@ -904,6 +918,79 @@ describe("useGettingStartedChecklist", () => {
       expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
       expect(Object.values(result.current.checklist!.items).every(Boolean)).toBe(true);
       expect(result.current.visible).toBe(true);
+    });
+
+    it("keeps progress main reports that this view never saw", async () => {
+      // Credited in another project view, so neither this view's hydration
+      // nor its stores know about it.
+      onboardingMock.reopenChecklist.mockResolvedValueOnce({
+        ...dismissedChecklist,
+        dismissed: false,
+        items: { ...dismissedChecklist.items, ranSecondParallelAgent: true },
+      });
+      const { result } = await mountDismissed();
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.checklist?.items.ranSecondParallelAgent).toBe(true);
+    });
+
+    it("picks tracking back up when another view reopens it", async () => {
+      const { result } = await mountDismissed();
+      projectState = { currentProject: "/some/project" };
+
+      await act(async () => {
+        pushHandler!({ ...dismissedChecklist, dismissed: false });
+      });
+
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(result.current.checklist?.dismissed).toBe(false);
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("hides a checklist Help forced open when another view dismisses it", async () => {
+      const { result } = await mountDismissed();
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.forced).toBe(true);
+
+      await act(async () => {
+        pushHandler!(dismissedChecklist);
+      });
+
+      expect(result.current.visible).toBe(false);
+      expect(result.current.forced).toBe(false);
+    });
+
+    it("a hydration read that began before a dismissal doesn't undo it", async () => {
+      const { result, rerender } = renderHook(({ loaded }) => useGettingStartedChecklist(loaded), {
+        initialProps: { loaded: false },
+      });
+      // Reopened before the app state finished loading.
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.visible).toBe(true);
+
+      let answerHydration: (state: ChecklistStateLike) => void = () => {};
+      onboardingMock.getChecklist.mockImplementationOnce(
+        () => new Promise((resolve) => (answerHydration = resolve))
+      );
+      rerender({ loaded: true });
+      act(() => result.current.dismiss());
+      await act(async () => {
+        answerHydration({ ...dismissedChecklist, dismissed: false });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.checklist?.dismissed).toBe(true);
+      expect(result.current.visible).toBe(false);
     });
 
     it("a dismissal made while the reopen is in flight wins", async () => {

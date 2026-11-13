@@ -51,6 +51,13 @@ vi.mock("../../../services/TelemetryService.js", () => ({
   setOnboardingCompleteTag: setOnboardingCompleteTagMock,
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer: broadcastToRendererMock,
+}));
+
 import { registerOnboardingHandlers } from "../onboarding.js";
 
 function getHandler(channel: string) {
@@ -276,6 +283,19 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(reopened).toEqual(expected);
     // A view hydrating later, or the next launch, reads it reopened too.
     expect(getHandler("onboarding:checklist-get")(null)).toEqual(expected);
+  });
+
+  it("pushes every dismissal and reopen to all views, in order", () => {
+    registerOnboardingHandlers();
+    seedOnboarding();
+
+    getHandler("onboarding:checklist-dismiss")(null);
+    getHandler("onboarding:checklist-reopen")(null);
+
+    const pushes = broadcastToRendererMock.mock.calls
+      .filter(([channel]) => channel === "onboarding:checklist-push")
+      .map(([, state]) => (state as { dismissed: boolean }).dismissed);
+    expect(pushes).toEqual([true, false]);
   });
 
   describe("tour", () => {

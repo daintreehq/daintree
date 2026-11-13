@@ -10,6 +10,10 @@ import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
 } from "@/store/accessibilityAnnouncerStore";
+import {
+  _resetTooltipFocusSuppressionForTests,
+  isTooltipSuppressedForElement,
+} from "@/lib/tooltipFocusSuppression";
 
 interface DocumentWithAriaNotify extends Document {
   ariaNotify?: (message: string, options?: { priority?: "normal" | "high" }) => void;
@@ -186,7 +190,15 @@ describe("handFocusOff", () => {
     return button;
   }
 
+  // Only the ring the departing control actually showed decides the handoff.
+  function showingRing(from: HTMLElement, ring: boolean) {
+    vi.spyOn(from, "matches").mockImplementation((selector) =>
+      selector === ":focus-visible" ? ring : !ring
+    );
+  }
+
   afterEach(() => {
+    _resetTooltipFocusSuppressionForTests();
     document.body.innerHTML = "";
   });
 
@@ -194,7 +206,7 @@ describe("handFocusOff", () => {
     const from = addButton("from");
     const target = addButton("target");
     from.focus();
-    vi.spyOn(from, "matches").mockReturnValue(true);
+    showingRing(from, true);
     const focus = vi.spyOn(target, "focus");
 
     handFocusOff(from, target);
@@ -209,7 +221,7 @@ describe("handFocusOff", () => {
     const from = addButton("from");
     const target = addButton("target");
     from.focus();
-    vi.spyOn(from, "matches").mockReturnValue(false);
+    showingRing(from, false);
     const focus = vi.spyOn(target, "focus");
 
     handFocusOff(from, target);
@@ -218,7 +230,17 @@ describe("handFocusOff", () => {
     expect(document.activeElement).toBe(target);
   });
 
-  it("falls back to the app shell when no candidate survives", () => {
+  it("keeps the receiving element's tooltip from opening on the handoff", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+
+    handFocusOff(from, target);
+
+    expect(isTooltipSuppressedForElement(target)).toBe(true);
+  });
+
+  it("falls back to the app shell, ringless still, when no candidate survives", () => {
     const root = document.createElement("div");
     root.id = "root";
     document.body.appendChild(root);
@@ -227,9 +249,12 @@ describe("handFocusOff", () => {
     const removed = addButton("removed");
     removed.remove();
     from.focus();
+    showingRing(from, false);
+    const focus = vi.spyOn(shellButton, "focus");
 
     handFocusOff(from, removed, null);
 
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
     expect(document.activeElement).toBe(shellButton);
   });
 });

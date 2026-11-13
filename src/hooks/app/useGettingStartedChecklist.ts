@@ -16,6 +16,17 @@ function isChecklistComplete(checklist: ChecklistState): boolean {
   return Object.values(checklist.items).every(Boolean);
 }
 
+// Steps only ever complete, so two copies of the checklist merge as a union:
+// neither can take back a step the other has already credited.
+function withStepsFrom(base: ChecklistState, other: ChecklistState | null): ChecklistState {
+  if (!other) return base;
+  const items = { ...base.items };
+  for (const key of Object.keys(other.items) as ChecklistItemId[]) {
+    if (other.items[key]) items[key] = true;
+  }
+  return { ...base, items, celebrationShown: base.celebrationShown || other.celebrationShown };
+}
+
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 function isLaunchedAgentPanel(p: CarrierPanel | undefined): boolean {
@@ -238,11 +249,15 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     if (!isElectronAvailable() || !isStateLoaded) return;
     if (!window.electron?.onboarding) return;
 
+    const request = visibilityRequest.current;
     // getOnboardingState shares the same-tick onboarding fetch with
     // useAgentWaitingNudge's effect in the same flush.
     Promise.all([getOnboardingState(), window.electron.onboarding.getChecklist()])
       .then(([onboarding, checklistState]) => {
         setOnboardingCompleted(onboarding.completed);
+        // A show or dismiss since this read began has already settled this
+        // view's copy; the read would put back the dismissal from before it.
+        if (request !== visibilityRequest.current && checklistRef.current !== null) return;
         setChecklist(checklistState);
         // The subscriptions below only see transitions, and their mount-time
         // reconcile ran before this resolved, against a null checklist. A
@@ -253,40 +268,29 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .catch((err) => logError("Failed to load checklist state", err));
   }, [isStateLoaded, markItem]);
 
-  // Subscribe to main-process checklist pushes. Every active WebContentsView
-  // receives the push via `broadcastToRenderer`, so cached views stay in sync.
-  // We merge by taking the union of truthy items rather than overwriting — this
-  // prevents a pre-push `getChecklist()` hydration promise from clobbering a
-  // newer push.
+  // Subscribe to main-process checklist pushes. Main broadcasts every
+  // dismissal and reopen to every WebContentsView, in the order it applied
+  // them, so a cached project view follows a change made in another and the
+  // push's dismissal is the latest word. Steps merge as a union, so a push
+  // never takes back one this view has already credited.
   useEffect(() => {
     if (!isElectronAvailable() || !window.electron?.onboarding?.onChecklistPush) return;
     return window.electron.onboarding.onChecklistPush((next) => {
-      const before = checklistRef.current;
-      if (before && !isChecklistComplete(before) && isChecklistComplete(next)) {
+      const prev = checklistRef.current;
+      const merged = withStepsFrom(next, prev);
+      // Synced before anything reads it, so a markItem firing before React
+      // commits doesn't see the previous copy.
+      checklistRef.current = merged;
+      setChecklist(merged);
+      if (merged.dismissed || (prev && !isChecklistComplete(prev) && isChecklistComplete(merged))) {
         setForceShow(false);
       }
-      setChecklist((prev) => {
-        if (!prev) {
-          // Sync the ref synchronously so a markItem firing before React
-          // commits doesn't read a stale null value.
-          checklistRef.current = next;
-          return next;
-        }
-        const mergedItems = { ...prev.items } as typeof prev.items;
-        for (const key of Object.keys(next.items) as Array<keyof typeof next.items>) {
-          if (next.items[key] || prev.items[key]) mergedItems[key] = true;
-        }
-        const merged: ChecklistState = {
-          ...next,
-          items: mergedItems,
-          dismissed: prev.dismissed || next.dismissed,
-          celebrationShown: prev.celebrationShown || next.celebrationShown,
-        };
-        checklistRef.current = merged;
-        return merged;
-      });
+      // Reopened in another view: nothing was tracked here while dismissed.
+      if (prev?.dismissed && !merged.dismissed) {
+        reconcileCurrentState(markItem, () => checklistRef.current);
+      }
     });
-  }, []);
+  }, [markItem]);
 
   // Re-check auto-collapse whenever the committed checklist changes (hydration,
   // a markItem, or a cross-window push that flips `launchedAgent`). Runs after
@@ -356,12 +360,13 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       hasAutoCollapsed.current = true;
       window.electron.onboarding
         .reopenChecklist()
-        .then((state) => {
+        .then((reopened) => {
           if (request !== visibilityRequest.current) return;
           // Published before the reconcile reads it: nothing was tracked while
           // the checklist was dismissed, so steps finished since then are
           // credited from what the stores hold now, and the live subscriptions
           // pick up from here.
+          const state = withStepsFrom(reopened, checklistRef.current);
           checklistRef.current = state;
           setChecklist(state);
           reconcileCurrentState(markItem, () => checklistRef.current);
