@@ -471,9 +471,12 @@ export function AgentSettings({
           isRefreshing={isRefreshingCli}
           onRefresh={() => void handleRefreshCliAvailability()}
           onOpenAgent={onSubtabChange}
-          onRunSetupWizard={() =>
-            window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
-          }
+          onRunSetupWizard={() => {
+            const open = () =>
+              window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+            if (onClose) void onClose((closed) => closed && open());
+            else open();
+          }}
         />
       )}
 
