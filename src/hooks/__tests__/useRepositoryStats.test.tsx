@@ -256,12 +256,21 @@ describe("useRepositoryStats", () => {
     });
 
     it("takes the tracker's clean count even when the code forge's half failed", async () => {
-      getRepoStatsMock.mockResolvedValueOnce(fresh).mockResolvedValueOnce({
-        ...fresh,
-        issueCount: 0,
-        stale: true,
-        error: "Cannot reach GitHub. Check your internet connection.",
-      });
+      getRepoStatsMock
+        .mockResolvedValueOnce(fresh)
+        .mockResolvedValueOnce({
+          ...fresh,
+          issueCount: 0,
+          stale: true,
+          error: "Cannot reach GitHub. Check your internet connection.",
+        })
+        .mockResolvedValueOnce({
+          ...fresh,
+          issueCount: null,
+          stale: true,
+          issueStale: true,
+          issueError: "Couldn't reach Linear",
+        });
 
       const { result } = renderHook(() => useRepositoryStats());
       await waitFor(() => expect(result.current.stats?.issueCount).toBe(3));
@@ -272,6 +281,13 @@ describe("useRepositoryStats", () => {
 
       expect(result.current.stats?.issueCount).toBe(0);
       expect(result.current.stats?.issueStale).toBe(false);
+
+      // The clean 0 is now what a failed tracker read falls back to, not the 3.
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(0);
     });
 
     it("stops calling the tracker's count fresh once a fetch throws", async () => {
