@@ -66,10 +66,22 @@ const highlightLineTheme = EditorView.baseTheme({
   },
 });
 
+// `editable={false}` strips contenteditable, and without a tabindex nothing
+// else makes `.cm-content` focusable: closing find handed focus to a node that
+// refused it and stranded it on `body`, and the keymap below never saw a key
+// unless the find field was open. The tabindex keeps the surface focusable
+// without a caret. CodeMirror's own dotted outline is dropped for the ring on
+// the scroll wrapper below, which shows for keyboard focus only.
+const focusableSurface = [
+  EditorView.contentAttributes.of({ tabindex: "0" }),
+  EditorView.theme({ "&.cm-focused": { outline: "none" } }),
+];
+
 const BASE_EXTENSIONS: Extension[] = [
   highlightedLineField,
   highlightLineTheme,
   EditorState.readOnly.of(true),
+  focusableSurface,
   search({ top: true, createPanel: createEditorSearchPanel }),
   keymap.of([{ key: "Mod-l", run: gotoLine }]),
   editorSearchPanelTheme,
@@ -325,7 +337,14 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
         onScroll={handleScroll}
         // `isolate` keeps CodeMirror's own stacking (its gutters sit at z-index
         // 200) from painting over the sticky find bar as the document scrolls.
-        className="isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible"
+        // The ring sits on this wrapper, which stays put while the document
+        // scrolls inside it, and not on the content node, which is as tall as
+        // the file.
+        className={cn(
+          "isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+          "[&_.cm-content:focus-visible]:outline-hidden",
+          "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:-outline-offset-2 has-[.cm-content:focus-visible]:outline-accent-primary"
+        )}
       >
         <div
           className={cn(
