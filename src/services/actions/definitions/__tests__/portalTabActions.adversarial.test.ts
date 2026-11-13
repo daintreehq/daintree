@@ -229,7 +229,9 @@ describe("portal URL copies asked for from a key", () => {
   ] as const;
   const UNCONFIRMED = ["agent", "user", "context-menu", "plugin", undefined] as const;
 
-  it.each(COPIES.flatMap(([id, args, url]) => UNCONFIRMED.map((src) => [id, src, args, url])))(
+  it.each(
+    COPIES.flatMap(([id, args, url]) => UNCONFIRMED.map((src) => [id, src, args, url] as const))
+  )(
     "%s draws nothing for a %s copy, which is confirmed elsewhere or not watched",
     async (id, dispatchSource, args, url) => {
       setTabs(3, "t1");
