@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Project } from "@shared/types";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 
@@ -343,13 +343,42 @@ describe("Sidebar resize handle pointer handling (#16887)", () => {
     expect(handle.getAttribute("data-resizing")).toBeNull();
   });
 
-  it("lets the contextmenu event reach the sidebar menu", () => {
-    const { handle } = setup();
-    const aside = handle.parentElement!;
+  it("lets the contextmenu event bubble past the handle to the sidebar menu", () => {
+    // The sidebar's menu trigger is an ancestor of the handle, so a React-level
+    // stopPropagation on the handle is what would swallow the menu.
+    workspaceRoot.mockReturnValue(PLAIN_FOLDER);
     const seen = vi.fn();
-    aside.addEventListener("contextmenu", seen);
-    fireEvent.contextMenu(handle);
+    render(
+      <div onContextMenu={seen}>
+        <Sidebar width={280} onResize={() => {}} />
+      </div>
+    );
+    fireEvent.contextMenu(screen.getByRole("separator", { name: /^Resize sidebar/ }));
     expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a drag from Control-click on a Mac client", () => {
+    const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const { handle, onResizeStart } = setup();
+      fireEvent.mouseDown(handle, { button: 0, ctrlKey: true });
+      expect(onResizeStart).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("ends the drag once when a release, blur and mouseup land before React flushes", () => {
+    const { handle, onResizeEnd, onResize } = setup();
+    fireEvent.mouseDown(handle, { button: 0 });
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mousemove", { buttons: 0, clientX: 300 }));
+      window.dispatchEvent(new Event("blur"));
+      document.dispatchEvent(new MouseEvent("mouseup"));
+      document.dispatchEvent(new MouseEvent("mousemove", { buttons: 1, clientX: 320 }));
+    });
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
+    expect(onResize).not.toHaveBeenCalled();
   });
 
   it("starts on the primary button and releases when a move reports no buttons held", () => {

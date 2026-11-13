@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { hostFileManagerRevealLabel, revealCopiesHostPath } from "@/hooks/useHostPlatform";
+import { isMac } from "@/lib/platform";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { cn } from "@/lib/utils";
 import { SidebarFooter } from "./SidebarFooter";
@@ -83,8 +84,9 @@ export function Sidebar({
 
   const startResizing = useCallback(
     (e: React.MouseEvent) => {
-      // A secondary button belongs to the context menu, not to a drag.
-      if (e.button !== 0) return;
+      // A secondary button belongs to the context menu, not to a drag, and so
+      // does Control-click on the client's Mac, which fires `contextmenu` next.
+      if (e.button !== 0 || (e.ctrlKey && isMac())) return;
       e.preventDefault();
       isResizingRef.current = true;
       onResizeStart?.();
@@ -94,6 +96,9 @@ export function Sidebar({
   );
 
   const stopResizing = useCallback(() => {
+    // Move, blur and mouseup can all land before React flushes the state, so
+    // the ref is what makes the release happen once.
+    if (!isResizingRef.current) return;
     isResizingRef.current = false;
     setIsResizing(false);
     onResizeEnd?.();
@@ -138,7 +143,7 @@ export function Sidebar({
 
   const resize = useCallback(
     (e: MouseEvent) => {
-      if (!isResizing) return;
+      if (!isResizingRef.current) return;
       // The release can land outside the window, where no mouseup reaches us.
       if (e.buttons === 0) {
         stopResizing();
@@ -149,7 +154,7 @@ export function Sidebar({
         onResize(newWidth);
       }
     },
-    [isResizing, onResize, stopResizing]
+    [onResize, stopResizing]
   );
 
   useEffect(() => {
