@@ -869,6 +869,8 @@ describe("snoozed rows", () => {
     );
 
     expect(group!.rows[0]!.agePhrase).toBe("Snoozed");
+    expect(group!.rows[0]!.ageLabel).toBe("Snoozed");
+    expect(group!.rows[0]!.age).toBe("");
   });
 });
 

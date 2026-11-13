@@ -453,7 +453,7 @@ function ageOf(
   if (band === "snoozed") {
     const until = run.snooze?.snoozedUntil;
     if (until === undefined) {
-      return { age, ageLabel: null, agePhrase: "Snoozed", secondaryPhrase: null };
+      return { age: "", ageLabel: "Snoozed", agePhrase: "Snoozed", secondaryPhrase: null };
     }
     const wake = formatWakeTime(until);
     return {

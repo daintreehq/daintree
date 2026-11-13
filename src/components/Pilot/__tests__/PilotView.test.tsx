@@ -1845,7 +1845,16 @@ describe("PilotView", () => {
 
       expect(unsnoozeRunMock).toHaveBeenCalledWith("snoozed-run");
       expect(parkRunMock).not.toHaveBeenCalled();
-      expect(screen.queryByTestId("pilot-park-note")).toBeNull();
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+
+      // A held chord wakes once and is otherwise consumed.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        repeat: true,
+      });
+      expect(unsnoozeRunMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
     });
 
     it("shows the park note on the row itself", () => {

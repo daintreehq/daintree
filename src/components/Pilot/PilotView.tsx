@@ -618,7 +618,7 @@ function RunRow({
             row.ageLabel === "quiet" ? "text-state-waiting" : "min-w-[3.5rem] text-text-secondary"
           )}
         >
-          {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`}
+          {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`.trim()}
         </span>
       )}
     </div>
@@ -1526,6 +1526,12 @@ export function PilotView() {
    */
   const drillWorktreeCount = hasNarrowing ? 0 : viewWorktreeCount;
 
+  const wakeRun = useCallback((runId: string) => {
+    safeFireAndForget(window.electron.fleet.unsnoozeRun(runId), {
+      context: "PilotView unsnoozeRun",
+    });
+  }, []);
+
   /**
    * Alt+Enter on the highlighted row opens the park editor — a second verb on
    * the same selection, so it lives beside Enter in both key paths rather
@@ -1541,23 +1547,24 @@ export function PilotView() {
         togglePluginShelf(selectedRow.item);
         return true;
       }
+      // Waking needs no healthy snapshot: Main lets a snooze be lifted while
+      // the fleet is unreadable. A held chord is consumed rather than acted on
+      // again, or the repeat after the wake would land on a now-unsnoozed row
+      // and open the park editor.
+      if (selectedRow.item.band === "snoozed") {
+        event.preventDefault();
+        if (!event.repeat) wakeRun(selectedRow.item.run.runId);
+        return true;
+      }
       // No parking from retained data: Main rejects a park it cannot validate
       // against a healthy snapshot, so offering the editor over a stale fleet
       // would collect a note and then bounce it.
       if (snapshot === null || snapshot.degraded) return false;
       event.preventDefault();
-      // A snoozed run is woken, not parked, matching Canopy's snoozed row.
-      if (selectedRow.item.band === "snoozed") {
-        const runId = selectedRow.item.run.runId;
-        safeFireAndForget(window.electron.fleet.unsnoozeRun(runId), {
-          context: "PilotView unsnoozeRun",
-        });
-        return true;
-      }
       setParkTargetId(selectedRow.item.run.runId);
       return true;
     },
-    [selectedRow, snapshot]
+    [selectedRow, snapshot, wakeRun]
   );
 
   /**
@@ -1877,12 +1884,12 @@ export function PilotView() {
       ? null
       : selectedRow.item.run === undefined
         ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "to park")
-        : status.kind !== "live"
-          ? null
-          : selectedRow.item.band === "parked"
-            ? "to edit park"
-            : selectedRow.item.band === "snoozed"
-              ? "to wake now"
+        : selectedRow.item.band === "snoozed"
+          ? "to wake now"
+          : status.kind !== "live"
+            ? null
+            : selectedRow.item.band === "parked"
+              ? "to edit park"
               : "to park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
@@ -2288,6 +2295,7 @@ export function PilotView() {
             onPark={() => {
               if (selectedRow?.kind === "item") {
                 if (selectedRow.item.run === undefined) togglePluginShelf(selectedRow.item);
+                else if (selectedRow.item.band === "snoozed") wakeRun(selectedRow.item.run.runId);
                 else setParkTargetId(selectedRow.item.run.runId);
               }
               // Every footer control hands focus back for the same reason: it
