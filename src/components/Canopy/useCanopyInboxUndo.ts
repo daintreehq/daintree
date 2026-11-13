@@ -120,6 +120,15 @@ export function useCanopyInboxUndo({
       },
     };
   }, [clearLine]);
+  /**
+   * Gives Z up for an action it can't take back (a park, snooze or wake):
+   * that action is now the newest, so Z must not reach past it to an older
+   * one. An action still waiting on main keeps no claim on Z either.
+   */
+  const clearUndo = useCallback(() => {
+    undoRef.current = null;
+    clearLine();
+  }, [clearLine]);
   // Z takes the newest action back from anywhere in the panel: a row, the
   // folded Archived bar, or Refresh once the last row archived away — never
   // from the pane's terminal or composer, any text field, where Z is a letter,
@@ -167,5 +176,5 @@ export function useCanopyInboxUndo({
     [api]
   );
 
-  return { reserveUndo, undoReads, undoLine: line };
+  return { reserveUndo, clearUndo, undoReads, undoLine: line };
 }

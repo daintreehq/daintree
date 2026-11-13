@@ -736,7 +736,7 @@ function CanopyInbox({
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
-  const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
+  const { reserveUndo, clearUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
   const sortShown = workersShown && reorderWaiting;
@@ -789,6 +789,7 @@ function CanopyInbox({
     showsHost,
     isSelected,
     reserveUndo,
+    clearUndo,
     undoReads,
     menuOpenChanged,
     requestRank,
@@ -2382,7 +2383,18 @@ function CanopyInbox({
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>
-          <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
+          <LazyParkRunDialog
+            key={parkRunId}
+            runId={parkRunId}
+            onClose={closePark}
+            // A park is the newest action, and Z can't take it back.
+            onSubmit={clearUndo}
+            // Should the row it was opened from have gone, the selected one.
+            restoreFocusTo={() =>
+              (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+              refreshRef.current
+            }
+          />
         </Suspense>
       )}
       <CanopyBulkTrashDialog

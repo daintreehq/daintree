@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /** The app root provides tooltips; the rows' action buttons need one. */
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
-import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
   CANOPY_SEARCH_MAX_TERMS,
@@ -1904,6 +1904,184 @@ describe("CanopyView", () => {
     expect(fleetApi.parkRun).not.toHaveBeenCalled();
   });
 
+  // Z takes back the newest action; a snooze, wake or unpark is one it can't,
+  // so it must not reach past it to an archive done before.
+  it.each<{
+    action: string;
+    aside: Partial<FleetRunRow>;
+    path: string[];
+    sent: () => (typeof fleetApi)["snoozeRun" | "unsnoozeRun" | "unparkRun"];
+  }>([
+    {
+      action: "snooze",
+      aside: {},
+      path: ["Snooze…", "15 minutes"],
+      sent: () => fleetApi.snoozeRun,
+    },
+    {
+      action: "wake",
+      aside: { snooze: { snoozedAt: NOW - 1000 } },
+      path: ["Snooze…", "Wake now"],
+      sent: () => fleetApi.unsnoozeRun,
+    },
+    {
+      action: "unpark",
+      aside: { park: { parkedAt: NOW - 1000 } },
+      path: ["Unpark"],
+      sent: () => fleetApi.unparkRun,
+    },
+  ])("leaves Z nothing to take back after a $action", async ({ aside, path, sent }) => {
+    const fleet = useFleetSnapshotStore.getState().snapshot!;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...fleet,
+        runs: fleet.runs.map((r) => (r.runId === "asking" ? { ...r, ...aside } : r)),
+      },
+    });
+    const canopy = installElectron();
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    await act(async () => {
+      fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+    });
+    expect(canopy.archive).toHaveBeenCalledTimes(1);
+    const target = cards(container).find((card) => card.id.endsWith("asking"))!;
+    fireEvent.contextMenu(target, { clientX: 5, clientY: 5 });
+    for (const [step, name] of path.entries()) {
+      const item = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
+        (candidate) => candidate.firstChild?.textContent === name
+      )!;
+      if (step < path.length - 1) fireEvent.keyDown(item, { key: "ArrowRight" });
+      else fireEvent.click(item);
+    }
+    expect(sent()).toHaveBeenCalledTimes(1);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+    expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+  });
+
+  // The menu hands focus back as it closes: a Park dialog opened before then
+  // loses the keyboard to it, and its own close has nothing to return to.
+  describe("Park from a menu", () => {
+    const settle = async () => {
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        await frames();
+      }
+    };
+    const parkDialog = async () =>
+      (await within(document.body).findByTestId("park-run-dialog")).closest<HTMLElement>(
+        "[role=dialog]"
+      )!;
+    /**
+     * Chooses the item and runs frames before the menu has handed the
+     * keyboard back, as a real menu's exit animation does: no dialog may open
+     * before then. jsdom has no exit, so its hand-back would otherwise always
+     * land before a dialog's first frame.
+     */
+    const choose = async (name: string) => {
+      const item = await within(document.body).findByRole("menuitem", { name, hidden: true });
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      try {
+        act(() => {
+          fireEvent.keyDown(item, { key: "Enter" });
+          vi.advanceTimersToNextFrame();
+          vi.advanceTimersToNextFrame();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(within(document.body).queryByTestId("park-run-dialog")).toBeNull();
+      await settle();
+    };
+
+    it("keeps the keyboard in the dialog from the row's menu, then gives it back to the row", async () => {
+      installElectron();
+      const { container } = render(<CanopyView frame={frame} />);
+      await frames();
+      // Twice: the first opening waits on the dialog's code, which can hide
+      // the race; the second has it to hand.
+      for (let opening = 0; opening < 2; opening++) {
+        const row = cards(container)[1]!;
+        act(() => row.focus());
+        await frames();
+        fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+        await choose("Park…");
+        const dialog = await parkDialog();
+        await settle();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        await act(async () => {
+          fireEvent.click(within(dialog).getByRole("button", { name: "Cancel", hidden: true }));
+        });
+        await vi.waitFor(() => expect(document.activeElement).toBe(cards(container)[1]));
+      }
+    });
+
+    // Opening the dialog and cancelling it does nothing Z could reach past; a
+    // park sent is the newest action, and Z can't take it back.
+    it.each([
+      { sent: false, unarchives: 1 },
+      { sent: true, unarchives: 0 },
+    ])("leaves Z to the archive before it unless a park is sent ($sent)", async (expected) => {
+      const canopy = installElectron();
+      const { container } = render(<CanopyView frame={frame} />);
+      await frames();
+      await act(async () => {
+        fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+      });
+      const row = cards(container)[1]!;
+      act(() => row.focus());
+      await frames();
+      fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+      await choose("Park…");
+      const dialog = await parkDialog();
+      await act(async () => {
+        fireEvent.click(
+          within(dialog).getByRole("button", {
+            name: expected.sent ? "Park" : "Cancel",
+            hidden: true,
+          })
+        );
+      });
+      if (expected.sent) expect(fleetApi.parkRun).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() =>
+        expect(within(document.body).queryByTestId("park-run-dialog")).toBeNull()
+      );
+      fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+      expect(canopy.unarchive).toHaveBeenCalledTimes(expected.unarchives);
+    });
+
+    it("keeps the keyboard in the dialog from the pane's menu, then gives it back to its button", async () => {
+      installElectron();
+      const { container } = render(<CanopyView frame={frame} />);
+      await frames();
+      act(() => cards(container)[0]!.focus());
+      await frames();
+      const trigger = within(document.body).getByRole("button", {
+        name: "Park or snooze",
+        hidden: true,
+      });
+      // Twice, as from the row's menu: the second opening has the code to hand.
+      for (let opening = 0; opening < 2; opening++) {
+        act(() => trigger.focus());
+        await act(async () => {
+          fireEvent.keyDown(trigger, { key: "Enter" });
+        });
+        await choose("Park…");
+        const dialog = await parkDialog();
+        await settle();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        await act(async () => {
+          fireEvent.click(within(dialog).getByRole("button", { name: "Cancel", hidden: true }));
+        });
+        await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+      }
+    });
+  });
+
   it("offers Unpark only for a parked run, and lifts the park", async () => {
     installElectron();
     const fleet = useFleetSnapshotStore.getState().snapshot!;
@@ -2122,12 +2300,44 @@ describe("CanopyView", () => {
     const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
     fireEvent.click(items.find((item) => item.textContent?.startsWith("Trash"))!);
     expect(canopy.trash).not.toHaveBeenCalled();
-    // The run it named is open, its Trash armed: the second press trashes it.
-    expect(liveRun(container)).toBe("asking");
+    // The run it named is open, its Trash armed — once the menu has closed:
+    // the second press trashes it.
+    await vi.waitFor(() => expect(liveRun(container)).toBe("asking"));
     await vi.waitFor(() =>
       expect(container.ownerDocument.body.textContent).toContain(
         "Press Trash terminal again to trash it"
       )
+    );
+    fireEvent.keyDown(cards(container)[1]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    expect(canopy.trash).toHaveBeenCalledWith("asking", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  // A right-press that takes no focus (on the row's hover Archive, say) leaves
+  // the keyboard on the row it was on; the menu's close handing it back there
+  // would select that row and take the Trash just armed away.
+  it("keeps Trash armed for an unselected row once its menu has closed", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    act(() => cards(container)[0]!.focus());
+    await frames();
+    expect(liveRun(container)).toBe("waiting");
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    fireEvent.click(items.find((item) => item.textContent?.startsWith("Trash"))!);
+    await vi.waitFor(() =>
+      expect(container.ownerDocument.body.textContent).toContain(
+        "Press Trash terminal again to trash it"
+      )
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await frames();
+    expect(liveRun(container)).toBe("asking");
+    expect(document.activeElement).toBe(cards(container)[1]);
+    expect(container.ownerDocument.body.textContent).toContain(
+      "Press Trash terminal again to trash it"
     );
     fireEvent.keyDown(cards(container)[1]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     expect(canopy.trash).toHaveBeenCalledWith("asking", { spawnedAt: NOW - 3_600_000 });
