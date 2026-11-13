@@ -4,9 +4,7 @@ import { placeMenuAtCaret } from "../useAutocompletePositioning";
 const VIEWPORT = { width: 1600, height: 1000 };
 
 /** An Expanded Editor frame at (100, 200), 1000 × 500 on screen. */
-function frame(
-  overrides: Partial<{ clientLeft: number; clientTop: number; scale: number }> = {}
-) {
+function frame(overrides: Partial<{ clientLeft: number; clientTop: number; scale: number }> = {}) {
   const scale = overrides.scale ?? 1;
   const clientTop = overrides.clientTop ?? 0;
   return {
