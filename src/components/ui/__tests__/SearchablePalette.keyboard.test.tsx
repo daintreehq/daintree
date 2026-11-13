@@ -317,6 +317,33 @@ describe("SearchablePalette Escape clears before it closes", () => {
 
     expect(onClose).toHaveBeenCalled();
   });
+
+  // Off the field, Escape reaches the dialog's backstop instead; the field's
+  // rule has to hold there too, or a query only clears from one place.
+  it("clears a query first when focus is on the results", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    renderPalette({ query: "abc", onQueryChange, onClose });
+    const region = screen.getByRole("group", { name: "Test" });
+    region.focus();
+
+    fireEvent.keyDown(region, { key: "Escape" });
+
+    expect(onQueryChange).toHaveBeenCalledWith("");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
+
+  it("closes from the results once the field is empty", () => {
+    const onClose = vi.fn();
+    renderPalette({ query: "", onClose });
+    const region = screen.getByRole("group", { name: "Test" });
+    region.focus();
+
+    fireEvent.keyDown(region, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });
 
 describe("SearchablePalette scroll and bands", () => {

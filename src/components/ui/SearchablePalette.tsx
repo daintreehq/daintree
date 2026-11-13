@@ -7,6 +7,7 @@ import {
   PaletteFooterHints,
   PaletteNoMatchHint,
   toHintPhrase,
+  type PaletteCloseReason,
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
@@ -409,6 +410,22 @@ export function SearchablePalette<T>({
     }
   });
 
+  // Escape from anywhere but the field (the results region, a footer control)
+  // reaches the dialog's backstop rather than handleKeyDown, so the field's
+  // rule is kept here too: a query clears before the palette closes. A scrim
+  // click always closes.
+  const handleDialogClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && query !== "") {
+        onQueryChange("");
+        inputRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      onClose();
+    },
+    [query, onQueryChange, onClose]
+  );
+
   const hoverIndexHandler = onHoverIndex ?? noopHoverIndex;
   const jumpToIndex = onSelectIndex ?? onHoverIndex;
 
@@ -559,7 +576,7 @@ export function SearchablePalette<T>({
   return (
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleDialogClose}
       ariaLabel={ariaLabel}
       tier={tier}
       zIndex={zIndex}
