@@ -13,7 +13,7 @@ import {
   MIN_MEMORY_KB,
   ALERT_COOLDOWN_MS,
   PLATEAU_RANGE_THRESHOLD_KB,
-  openPerformanceSettings,
+  buildLeakActions,
   type LeakState,
 } from "../useMemoryLeakDetection";
 
@@ -238,9 +238,11 @@ describe("dismiss", () => {
   });
 });
 
-describe("openPerformanceSettings", () => {
-  it("dispatches the Terminal → Performance settings action", () => {
-    openPerformanceSettings();
+describe("buildLeakActions", () => {
+  it("makes the Settings button open Terminal → Performance when clicked", () => {
+    dispatch.mockClear();
+    const settings = buildLeakActions("t1", () => {}).find((a) => a.label === "Settings")!;
+    settings.onClick();
     expect(dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "terminal", subtab: "performance" },

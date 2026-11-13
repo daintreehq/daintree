@@ -6,6 +6,30 @@ import { actionService } from "@/services/ActionService";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { isPtyPanel } from "@shared/types/panel";
 
+export function buildLeakActions(terminalId: string, muteAlerts: () => void) {
+  return [
+    {
+      label: "Restart terminal",
+      actionId: "terminal.restart" as const,
+      actionArgs: { terminalId },
+      onClick: () => {
+        usePanelStore.getState().restartTerminal(terminalId);
+      },
+    },
+    {
+      label: "Settings",
+      actionId: "app.settings.openTab" as const,
+      actionArgs: { tab: "terminal", subtab: "performance" },
+      onClick: openPerformanceSettings,
+    },
+    {
+      label: "Mute alerts",
+      variant: "secondary" as const,
+      onClick: muteAlerts,
+    },
+  ];
+}
+
 export function openPerformanceSettings(): void {
   void actionService.dispatch(
     "app.settings.openTab",
@@ -163,30 +187,10 @@ export function useMemoryLeakDetection(enabled: boolean): void {
               panelId: id,
               ...(terminal?.worktreeId ? { worktreeId: terminal.worktreeId } : {}),
             },
-            actions: [
-              {
-                label: "Restart terminal",
-                actionId: "terminal.restart" as const,
-                actionArgs: { terminalId: id },
-                onClick: () => {
-                  usePanelStore.getState().restartTerminal(id);
-                },
-              },
-              {
-                label: "Settings",
-                actionId: "app.settings.openTab" as const,
-                actionArgs: { tab: "terminal", subtab: "performance" },
-                onClick: openPerformanceSettings,
-              },
-              {
-                label: "Mute alerts",
-                variant: "secondary" as const,
-                onClick: () => {
-                  const st = localStateMap.get(id);
-                  if (st) st.dismissed = true;
-                },
-              },
-            ],
+            actions: buildLeakActions(id, () => {
+              const st = localStateMap.get(id);
+              if (st) st.dismissed = true;
+            }),
           });
         }
       }
