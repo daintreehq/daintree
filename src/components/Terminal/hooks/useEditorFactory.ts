@@ -97,7 +97,7 @@ interface UseEditorFactoryParams {
   keymapHandlersRef: React.RefObject<{
     onEnter: () => boolean;
     onModEnter: () => boolean;
-    onEscape: () => boolean;
+    onEscape: (event?: KeyboardEvent) => boolean;
     onArrowUp: () => boolean;
     onArrowDown: () => boolean;
     onArrowLeft: () => boolean;
@@ -227,7 +227,7 @@ export function useEditorFactory({
         createCustomKeymap({
           onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
           onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
-          onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
+          onEscape: (event) => keymapHandlersRef.current?.onEscape(event) ?? false,
           onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
           onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,
           onArrowLeft: () => keymapHandlersRef.current?.onArrowLeft() ?? false,

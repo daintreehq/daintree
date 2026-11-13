@@ -874,7 +874,8 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
 interface CustomKeymapConfig {
   onEnter: () => boolean;
   onModEnter: () => boolean;
-  onEscape: () => boolean;
+  /** Handed the keypress when it came from the DOM, which a keymap command otherwise never sees. */
+  onEscape: (event?: KeyboardEvent) => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
   onArrowLeft: () => boolean;
@@ -888,7 +889,14 @@ interface CustomKeymapConfig {
 }
 
 export function createCustomKeymap(config: CustomKeymapConfig): Extension {
-  return Prec.highest(
+  // Observers run before any keydown handler, the keymap's included.
+  let escapeEvent: KeyboardEvent | null = null;
+  const trackEscape = EditorView.domEventObservers({
+    keydown(event) {
+      escapeEvent = event.key === "Escape" ? event : null;
+    },
+  });
+  const bindings = Prec.highest(
     keymap.of([
       {
         key: "Enter",
@@ -913,7 +921,9 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
       {
         key: "Escape",
         run() {
-          return config.onEscape();
+          const event = escapeEvent ?? undefined;
+          escapeEvent = null;
+          return config.onEscape(event);
         },
       },
       {
@@ -979,6 +989,7 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
       },
     ])
   );
+  return [trackEscape, bindings];
 }
 
 export function createPlaceholder(text: string): Extension {

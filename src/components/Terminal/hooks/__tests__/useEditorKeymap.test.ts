@@ -307,6 +307,25 @@ describe("useEditorKeymap", () => {
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
     });
 
+    // A dialog around the composer closes on any Escape that reaches it.
+    it("keeps the Escape that closed the menu from going any further", () => {
+      const { handlers } = renderKeymap(makeLatest({ isExpanded: true }));
+      const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+      const stop = vi.spyOn(event, "stopPropagation");
+      expect(handlers.onEscape(event)).toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
+    });
+
+    it("lets an Escape that closes the Expanded Editor carry on to its dialog", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, isExpanded: true })
+      );
+      const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+      const stop = vi.spyOn(event, "stopPropagation");
+      expect(handlers.onEscape(event)).toBe(true);
+      expect(stop).not.toHaveBeenCalled();
+    });
+
     it("dismisses a menu still waiting on its rows and carries on to the agent", () => {
       const onSendKey = vi.fn<(key: string) => void>();
       const { handlers } = renderKeymap(

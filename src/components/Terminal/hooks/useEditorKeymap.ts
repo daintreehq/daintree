@@ -77,7 +77,7 @@ interface UseEditorKeymapParams {
 interface KeymapHandlers {
   onEnter: (route?: ComposerSendRoute) => boolean;
   onModEnter: () => boolean;
-  onEscape: () => boolean;
+  onEscape: (event?: KeyboardEvent) => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
   onArrowLeft: () => boolean;
@@ -188,7 +188,7 @@ export function useEditorKeymap({
       if (!route) return false;
       return handlersRef.current?.onEnter(route) ?? false;
     },
-    onEscape: () => {
+    onEscape: (event) => {
       const latest = latestRef.current;
       if (!latest) return false;
       if (isComposingRef.current) return false;
@@ -197,6 +197,10 @@ export function useEditorKeymap({
 
       if (latest.isAutocompleteOpen) {
         setActiveCompletionContext(null);
+        // Spent on the menu, a layer of the composer's own: a dialog the
+        // composer sits in (the Expanded Editor's, Canopy's) closes on any
+        // Escape that reaches it, prevented or not.
+        event?.stopPropagation();
         return true;
       }
       // A `#` menu still waiting on its rows is dismissed before it can show,

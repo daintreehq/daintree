@@ -7,6 +7,12 @@ interface UseAutocompleteStateParams {
   activeCompletionContext: ActiveCompletionContext | null;
   autocompleteItems: AutocompleteItem[];
   rootRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Outside the root once portalled: the menu, and the Expanded Editor's host
+   * the editor moves into. A press in either is not a press away.
+   */
+  menuRef: React.RefObject<HTMLElement | null>;
+  modalEditorHostRef: React.RefObject<HTMLElement | null>;
   selectedIndex: number;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   lastQueryRef: React.RefObject<string>;
@@ -18,6 +24,8 @@ export function useAutocompleteState({
   activeCompletionContext,
   autocompleteItems,
   rootRef,
+  menuRef,
+  modalEditorHostRef,
   selectedIndex,
   setSelectedIndex,
   lastQueryRef,
@@ -107,9 +115,11 @@ export function useAutocompleteState({
       const target = event.target as Node | null;
       if (!target) return;
       if (root.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      if (modalEditorHostRef.current?.contains(target)) return;
       setActiveCompletionContext(null);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [isAutocompleteOpen, rootRef, setActiveCompletionContext]);
+  }, [isAutocompleteOpen, rootRef, menuRef, modalEditorHostRef, setActiveCompletionContext]);
 }

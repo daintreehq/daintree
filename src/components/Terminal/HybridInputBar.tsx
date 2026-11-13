@@ -664,6 +664,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const editorViewRef = useRef<EditorView | null>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
+    const [modalFrameEl, setModalFrameEl] = useState<HTMLDivElement | null>(null);
     const compactEditorHostRef = useRef<HTMLDivElement | null>(null);
     // Absolute path the current selection resolves to, captured on right-click.
     // Gates the "View file" / reveal context-menu section.
@@ -686,6 +687,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
+    // The editor changes hosts with the Expanded Editor: a menu open across
+    // the move would be placed against the host it left.
+    const [completionHostExpanded, setCompletionHostExpanded] = useState(isExpanded);
+    if (completionHostExpanded !== isExpanded) {
+      setCompletionHostExpanded(isExpanded);
+      setActiveCompletionContext(null);
+    }
 
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
@@ -837,8 +845,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // then fires the pending dragleave at the detached node, which React never
     // sees, so the depth the body accumulated would pin the overlay on the
     // compact bar. Stable identity, or every re-render would detach and reset.
-    const releaseModalDropTarget = useCallback(
+    // The completion menu sits in the same frame, and is placed against it.
+    const attachModalFrame = useCallback(
       (node: HTMLDivElement | null) => {
+        setModalFrameEl(node);
         if (!node) resetDragState();
       },
       [resetDragState]
@@ -1244,6 +1254,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteOpen,
       activeCompletionContext,
       setMenuPlacement,
+      isExpanded,
+      modalFrameEl,
     });
 
     useAutocompleteState({
@@ -1251,6 +1263,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       activeCompletionContext,
       autocompleteItems,
       rootRef,
+      menuRef,
+      modalEditorHostRef,
       selectedIndex,
       setSelectedIndex,
       lastQueryRef,
@@ -2736,6 +2750,75 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 }
               : undefined;
 
+    // One menu, wherever the editor is: in the bar's shell, or in the Expanded
+    // Editor's dialog, which covers the bar.
+    const autocompleteMenu = (
+      <AutocompleteMenu
+        ref={menuRef}
+        isOpen={isAutocompleteOpen}
+        items={autocompleteItems}
+        selectedIndex={selectedIndex}
+        isLoading={isLoading}
+        staleKeys={staleItemKeys}
+        onSelect={handleAutocompleteSelect}
+        onHoverIndex={setSelectedIndex}
+        side={menuPlacement.side}
+        style={{
+          left: `${menuPlacement.left}px`,
+          top: menuPlacement.top,
+          bottom: menuPlacement.bottom,
+          maxWidth: menuPlacement.maxWidth,
+          maxHeight: menuPlacement.maxHeight,
+          marginBottom: menuPlacement.side ? undefined : MENU_SHELL_GAP_PX,
+        }}
+        listboxId={listboxId}
+        title={
+          triggerChar === "/"
+            ? "Commands"
+            : triggerChar === "$"
+              ? "Capabilities"
+              : triggerChar === "#"
+                ? "Issues and pull requests"
+                : atClaim === "terminal"
+                  ? "Terminal output"
+                  : atClaim === "selection"
+                    ? "Terminal selection"
+                    : atClaim === "notes"
+                      ? "Diff notes"
+                      : atClaim === "diff"
+                        ? "Diffs"
+                        : "Files"
+        }
+        ariaLabel={
+          triggerChar === "/"
+            ? "Command autocomplete"
+            : triggerChar === "$"
+              ? "Capability autocomplete"
+              : triggerChar === "#"
+                ? "Issue and pull request autocomplete"
+                : atClaim === "terminal"
+                  ? "Terminal autocomplete"
+                  : atClaim === "selection"
+                    ? "Selection autocomplete"
+                    : atClaim === "notes"
+                      ? "Diff note autocomplete"
+                      : atClaim === "diff"
+                        ? "Diff autocomplete"
+                        : "File autocomplete"
+        }
+        emptyMessage={
+          triggerChar === "/"
+            ? "No commands match"
+            : triggerChar === "$"
+              ? "No capabilities match"
+              : isFileMode
+                ? "No files match"
+                : "No matches"
+        }
+        note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
+      />
+    );
+
     const barContent = (
       <div
         className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
@@ -2874,67 +2957,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {unresolvedFileReferencesCaption(fileReferenceNote.references)}
               </div>
             )}
-            <AutocompleteMenu
-              ref={menuRef}
-              isOpen={isAutocompleteOpen}
-              items={autocompleteItems}
-              selectedIndex={selectedIndex}
-              isLoading={isLoading}
-              staleKeys={staleItemKeys}
-              onSelect={handleAutocompleteSelect}
-              onHoverIndex={setSelectedIndex}
-              style={{
-                left: `${menuPlacement.left}px`,
-                maxWidth: menuPlacement.maxWidth,
-                maxHeight: menuPlacement.maxHeight,
-                marginBottom: MENU_SHELL_GAP_PX,
-              }}
-              listboxId={listboxId}
-              title={
-                triggerChar === "/"
-                  ? "Commands"
-                  : triggerChar === "$"
-                    ? "Capabilities"
-                    : triggerChar === "#"
-                      ? "Issues and pull requests"
-                      : atClaim === "terminal"
-                        ? "Terminal output"
-                        : atClaim === "selection"
-                          ? "Terminal selection"
-                          : atClaim === "notes"
-                            ? "Diff notes"
-                            : atClaim === "diff"
-                              ? "Diffs"
-                              : "Files"
-              }
-              ariaLabel={
-                triggerChar === "/"
-                  ? "Command autocomplete"
-                  : triggerChar === "$"
-                    ? "Capability autocomplete"
-                    : triggerChar === "#"
-                      ? "Issue and pull request autocomplete"
-                      : atClaim === "terminal"
-                        ? "Terminal autocomplete"
-                        : atClaim === "selection"
-                          ? "Selection autocomplete"
-                          : atClaim === "notes"
-                            ? "Diff note autocomplete"
-                            : atClaim === "diff"
-                              ? "Diff autocomplete"
-                              : "File autocomplete"
-              }
-              emptyMessage={
-                triggerChar === "/"
-                  ? "No commands match"
-                  : triggerChar === "$"
-                    ? "No capabilities match"
-                    : isFileMode
-                      ? "No files match"
-                      : "No matches"
-              }
-              note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
-            />
+            {!isExpanded && autocompleteMenu}
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
             {/* The prompt marker is what makes the box read as somewhere to
                 type. `h-6` keeps it centred on the draft's last 24px row; `ml-2`
@@ -3280,7 +3303,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               Outside the scrolling host, so the overlay covers the visible
               editor instead of scrolling away with a long draft. */}
           <div
-            ref={releaseModalDropTarget}
+            ref={attachModalFrame}
             className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -3320,6 +3343,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
+            {isExpanded && autocompleteMenu}
             {isDragOverModal && <FileDropOverlay />}
             {isExpanded && voiceSubmitAnnouncer}
             {/* The app's announcer outside this modal goes unheard in it. */}
