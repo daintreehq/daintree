@@ -90,7 +90,13 @@ const WORKTREE = "/repo";
 const OUTER_SENTINEL = "Enclosing menu sentinel";
 
 function entry(path: string): DiffChangeSetEntry {
-  return { path, status: "modified", insertions: 1, deletions: 0, viewedKey: `working-tree:${path}` };
+  return {
+    path,
+    status: "modified",
+    insertions: 1,
+    deletions: 0,
+    viewedKey: `working-tree:${path}`,
+  };
 }
 
 function renderSidebar(overrides: Partial<React.ComponentProps<typeof DiffFileSidebar>> = {}) {

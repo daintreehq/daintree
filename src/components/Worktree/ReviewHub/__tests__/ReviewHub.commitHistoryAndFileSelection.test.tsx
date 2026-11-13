@@ -1033,7 +1033,12 @@ describe("ReviewHub", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
       expect(viewedState("src/app.ts")).toBe("true");
 
-      const appRow = { path: "src/app.ts", status: "modified" as const, insertions: 3, deletions: 1 };
+      const appRow = {
+        path: "src/app.ts",
+        status: "modified" as const,
+        insertions: 3,
+        deletions: 1,
+      };
       await poll(makeStatus({ staged: [...makeStatus().staged, appRow], unstaged: [] }));
       const inStaged = () =>
         screen
@@ -1080,9 +1085,7 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByText("app.ts")).toBeNull());
       // The mark goes when the row does, not when it comes back.
       expect(
-        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has(
-          "working-tree:src/app.ts"
-        )
+        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has("working-tree:src/app.ts")
       ).toBe(false);
 
       await poll(makeStatus());
