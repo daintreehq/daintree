@@ -359,3 +359,225 @@ describe("useBranchValidation — suggested path separators", () => {
     expect(result.current.worktreePath).toBe("/home/me/app-worktrees/feature-x");
   });
 });
+
+describe("useBranchValidation — a path the user chose", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/worktrees/${branch}`)
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("keeps it through later branch edits", async () => {
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+
+    // The branch is still checked; only the path is left alone.
+    expect(mockGetAvailableBranch).toHaveBeenLastCalledWith(ROOT, "feature/canyon");
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+
+  it("keeps it through an invalid name, an empty prefix, and an emptied field", async () => {
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+
+    for (const branchInput of ["feature/bad..name", "feature/", ""]) {
+      rerender({ branchInput });
+      await settle();
+      expect(result.current.worktreePath).toBe("/custom/terrain");
+    }
+  });
+
+  it("drops the auto-resolved hint once the user picks a path", async () => {
+    mockGetDefaultPath.mockResolvedValue("/worktrees/feature-terrain-2");
+    const { result } = renderValidation("feature/terrain");
+    await settle();
+    expect(result.current.pathWasAutoResolved).toBe(true);
+
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    expect(result.current.pathWasAutoResolved).toBe(false);
+  });
+
+  it("follows suggestions again once the user empties the path", async () => {
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    act(() => result.current.setCustomWorktreePath(""));
+
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/canyon");
+  });
+
+  it("is forgotten on reopen", async () => {
+    const { result, rerender } = renderHook(
+      (props: { branchInput: string; isOpen: boolean }) =>
+        useBranchValidation({
+          branchInput: props.branchInput,
+          rootPath: ROOT,
+          isOpen: props.isOpen,
+        }),
+      { initialProps: { branchInput: "feature/terrain", isOpen: true } }
+    );
+    await settle();
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+
+    rerender({ branchInput: "feature/terrain", isOpen: false });
+    rerender({ branchInput: "feature/canyon", isOpen: true });
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/canyon");
+  });
+
+  it("outlasts a Retry's restored path, even back on the restored branch", async () => {
+    const { result, rerender } = renderHook(
+      (props: { branchInput: string }) =>
+        useBranchValidation({
+          branchInput: props.branchInput,
+          rootPath: ROOT,
+          isOpen: true,
+          restoredBranch: "feature/terrain",
+          restoredPath: "/restored/terrain",
+        }),
+      { initialProps: { branchInput: "feature/terrain" } }
+    );
+    await settle();
+    expect(result.current.worktreePath).toBe("/restored/terrain");
+
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    rerender({ branchInput: "feature/canyon" });
+    await settle();
+    rerender({ branchInput: "feature/terrain" });
+    await settle();
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+
+  // A lookup that answers only when the test says so.
+  function holdDefaultPath() {
+    const pending: { resolve: (path: string) => void; reject: (err: Error) => void }[] = [];
+    mockGetDefaultPath.mockImplementation(
+      () => new Promise<string>((resolve, reject) => pending.push({ resolve, reject }))
+    );
+    return pending;
+  }
+
+  it.each([
+    ["answers", (lookup: { resolve: (path: string) => void }) => lookup.resolve("/worktrees/x")],
+    ["fails", (lookup: { reject: (err: Error) => void }) => lookup.reject(new Error("no path"))],
+  ])("keeps a path chosen while the lookup is in flight, when the lookup %s", async (_, land) => {
+    const pending = holdDefaultPath();
+    const { result } = renderValidation("feature/terrain");
+    await settle();
+    expect(pending).toHaveLength(1);
+
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    await act(async () => {
+      land(pending[0]!);
+    });
+    expect(result.current.isGeneratingPath).toBe(false);
+    expect(result.current.worktreePath).toBe("/custom/terrain");
+  });
+
+  it("keeps it for an existing branch too", async () => {
+    const { result, rerender } = renderHook(
+      (props: { overrideBranchName: string }) =>
+        useBranchValidation({
+          branchInput: "",
+          rootPath: ROOT,
+          isOpen: true,
+          skipAvailabilityCheck: true,
+          overrideBranchName: props.overrideBranchName,
+        }),
+      { initialProps: { overrideBranchName: "existing/one" } }
+    );
+    await settle();
+    act(() => result.current.setCustomWorktreePath("/custom/existing"));
+
+    rerender({ overrideBranchName: "existing/two" });
+    await settle();
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith(ROOT, "existing/two");
+    expect(result.current.worktreePath).toBe("/custom/existing");
+  });
+
+  it("takes the suggestion for a Retry's branch once a path chosen mid-lookup is emptied", async () => {
+    const pending = holdDefaultPath();
+    const { result } = renderHook(() =>
+      useBranchValidation({
+        branchInput: "feature/terrain",
+        rootPath: ROOT,
+        isOpen: true,
+        restoredBranch: "feature/terrain",
+        restoredPath: "/restored/terrain",
+      })
+    );
+    await settle();
+    expect(result.current.worktreePath).toBe("/restored/terrain");
+
+    act(() => result.current.setCustomWorktreePath("/custom/terrain"));
+    act(() => result.current.setCustomWorktreePath(""));
+    await act(async () => {
+      pending[0]!.resolve("/worktrees/feature/terrain");
+    });
+    // The lookup began while the Retry's path held, but the user has since let it go.
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+  });
+});
+
+describe("useBranchValidation — an emptied branch name", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/worktrees/${branch}`)
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("clears the path suggested for the name it replaced", async () => {
+    const { result, rerender } = renderValidation("feature/terrain");
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
+
+    rerender({ branchInput: "  " });
+    expect(result.current.worktreePath).toBe("");
+    expect(result.current.pathWasAutoResolved).toBe(false);
+  });
+
+  it("clears an existing-branch suggestion when the pick is cleared", async () => {
+    const { result, rerender } = renderHook(
+      (props: { overrideBranchName: string }) =>
+        useBranchValidation({
+          branchInput: "",
+          rootPath: ROOT,
+          isOpen: true,
+          skipAvailabilityCheck: true,
+          overrideBranchName: props.overrideBranchName,
+        }),
+      { initialProps: { overrideBranchName: "existing/branch" } }
+    );
+    await settle();
+    expect(result.current.worktreePath).toBe("/worktrees/existing/branch");
+
+    rerender({ overrideBranchName: "" });
+    expect(result.current.worktreePath).toBe("");
+  });
+});

@@ -123,6 +123,62 @@ describe("useWorktreeFormValidation", () => {
     expect(validation.error?.field).toBe("worktree-path");
   });
 
+  describe("with the path left to the host", () => {
+    const existingInput = {
+      ...baseInput,
+      branchMode: "existing" as const,
+      branchInput: "",
+      selectedExistingBranch: "develop",
+    };
+
+    it.each([
+      ["new", baseInput],
+      ["existing", existingInput],
+    ])("accepts an empty path in %s mode", (_mode, input) => {
+      const { result } = renderHook(() => useWorktreeFormValidation());
+
+      for (const worktreePath of ["", "   "]) {
+        expect(result.current.validate({ ...input, worktreePath, requirePath: false }).valid).toBe(
+          true
+        );
+      }
+    });
+
+    it("still names the branch it will create", () => {
+      const { result } = renderHook(() => useWorktreeFormValidation());
+
+      const validation = result.current.validate({
+        ...baseInput,
+        worktreePath: "",
+        requirePath: false,
+      });
+      expect(validation.fullBranchName).toBe("feature/my-feature");
+    });
+
+    it.each([
+      ["no branch name", { branchInput: "" }, "new-branch"],
+      ["an empty slug", { branchInput: "feature/" }, "new-branch"],
+      ["an invalid name", { branchInput: "bad:prefix/my-feature" }, "new-branch"],
+      ["no base branch", { baseBranch: "" }, "base-branch"],
+      [
+        "no existing pick",
+        { branchMode: "existing" as const, selectedExistingBranch: null },
+        "existing-branch",
+      ],
+    ])("still rejects %s", (_case, overrides, field) => {
+      const { result } = renderHook(() => useWorktreeFormValidation());
+
+      const validation = result.current.validate({
+        ...baseInput,
+        ...overrides,
+        worktreePath: "",
+        requirePath: false,
+      });
+      expect(validation.valid).toBe(false);
+      expect(validation.error?.field).toBe(field);
+    });
+  });
+
   it("returns fullBranchName for unprefixed input", () => {
     const { result } = renderHook(() => useWorktreeFormValidation());
 

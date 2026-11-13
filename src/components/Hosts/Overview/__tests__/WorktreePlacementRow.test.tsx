@@ -207,6 +207,24 @@ describe("WorktreePlacementRow", () => {
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves an empty path for the chosen host to place by its own pattern", async () => {
+    const { onCommitChange } = renderRow({
+      worktreePath: "",
+      getDraft: () => ({ ...DRAFT, path: "" }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
+    expect(lastCommit(onCommitChange)?.relativePath).toBeNull();
+
+    await act(async () => {
+      lastCommit(onCommitChange)!.submit();
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      "project.openOnHost",
+      expect.objectContaining({ worktree: expect.objectContaining({ relativePath: null }) }),
+      { source: "user" }
+    );
+  });
+
   it("leaves this window where it is on a Cmd/Ctrl-click, opening the host in a new one", async () => {
     const { onCommitChange, onLeave } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
