@@ -53,7 +53,7 @@ vi.mock("@/store/paletteStore", () => {
 import { PluginInputBoxDialog } from "../PluginInputBoxDialog";
 import { PluginQuickPickDialog } from "../PluginQuickPickDialog";
 import { PluginConfirmPromptDialog } from "../PluginConfirmPromptDialog";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { enqueueUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   _resetPluginRuntimeStoreForTest,
@@ -525,4 +525,86 @@ describe("PluginQuickPickDialog — plugin attribution", () => {
     );
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
   });
+});
+
+describe("PluginConfirmPromptDialog — advancing the queue (#16943)", () => {
+  function ask(promptId: string, destructive: boolean) {
+    return enqueueUiPrompt({
+      promptId,
+      pluginId: PLUGIN_ID,
+      params: {
+        kind: "confirm",
+        options: { title: `Question ${promptId}?`, message: "Body", destructive },
+      },
+    });
+  }
+
+  function scroller(): HTMLElement {
+    const el = document.querySelector<HTMLElement>(
+      '[role="dialog"] .dialog-body-inset, [role="alertdialog"] .dialog-body-inset'
+    );
+    if (!el) throw new Error("no dialog body rendered");
+    return el;
+  }
+
+  function primary(): HTMLElement {
+    const el = document.querySelector<HTMLElement>('[data-confirm-role="confirm"]');
+    if (!el) throw new Error("no primary rendered");
+    return el;
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([false, true])(
+    "starts the next question at the top with focus on Cancel (destructive: %s)",
+    async (destructive) => {
+      vi.useFakeTimers();
+      const first = ask("q1", destructive);
+      const second = ask("q2", destructive);
+      render(<PluginConfirmPromptDialog />);
+      // A destructive question holds its answer for a read; a plain one doesn't.
+      expect(primary().getAttribute("aria-disabled") === "true").toBe(destructive);
+      await advance(5_000);
+
+      Object.defineProperty(scroller(), "scrollTop", {
+        value: 40,
+        writable: true,
+        configurable: true,
+      });
+      const confirm = primary();
+      act(() => {
+        confirm.focus();
+        fireEvent.click(confirm);
+      });
+      await expect(first).resolves.toBe(true);
+      expect(document.body.textContent).toContain("Question q2?");
+      expect(scroller().scrollTop).toBe(0);
+
+      await advance(16);
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+
+      if (destructive) {
+        expect(primary().getAttribute("aria-disabled")).toBe("true");
+        act(() => {
+          fireEvent.click(primary());
+        });
+        expect(usePluginPromptStore.getState().current?.promptId).toBe("q2");
+        await advance(1_200);
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      }
+      expect(primary().hasAttribute("aria-disabled")).toBe(false);
+      act(() => {
+        fireEvent.click(primary());
+      });
+      await expect(second).resolves.toBe(true);
+    }
+  );
 });

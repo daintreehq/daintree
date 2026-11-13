@@ -233,6 +233,38 @@ describe("PluginConfirmDialog", () => {
     }
   });
 
+  it("moves focus to Cancel when a destructive item is promoted, so a held Enter can't approve it", async () => {
+    vi.useFakeTimers();
+    try {
+      void enqueue({ requestId: "A", actionTitle: "Delete worktree" });
+      void enqueue({ requestId: "B", actionTitle: "Reset branch" });
+      render(<PluginConfirmDialog />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200);
+      });
+
+      const aBtn = screen.getByRole("button", { name: "Delete worktree" });
+      act(() => {
+        aBtn.focus();
+        aBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200);
+      });
+      const bBtn = screen.getByRole("button", { name: "Reset branch" });
+      expect(bBtn.hasAttribute("aria-disabled")).toBe(false);
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores a click on a freshly-promoted item that lands before its cooldown clears", async () => {
     vi.useFakeTimers();
     try {

@@ -251,6 +251,43 @@ describe("PluginMcpConfirmDialog structure", () => {
     expect(text.indexOf("1 more request")).toBeLessThan(text.indexOf("remembered"));
   });
 
+  it("moves focus off the button that approved the last request when the next is promoted", async () => {
+    vi.useFakeTimers();
+    try {
+      enqueue({ requestId: "req-a", dangerTier: "D2" });
+      act(() => {
+        usePluginMcpConfirmStore
+          .getState()
+          .enqueue(pending({ requestId: "req-b", toolName: "other_tool", dangerTier: "D3" }));
+      });
+      render(<PluginMcpConfirmDialog />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+      });
+
+      const allow = screen.getByRole("button", { name: "Allow and remember" });
+      act(() => {
+        allow.focus();
+        allow.click();
+      });
+      expect(screen.getByText("other_tool")).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+
+      // Still there once the promoted request's cooldown clears, so an Enter
+      // meant for the last request can't approve this one.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+      });
+      expect(allow.hasAttribute("aria-disabled")).toBe(false);
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not carry an expanded disclosure over to the next queued request", () => {
     // The queue advances by swapping `current` on a mounted dialog, so body
     // state survives unless it is keyed. Otherwise a freshly promoted tool

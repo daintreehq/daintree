@@ -89,8 +89,10 @@ export function PluginConfirmDialog() {
         // below happens to be open — the role must not flip as the user toggles.
         hasPreview={hasArgs}
         // The queue advances by swapping `current` on a mounted dialog, so the
-        // body's scroll offset would otherwise carry into the next request.
+        // body's scroll offset and the focus on the button that answered would
+        // otherwise carry into the next request.
         bodyResetKey={current.requestId}
+        focusResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
