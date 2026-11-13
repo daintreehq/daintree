@@ -51,6 +51,7 @@ import type { GettingStartedChecklistState } from "../useGettingStartedChecklist
 
 const gettingStarted: GettingStartedChecklistState = {
   visible: false,
+  forced: false,
   collapsed: false,
   checklist: null,
   dismiss: () => {},

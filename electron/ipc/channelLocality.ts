@@ -714,6 +714,7 @@ export const CHANNEL_LOCALITY = {
   "onboarding:checklist-get": "shell",
   "onboarding:checklist-mark-item": "shell",
   "onboarding:checklist-push": "shell",
+  "onboarding:checklist-reopen": "shell",
   "onboarding:complete": "shell",
   "onboarding:dismiss-setup-banner": "shell",
   "onboarding:dismiss-welcome-card": "shell",

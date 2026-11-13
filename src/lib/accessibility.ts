@@ -1,4 +1,5 @@
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 /**
  * Elements that are actually in the tab order.
@@ -63,16 +64,43 @@ export function getVisibleTabbableElements(root: ParentNode): HTMLElement[] {
  * focus inside a shadow tree is reported at the document level as the host.
  */
 export function restoreFocusTo(...candidates: (HTMLElement | null | undefined)[]): void {
+  focusFirstAccepting(candidates);
+}
+
+function focusFirstAccepting(
+  candidates: (HTMLElement | null | undefined)[],
+  options?: FocusOptions
+): void {
   for (const candidate of candidates) {
     if (!candidate || candidate === document.body) continue;
     if (!document.contains(candidate)) continue;
 
-    candidate.focus();
+    candidate.focus(options);
     if (document.activeElement === candidate) return;
   }
 
   const root = document.getElementById("root");
-  getVisibleTabbableElements(root ?? document.body)[0]?.focus();
+  getVisibleTabbableElements(root ?? document.body)[0]?.focus(options);
+}
+
+/**
+ * `restoreFocusTo` for a control that is about to go away while it holds focus
+ * (a dismissed card, a step that just finished). The handoff keeps the ring
+ * only if `from` was showing one, so a mouse user doesn't get an accent ring
+ * nobody asked for, and the target's focus-driven tooltip stays shut, as the
+ * shared overlay close policy does.
+ */
+export function handFocusOff(
+  from: Element,
+  ...candidates: (HTMLElement | null | undefined)[]
+): void {
+  armTooltipFocusSuppression();
+  focusFirstAccepting(
+    candidates,
+    from.matches(":focus-visible")
+      ? { preventScroll: true }
+      : { preventScroll: true, focusVisible: false }
+  );
 }
 
 /**

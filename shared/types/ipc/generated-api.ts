@@ -1114,6 +1114,9 @@ export interface GeneratedElectronAPI {
     recordAgentFirstSeen(
       ...args: IpcInvokeMap["onboarding:record-agent-first-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:record-agent-first-seen"]["result"]>;
+    reopenChecklist(
+      ...args: IpcInvokeMap["onboarding:checklist-reopen"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:checklist-reopen"]["result"]>;
     setStep(
       ...args: IpcInvokeMap["onboarding:set-step"]["args"]
     ): Promise<IpcInvokeMap["onboarding:set-step"]["result"]>;

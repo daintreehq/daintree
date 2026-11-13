@@ -994,6 +994,7 @@ export const CHANNELS = {
   ONBOARDING_DISMISS_SETUP_BANNER: "onboarding:dismiss-setup-banner",
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
+  ONBOARDING_CHECKLIST_REOPEN: "onboarding:checklist-reopen",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
   ONBOARDING_TOUR_DISMISS_INVITE: "onboarding:tour-dismiss-invite",
