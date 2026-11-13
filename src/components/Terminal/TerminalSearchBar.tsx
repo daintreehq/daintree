@@ -118,6 +118,19 @@ export function TerminalSearchBar({
     };
   }, [target]);
 
+  // Highlights stay on the terminal they were drawn on, so leaving it (a tab
+  // switch, or the pane taking the bar away) clears them there: once the bar
+  // has moved on, nothing else could (#16878). A search still loading its
+  // addon by then is dropped rather than drawing them again.
+  const liveTargetRef = useRef<TerminalSearchTarget | null>(null);
+  useEffect(() => {
+    liveTargetRef.current = target;
+    return () => {
+      liveTargetRef.current = null;
+      target.getSearchAddon()?.clearDecorations();
+    };
+  }, [target]);
+
   const performSearch = useCallback(
     (
       term: string,
@@ -157,7 +170,7 @@ export function TerminalSearchBar({
       void target
         .ensureSearchAddon()
         .then((searchAddon) => {
-          if (!searchAddon) return;
+          if (!searchAddon || liveTargetRef.current !== target) return;
           const found =
             direction === "next"
               ? searchAddon.findNext(term, options)
@@ -170,6 +183,7 @@ export function TerminalSearchBar({
           setSearchStatus(found ? "found" : "none");
         })
         .catch((error: unknown) => {
+          if (liveTargetRef.current !== target) return;
           setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
           setMatchResults(null);
           if (effectiveRegexEnabled && error instanceof Error) {

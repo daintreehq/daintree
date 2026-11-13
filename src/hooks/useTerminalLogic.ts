@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import type { RetryAction } from "@/store/errorStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -32,8 +32,15 @@ export function useTerminalLogic({
   removeError,
   restartKey,
 }: UseTerminalLogicOptions): UseTerminalLogicReturn {
-  const [isExited, setIsExited] = useState(false);
-  const [exitCode, setExitCode] = useState<number | null>(null);
+  // Tagged with the terminal and run it was heard on rather than reset when
+  // they change: a tab group reuses the pane for its next tab, and a reset
+  // would still let that tab commit once with the last one's exit, or a late
+  // exit from the last tab land on it (#16878).
+  const [heardExit, setHeardExit] = useState<{
+    id: string;
+    restartKey: number | undefined;
+    code: number | null;
+  } | null>(null);
   const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
   // The exit stream is one-shot: a pane that mounts after it fired, or an exit
   // only the store heard of (a host that restarted without the terminal), is
@@ -44,17 +51,14 @@ export function useTerminalLogic({
     return panel.exitCode ?? null;
   });
 
-  // Reset exit state when terminal ID or restartKey changes
-  useEffect(() => {
-    setIsExited(false);
-    setExitCode(null);
-  }, [id, restartKey]);
-
-  const handleExit = useCallback((code: number | null) => {
-    const safeCode = code === null ? null : Number.isFinite(code) ? code : 0;
-    setIsExited(true);
-    setExitCode(safeCode);
-  }, []);
+  const handleExit = useCallback(
+    (code: number | null) => {
+      const safeCode = code === null ? null : Number.isFinite(code) ? code : 0;
+      setHeardExit({ id, restartKey, code: safeCode });
+    },
+    [id, restartKey]
+  );
+  const isExited = heardExit !== null && heardExit.id === id && heardExit.restartKey === restartKey;
 
   // Promise-method cleanup instead of try/finally: a statement-level finally
   // clause bails React Compiler memoization for the whole per-terminal hook.
@@ -80,7 +84,7 @@ export function useTerminalLogic({
 
     // Exit handling
     isExited: isExited || storeExitCode !== undefined,
-    exitCode: isExited ? exitCode : (storeExitCode ?? null),
+    exitCode: isExited ? heardExit.code : (storeExitCode ?? null),
     handleExit,
   };
 }
