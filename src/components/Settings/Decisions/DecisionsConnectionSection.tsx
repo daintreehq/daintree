@@ -177,6 +177,7 @@ export function DecisionsConnectionSection({
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   /** The deployed relay's URL as Daintree put it in the field, until the person edits it. */
   const autoFilled = useRef<string | null>(null);
+  const relayUrlField = useRef<HTMLInputElement>(null);
   const deploy = status.relayDeploy;
   // Main is claiming the relay a guided deploy created (#16200): nothing here starts meanwhile.
   const deployClaiming = deploy?.claim?.state === "claiming";
@@ -437,6 +438,7 @@ export function DecisionsConnectionSection({
                 }}
               >
                 <Input
+                  ref={relayUrlField}
                   type="text"
                   inputMode="url"
                   autoComplete="off"
@@ -634,6 +636,8 @@ export function DecisionsConnectionSection({
           if (identity.pending !== "disconnect") setDisconnectOpen(false);
         }}
         onConfirm={confirmDisconnect}
+        // With the relay gone, so is its button; setting up the next one starts here.
+        restoreFocusTo={relayUrlField}
       />
     </SettingsSection>
   );

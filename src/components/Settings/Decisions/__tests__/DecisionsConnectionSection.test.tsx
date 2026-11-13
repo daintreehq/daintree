@@ -7,6 +7,7 @@ import type {
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
 } from "@shared/types/decisions";
+import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 
@@ -505,4 +506,64 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(statusRow()).toContain("keys couldn't be read");
     expect(screen.queryByText("Setup isn't finished")).toBeNull();
   });
+});
+
+describe("DecisionsConnectionSection disconnect focus", () => {
+  const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
+
+  /** The tab's part: the status main answers with replaces the one shown. */
+  function Section({ initial }: { initial: DecisionsStatus }) {
+    const [status, setStatus] = useState(initial);
+    return (
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={status}
+          onChanged={(next) => {
+            if (next) setStatus(next);
+          }}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    disconnectRelay.mockReset();
+    const stub = electronStub();
+    Object.defineProperty(window, "electron", {
+      value: { ...stub, decisions: { ...stub.decisions, disconnectRelay } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each<[string, DecisionsStatus, string]>([
+    ["a relay", { state: "not-connected", relayOrigin: ORIGIN }, "Disconnect relay"],
+    ["an unfinished setup's keys", { state: "not-connected", keysStored: true }, "Remove keys"],
+  ])(
+    "hands focus to the relay URL field once removing %s takes its button away",
+    async (_, initial, label) => {
+      disconnectRelay.mockResolvedValue({ state: "not-connected" });
+      render(<Section initial={initial} />);
+      await act(async () => {});
+
+      const trigger = screen.getByRole("button", { name: label });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: label,
+      });
+      act(() => confirm.focus());
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+
+      expect(disconnectRelay).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+      await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
+    }
+  );
 });
