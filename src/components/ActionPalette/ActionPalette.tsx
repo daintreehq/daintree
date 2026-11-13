@@ -390,12 +390,6 @@ export function ActionPalette({
         }
       }
 
-      if (e.key === "Enter" && offersProjectSearch) {
-        e.preventDefault();
-        onSearchProjects(query);
-        return;
-      }
-
       // Backspace at position 0 (no selection) pops the active chip and
       // restores global action search. Mirrors the asymmetric Escape stack:
       // first Backspace clears the mode, subsequent Backspace acts normally.
@@ -445,9 +439,18 @@ export function ActionPalette({
       unpinAction,
       hideAction,
       canHideIndex,
-      offersProjectSearch,
-      onSearchProjects,
     ]
+  );
+
+  // Enter on a path with no matching action searches projects for it, from the
+  // field or the results region alike.
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.key !== "Enter" || !offersProjectSearch) return;
+      e.preventDefault();
+      onSearchProjects(query);
+    },
+    [offersProjectSearch, onSearchProjects, query]
   );
 
   // Mirror showSections (`!query.trim()`) so a whitespace-only buffer collapses
@@ -598,6 +601,7 @@ export function ActionPalette({
       clearQueryOnEscape={!argPrompt}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
+      onListKeyDown={handleListKeyDown}
       inputPrefix={chipNode}
       getFooter={getFooter}
       getItemId={getActionItemId}

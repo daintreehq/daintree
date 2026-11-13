@@ -1,5 +1,6 @@
 import {
   isValidElement,
+  useCallback,
   useDeferredValue,
   useEffect,
   useId,
@@ -24,7 +25,11 @@ import type {
   PluginStepState,
   PluginStepperProps,
 } from "@shared/types/plugin-sdk-react";
-import { AppPaletteDialog, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
+import {
+  AppPaletteDialog,
+  PALETTE_BODY_SCROLLER_SELECTOR,
+  PaletteNoMatchHint,
+} from "@/components/ui/AppPaletteDialog";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -396,7 +401,14 @@ function KitCommandPalette({
   const listId = `${baseId}list`;
   const optionPrefix = `${baseId}option`;
   const handle = useRef<VirtuosoHandle>(null);
-  const [listPx, setListPx] = useState<number | null>(null);
+  // The palette's results region scrolls the list rather than a scroller of
+  // Virtuoso's own, which would be a second tab stop that took Tab and then
+  // ignored every key. The region hands the list keys on and names the active
+  // option, and a long list still has a keyboard-reachable scroller.
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const findScrollParent = useCallback((el: HTMLElement | null) => {
+    setScrollParent(el?.closest<HTMLElement>(PALETTE_BODY_SCROLLER_SELECTOR) ?? null);
+  }, []);
 
   const moveTo = (index: number) => {
     if (index < 0) return;
@@ -530,30 +542,26 @@ function KitCommandPalette({
         />
       );
     }
-    const estimate = rows.length * PALETTE_ROW_PX;
     return (
       <PluginStyleScope block>
-        <Virtuoso
-          ref={handle}
-          // Out of the tab order: the palette's results region around it is the
-          // list's one stop, and it is the one that hands the list keys on. A
-          // second stop here would take Tab and then ignore every key.
-          tabIndex={-1}
-          // Sized to its rows up to the palette body's own cap, so a short list
-          // does not stretch the palette and a long one scrolls inside it.
-          style={{ height: `min(${listPx ?? estimate}px, calc(60vh - 1rem))` }}
-          context={{ listId, label: heading }}
-          components={PALETTE_COMPONENTS}
-          data={rows}
-          defaultItemHeight={PALETTE_ROW_PX}
-          increaseViewportBy={8 * PALETTE_ROW_PX}
-          initialTopMostItemIndex={Math.max(0, (rowOf[active] ?? 0) - 1)}
-          computeItemKey={(index, row) =>
-            row.kind === "head" ? `head-${index}-${row.label}` : row.result.item.id
-          }
-          itemContent={(_index, row) => renderRow(row)}
-          totalListHeightChanged={setListPx}
-        />
+        <div ref={findScrollParent}>
+          {scrollParent !== null && (
+            <Virtuoso
+              ref={handle}
+              customScrollParent={scrollParent}
+              context={{ listId, label: heading }}
+              components={PALETTE_COMPONENTS}
+              data={rows}
+              defaultItemHeight={PALETTE_ROW_PX}
+              increaseViewportBy={8 * PALETTE_ROW_PX}
+              initialTopMostItemIndex={Math.max(0, (rowOf[active] ?? 0) - 1)}
+              computeItemKey={(index, row) =>
+                row.kind === "head" ? `head-${index}-${row.label}` : row.result.item.id
+              }
+              itemContent={(_index, row) => renderRow(row)}
+            />
+          )}
+        </div>
       </PluginStyleScope>
     );
   };

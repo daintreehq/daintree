@@ -329,13 +329,17 @@ describe("CommandPalette", () => {
     expect(screen.getByRole("dialog", { hidden: true }).getAttribute("aria-modal")).toBe("false");
   });
 
-  it("leaves the results region as the list's one tab stop", async () => {
+  it("scrolls the results region, so the list has one tab stop and it takes the list keys", async () => {
     render(inViewport(createElement(Harness)));
     await screen.findByText("Alpha issue");
-    const scroller = document.querySelector<HTMLElement>("[data-virtuoso-scroller]");
-    expect(scroller).not.toBeNull();
-    expect(scroller!.tabIndex).toBe(-1);
-    expect(screen.getByRole("group", { name: "Go to" }).tabIndex).toBe(0);
+    const region = screen.getByRole("group", { name: "Go to" });
+    expect(region.tabIndex).toBe(0);
+    expect(region.querySelectorAll('[tabindex]:not([tabindex="-1"])')).toHaveLength(0);
+    expect(region.contains(screen.getByRole("listbox"))).toBe(true);
+    const input = screen.getByRole("combobox");
+    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    expect(active()?.textContent).toBe("Delta issue");
   });
 
   it("pages over disabled rows toward the cursor instead of wrapping to the far end", async () => {
@@ -346,16 +350,17 @@ describe("CommandPalette", () => {
     }));
     render(inViewport(createElement(Harness, { items: paged })));
     const input = await screen.findByRole("combobox");
-    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
-    await screen.findByText("Row 15");
-    expect(active()?.textContent).toBe("Row 15");
+    // Read off the active descendant's id: jsdom has no scroll offset to
+    // render a list that opens partway down.
+    const activeId = () => input.getAttribute("aria-activedescendant")?.replace(/^.*option-/, "");
+    expect(activeId()).toBe("row-15");
     for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(active()?.textContent).toBe("Row 20");
+    expect(activeId()).toBe("row-20");
 
     fireEvent.keyDown(input, { key: "PageUp" });
-    expect(active()?.textContent).toBe("Row 15");
+    expect(activeId()).toBe("row-15");
     fireEvent.keyDown(input, { key: "PageDown" });
-    expect(active()?.textContent).toBe("Row 24");
+    expect(activeId()).toBe("row-24");
   });
 
   it("skips disabled rows with the arrow keys", async () => {
