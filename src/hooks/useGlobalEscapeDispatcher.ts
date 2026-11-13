@@ -22,7 +22,7 @@ export function useGlobalEscapeDispatcher(): void {
       // A layer open inside the plugin manager owned this Escape, whether or
       // not it is still open by now.
       if (nestedLayerOwnsEscape(e)) return;
-      if (dispatchEscape() || dispatchEscapeFallback()) {
+      if (dispatchEscape() || dispatchEscapeFallback(e)) {
         e.preventDefault();
       }
     };

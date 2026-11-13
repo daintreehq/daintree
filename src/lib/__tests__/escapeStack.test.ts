@@ -147,6 +147,16 @@ describe("escape fallbacks", () => {
     expect(calls).toEqual(["newest", "middle"]);
   });
 
+  it("hand each fallback the keypress being dispatched", () => {
+    const seen = vi.fn((_event?: KeyboardEvent) => false);
+    registerEscapeFallback(seen);
+    const event = new KeyboardEvent("keydown", { key: "Escape" });
+
+    dispatchEscapeFallback(event);
+
+    expect(seen).toHaveBeenCalledWith(event);
+  });
+
   it("unregister removes only that registration, even of a shared callback", () => {
     const shared = vi.fn(() => true);
     const between = vi.fn(() => false);

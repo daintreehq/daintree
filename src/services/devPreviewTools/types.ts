@@ -38,6 +38,12 @@ export interface DevPreviewToolSessionContext extends DevPreviewToolContext {
 export interface DevPreviewToolSession {
   /** The context changed — a new page, a moved worktree, a surface mounting. */
   update?: (context: DevPreviewToolSessionContext) => void;
+  /**
+   * Escape reached the preview's chrome and nothing else took it. True when
+   * the session used it (let go of a selection, say) and the tool stays on;
+   * otherwise the host turns the tool off.
+   */
+  handleEscape?: () => boolean;
   dispose: () => void;
 }
 

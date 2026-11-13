@@ -312,8 +312,44 @@ describe("createPicker", () => {
     const escape = press("Escape");
     expect(escape.defaultPrevented).toBe(true);
     expect(ofType("selectionChanged").at(-1)).toMatchObject({ observations: [], cause: "user" });
-    // Nothing left to clear: Escape is the host's again.
+    expect(ofType("dismissRequested")).toHaveLength(0);
+  });
+
+  it("asks the host to close the picker on Escape with nothing selected", () => {
+    start();
+    let pageEscapes = 0;
+    document.addEventListener("keydown", () => (pageEscapes += 1), {
+      signal: testListeners.signal,
+    });
+
+    const escape = press("Escape", {}, document.getElementById("first")!);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(pageEscapes).toBe(0);
+    expect(ofType("dismissRequested")).toHaveLength(1);
+    expect(ofType("selectionChanged")).toHaveLength(0);
+  });
+
+  it("peels one layer per Escape, however long the key is held", () => {
+    start();
+    document.getElementById("first")!.click();
+    const selections = ofType("selectionChanged").length;
+
+    press("Escape");
+    expect(press("Escape", { repeat: true }).defaultPrevented).toBe(true);
+    expect(press("Escape", { repeat: true }).defaultPrevented).toBe(true);
+    expect(ofType("selectionChanged")).toHaveLength(selections + 1);
+    expect(ofType("dismissRequested")).toHaveLength(0);
+
+    press("Escape");
+    expect(ofType("dismissRequested")).toHaveLength(1);
+  });
+
+  it("leaves Escape to an IME composition and to the page in browse mode", () => {
+    start();
+    expect(press("Escape", { isComposing: true }).defaultPrevented).toBe(false);
+    picker!.setMode("browse");
     expect(press("Escape").defaultPrevented).toBe(false);
+    expect(ofType("dismissRequested")).toHaveLength(0);
   });
 
   it("leaves keys to an IME composition and to a focused page control", () => {

@@ -526,6 +526,7 @@ export class InspectorController implements DevPreviewToolSession {
   readonly panelId: string;
   private state: InspectorState = INITIAL_INSPECTOR_STATE;
   private readonly listeners = new Set<() => void>();
+  private readonly dismissListeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
   // Undefined until the first context arrives: a preview that starts with no
@@ -590,6 +591,18 @@ export class InspectorController implements DevPreviewToolSession {
   };
 
   getSnapshot = (): InspectorState => this.state;
+
+  /**
+   * The page's Escape found nothing selected: whoever turns the picker off
+   * hears it. A page's keys never reach the host's DOM, so this is the only
+   * way that Escape gets out.
+   */
+  onDismissRequest = (listener: () => void): (() => void) => {
+    this.dismissListeners.add(listener);
+    return () => {
+      this.dismissListeners.delete(listener);
+    };
+  };
 
   private patchState(patch: Partial<InspectorState>): void {
     if (this.disposed) return;
@@ -1211,6 +1224,12 @@ export class InspectorController implements DevPreviewToolSession {
         this.watchPointerLeaving(event.observation !== null);
         return;
       case "frameworksDetected":
+        return;
+      case "dismissRequested":
+        // Browse hands the page its own keys; a request still in flight from
+        // Inspect is not the user asking now.
+        if (this.state.mode !== "select" || this.state.modePending) return;
+        for (const listener of [...this.dismissListeners]) listener();
         return;
     }
   }
@@ -1864,6 +1883,17 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /** Drop the selection, here and on the page. */
+  /**
+   * Escape from the preview's chrome: let go of what is selected, if
+   * anything, as Escape in the page does. False leaves the key to the host,
+   * which turns the picker off.
+   */
+  handleEscape(): boolean {
+    if (this.state.selection.status === "none") return false;
+    void this.clearSelection();
+    return true;
+  }
+
   async clearSelection(): Promise<void> {
     this.selectionRequest++;
     this.held = null;
@@ -2190,6 +2220,7 @@ export class InspectorController implements DevPreviewToolSession {
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
     this.listeners.clear();
+    this.dismissListeners.clear();
     if (this.lingering === null) this.stopHearingSource();
   }
 
