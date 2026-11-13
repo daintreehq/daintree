@@ -87,10 +87,12 @@ function install(saved: Partial<typeof SAVED> = {}) {
     writable: true,
   });
   return {
-    load: () =>
-      act(async () => {
+    load: async () => {
+      await waitFor(() => expect(getSettings).toHaveBeenCalled());
+      await act(async () => {
         answer?.({ ...SAVED, ...saved });
-      }),
+      });
+    },
   };
 }
 

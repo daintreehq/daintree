@@ -1907,8 +1907,17 @@ export function useSettingsScrollToSection(
     holds?.subscribe ?? subscribeToNoHolds,
     holds?.isHeld ?? isNeverHeld
   );
+  // The link this instance has already landed. A release re-runs the effect on the
+  // snapshot's way up as well as down, and the commit that releases can already land,
+  // so without it one link could land twice before the dialog clears it.
+  const handledRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!isActive || !scrollToSectionId || holds?.isHeld()) return;
+    if (!scrollToSectionId) {
+      handledRef.current = null;
+      return;
+    }
+    if (!isActive || holds?.isHeld() || handledRef.current === scrollToSectionId) return;
+    handledRef.current = scrollToSectionId;
     const landed =
       scrollAndHighlightSettingsSection(scrollToSectionId) ||
       (tab !== undefined && landOnSettingByText(scrollToSectionId, tab));
