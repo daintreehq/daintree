@@ -2699,7 +2699,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Send this view's agent panes back to the main process. */
     sendAgentsListResponse(payload: {
       requestId: string;
-      agents: import("../plugin.js").PluginAgentPane[];
+      agents: import("../plugin.js").PluginAgentPaneObservation[];
     }): void;
     /**
      * Listen for imperative plugin UI-prompt requests from the main process (a

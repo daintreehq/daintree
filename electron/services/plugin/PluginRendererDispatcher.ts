@@ -18,7 +18,7 @@ import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
-import type { PluginAgentPane } from "../../../shared/types/plugin.js";
+import type { PluginAgentPaneObservation } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import type { HostApprovedPluginPresetLaunch } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
@@ -42,7 +42,7 @@ const REFUSAL_REASONS = [
   "launch-failed",
   "prompt-open",
   "busy",
-] as const satisfies readonly PluginAgentPane["draftRefusal"][];
+] as const satisfies readonly PluginAgentPaneObservation["draftRefusal"][];
 
 /**
  * One pane as a plugin may see it. Built field by field, so whatever else a
@@ -74,9 +74,9 @@ const AgentPaneSchema = z.object({
  * reads it: a malformed entry is dropped rather than passed through, and a
  * non-array answer reads as no panes.
  */
-export function projectAgentPanes(value: unknown): PluginAgentPane[] {
+export function projectAgentPanes(value: unknown): PluginAgentPaneObservation[] {
   if (!Array.isArray(value)) return [];
-  const panes: PluginAgentPane[] = [];
+  const panes: PluginAgentPaneObservation[] = [];
   for (const entry of value.slice(0, MAX_AGENT_PANES)) {
     const parsed = AgentPaneSchema.safeParse(entry);
     if (parsed.success) panes.push(parsed.data);
@@ -519,8 +519,8 @@ export class PluginRendererDispatcher {
   sendAgentsListToRenderer(
     projectId?: PluginTargetProjectId,
     pluginId?: string
-  ): Promise<PluginAgentPane[]> {
-    return this.requestFromRenderer<PluginAgentPane[]>({
+  ): Promise<PluginAgentPaneObservation[]> {
+    return this.requestFromRenderer<PluginAgentPaneObservation[]>({
       pluginId,
       remote: { method: PluginFrontendMethod.AGENTS_LIST, payload: { pluginId } },
       requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
@@ -543,7 +543,7 @@ export class PluginRendererDispatcher {
   async sendAgentsListWithProject(
     projectId?: PluginTargetProjectId,
     pluginId?: string
-  ): Promise<{ projectId: string | null; agents: PluginAgentPane[] }> {
+  ): Promise<{ projectId: string | null; agents: PluginAgentPaneObservation[] }> {
     if (projectId != null) {
       return { projectId, agents: await this.sendAgentsListToRenderer(projectId, pluginId) };
     }
@@ -560,7 +560,7 @@ export class PluginRendererDispatcher {
       viewKey !== null && isLocalHostId(parseHostScopedKey(viewKey).hostId) ? viewKey : null;
     // Same response shape as `sendAgentsListToRenderer`: the channel's listener
     // keeps the first extractor registered, so the two must agree.
-    const agents = await this.requestFromWebContents<PluginAgentPane[]>(webContents, {
+    const agents = await this.requestFromWebContents<PluginAgentPaneObservation[]>(webContents, {
       requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
       responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
       buildRequest: (requestId) => ({ requestId }),
@@ -674,7 +674,7 @@ export class PluginRendererDispatcher {
   /** The Shell's half of a host plugin's `host.agents.list()`, for one scoped view. */
   sendAgentsListToWebContents(
     webContents: Electron.WebContents
-  ): Promise<{ agents: PluginAgentPane[] }> {
+  ): Promise<{ agents: PluginAgentPaneObservation[] }> {
     return this.requestFromWebContents(webContents, {
       requestChannel: CHANNELS.PLUGIN_AGENTS_LIST_REQUEST,
       responseChannel: CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,

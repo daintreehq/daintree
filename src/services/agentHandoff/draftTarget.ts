@@ -5,7 +5,7 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import type { PluginAgentPane, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type { PluginAgentPaneObservation, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { BackendStatus } from "@/store/panelStore";
 import { getBuiltInRuntimeAgentId, getRuntimeAgentId, isAgentTerminal } from "@/utils/terminalType";
@@ -116,8 +116,8 @@ export interface AgentPaneListInputs extends DraftTargetInputs {
  * the reason it would refuse — a docked agent is still an agent the user can
  * bring back.
  */
-export function buildAgentPanes(inputs: AgentPaneListInputs): PluginAgentPane[] {
-  const panes: PluginAgentPane[] = [];
+export function buildAgentPanes(inputs: AgentPaneListInputs): PluginAgentPaneObservation[] {
+  const panes: PluginAgentPaneObservation[] = [];
   for (const id of inputs.panelIds) {
     const panel = inputs.panelsById[id];
     if (!panel || panel.location === "trash" || !isPtyPanel(panel)) continue;
@@ -160,9 +160,9 @@ export function buildAgentPanes(inputs: AgentPaneListInputs): PluginAgentPane[] 
  * Within the worktree the focused agent wins, then grid order.
  */
 export function pickPreselectedPane(
-  panes: readonly PluginAgentPane[],
+  panes: readonly PluginAgentPaneObservation[],
   worktreeId: string | undefined
-): PluginAgentPane | null {
+): PluginAgentPaneObservation | null {
   const draftable = panes.filter((pane) => pane.canDraft);
   if (worktreeId !== undefined) {
     const inWorktree = draftable.filter((pane) => pane.worktree?.id === worktreeId);

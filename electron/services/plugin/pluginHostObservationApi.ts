@@ -578,8 +578,18 @@ export function buildObservationHostApi(
           );
         }
         try {
-          const agents = await dispatcher.sendAgentsListToRenderer(boundProjectId, pluginId);
-          return isBound() ? agents : [];
+          const panes = await dispatcher.sendAgentsListToRenderer(boundProjectId, pluginId);
+          if (!isBound()) return [];
+          // Who launched a pane is main's to say, from the record the input
+          // methods check, never the view's: a Shell answering for a Host
+          // plugin, or a view's stale panel state, could otherwise claim it.
+          const pty = getPtyClient();
+          return panes.map((pane) => ({
+            ...pane,
+            launchedByThisPlugin:
+              pty !== null &&
+              launchedAgentProject(pty, pluginId, pane.terminalId, boundProjectId) !== null,
+          }));
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
           throw err;

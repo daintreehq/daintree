@@ -542,6 +542,11 @@ describe("projectAgentPanes", () => {
     expect(projected).not.toHaveProperty("cwd");
   });
 
+  it("drops a view's claim about who launched a pane, which only main answers (#16845)", () => {
+    const [projected] = projectAgentPanes([{ ...pane, launchedByThisPlugin: true }]);
+    expect(projected).toEqual(pane);
+  });
+
   it("drops malformed entries and keeps the rest", () => {
     expect(
       projectAgentPanes([

@@ -1738,10 +1738,12 @@ It resolves to one of:
 ```ts
 const agents = await host.agents.list();
 // [{ terminalId, title, agentId, worktree: { id, name, branch? } | null,
-//    observedState?, isFocused, canDraft, draftRefusal? }]
+//    observedState?, isFocused, canDraft, draftRefusal?, launchedByThisPlugin }]
 ```
 
 The live agent panes in this plugin's project (for an installed plugin, the project the user is looking at), in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
+
+`launchedByThisPlugin` is `true` for an agent this plugin started with its own `agent.launch`: the same record `agents.interrupt`, `sendKeys` and `submit` honour, answered by main rather than the view, so a pane the user, an assistant or another plugin started is always `false`. It survives a Daintree restart for a pane restored under the id it was launched with, and goes when the plugin is disabled or uninstalled. A launch that named its own `requestedId` is never counted. It says who launched the pane, not that input will land: the input methods still need `agent:input`, consent and a live process.
 
 ## `agents.listAll` — every agent in every open project
 

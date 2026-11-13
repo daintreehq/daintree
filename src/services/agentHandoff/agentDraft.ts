@@ -1,5 +1,5 @@
 import type {
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
 } from "@shared/types/plugin";
@@ -63,7 +63,7 @@ export function getDraftRefusal(terminalId: string): PluginSendToAgentRefusalRea
 }
 
 /** This view's agent panes, as `host.agents.list()` and the picker read them. */
-export function listAgentPanes(): PluginAgentPane[] {
+export function listAgentPanes(): PluginAgentPaneObservation[] {
   const panelState = usePanelStore.getState();
   return buildAgentPanes({
     ...readDraftTargetInputs(),

@@ -1,5 +1,5 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
-import type { PluginAgentPane, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type { PluginAgentPaneObservation, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 import { pickPreselectedPane } from "@/services/agentHandoff/draftTarget";
 
 /** The agent a "new agent" row would start. */
@@ -9,7 +9,7 @@ export interface HandoffAgentChoice {
 }
 
 export type SendToAgentRow =
-  | { kind: "agent"; id: string; pane: PluginAgentPane }
+  | { kind: "agent"; id: string; pane: PluginAgentPaneObservation }
   | {
       kind: "new-here";
       id: "new-here";
@@ -21,7 +21,7 @@ export type SendToAgentRow =
   | { kind: "create-branch"; id: "create-branch"; agent: HandoffAgentChoice };
 
 export interface SendToAgentRowInputs {
-  panes: readonly PluginAgentPane[];
+  panes: readonly PluginAgentPaneObservation[];
   /** The worktree the plugin named — steers preselection and "New agent here". */
   requestedWorktreeId: string | undefined;
   /** The view's active worktree, where "here" falls back to. */
@@ -38,10 +38,10 @@ export interface SendToAgentRowInputs {
  * mechanism to keep in step with it. Other groups keep grid order.
  */
 function orderAgentRows(
-  panes: readonly PluginAgentPane[],
-  preselected: PluginAgentPane | null
+  panes: readonly PluginAgentPaneObservation[],
+  preselected: PluginAgentPaneObservation | null
 ): SendToAgentRow[] {
-  const groups = new Map<string, PluginAgentPane[]>();
+  const groups = new Map<string, PluginAgentPaneObservation[]>();
   for (const pane of panes) {
     const key = pane.worktree?.id ?? "";
     const group = groups.get(key);

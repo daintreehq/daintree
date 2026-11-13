@@ -23,7 +23,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginTerminalLifecycleEvent,
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
   PluginProjectPresence,
@@ -186,7 +186,7 @@ export interface WorkspaceFacet {
   /** What `getWorktreesResult()` answers right now. */
   resolveWorktreesResult(): PluginWorktreesResult;
   /** The panes `agents.list()` answers right now. */
-  agentPanes(): readonly PluginAgentPane[];
+  agentPanes(): readonly PluginAgentPaneObservation[];
   /** Latest simulated lifecycle event per panel id. */
   panelPhases: ReadonlyMap<string, PluginPanelLifecycleEvent>;
   /** Records the agent a dispatched `agent.launch` started, on a Remote Host when `hostId` is set. */
@@ -212,7 +212,7 @@ export function createWorkspaceFacet(
   const sentToAgentCalls: SentToAgentRecord[] = [];
   const runRecipeCalls: RunRecipeRecord[] = [];
   let runRecipeResult: PluginRunRecipeResult = { status: "cancelled" };
-  let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  let agentPanes: PluginAgentPaneObservation[] = options.agents ?? [];
   const remoteHosts: PluginRemoteHost[] = options.remoteHosts ?? [];
   let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
     options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
@@ -423,7 +423,11 @@ export function createWorkspaceFacet(
             'PERMISSION_REQUIRED: agents.list requires "agent:read", which is not declared in manifest.capabilities'
           );
         }
-        return agentPanes.map((pane) => ({ ...pane }));
+        // Answered from the mock's own launch record, as main answers it from its own.
+        return agentPanes.map((pane) => ({
+          ...pane,
+          launchedByThisPlugin: launchedAgents.has(launchKey(pane.terminalId, null)),
+        }));
       },
       async listAll() {
         assertMockCanReadAllAgents("agents.listAll");

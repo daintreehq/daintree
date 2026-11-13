@@ -728,3 +728,106 @@ describe("host.agents input after Daintree restarts (#16240)", () => {
     await expect(other.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
   });
 });
+
+describe("host.agents.list says which panes the plugin launched (#16845)", () => {
+  const pane = (terminalId: string, extra: Record<string, unknown> = {}) => ({
+    terminalId,
+    title: terminalId,
+    agentId: "claude",
+    worktree: null,
+    isFocused: false,
+    canDraft: true,
+    ...extra,
+  });
+
+  function listingHarness(panes: ReturnType<typeof pane>[]): Harness {
+    const h = makeHarness();
+    for (const id of [PLUGIN_ID, OTHER_PLUGIN_ID]) {
+      h.capabilities.set(id, new Set(["agent:input", "agent:read"]));
+    }
+    (h.deps.dispatcher as unknown as Record<string, unknown>).sendAgentsListToRenderer = vi.fn(
+      async () => panes
+    );
+    return h;
+  }
+
+  const launchedIds = async (h: Harness, pluginId = PLUGIN_ID, binding?: PluginHostBinding) =>
+    (await createHost(h.deps, pluginId, binding ?? UNBOUND_PLUGIN_HOST_BINDING).host.agents.list())
+      .filter((p) => p.launchedByThisPlugin)
+      .map((p) => p.terminalId);
+
+  afterEach(() => {
+    _resetPluginLaunchesForTests();
+  });
+
+  it("marks only the agents this plugin's own launch started", async () => {
+    const h = listingHarness([pane("t-1"), pane("t-2"), pane("t-user")]);
+    await launch(h, { result: launchResult("t-1") });
+    await launch(h, { pluginId: OTHER_PLUGIN_ID, result: launchResult("t-2") });
+    terminals.set("t-user", agent());
+
+    const listed = await hostFor(h).agents.list();
+    expect(listed.map((p) => [p.terminalId, p.launchedByThisPlugin])).toEqual([
+      ["t-1", true],
+      ["t-2", false],
+      ["t-user", false],
+    ]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual(["t-2"]);
+  });
+
+  it("answers from main's record, whatever the view's answer claims", async () => {
+    const h = listingHarness([pane("t-user", { launchedByThisPlugin: true })]);
+    terminals.set("t-user", agent());
+    await expect(launchedIds(h)).resolves.toEqual([]);
+  });
+
+  it("agrees with interrupt when the pane turns up in another project", async () => {
+    const h = listingHarness([pane("t-1")]);
+    h.plugins.set(PLUGIN_ID, loaded(PLUGIN_ID, BOUND));
+    await launch(h, { binding: BOUND });
+    await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual(["t-1"]);
+
+    terminals.set("t-1", agent({ projectId: OTHER_PROJECT_ID }));
+    await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual([]);
+    await expect(hostFor(h, BOUND).agents.interrupt("t-1")).resolves.toEqual({
+      status: "not-found",
+    });
+  });
+
+  it("marks a pane restored under its launch id once main's hydrate hands it back", async () => {
+    let disk: Record<string, StoredPluginLaunch> | undefined;
+    const persistence: PluginLaunchPersistence = {
+      load: () => disk,
+      save: (records) => {
+        disk = structuredClone(records);
+      },
+    };
+    attachPluginLaunchPersistence(persistence);
+    const h = listingHarness([pane("t-1")]);
+    await launch(h);
+
+    _resetPluginLaunchesForTests();
+    attachPluginLaunchPersistence(persistence);
+    await expect(launchedIds(h)).resolves.toEqual([]);
+
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual([]);
+  });
+
+  it("marks nothing once the plugin's launches are forgotten", async () => {
+    const h = listingHarness([pane("t-1")]);
+    await launch(h);
+    forgetPluginLaunches(PLUGIN_ID);
+    await expect(launchedIds(h)).resolves.toEqual([]);
+  });
+
+  it("marks nothing with no terminal host", async () => {
+    const h = listingHarness([pane("t-1")]);
+    await launch(h);
+    ptyMock.client = null;
+    await expect(hostFor(h).agents.list()).resolves.toEqual([
+      expect.objectContaining({ terminalId: "t-1", launchedByThisPlugin: false }),
+    ]);
+  });
+});

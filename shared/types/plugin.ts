@@ -5322,7 +5322,23 @@ export interface PluginAgentPane {
   readonly canDraft: boolean;
   /** Why it would not, when `canDraft` is `false`. */
   readonly draftRefusal?: PluginSendToAgentRefusalReason;
+  /**
+   * Whether this plugin launched the agent with its own `agent.launch`, by the
+   * record main keeps of its launches: the one the {@link PluginAgentsApi}
+   * input methods reach, kept across an app restart for a pane restored under
+   * the id it was launched with. `false` for an agent the user, an assistant or
+   * another plugin started, and for one launched before this plugin was last
+   * disabled or uninstalled.
+   */
+  readonly launchedByThisPlugin: boolean;
 }
+
+/**
+ * An agent pane without `launchedByThisPlugin`: what the project's view
+ * reports, and what a `createMockHost` fixture supplies. Who launched a pane is
+ * answered only from the host's own launch record, never from the pane itself.
+ */
+export type PluginAgentPaneObservation = Omit<PluginAgentPane, "launchedByThisPlugin">;
 
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
