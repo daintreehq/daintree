@@ -9,6 +9,7 @@ import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import { claimWaitingSend } from "@/services/voiceDraftSend";
+import { CODE_VIEWER_OWNER_ATTR } from "@/lib/codeViewerKeys";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -2522,5 +2523,101 @@ describe("useGlobalKeybindings — layers open inside the plugin manager (#16942
     pressEscapeOn(control);
 
     expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useGlobalKeybindings — Mod+L inside a code viewer", () => {
+  const originalNavigator = globalThis.navigator;
+  let viewer: HTMLElement;
+  let inside: HTMLElement;
+
+  function setNavigatorPlatform(platform: string) {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { platform },
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  function press(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "l",
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    viewer = document.createElement("div");
+    viewer.setAttribute(CODE_VIEWER_OWNER_ATTR, "");
+    inside = document.createElement("div");
+    inside.tabIndex = 0;
+    viewer.appendChild(inside);
+    document.body.appendChild(viewer);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "help.togglePanel" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  afterEach(() => {
+    viewer.remove();
+    mocks.keybindingService.resolveKeybinding.mockReset();
+    Object.defineProperty(globalThis, "navigator", {
+      value: originalNavigator,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it.each([
+    ["MacIntel", { metaKey: true }],
+    ["Win32", { ctrlKey: true }],
+  ])("leaves the platform's primary+L to the viewer on %s", (platform, modifier) => {
+    setNavigatorPlatform(platform);
+    render(<Host />);
+
+    const event = press(inside, modifier);
+
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("still resolves the same key from outside a viewer", () => {
+    setNavigatorPlatform("MacIntel");
+    render(<Host />);
+
+    const event = press(document.body, { metaKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("holds back only the viewer's own key, not other shortcuts typed inside it", () => {
+    setNavigatorPlatform("MacIntel");
+    render(<Host />);
+
+    press(inside, { metaKey: true, shiftKey: true });
+    press(inside, { metaKey: true, key: "j" });
+    press(inside, { ctrlKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets a chord in progress complete inside the viewer", () => {
+    setNavigatorPlatform("MacIntel");
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+    render(<Host />);
+
+    press(inside, { metaKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
   });
 });
