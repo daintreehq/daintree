@@ -388,10 +388,12 @@ const mountedPalettes = () => screen.queryAllByRole("combobox", { name: "Search 
 
 describe("HybridInputBar prompt history has one composer at a time", () => {
   it("serves the grid pane until focus lands in the global assistant, then it alone", async () => {
+    const submitText = vi.fn(async () => true);
     const { other } = await renderBeside({
       isolated: true,
       terminalId: GLOBAL_ID,
       historyProjectId: GLOBAL_ASSISTANT_HISTORY_ID,
+      submitText,
     });
 
     await openFromActionPalette();
@@ -408,6 +410,60 @@ describe("HybridInputBar prompt history has one composer at a time", () => {
       SENT
     );
     expect(other.state.doc.toString()).toBe(SENT);
+
+    await act(async () => {
+      runScopeHandlers(other, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    expect(submitText).toHaveBeenCalledTimes(1);
+    const kept = useCommandHistoryStore.getState().history;
+    expect(kept[hostScopedKey(GLOBAL_ASSISTANT_HISTORY_ID)]?.[0]?.prompt).toBe(SENT);
+    expect(kept[hostScopedKey(isolatedComposerScope())]).toBeUndefined();
+  });
+
+  it("takes history back for a pane whose ❯ is clicked with no press, an Assistant holding it", async () => {
+    const onActivate = vi.fn();
+    const { container } = render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <div data-panel-id={TERMINAL_ID} data-testid="pane">
+            <HybridInputBar
+              terminalId={TERMINAL_ID}
+              cwd={WT_ID}
+              agentId="claude"
+              onSend={vi.fn()}
+              onActivate={onActivate}
+            />
+          </div>
+          <section data-prompt-history-host="" data-testid="host">
+            <HybridInputBar
+              terminalId="assistant-1"
+              cwd=""
+              agentId="claude"
+              onSend={vi.fn()}
+              ownsHistoryByFocus
+            />
+          </section>
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const assistant = EditorView.findFromDOM(
+      container.querySelector<HTMLElement>('[data-testid="host"] .cm-content')!
+    )!;
+    act(() => assistant.contentDOM.focus());
+    const paneMarker = container.querySelector<HTMLElement>(
+      '[data-testid="pane"] [data-composer-marker]'
+    )!;
+
+    // Assistive technology: a click alone, on the pane already selected.
+    await act(async () => {
+      fireEvent.click(paneMarker);
+    });
+
+    expect(paletteOpen()).toBe(true);
+    await recall(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput(TERMINAL_ID, PROJECT_ID)).toBe(SENT);
+    expect(useTerminalInputStore.getState().getDraftInput("assistant-1", PROJECT_ID)).toBe("");
   });
 
   it("opens the Project Assistant's history by Mod+R and `:`, never the pane's behind it", async () => {

@@ -53,6 +53,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   claimPromptHistory,
   followPromptHistoryHost,
+  returnPromptHistoryToGrid,
   usePromptHistoryOwnerStore,
 } from "@/store/promptHistoryOwnerStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -2115,8 +2116,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // request that commit did not answer is dropped rather than left to open
       // on some later focus.
       pendingHistoryOpenRef.current = true;
-      if (historyByFocus) claimPromptHistory(historyToken);
-      else onActivate?.();
+      if (historyByFocus) {
+        claimPromptHistory(historyToken);
+      } else {
+        // The pane may already be the selected one, with an Assistant holding
+        // history since: selecting it again would change nothing.
+        returnPromptHistoryToGrid();
+        onActivate?.();
+      }
       requestAnimationFrame(() => {
         pendingHistoryOpenRef.current = false;
       });

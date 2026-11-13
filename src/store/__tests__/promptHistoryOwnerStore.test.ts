@@ -114,6 +114,76 @@ describe("promptHistoryOwnerStore", () => {
     expect(owner()).toBe("reply");
   });
 
+  it("lends a host's focus to the composer nested in it while it has none of its own", () => {
+    const canopy = host();
+    const list = focusable(canopy);
+    const dock = host(canopy);
+    const globalComposer = focusable(dock, "div");
+    follow("global", globalComposer);
+
+    list.focus();
+    expect(owner()).toBe("global");
+  });
+
+  it("passes history to the composer nested beside it when the run's reply goes", () => {
+    const canopy = host();
+    const list = focusable(canopy);
+    const reply = focusable(canopy, "div");
+    const globalComposer = focusable(host(canopy), "div");
+    follow("global", globalComposer);
+    const stopReply = follow("reply", reply);
+    list.focus();
+    expect(owner()).toBe("reply");
+
+    // The global assistant is selected: the reply unmounts, focus stays on the list.
+    stopReply();
+
+    expect(owner()).toBe("global");
+  });
+
+  it("hands history to the composer replacing one that held it, focus gone with the old editor", () => {
+    const aside = host();
+    const first = focusable(aside, "div");
+    const stopFirst = follow("first", first);
+    first.focus();
+    expect(owner()).toBe("first");
+
+    // Remounted for a new input owner: the old editor leaves, and focus with it.
+    first.remove();
+    stopFirst();
+    expect(owner()).toBeNull();
+    follow("second", focusable(aside, "div"));
+
+    expect(owner()).toBe("second");
+  });
+
+  it("leaves a composer that comes later alone, once the commit that lost one is over", async () => {
+    const aside = host();
+    const first = focusable(aside, "div");
+    const stopFirst = follow("first", first);
+    first.focus();
+    first.remove();
+    stopFirst();
+
+    await Promise.resolve();
+    follow("second", focusable(aside, "div"));
+
+    expect(owner()).toBeNull();
+  });
+
+  it("stops listening once it stops following", () => {
+    const aside = host();
+    const composer = focusable(aside, "div");
+    const pane = focusable(gridPane());
+    const stop = follow("assistant", composer);
+    pane.focus();
+    stop();
+
+    composer.focus();
+
+    expect(owner()).toBeNull();
+  });
+
   it("hands history back when it stops following, but never another composer's", () => {
     const composer = focusable(host(), "div");
     const stopA = follow("a", composer);

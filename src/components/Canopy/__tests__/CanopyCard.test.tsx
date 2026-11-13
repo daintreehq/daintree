@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render as rtlRender } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender } from "@testing-library/react";
 import { createRef, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -11,6 +11,7 @@ import { bandForRun } from "@shared/utils/fleetBands";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
 import { CanopyFrameContext, type CanopyFrame } from "../canopyFrame";
 import { canopyTestFrame } from "./canopyTestFrame";
+import { allHostsKey } from "../canopyAllHosts";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
@@ -25,6 +26,7 @@ import {
 interface ComposerProps {
   terminalId: string;
   isolated: boolean;
+  historyProjectId?: string;
   disabled: boolean;
   onSend: (payload: { text: string; imagePaths?: string[] }) => void;
   onSendKey: (key: string) => void;
@@ -266,6 +268,20 @@ describe("CanopyCard", () => {
     // Through the open stream, so main sends to the incarnation on screen.
     expect(submit).toHaveBeenCalledWith(7, "Keep it read-only", undefined);
     expect(h.onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reply's prompt history under the run's project, by its bare id from All hosts", async () => {
+    renderCard(itemFor("question"));
+    expect((await composer()).historyProjectId).toBe("p1");
+    cleanup();
+
+    composerProps.current = null;
+    const item = itemFor("question");
+    renderCard({
+      ...item,
+      row: { ...item.row, run: { ...item.row.run, workspaceId: allHostsKey("local", "p1") } },
+    });
+    expect((await composer()).historyProjectId).toBe("p1");
   });
 
   it("sends nothing before the stream is open", async () => {
