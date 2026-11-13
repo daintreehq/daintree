@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
-import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
+import { AppDialog, type DialogAction, type RestoreFocusTarget } from "@/components/ui/AppDialog";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -15,6 +15,8 @@ interface ChangeHostTargetDialogProps {
   hostId: HostId;
   hostName: string;
   currentTarget: string;
+  /** Where focus goes on close when the control that opened the dialog is gone. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 function Line({ label, value }: { label: string; value: string }) {
@@ -45,6 +47,7 @@ export function ChangeHostTargetDialog({
   hostId,
   hostName,
   currentTarget,
+  restoreFocusTo,
 }: ChangeHostTargetDialogProps) {
   const [target, setTarget] = useState(currentTarget);
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
@@ -131,6 +134,7 @@ export function ChangeHostTargetDialog({
       onClose={onClose}
       size="md"
       hasPreview
+      restoreFocusTo={restoreFocusTo}
       // Windows are moving and permissions clearing: it settles with the dialog in view.
       dismissible={!changing}
       data-testid="change-host-target-dialog"
@@ -163,6 +167,7 @@ export function ChangeHostTargetDialog({
               }}
             />
             <FieldDescription>{SSH_TARGET_HINT}</FieldDescription>
+            {error && <FieldError role="alert">{error}</FieldError>}
           </Field>
           {reviewed && probe && (
             <div data-testid="change-host-target-probe">
@@ -197,11 +202,6 @@ export function ChangeHostTargetDialog({
             </p>
           )}
         </div>
-        {error && (
-          <InlineError role="alert" className="mt-3">
-            {error}
-          </InlineError>
-        )}
       </AppDialog.Body>
       <AppDialog.Footer
         primaryAction={primary}

@@ -532,6 +532,15 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     setEditingPath(true);
   };
 
+  const cancelPathEdit = () => {
+    confirmOwedRef.current = null;
+    setEditingPath(false);
+    setPathError(null);
+    setPathDraft(shownPath);
+    setDraftEdited(false);
+    listRef.current?.focus();
+  };
+
   const goToDraft = (thenConfirm = false) => {
     if (!isAbsoluteHostPath(draftTarget)) {
       setPathError("Enter an absolute path, starting with /");
@@ -555,6 +564,14 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       event.preventDefault();
       editPath("/");
+      return;
+    }
+    if (
+      (event.key === "Backspace" && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+      (event.key === "ArrowUp" && event.altKey && !event.metaKey && !event.ctrlKey)
+    ) {
+      event.preventDefault();
+      if (parentTarget !== null) navigate(parentTarget);
       return;
     }
     if (!ready || entries.length === 0) return;
@@ -712,7 +729,13 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                 setDraftEdited(false);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                if (event.key === "Escape") {
+                  // Cancels the edit, not the dialog: the dialog's backstop
+                  // sits on the document and honours a stopped event.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelPathEdit();
+                } else if (event.key === "Enter") {
                   event.preventDefault();
                   goToDraft();
                 } else if (event.key === "ArrowDown") {
@@ -760,7 +783,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
             aria-label="Folder contents"
             aria-busy={loading || undefined}
             aria-multiselectable={multiple || undefined}
-            aria-activedescendant={activeEntry ? optionId(activeIndex) : undefined}
+            aria-activedescendant={
+              activeEntry && keyboardCursor ? optionId(activeIndex) : undefined
+            }
             tabIndex={0}
             onKeyDown={onListKeyDown}
             onPointerDown={() => {

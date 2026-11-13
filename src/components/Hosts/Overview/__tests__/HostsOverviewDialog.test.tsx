@@ -94,7 +94,12 @@ vi.mock("../../PluginParitySummary", () => ({
 }));
 vi.mock("@/components/ui/AppDialog", () => {
   const Pass = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
-  const AppDialog = Object.assign(Pass, {
+  const Root = ({ children, initialFocus }: { children?: ReactNode; initialFocus?: string }) => (
+    <div data-testid="app-dialog" data-initial-focus={initialFocus}>
+      {children}
+    </div>
+  );
+  const AppDialog = Object.assign(Root, {
     Header: Pass,
     Title: Pass,
     CloseButton: () => null,
@@ -141,6 +146,15 @@ describe("HostsOverviewDialog plugin parity", () => {
     // This machine has nothing to compare with itself.
     expect(screen.getByTestId("parity-local").textContent).toBe("false");
     expect(h.paritySummary).toHaveBeenCalledWith({ hostId: "studio-01", connected: true });
+  });
+});
+
+describe("HostsOverviewDialog focus", () => {
+  it("lands focus on a content control, never the header close button", () => {
+    h.hosts = [];
+    render(<HostsOverviewDialog onClose={() => {}} />);
+    // "first" skips the close button; "none" left focus behind the modal.
+    expect(screen.getByTestId("app-dialog").getAttribute("data-initial-focus")).toBe("first");
   });
 });
 

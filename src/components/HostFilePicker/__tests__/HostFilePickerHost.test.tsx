@@ -303,6 +303,9 @@ describe("HostFilePickerHost", () => {
     await findRow("notes.md");
     const listbox = screen.getByRole("listbox");
     const options = screen.getAllByRole("option");
+    // Nothing is the keyboard's yet: the field has focus, not the list.
+    expect(listbox.getAttribute("aria-activedescendant")).toBeNull();
+    act(() => listbox.focus());
     expect(listbox.getAttribute("aria-activedescendant")).toBe(options[0]!.id);
     fireEvent.keyDown(listbox, { key: "ArrowDown" });
     expect(listbox.getAttribute("aria-activedescendant")).toBe(options[1]!.id);
@@ -550,6 +553,53 @@ describe("HostFilePickerHost focus", () => {
       expect(document.activeElement).toBe(invoker);
     } finally {
       invoker.remove();
+    }
+  });
+});
+
+describe("HostFilePickerHost keyboard", () => {
+  it("cancels path editing on Escape without closing the picker", async () => {
+    const { settled, field } = await openFolderPick();
+    typePath(field, "/home/greg/wor");
+    fireEvent.keyDown(field, { key: "Escape" });
+
+    expect(screen.queryByLabelText("Folder path", { selector: "input" })).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("listbox")));
+    expect(settled()).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Edit path" }));
+    expect((screen.getByLabelText("Folder path") as HTMLInputElement).value).toBe("/home/greg");
+  });
+
+  it("still closes the picker on Escape from the list", async () => {
+    const { picked } = await openFolderPick();
+    const listbox = screen.getByRole("listbox");
+    act(() => listbox.focus());
+    fireEvent.keyDown(listbox, { key: "Escape" });
+    await expect(picked).resolves.toBeNull();
+  });
+
+  it.each([
+    ["Backspace", { key: "Backspace" }],
+    ["Alt+ArrowUp", { key: "ArrowUp", altKey: true }],
+  ])("opens the parent folder on %s in the list", async (_name, keys) => {
+    listings["/home"] = {
+      path: "/home",
+      parent: "/",
+      truncated: false,
+      entries: [{ name: "greg", kind: "directory", size: null, mtimeMs: 0 }],
+    };
+    try {
+      render(<HostFilePickerHost />);
+      void openPick({ mode: "file", title: "Choose file" });
+      await findRow("notes.md");
+      const listbox = screen.getByRole("listbox");
+      act(() => listbox.focus());
+      fireEvent.keyDown(listbox, keys);
+      await findRow("greg");
+      expect(listDirectory).toHaveBeenLastCalledWith({ path: "/home", showHidden: false });
+    } finally {
+      delete listings["/home"];
     }
   });
 });
