@@ -928,9 +928,9 @@ describe("WorktreeBulkRemoveDialog — a held confirm says why (#16892)", () => 
     );
     // The hook already announced it assertively; a live region here would say
     // it twice, and these roles are live regions without saying so.
-    expect(
-      notice()!.closest('[aria-live], [role="status"], [role="alert"], [role="log"]')
-    ).toBeNull();
+    const live = '[aria-live], [role="status"], [role="alert"], [role="log"]';
+    expect(notice()!.closest(live)).toBeNull();
+    expect(notice()!.querySelector(live)).toBeNull();
     // The disabled primary points at it, so the reason travels with the button.
     const hintId = document.querySelector('[data-testid="app-dialog-hint"]')!.id;
     expect(confirmButton()!.getAttribute("aria-describedby") ?? "").toContain(hintId);

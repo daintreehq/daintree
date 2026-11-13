@@ -1517,6 +1517,13 @@ describe("useWorktreeBulkRemove — a target's panels close before its delete (#
       "a",
       "b",
     ]);
+    // The close removes panels synchronously, so a snapshot taken after it
+    // would have nothing left to relaunch from.
+    const captured = panelCloseMock.captureWorktreeTerminalSnapshot.mock;
+    const closed = panelCloseMock.closeTerminalsForWorktree.mock;
+    for (const [index] of ["a", "b"].entries()) {
+      expect(captured.invocationCallOrder[index]!).toBeLessThan(closed.invocationCallOrder[index]!);
+    }
     expect(devPreviewStopByWorktreeMock).not.toHaveBeenCalled();
     expect(worktreeClientMock.delete).not.toHaveBeenCalled();
 
@@ -1719,6 +1726,7 @@ describe("useWorktreeBulkRemove — a target's panels close before its delete (#
 
     await confirm(hook);
 
+    expect(panelCloseMock.restoreClosedTerminals).toHaveBeenCalledWith(snapshot("a"));
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", message: "feature/a: Directory locked" })
     );
