@@ -308,21 +308,26 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     [savedScheme, query, projectScheme]
   );
 
+  // A move counts only when it lands on another row: a key with nowhere to go
+  // (no results, a single result, Home on the row the cursor opened on) leaves
+  // the opening as it was. The arrows wrap, so with two rows or more they
+  // always land elsewhere.
   const moveTo = useCallback(
     (index: number) => {
-      openedOnIdRef.current = null;
+      const target = results[index];
+      if (target && target.id !== openedOnIdRef.current) openedOnIdRef.current = null;
       setSelectedIndex(index);
     },
-    [setSelectedIndex]
+    [results, setSelectedIndex]
   );
   const movePrevious = useCallback(() => {
-    openedOnIdRef.current = null;
+    if (results.length > 1) openedOnIdRef.current = null;
     selectPrevious();
-  }, [selectPrevious]);
+  }, [results.length, selectPrevious]);
   const moveNext = useCallback(() => {
-    openedOnIdRef.current = null;
+    if (results.length > 1) openedOnIdRef.current = null;
     selectNext();
-  }, [selectNext]);
+  }, [results.length, selectNext]);
 
   // Escape from anywhere but the field (the results, the footer) reaches the
   // dialog's backstop rather than the field's own handler, so it keeps the

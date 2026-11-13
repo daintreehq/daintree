@@ -263,6 +263,29 @@ describe("ThemePalette", () => {
       expect(shownTheme()).toBe(COMMITTED.id);
     });
 
+    it.each([
+      ["no rows", "qqxzv"],
+      ["only the saved row", "bondi"],
+    ])("counts no move from a key with nowhere to go (%s)", async (_label, search) => {
+      renderOpen();
+      await act(async () => {});
+      fireEvent.change(input(), { target: { value: search } });
+      await act(async () => {});
+      const themeRows = screen
+        .queryAllByRole("option")
+        .filter((o) => o.getAttribute("aria-disabled") !== "true");
+      expect(themeRows.length).toBeLessThanOrEqual(1);
+
+      fireEvent.keyDown(input(), { key: "ArrowDown" });
+      fireEvent.keyDown(input(), { key: "Home" });
+      await act(async () => {});
+      fireEvent.change(input(), { target: { value: "" } });
+      await act(async () => {});
+
+      expect(cursorScheme().id).toBe(COMMITTED.id);
+      expect(shownTheme()).toBe(PROJECT.id);
+    });
+
     it("leaves the project's theme on screen while a search moves the saved row", async () => {
       const saved = BUILT_IN_APP_SCHEMES.find((s) => s.name === "Arashiyama")!;
       useAppThemeStore.setState({ selectedSchemeId: saved.id });

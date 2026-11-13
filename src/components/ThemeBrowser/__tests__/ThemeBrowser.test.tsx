@@ -1178,6 +1178,50 @@ describe("ThemeBrowser navigation contract", () => {
     reopened.remove();
   });
 
+  it("re-reads where focus is once the frame comes, not at unmount", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+
+    view.unmount();
+    const reopened = document.createElement("button");
+    document.body.appendChild(reopened);
+    reopened.focus();
+    await nextFrame();
+
+    expect(document.activeElement).toBe(reopened);
+    opener.remove();
+    reopened.remove();
+  });
+
+  // The app chrome is inert while the browser holds its overlay claim, and the
+  // render that lifts it follows the unmount that releases the claim. jsdom
+  // ignores inert, so the opener stands in for Chromium and refuses focus
+  // while it sits inside an inert subtree.
+  it("hands focus back once the app chrome is no longer inert", async () => {
+    const chrome = document.createElement("div");
+    const opener = document.createElement("button");
+    chrome.appendChild(opener);
+    document.body.appendChild(chrome);
+    const focusOpener = opener.focus.bind(opener);
+    opener.focus = (options?: FocusOptions) => {
+      if (!opener.closest("[inert]")) focusOpener(options);
+    };
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+    chrome.setAttribute("inert", "");
+
+    view.unmount();
+    chrome.removeAttribute("inert");
+    await nextFrame();
+
+    expect(document.activeElement).toBe(opener);
+    chrome.remove();
+  });
+
   describe("plugin themes (#13832)", () => {
     const base = BUILT_IN_APP_SCHEMES.find((s) => s.type !== "light")!;
     const pluginTheme = (pluginId: string, pluginName: string, themeId: string, name: string) => ({
