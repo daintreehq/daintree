@@ -20,6 +20,12 @@ import { useRowFocus } from "./useRowFocus";
 import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
 import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
+import {
+  useSettingsTabFlush,
+  type SettingsFlushFailure,
+  type SettingsFlushReason,
+} from "./SettingsFlushRegistry";
+import type { SettingsTab } from "./settingsTabIds";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -84,6 +90,12 @@ export interface EnvVarEditorProps {
    * entirely (identical to the original editor behaviour).
    */
   inheritedEnv?: Record<string, string>;
+  /**
+   * The Settings page the editor sits on. While its table holds anything
+   * unsaved, closing Settings saves it, or stays open on the first row whose
+   * name keeps it from saving.
+   */
+  settingsTab?: SettingsTab;
 }
 
 interface DraftRow {
@@ -156,6 +168,95 @@ function shallowEnvEqual(
   return true;
 }
 
+/**
+ * Whether the editable rows are exactly `env`. Not `draftToEnv` equality: that
+ * drops blank and repeated names, so a draft only those rows keep from saving
+ * would read as saved. A name matches as saved, or trimmed the way a commit
+ * trims it — a saved name that only trims to something invalid is still saved,
+ * and must not hold every close on a row the user never touched.
+ */
+function draftMatchesEnv(rows: DraftRow[], env: Record<string, string>): boolean {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (row.isInherited) continue;
+    const k = Object.prototype.hasOwnProperty.call(env, row.key) ? row.key : row.key.trim();
+    if (seen.has(k) || !Object.prototype.hasOwnProperty.call(env, k) || env[k] !== row.value) {
+      return false;
+    }
+    seen.add(k);
+  }
+  return seen.size === Object.keys(env).length;
+}
+
+/**
+ * An override emptied by the user while the key is still inherited. Saved as is,
+ * it would ship `KEY=""` and mask the inherited value instead of falling back to
+ * it. A blank the env already holds was put there on purpose (a provider
+ * template blanking an inherited ANTHROPIC_API_KEY), so it is left alone.
+ */
+function isClearedOverride(
+  row: DraftRow,
+  env: Record<string, string>,
+  inheritedEnv: Record<string, string> | undefined
+): boolean {
+  if (row.isInherited || row.value !== "" || !inheritedEnv) return false;
+  const key = row.key.trim();
+  return key in inheritedEnv && env[key] !== "";
+}
+
+/**
+ * Drafts an editor had to leave unsaved, by `contextKey`. Moving to another
+ * agent or preset reseeds or remounts the editor, and a table with one bad name
+ * (and every edit made since, none of which can save until it is fixed) would
+ * otherwise go with it. Taken back when the editor shows that context again,
+ * as long as the saved env it was drafted against is still the one given.
+ */
+const parkedDrafts = new Map<string, { env: Record<string, string>; rows: DraftRow[] }>();
+
+function parkDraft(
+  contextKey: string | undefined,
+  env: Record<string, string>,
+  rows: DraftRow[]
+): void {
+  if (contextKey === undefined) return;
+  if (draftMatchesEnv(rows, env)) parkedDrafts.delete(contextKey);
+  else parkedDrafts.set(contextKey, { env, rows });
+}
+
+interface DraftSeed {
+  rows: DraftRow[];
+  touched: Record<string, boolean>;
+}
+
+/** The rows a context opens with: its parked draft while that still applies, else `env`. */
+function seedDraft(
+  contextKey: string | undefined,
+  env: Record<string, string>,
+  inheritedEnv: Record<string, string> | undefined
+): DraftSeed {
+  const parked = contextKey === undefined ? undefined : parkedDrafts.get(contextKey);
+  if (!parked || !shallowEnvEqual(parked.env, env)) {
+    return { rows: envToDraft(env, inheritedEnv), touched: {} };
+  }
+  const editable = parked.rows.filter((r) => !r.isInherited);
+  const named = new Set(editable.map((r) => r.key.trim()));
+  // Rebuilt rather than restored: what is inherited may have changed while the
+  // draft waited.
+  const inherited: DraftRow[] = [];
+  for (const [key, value] of Object.entries(inheritedEnv ?? {})) {
+    if (!named.has(key)) inherited.push({ rowId: nextRowId(), key, value, isInherited: true });
+  }
+  // Touched, so a blank name shows its error at once instead of looking saved.
+  const touched: Record<string, boolean> = {};
+  for (const row of editable) touched[row.rowId] = true;
+  return { rows: [...editable, ...inherited], touched };
+}
+
+/** The id a row's wrapper carries, for a held Settings close to land on. */
+function rowElementId(rowId: string): string {
+  return `env-editor-row-${rowId}`;
+}
+
 function findDuplicateKeys(rows: DraftRow[]): Set<string> {
   const counts = new Map<string, number>();
   for (const row of rows) {
@@ -201,11 +302,9 @@ interface EnvVarKeyCellProps {
   onChange: (rowId: string, newKey: string) => void;
   onBlur: (rowId: string) => void;
   /**
-   * Picker selection — must commit synchronously. Distinct from `onChange` so
-   * the parent can both update the row AND drive `onChange(env)` in the same
-   * pass (clicking a suggestion otherwise loses the selection: the input's
-   * blur fires before the option's click, and the blur path commits the OLD
-   * key before the click can update the row).
+   * Picker selection — commits synchronously and moves focus on to the row's
+   * value. Distinct from `onChange` so the parent can update the row, drive
+   * `onChange(env)` and place focus in the same pass, with no blur needed.
    */
   onSelect: (rowId: string, newKey: string) => void;
   registerRef: (rowId: string, el: HTMLInputElement | null) => void;
@@ -217,9 +316,12 @@ interface EnvVarKeyCellProps {
  * Replaces the native `<datalist>` indicator (Chromium's is unreliable in
  * Electron — clicks often do nothing, content can't be styled, hint text
  * isn't surfaced). State (open / activeIndex) is local so opening one row's
- * popover doesn't re-render other rows. Focus stays on the input while the
- * popover is open via `onOpenAutoFocus` preventDefault, and is restored on
- * close via `onCloseAutoFocus`.
+ * popover doesn't re-render other rows.
+ *
+ * A combobox: focus never leaves the input for the list. Neither opening nor
+ * closing moves it, and a press anywhere in the list is kept from taking it, so
+ * however the list closes, focus is wherever the user sent it — Tab's next
+ * field, a click's target, or the value field a pick hands it to.
  */
 function EnvVarKeyCell({
   rowId,
@@ -298,7 +400,10 @@ function EnvVarKeyCell({
                 open && activeIndex >= 0 ? `env-key-option-${rowId}-${activeIndex}` : undefined
               }
               onChange={(e) => onChange(rowId, e.target.value)}
-              onBlur={() => onBlur(rowId)}
+              onBlur={() => {
+                setOpen(false);
+                onBlur(rowId);
+              }}
               onFocus={(e) => e.target.select()}
               onKeyDown={(e) => {
                 // Down opens a shut list at its first row; the rest move an open one.
@@ -318,6 +423,9 @@ function EnvVarKeyCell({
                   e.preventDefault();
                   const sel = availableSuggestions[activeIndex];
                   if (sel) handleSelect(sel.key);
+                } else if (e.key === "Tab") {
+                  // Left to the browser, which moves focus on; the list goes with it.
+                  if (open) setOpen(false);
                 } else if (e.key === "Escape") {
                   if (open) {
                     // Close the popover first; don't bubble to the surrounding
@@ -358,10 +466,14 @@ function EnvVarKeyCell({
             sideOffset={4}
             className="p-1 min-w-52 w-auto"
             onOpenAutoFocus={(e) => e.preventDefault()}
-            onCloseAutoFocus={(e) => {
-              e.preventDefault();
-              inputRef.current?.focus();
-            }}
+            // Focus is already where it belongs, so a close never moves it.
+            // Restoring it to the input here is what pulled a Tab or a click
+            // elsewhere straight back into the name field.
+            onCloseAutoFocus={(e) => e.preventDefault()}
+            // Options aren't focusable, so a press would otherwise move focus
+            // to the content itself: the input blurs mid-pick, and the content
+            // unmounting with it strands focus on the body.
+            onMouseDown={(e) => e.preventDefault()}
             data-testid="env-editor-key-suggestions-listbox"
           >
             <div role="listbox" id={listboxId} aria-label="Env var key suggestions">
@@ -437,11 +549,13 @@ export function EnvVarEditor({
   valuePlaceholder = "value or ${ENV_VAR}",
   "data-testid": dataTestId,
   inheritedEnv,
+  settingsTab,
 }: EnvVarEditorProps) {
-  const [rows, setRows] = useState<DraftRow[]>(() => envToDraft(env, inheritedEnv));
+  const [seed] = useState(() => seedDraft(contextKey, env, inheritedEnv));
+  const [rows, setRows] = useState<DraftRow[]>(seed.rows);
   // Track which keys have been "touched" (blurred or modified after creation) —
   // we suppress the empty-key error for newly added rows until first blur.
-  const [touchedKeys, setTouchedKeys] = useState<Record<string, boolean>>({});
+  const [touchedKeys, setTouchedKeys] = useState<Record<string, boolean>>(seed.touched);
   // Per-row reveal state for secret values. Session-scoped, cleared on context switch.
   const [revealedRows, setRevealedRows] = useState<Set<string>>(() => new Set());
   // When non-null, the focus-recovery effect focuses the key input for that rowId.
@@ -460,6 +574,7 @@ export function EnvVarEditor({
   const lastInheritedRef = useRef<Record<string, string> | undefined>(inheritedEnv);
   const lastContextKeyRef = useRef<string | undefined>(contextKey);
   const keyInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const valueInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
   // When the parent's env or inheritedEnv changes externally (different preset
   // selected, programmatic reset, global env updated), reseed the draft rows.
@@ -471,24 +586,42 @@ export function EnvVarEditor({
     const contextChanged = lastContextKeyRef.current !== contextKey;
     if (!contextChanged && !envChanged && !inheritedChanged) return;
 
+    const leftEnv = lastEnvRef.current;
+    const leftContextKey = lastContextKeyRef.current;
     lastEnvRef.current = env;
     lastInheritedRef.current = inheritedEnv;
     lastContextKeyRef.current = contextKey;
     if (contextChanged) {
-      setTouchedKeys({});
+      // `rows` is still the draft of the context being left.
+      parkDraft(leftContextKey, leftEnv, rows);
       setRevealedRows(new Set());
       normalizeTimers.current.forEach((t) => clearTimeout(t));
       normalizeTimers.current.clear();
       setNormalizedRows(new Set());
+      const next = seedDraft(contextKey, env, inheritedEnv);
+      setRows(next.rows);
+      setTouchedKeys(next.touched);
+      return;
     }
     // Only reseed if the incoming env+inheritance actually differs from what
     // our current draft would produce. Otherwise the parent's commit echo
     // would stomp an in-progress edit.
     const draftAsEnv = draftToEnv(rows);
-    if (contextChanged || inheritedChanged || !shallowEnvEqual(draftAsEnv, env)) {
+    if (inheritedChanged || !shallowEnvEqual(draftAsEnv, env)) {
       setRows(envToDraft(env, inheritedEnv));
     }
   }, [env, inheritedEnv, contextKey, rows]);
+
+  // A preset switch remounts the editor, and closing Settings unmounts it: what
+  // it holds then is parked the same way a context switch parks it above.
+  const latestDraftRef = useRef({ contextKey, env, rows });
+  useEffect(() => {
+    latestDraftRef.current = { contextKey, env, rows };
+  });
+  useEffect(() => {
+    const latest = latestDraftRef;
+    return () => parkDraft(latest.current.contextKey, latest.current.env, latest.current.rows);
+  }, []);
 
   // Clear any pending normalize-indicator timers on unmount so we don't
   // setState on an unmounted component.
@@ -600,9 +733,7 @@ export function EnvVarEditor({
   };
 
   const handleKeySelect = (rowId: string, newKey: string) => {
-    // Picker selection commits synchronously. The input's blur fires before
-    // the option's click, so a typing-style onChange + later blur loses the
-    // pick (blur commits the OLD key before the click can update rows).
+    // Picker selection commits synchronously rather than waiting on a blur.
     // Mark the row touched so a subsequent blank-out still surfaces the
     // empty-key error.
     setTouchedKeys((prev) => ({ ...prev, [rowId]: true }));
@@ -611,6 +742,8 @@ export function EnvVarEditor({
       commitIfValid(next);
       return next;
     });
+    // A picked name is a finished name: what's left to type is its value.
+    valueInputRefs.current.get(rowId)?.focus();
   };
 
   const handleValueChange = (rowId: string, newValue: string) => {
@@ -687,25 +820,17 @@ export function EnvVarEditor({
     });
   };
 
+  const revertToInherited = (row: DraftRow): DraftRow => ({
+    ...row,
+    value: inheritedEnv![row.key.trim()]!,
+    isInherited: true,
+  });
+
   const handleValueBlur = (rowId: string) => {
     setRows((prev) => {
       const row = prev.find((r) => r.rowId === rowId);
-      if (!row || row.isInherited) {
-        commitIfValid(prev);
-        return prev;
-      }
-      const key = row.key.trim();
-      // If a user clears an override's value and that key is still inherited,
-      // silently reverting is safer than persisting an empty-string override —
-      // otherwise the preset would ship `KEY=""` which masks the inherited
-      // value instead of falling back to it. A blank the preset already holds
-      // was put there on purpose (a provider template blanking an inherited
-      // ANTHROPIC_API_KEY), so tabbing through it leaves it alone.
-      if (row.value === "" && inheritedEnv && key in inheritedEnv && env[key] !== "") {
-        const inheritedValue = inheritedEnv[key]!;
-        const next = prev.map((r) =>
-          r.rowId === rowId ? { ...r, value: inheritedValue, isInherited: true } : r
-        );
+      if (row && isClearedOverride(row, env, inheritedEnv)) {
+        const next = prev.map((r) => (r.rowId === rowId ? revertToInherited(r) : r));
         commitIfValid(next);
         return next;
       }
@@ -728,18 +853,73 @@ export function EnvVarEditor({
     else keyInputRefs.current.delete(rowId);
   };
 
+  const registerValueInput = (rowId: string, el: HTMLInputElement | null) => {
+    if (el) valueInputRefs.current.set(rowId, el);
+    else valueInputRefs.current.delete(rowId);
+  };
+
   const handleImportConfirm = (mergedEnv: Record<string, string>) => {
-    // Imports commit the merged map as the new source of truth. Bump the
-    // parent first, then sync local draft + lastEnvRef so the reseed effect
-    // sees the prop and ref already aligned (no stomp on the optimistic
-    // rows) and so a thrown onChange leaves local state untouched.
-    onChange(mergedEnv);
-    lastEnvRef.current = mergedEnv;
-    setRows(envToDraft(mergedEnv, inheritedEnv));
+    // Applied to the table as it stands, not swapped in for it, so an import
+    // doesn't throw away a draft still waiting on a name. Only what the import
+    // changes is applied: the dialog weighed each key against the saved env.
+    let next = rows;
+    for (const [key, value] of Object.entries(mergedEnv)) {
+      if (Object.prototype.hasOwnProperty.call(env, key) && env[key] === value) continue;
+      const at = next.findIndex((r) => !r.isInherited && r.key.trim() === key);
+      if (at !== -1) {
+        next = next.map((r, i) => (i === at ? { ...r, value } : r));
+        continue;
+      }
+      // A new key, or one that overrides an inherited row: it joins the
+      // overrides, ahead of the inherited tail, where a reload would put it.
+      const rest = next.filter((r) => !(r.isInherited && r.key === key));
+      const tail = rest.findIndex((r) => r.isInherited);
+      const row: DraftRow = { rowId: nextRowId(), key, value, isInherited: false };
+      next = tail === -1 ? [...rest, row] : [...rest.slice(0, tail), row, ...rest.slice(tail)];
+    }
+    setRows(next);
+    commitIfValid(next);
+  };
+
+  const handleDiscard = () => {
+    setRows(envToDraft(env, inheritedEnv));
     setTouchedKeys({});
   };
 
+  const hasUnsavedDraft = !draftMatchesEnv(rows, env);
   const duplicateKeys = findDuplicateKeys(rows);
+
+  // Edits save on blur, and a draft no name problem holds up saves then. What
+  // a close can still catch is an edit no blur reached (Settings closed from
+  // the keyboard, the view cached by a project switch) and a draft that can't
+  // save at all, which holds the close on its first bad row.
+  const flushDraft = (reason: SettingsFlushReason): SettingsFlushFailure | undefined => {
+    if (!hasUnsavedDraft) return undefined;
+    if (isValid(rows)) {
+      // No blur ran, so a cleared override still falls back to what it shadows.
+      const next = rows.some((r) => isClearedOverride(r, env, inheritedEnv))
+        ? rows.map((r) => (isClearedOverride(r, env, inheritedEnv) ? revertToInherited(r) : r))
+        : rows;
+      if (next !== rows) setRows(next);
+      commitIfValid(next);
+      return undefined;
+    }
+    // A hide leaves Settings open with the draft still on screen.
+    if (reason === "hide") return undefined;
+    const editable = rows.filter((r) => !r.isInherited);
+    setTouchedKeys((prev) => {
+      const next = { ...prev };
+      for (const row of editable) next[row.rowId] = true;
+      return next;
+    });
+    const firstBad = editable.find((r) => {
+      const k = r.key.trim();
+      return k === "" || !isValidEnvKey(k) || duplicateKeys.has(k);
+    });
+    return firstBad ? { landOn: rowElementId(firstBad.rowId) } : undefined;
+  };
+  // Registers only with a `settingsTab`; the fallback tab is never used.
+  useSettingsTabFlush(settingsTab ?? "agents", flushDraft, !!settingsTab && hasUnsavedDraft);
   const isEmpty = rows.length === 0;
   // Every edit commits only while the whole table is valid, so a visible error
   // also means nothing typed since is being saved — say so where it is seen.
@@ -857,6 +1037,7 @@ export function EnvVarEditor({
           return (
             <div
               key={row.rowId}
+              id={rowElementId(row.rowId)}
               className={cn(
                 "relative grid grid-cols-[2fr_3fr_auto] items-stretch group",
                 "before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[2px]",
@@ -887,6 +1068,7 @@ export function EnvVarEditor({
               <div className="flex flex-col border-l border-border-subtle">
                 <div className="relative">
                   <input
+                    ref={(el) => registerValueInput(row.rowId, el)}
                     type={valueInputType}
                     className={cn(
                       ENV_CELL_INPUT,
@@ -1034,6 +1216,16 @@ export function EnvVarEditor({
           <SettingsInlineError className="w-full" role="status">
             Changes aren&apos;t saved until every name is valid and unique
           </SettingsInlineError>
+        )}
+        {hasBlockingError && hasUnsavedDraft && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDiscard}
+            data-testid="env-editor-discard"
+          >
+            Discard changes
+          </Button>
         )}
         {addButton}
         {importButton}

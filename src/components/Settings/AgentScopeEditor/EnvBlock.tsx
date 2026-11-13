@@ -86,7 +86,8 @@ export function EnvBlock({
               env={globalEnv ?? {}}
               onChange={onGlobalEnvChange}
               suggestions={suggestions}
-              contextKey={`global-${agentId}`}
+              contextKey={JSON.stringify([agentId, "global"])}
+              settingsTab="agents"
               data-testid="global-env-editor"
             />
             <EnvVarReference suggestions={suggestions} />
@@ -109,7 +110,10 @@ export function EnvBlock({
             env={selectedPreset.env ?? {}}
             onChange={onPresetEnvChange}
             suggestions={suggestions}
-            contextKey={selectedPreset.id}
+            // Agent-scoped: a preset id is only unique within its agent, and the
+            // editor keeps drafts it couldn't save under this key.
+            contextKey={JSON.stringify([agentId, "preset", selectedPreset.id])}
+            settingsTab="agents"
             inheritedEnv={globalEnv}
             data-testid="preset-env-editor"
           />
