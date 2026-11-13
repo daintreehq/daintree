@@ -130,6 +130,8 @@ export interface UseWorktreeSidebarKeyboardReturn {
    * focus where it is, when no row is there to take it.
    */
   focusFirstRow: () => boolean;
+  /** Whether any item is a row, the one thing a grid tab stop is worth having for. */
+  hasRows: boolean;
   handleGridKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   handleGridFocus: (e: React.FocusEvent<HTMLDivElement>) => void;
   handleGridFocusCapture: (e: React.FocusEvent<HTMLDivElement>) => void;
@@ -389,20 +391,15 @@ export function useWorktreeSidebarKeyboard({
     // Tracked from the input rather than `:focus-visible`, which a scripted
     // focus reports inconsistently.
     let pointerPressed = false;
-    // A press ends with the pointer, wherever it is released. Left latched it
-    // outlived the click and hid the cursor for a focus the keyboard caused
-    // later, such as ArrowDown from the search field.
-    const endPress = () => {
-      pointerPressed = false;
-      document.removeEventListener("pointerup", endPress, true);
-      document.removeEventListener("pointercancel", endPress, true);
-      window.removeEventListener("blur", endPress);
-    };
     const onPointerDown = () => {
       pointerPressed = true;
-      document.addEventListener("pointerup", endPress, true);
-      document.addEventListener("pointercancel", endPress, true);
-      window.addEventListener("blur", endPress);
+    };
+    // The latch is the pointer's until a key says otherwise, from anywhere: a
+    // keyboard entry into the grid (ArrowDown from the search field, Tab)
+    // starts outside it, and a release can't end the press instead, since a
+    // touch or pen tap focuses the grid in compatibility events after it.
+    const onDocumentKeyDown = (e: KeyboardEvent) => {
+      if (!e.repeat) pointerPressed = false;
     };
     const onKeyDownCapture = () => {
       pointerPressed = false;
@@ -422,12 +419,13 @@ export function useWorktreeSidebarKeyboard({
     };
     grid.addEventListener("pointerdown", onPointerDown, true);
     grid.addEventListener("keydown", onKeyDownCapture, true);
+    document.addEventListener("keydown", onDocumentKeyDown, true);
     grid.addEventListener("focusin", onFocusIn);
     grid.addEventListener("focusout", onFocusOut);
     return () => {
-      endPress();
       grid.removeEventListener("pointerdown", onPointerDown, true);
       grid.removeEventListener("keydown", onKeyDownCapture, true);
+      document.removeEventListener("keydown", onDocumentKeyDown, true);
       grid.removeEventListener("focusin", onFocusIn);
       grid.removeEventListener("focusout", onFocusOut);
     };
@@ -774,6 +772,7 @@ export function useWorktreeSidebarKeyboard({
     activeDescendantId,
     keyboardCursorId,
     focusFirstRow,
+    hasRows: items.some((item) => item.kind === "row"),
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,

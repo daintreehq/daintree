@@ -783,19 +783,30 @@ describe("WorktreeDetailsSection review change hint", () => {
 });
 
 describe("WorktreeDetailsSection resource controls", () => {
-  it("runs the visible resume button and mounts no hidden menu trigger beside it", () => {
-    const onResourceResume = vi.fn();
-    const { container } = renderSection({
-      hasResourceConfig: true,
-      resourceStatus: "stopped",
-      onResourceResume,
-    });
+  it.each([
+    { status: "stopped", label: "Resume resource", callback: "onResourceResume" },
+    { status: "running", label: "Pause resource", callback: "onResourcePause" },
+    { status: "running", label: "Connect to resource", callback: "onResourceConnect" },
+  ] as const)(
+    "runs the visible $label button and mounts no hidden menu trigger beside it",
+    ({ status, label, callback }) => {
+      const handlers = {
+        onResourceResume: vi.fn(),
+        onResourcePause: vi.fn(),
+        onResourceConnect: vi.fn(),
+      };
+      const { container } = renderSection({
+        hasResourceConfig: true,
+        resourceStatus: status,
+        ...handlers,
+      });
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume resource" }));
+      fireEvent.click(screen.getByRole("button", { name: label }));
 
-    expect(onResourceResume).toHaveBeenCalledTimes(1);
-    // A clipped 1px trigger no pointer can reach opened a menu nobody could use.
-    expect(screen.queryByText("Resource actions")).toBeNull();
-    expect(container.querySelector("[data-radix-context-menu-trigger], .sr-only")).toBeNull();
-  });
+      expect(handlers[callback]).toHaveBeenCalledTimes(1);
+      // A clipped 1px trigger no pointer can reach opened a menu nobody could use.
+      expect(screen.queryByText("Resource actions")).toBeNull();
+      expect(container.querySelector("[data-radix-context-menu-trigger], .sr-only")).toBeNull();
+    }
+  );
 });

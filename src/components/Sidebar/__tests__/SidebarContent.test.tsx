@@ -1122,10 +1122,9 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     it("sets a single tab stop on the grid container (not on individual rows)", () => {
       // aria-activedescendant pattern: container holds tabIndex=0, rows stay -1.
       // An empty grid is no stop at all: it took focus with nothing to show.
-      // Headers and the deleted rail are items but no row to land on.
-      expect(source).toMatch(
-        /const hasKeyboardRows = keyboardItems\.some\(\(item\) => item\.kind === "row"\)/
-      );
+      // Headers and the deleted rail are items but no row to land on, so the
+      // hook says whether there is a row (its tests cover the cases).
+      expect(source).toMatch(/hasRows: hasKeyboardRows,/);
       expect(source).toMatch(/role="grid"[\s\S]{0,500}tabIndex=\{hasKeyboardRows \? 0 : -1\}/);
     });
 

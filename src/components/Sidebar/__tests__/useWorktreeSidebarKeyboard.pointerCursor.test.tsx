@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { useRef } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -24,8 +24,15 @@ const ITEMS: SidebarKeyboardItem[] = [
   { kind: "row", worktreeId: "wt2" },
 ];
 
-// The field stands in for the sidebar search bar: ArrowDown hands the keys to
-// the list through the hook's `focusFirstRow`, as `SidebarContent` wires it.
+const AFTER_HEADER: SidebarKeyboardItem[] = [
+  { kind: "header" },
+  { kind: "row", worktreeId: "wt1" },
+  { kind: "row", worktreeId: "wt2" },
+];
+
+// Wired the way SidebarContent wires it: the field's ArrowDown hands the keys
+// to the list through `focusFirstRow`, and the grid is a tab stop only while it
+// has a row.
 function Harness({ items = ITEMS }: { items?: SidebarKeyboardItem[] }) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
@@ -34,6 +41,7 @@ function Harness({ items = ITEMS }: { items?: SidebarKeyboardItem[] }) {
     activeDescendantId,
     keyboardCursorId,
     focusFirstRow,
+    hasRows,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -51,7 +59,7 @@ function Harness({ items = ITEMS }: { items?: SidebarKeyboardItem[] }) {
       <div
         ref={gridRef}
         role="grid"
-        tabIndex={0}
+        tabIndex={hasRows ? 0 : -1}
         aria-activedescendant={activeDescendantId}
         data-cursor-id={keyboardCursorId ?? ""}
         data-testid="grid"
@@ -93,7 +101,7 @@ function clickCard(card: HTMLElement) {
 
 describe("useWorktreeSidebarKeyboard — keyboard cursor after a pointer press", () => {
   it("lands the cursor on the first row when the search field's ArrowDown follows earlier clicks", () => {
-    const { getByTestId } = render(<Harness />);
+    const { getByTestId } = render(<Harness items={AFTER_HEADER} />);
     const grid = getByTestId("grid");
     const search = getByTestId("search");
 
@@ -108,54 +116,17 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor after a pointer press",
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeSidebarRowId("wt1"));
   });
 
-  it("skips header items when walking in from the search field", () => {
-    const { getByTestId } = render(
-      <Harness
-        items={[{ kind: "header" }, { kind: "row", worktreeId: "wt1" }, { kind: "header" }]}
-      />
-    );
-    const grid = getByTestId("grid");
-    const search = getByTestId("search");
-
-    focus(search);
-    fireEvent.keyDown(search, { key: "ArrowDown" });
-
-    expect(grid.dataset.cursorId).toBe("wt1");
-  });
-
-  it("keeps focus in the search field when no row is there to take it", () => {
-    const { getByTestId } = render(<Harness items={[{ kind: "header" }, { kind: "header" }]} />);
-    const grid = getByTestId("grid");
-    const search = getByTestId("search");
-
-    focus(search);
-    fireEvent.keyDown(search, { key: "ArrowDown" });
-
-    expect(document.activeElement).toBe(search);
-    expect(grid.dataset.cursorId).toBe("");
-  });
-
-  it("keeps focus in the search field when the list is empty", () => {
-    const { getByTestId } = render(<Harness items={[]} />);
-    const search = getByTestId("search");
-
-    focus(search);
-    fireEvent.keyDown(search, { key: "ArrowDown" });
-
-    expect(document.activeElement).toBe(search);
-  });
-
-  it("still shows no cursor when a pointer press focuses the grid itself", () => {
+  it("shows the cursor when the grid is tabbed into after a click", () => {
     const { getByTestId } = render(<Harness />);
     const grid = getByTestId("grid");
+    const search = getByTestId("search");
 
-    fireEvent.pointerDown(grid);
+    clickCard(getByTestId("card-wt2"));
+    focus(search);
+    fireEvent.keyDown(search, { key: "Tab" });
     focus(grid);
 
-    expect(grid.dataset.cursorId).toBe("");
-
-    fireEvent.pointerUp(grid);
-    expect(grid.dataset.cursorId).toBe("");
+    expect(grid.dataset.cursorId).toBe("wt2");
   });
 
   it("shows no cursor while a card is clicked", () => {
@@ -167,68 +138,89 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor after a pointer press",
     expect(grid.dataset.cursorId).toBe("");
   });
 
-  it("shows the cursor when the grid is tabbed into after a click", () => {
+  it("shows no cursor for a focus a press caused, even one that lands after its release", () => {
     const { getByTestId } = render(<Harness />);
     const grid = getByTestId("grid");
 
-    clickCard(getByTestId("card-wt2"));
-    focus(getByTestId("search"));
+    // A touch or pen tap focuses the grid in compatibility events after pointerup.
+    fireEvent.pointerDown(grid);
+    fireEvent.pointerUp(grid);
     focus(grid);
+
+    expect(grid.dataset.cursorId).toBe("");
+  });
+
+  it("reveals the cursor on the first key after a press focused the grid", () => {
+    const { getByTestId } = render(<Harness />);
+    const grid = getByTestId("grid");
+
+    fireEvent.pointerDown(grid);
+    focus(grid);
+    expect(grid.dataset.cursorId).toBe("");
+
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
 
     expect(grid.dataset.cursorId).toBe("wt2");
   });
 
-  it("treats a press cancelled by the browser like a release", () => {
+  it("keeps the press while a held modifier repeats", () => {
     const { getByTestId } = render(<Harness />);
     const grid = getByTestId("grid");
 
-    fireEvent.pointerDown(getByTestId("card-wt1"));
-    fireEvent.pointerCancel(getByTestId("card-wt1"));
-    focus(getByTestId("search"));
+    fireEvent.pointerDown(grid);
+    fireEvent.keyDown(document.body, { key: "Shift", repeat: true });
     focus(grid);
 
-    expect(grid.dataset.cursorId).toBe("wt1");
+    expect(grid.dataset.cursorId).toBe("");
   });
 
-  it("ends the press when it is released outside the grid", () => {
-    const { getByTestId } = render(<Harness />);
+  it("keeps focus in the search field when only headers are listed", () => {
+    const { getByTestId } = render(<Harness items={[{ kind: "header" }, { kind: "header" }]} />);
     const grid = getByTestId("grid");
+    const search = getByTestId("search");
 
-    fireEvent.pointerDown(getByTestId("card-wt1"));
-    fireEvent.pointerUp(document.body);
-    focus(getByTestId("search"));
-    focus(grid);
+    focus(search);
+    fireEvent.keyDown(search, { key: "ArrowDown" });
 
-    expect(grid.dataset.cursorId).toBe("wt1");
+    expect(document.activeElement).toBe(search);
+    expect(grid.dataset.cursorId).toBe("");
+    expect(grid.tabIndex).toBe(-1);
   });
 
-  it("ends the press when the window loses focus mid-press", () => {
-    const { getByTestId } = render(<Harness />);
+  it("keeps focus in the search field when the list is empty", () => {
+    const { getByTestId } = render(<Harness items={[]} />);
     const grid = getByTestId("grid");
+    const search = getByTestId("search");
 
-    fireEvent.pointerDown(getByTestId("card-wt1"));
-    fireEvent(window, new Event("blur"));
-    focus(getByTestId("search"));
-    focus(grid);
+    focus(search);
+    fireEvent.keyDown(search, { key: "ArrowDown" });
 
-    expect(grid.dataset.cursorId).toBe("wt1");
+    expect(document.activeElement).toBe(search);
+    expect(grid.tabIndex).toBe(-1);
   });
 
-  it("drops its press listeners on unmount", () => {
-    const removed: string[] = [];
-    const originalRemove = document.removeEventListener.bind(document);
-    document.removeEventListener = ((type: string, ...rest: unknown[]) => {
-      removed.push(type);
-      return (originalRemove as (...a: unknown[]) => void)(type, ...rest);
-    }) as typeof document.removeEventListener;
+  it("makes the grid a tab stop once a row is listed", () => {
+    const { getByTestId } = render(<Harness />);
+
+    expect(getByTestId("grid").tabIndex).toBe(0);
+  });
+
+  it("removes the document key listener it added when it unmounts", () => {
+    const added = vi.spyOn(document, "addEventListener");
+    const removed = vi.spyOn(document, "removeEventListener");
     try {
-      const { getByTestId, unmount } = render(<Harness />);
-      fireEvent.pointerDown(getByTestId("card-wt1"));
-      removed.length = 0;
+      const { unmount } = render(<Harness />);
+      const registered = added.mock.calls.filter(
+        ([type, , options]) => type === "keydown" && options === true
+      );
       unmount();
-      expect(removed).toEqual(expect.arrayContaining(["pointerup", "pointercancel"]));
+      const dropped = removed.mock.calls.filter(([type]) => type === "keydown");
+
+      expect(registered.length).toBeGreaterThan(0);
+      for (const call of registered) expect(dropped).toContainEqual(call);
     } finally {
-      document.removeEventListener = originalRemove;
+      added.mockRestore();
+      removed.mockRestore();
     }
   });
 });

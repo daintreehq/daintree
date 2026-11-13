@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -176,6 +176,8 @@ describe("DeletedWorktreeGroup", () => {
 
   describe("rail chip title", () => {
     const LONG_TITLE = "claude-code-session-with-a-very-long-title";
+    // Past Radix's default hover delay (700 ms).
+    const PAST_HOVER_DELAY_MS = 1000;
 
     function chipTitle(): HTMLElement {
       const chip = screen.getByRole("button", {
@@ -188,22 +190,36 @@ describe("DeletedWorktreeGroup", () => {
       return span;
     }
 
-    it("discloses the full title on hover when it is cut off", async () => {
+    function hoverChipTitle() {
+      act(() => {
+        fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+        vi.advanceTimersByTime(PAST_HOVER_DELAY_MS);
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("discloses the full title on hover when it is cut off", () => {
       truncation.truncated = true;
       setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
       renderGroup([worktrees[0]!]);
+      expect(screen.queryByRole("tooltip")).toBeNull();
 
-      fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+      hoverChipTitle();
 
-      const tooltip = await screen.findByRole("tooltip");
-      expect(tooltip.textContent).toBe(LONG_TITLE);
+      expect(screen.getByRole("tooltip").textContent).toBe(LONG_TITLE);
     });
 
     it("adds no tooltip when the title fits", () => {
       setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
       renderGroup([worktrees[0]!]);
 
-      fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+      hoverChipTitle();
 
       expect(screen.queryByRole("tooltip")).toBeNull();
     });

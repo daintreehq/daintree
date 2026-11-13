@@ -691,6 +691,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     activeDescendantId,
     keyboardCursorId,
     focusFirstRow,
+    hasRows: hasKeyboardRows,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -701,8 +702,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     onKeyboardReorder: handleKeyboardReorder,
     onSelectWorktree: selectWorktree,
   });
-
-  const hasKeyboardRows = keyboardItems.some((item) => item.kind === "row");
 
   const virtuosoContext = useMemo<SidebarVirtuosoContext>(
     () => ({
