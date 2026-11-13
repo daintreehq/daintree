@@ -5,13 +5,12 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { useUIStore } from "@/store/uiStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { actionService } from "@/services/ActionService";
-import type { ActionId } from "@shared/types/actions";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { formatSnoozeWake } from "./NotificationCenterEntry";
 import { groupByCorrelationId, type FlatRow } from "./notificationTriageModel";
+import { runNotificationAction } from "./notificationNavigation";
 
 /**
  * Says what a row action did. Archive, restore and snooze take the row out of
@@ -90,9 +89,7 @@ export function useNotificationRowActions(entries: NotificationHistoryEntry[]) {
   const dispatchPrimaryAction = useCallback((row: FlatRow) => {
     const action = row.primaryAction;
     if (!action) return;
-    const manifest = actionService.get(action.actionId as ActionId);
-    if (!manifest || !manifest.enabled) return;
-    void actionService.dispatch(action.actionId as ActionId, action.actionArgs);
+    void runNotificationAction(action, { id: row.entryId, context: row.context });
   }, []);
 
   const archiveRow = useCallback(

@@ -1,4 +1,5 @@
 import { actionService } from "@/services/ActionService";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -8,6 +9,7 @@ import { getWorktreeIdSet } from "@/store/storeAccessors";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
   useNotificationHistoryStore,
+  type NotificationHistoryAction,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import {
@@ -209,4 +211,101 @@ export async function goToNotificationSource(
     useUIStore.getState().closeNotificationCenter();
   }
   return arrived;
+}
+
+/**
+ * The panel a `panel.focus` row action names, or undefined for any other
+ * action. "Go to terminal" is navigation, so it goes the way a row click goes:
+ * a bare `panel.focus` never selects the panel's worktree when that panel is
+ * already the focused one, and nothing re-runs the focus-follow switch then.
+ */
+export function panelActionTarget(
+  action: Pick<NotificationHistoryAction, "actionId" | "actionArgs"> | undefined
+): string | undefined {
+  if (action?.actionId !== "panel.focus") return undefined;
+  const panelId = action.actionArgs?.panelId;
+  return typeof panelId === "string" && panelId ? panelId : undefined;
+}
+
+/**
+ * Where a panel action goes: that panel, in the row's own workspace and
+ * machine. Not the row's worktree: the resolver falls back to it when the
+ * panel is trashed, and "Go to terminal" landing on a worktree with some other
+ * terminal focused is the dead link in another form.
+ */
+export function panelActionContext(
+  context: NotificationContext,
+  panelId: string
+): NotificationContext {
+  return {
+    panelId,
+    ...(context?.projectId ? { projectId: context.projectId } : {}),
+    ...(context?.hostName ? { hostName: context.hostName } : {}),
+  };
+}
+
+/**
+ * Up while the inbox shows a dialog of its own (Clear all's confirm). That
+ * dialog is the inbox's child, so an action closing the inbox under it would
+ * take it down unanswered. Set by the inbox before the dialog mounts: the
+ * dialog's overlay claim lands before any effect of the inbox's would.
+ */
+let inboxDialogOpen = false;
+
+export function setInboxDialogOpen(open: boolean): void {
+  inboxDialogOpen = open;
+}
+
+/**
+ * A row's action button, and Mod+Enter on its first one. The inbox is a
+ * popover that stays up through overlays of its own (Clear all's confirm), so
+ * whatever the action opens would otherwise sit under it. It closes once the
+ * action has run, or as soon as the action opens a dialog while it runs — a
+ * confirm the action awaits, a settings dialog — and stays open when the
+ * action fails, the way a dead row click leaves it.
+ *
+ * Resolves true when the action ran or handed off to a dialog.
+ */
+export async function runNotificationAction(
+  action: NotificationHistoryAction,
+  entry: { id: string; context: NotificationContext }
+): Promise<boolean> {
+  const panelId = panelActionTarget(action);
+  if (panelId) {
+    return goToNotificationSource(panelActionContext(entry.context, panelId), entry.id);
+  }
+
+  const manifest = actionService.get(action.actionId);
+  if (!manifest?.enabled) return false;
+
+  const ui = useUIStore;
+  let epochSeen = ui.getState().overlayClaimEpoch;
+  // Set once the inbox has closed by any hand while this runs, so a late
+  // result never closes an inbox the user has opened again since.
+  let inboxLeft = !ui.getState().notificationCenterOpen;
+  const stopWatching = ui.subscribe((state) => {
+    if (inboxLeft) return;
+    if (!state.notificationCenterOpen) {
+      inboxLeft = true;
+      return;
+    }
+    if (state.overlayClaimEpoch === epochSeen) return;
+    // Each claim is judged once, so the inbox's own dialog doesn't count as
+    // the action's on the next unrelated store write after it.
+    epochSeen = state.overlayClaimEpoch;
+    if (inboxDialogOpen) return;
+    inboxLeft = true;
+    state.closeNotificationCenter();
+  });
+
+  let result: Awaited<ReturnType<typeof actionService.dispatch>>;
+  try {
+    result = await actionService.dispatch(action.actionId, action.actionArgs);
+  } finally {
+    stopWatching();
+  }
+
+  const ran = result.ok || isStagedConfirmation(result.error);
+  if (ran && !inboxLeft && !inboxDialogOpen) ui.getState().closeNotificationCenter();
+  return ran;
 }

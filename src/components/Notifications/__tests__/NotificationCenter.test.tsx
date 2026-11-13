@@ -1087,6 +1087,46 @@ describe("NotificationCenter overflow menu", () => {
     expect(callOrder).toEqual(["clearAll", "onClose"]);
   });
 
+  it("keeps Clear all's confirm up when a row action finishes under it (#16937)", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+    let settle!: (result: unknown) => void;
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        actions: [{ actionId: "test.action", label: "Retry" }],
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    const trigger = screen.getByLabelText("More notification actions");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clear all…"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+
+    await act(async () => {
+      settle({ ok: true });
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+    expect(screen.getByRole("button", { name: "Clear notifications" })).toBeTruthy();
+  });
+
   it("leaves the history intact when the clear confirm is dismissed", async () => {
     setEntries([makeEntry(), makeEntry({ id: "entry-keep" })]);
     render(<NotificationCenter open onClose={vi.fn()} />);
@@ -2760,6 +2800,31 @@ describe("NotificationCenter — keyboard navigation", () => {
     });
 
     expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
+  });
+
+  it("closes the inbox once Mod+Enter's action has run (#16937)", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        actions: [{ actionId: "test.action", label: "Open", actionArgs: { x: 1 } }],
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const row = getRows(container)[0]!;
+
+    act(() => {
+      row.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter", metaKey: isMac(), ctrlKey: !isMac() });
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
   it("does not dispatch on Mod+Enter when the action is unavailable", async () => {

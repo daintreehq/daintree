@@ -1,21 +1,22 @@
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
+import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
 import { usePanelStore } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
-import { exitProjectHome } from "@/store/storeAccessors";
 
 /**
- * "Go to terminal": focus the panel and make sure it is on screen. A grid
- * panel is hidden while the project's Home shows, so leave Home for one; the
- * dock stays visible beside it.
+ * "Go to terminal": the panel's worktree, then the panel, the way the inbox's
+ * Go to source goes there. Focusing alone switched worktrees only through the
+ * focus-follow subscription, which never fires for the panel that is already
+ * the focused one — and a worktree with no remembered terminal leaves it so.
+ * Rejects when the panel is gone or trashed, so the toast never says it
+ * opened something it didn't.
  */
-function goToPanel(panelId: string): void {
-  const state = usePanelStore.getState();
-  const panel = state.panelsById[panelId];
-  if (panel !== undefined && (panel.location === "grid" || panel.location === undefined)) {
-    exitProjectHome();
+async function goToPanel(panelId: string): Promise<void> {
+  if (!(await navigateToNotificationSource({ panelId }))) {
+    throw new Error("The terminal is no longer available");
   }
-  state.setFocused(panelId, true);
+  usePanelStore.getState().pingTerminal(panelId);
 }
 
 export function fireWatchNotification(
@@ -41,9 +42,7 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         successLabel: "Opened",
-        onClick: () => {
-          goToPanel(panelId);
-        },
+        onClick: () => goToPanel(panelId),
         actionId: "panel.focus",
         actionArgs: { panelId },
       },
@@ -64,9 +63,7 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         successLabel: "Opened",
-        onClick: () => {
-          goToPanel(panelId);
-        },
+        onClick: () => goToPanel(panelId),
         actionId: "panel.focus",
         actionArgs: { panelId },
       },
@@ -86,9 +83,7 @@ export function fireWatchNotification(
     action: {
       label: "Go to terminal",
       successLabel: "Opened",
-      onClick: () => {
-        goToPanel(panelId);
-      },
+      onClick: () => goToPanel(panelId),
       actionId: "panel.focus",
       actionArgs: { panelId },
     },

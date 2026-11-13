@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dispatchMock = vi.hoisted(() => vi.fn());
+const getMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: dispatchMock },
+  actionService: { dispatch: dispatchMock, get: getMock },
 }));
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
@@ -18,10 +19,13 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
+import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
 import {
   goToNotificationSource,
   navigateToNotificationSource,
   resolveLiveNotificationDestination,
+  runNotificationAction,
+  setInboxDialogOpen,
 } from "../notificationNavigation";
 
 type PanelSeed = { location: string; worktreeId?: string };
@@ -44,6 +48,7 @@ const SCRATCH = "0b2d7c4e-1f3a-4b5c-8d9e-0a1b2c3d4e5f";
 
 beforeEach(() => {
   dispatchMock.mockReset().mockResolvedValue({ ok: true });
+  getMock.mockReset().mockReturnValue({ enabled: true });
   notifyMock.mockReset();
   trackTerminalFocus.mockReset();
   selectWorktree.mockReset();
@@ -383,6 +388,195 @@ describe("goToNotificationSource", () => {
       ).resolves.toBe(false);
       expect(switchProject).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("runNotificationAction (#16937)", () => {
+  const settings = {
+    label: "Open settings",
+    actionId: "app.settings.openTab",
+    actionArgs: { tab: "notifications" },
+  } as const;
+  const run = (action: Parameters<typeof runNotificationAction>[0] = settings) =>
+    runNotificationAction(action, { id: "e1", context: { panelId: "pane-row" } });
+  const inboxOpen = () => useUIStore.getState().notificationCenterOpen;
+
+  function deferDispatch() {
+    let settle!: (result: unknown) => void;
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    return (result: unknown) => settle(result);
+  }
+
+  it("closes the inbox once the action has run", async () => {
+    await expect(run()).resolves.toBe(true);
+    expect(dispatchMock).toHaveBeenCalledWith("app.settings.openTab", { tab: "notifications" });
+    expect(inboxOpen()).toBe(false);
+  });
+
+  it("closes the inbox for an action that stays in place, too", async () => {
+    await expect(run({ label: "Retry", actionId: "git.retryAuthFetch" } as never)).resolves.toBe(
+      true
+    );
+    expect(inboxOpen()).toBe(false);
+  });
+
+  it("leaves the inbox open when the action fails", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "nope" },
+    });
+    await expect(run()).resolves.toBe(false);
+    expect(inboxOpen()).toBe(true);
+  });
+
+  it("closes the inbox when the action staged a confirmation dialog", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "CONFIRMATION_REQUIRED",
+        message: "staged",
+        details: new ConfirmationStagedError("staged"),
+      },
+    });
+    await expect(run()).resolves.toBe(true);
+    expect(inboxOpen()).toBe(false);
+  });
+
+  it("leaves the inbox open when the confirmation was refused rather than staged", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", message: "needs a person" },
+    });
+    await expect(run()).resolves.toBe(false);
+    expect(inboxOpen()).toBe(true);
+  });
+
+  it("closes the inbox as soon as the action opens a dialog it waits on", async () => {
+    const settle = deferDispatch();
+    const pending = run();
+    expect(inboxOpen()).toBe(true);
+    useUIStore.getState().addOverlayClaim("confirm-pull");
+    expect(inboxOpen()).toBe(false);
+    settle({ ok: true });
+    await expect(pending).resolves.toBe(true);
+    useUIStore.getState().removeOverlayClaim("confirm-pull");
+  });
+
+  it("never closes an inbox the user reopened while the action ran", async () => {
+    const settle = deferDispatch();
+    const pending = run();
+    useUIStore.getState().closeNotificationCenter();
+    useUIStore.getState().openNotificationCenter();
+    // Neither a dialog that opens after the reopen nor the late result is the
+    // action's business any more.
+    useUIStore.getState().addOverlayClaim("later-dialog");
+    expect(inboxOpen()).toBe(true);
+    settle({ ok: true });
+    await pending;
+    expect(inboxOpen()).toBe(true);
+    useUIStore.getState().removeOverlayClaim("later-dialog");
+  });
+
+  it.each([
+    ["failed", () => dispatchMock.mockResolvedValueOnce({ ok: false, error: { code: "X" } })],
+    ["threw", () => dispatchMock.mockRejectedValueOnce(new Error("boom"))],
+  ])("stops watching once the action has %s", async (_, arrange) => {
+    arrange();
+    await run().catch(() => undefined);
+    expect(inboxOpen()).toBe(true);
+    useUIStore.getState().addOverlayClaim("later-dialog");
+    expect(inboxOpen()).toBe(true);
+    useUIStore.getState().removeOverlayClaim("later-dialog");
+  });
+
+  describe("the inbox's own dialog", () => {
+    afterEach(() => {
+      setInboxDialogOpen(false);
+      useUIStore.getState().removeOverlayClaim("clear-all");
+      useUIStore.getState().removeOverlayClaim("confirm-pull");
+    });
+
+    it("is never closed under, by a claim or a late result", async () => {
+      const settle = deferDispatch();
+      const pending = run();
+      setInboxDialogOpen(true);
+      useUIStore.getState().addOverlayClaim("clear-all");
+      expect(inboxOpen()).toBe(true);
+      settle({ ok: true });
+      await expect(pending).resolves.toBe(true);
+      expect(inboxOpen()).toBe(true);
+    });
+
+    it("doesn't count as the action's dialog once it has gone", async () => {
+      const settle = deferDispatch();
+      const pending = run();
+      setInboxDialogOpen(true);
+      useUIStore.getState().addOverlayClaim("clear-all");
+      setInboxDialogOpen(false);
+      useUIStore.getState().removeOverlayClaim("clear-all");
+      expect(inboxOpen()).toBe(true);
+      useUIStore.getState().addOverlayClaim("confirm-pull");
+      expect(inboxOpen()).toBe(false);
+      settle({ ok: true });
+      await pending;
+    });
+  });
+
+  it("dispatches nothing for an action that can't run now", async () => {
+    getMock.mockReturnValue({ enabled: false });
+    await expect(run()).resolves.toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(inboxOpen()).toBe(true);
+  });
+
+  describe("Go to terminal", () => {
+    const goToTerminal = (panelId: string) =>
+      ({ label: "Go to terminal", actionId: "panel.focus", actionArgs: { panelId } }) as const;
+
+    it("selects the panel's worktree first, even when the panel is already focused", async () => {
+      // Focus stays on a panel when its worktree is left for one with no
+      // remembered terminal, so a bare panel.focus changed nothing.
+      seedPanels({ "pane-2": { location: "grid", worktreeId: "wt-2" } }, "pane-2");
+      await expect(
+        runNotificationAction(goToTerminal("pane-2"), { id: "e1", context: undefined })
+      ).resolves.toBe(true);
+      expect(trackTerminalFocus).toHaveBeenCalledWith("wt-2", "pane-2");
+      expect(dispatchMock.mock.calls).toEqual([
+        ["worktree.select", { worktreeId: "wt-2" }],
+        ["panel.focus", { panelId: "pane-2" }],
+      ]);
+      expect(inboxOpen()).toBe(false);
+    });
+
+    it("goes nowhere for a trashed panel, even though the row's worktree is live", async () => {
+      seedPanels({ "pane-2": { location: "trash", worktreeId: "wt-2" } });
+      await expect(
+        runNotificationAction(goToTerminal("pane-2"), {
+          id: "e1",
+          context: { worktreeId: "wt-2", panelId: "pane-2" },
+        })
+      ).resolves.toBe(false);
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(inboxOpen()).toBe(true);
+    });
+
+    it("switches to another workspace for a panel recorded there", async () => {
+      await expect(
+        runNotificationAction(goToTerminal("pane-x"), {
+          id: "e1",
+          context: { projectId: OTHER_PROJECT, worktreeId: "wt-x", panelId: "pane-x" },
+        })
+      ).resolves.toBe(true);
+      expect(switchProject).toHaveBeenCalledWith(OTHER_PROJECT, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-x" },
+      });
+      expect(inboxOpen()).toBe(false);
     });
   });
 });
