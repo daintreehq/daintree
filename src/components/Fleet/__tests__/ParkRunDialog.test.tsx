@@ -159,6 +159,24 @@ describe("ParkRunDialog", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it.each([
+    { button: "Update park", sends: parkRun },
+    { button: "Unpark", sends: unparkRun },
+  ])("says when $button is sent, and never for Cancel", async ({ button, sends }) => {
+    setRuns([run("a", { park: { parkedAt: 1 } })]);
+    const onSubmit = vi.fn();
+    render(<ParkRunDialog runId="a" onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: button }));
+    });
+    expect(sends).toHaveBeenCalledWith("a", ...(sends === parkRun ? [{}] : []));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
   it("offers no Unpark for a run that isn't parked", () => {
     setRuns([run("a")]);
     render(<ParkRunDialog runId="a" onClose={vi.fn()} />);

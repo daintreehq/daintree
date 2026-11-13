@@ -491,6 +491,10 @@ export function CanopyCard({
     return () => clearTimeout(timer);
   }, [answerArmed]);
 
+  // Park's dialog opens once the menu has handed the keyboard back to its
+  // button: opened any sooner, the menu's close would take it from the dialog.
+  const parkAfterCloseRef = useRef(false);
+
   const pressTrash = () => {
     if (!trashArmed) {
       setTrashPressedFor(trashTarget);
@@ -917,7 +921,11 @@ export function CanopyCard({
             {archived ? <ArchiveRestore aria-hidden="true" /> : <Archive aria-hidden="true" />}
           </HeaderControl>
           {aside !== undefined && canSetAside && (
-            <DropdownMenu>
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open) parkAfterCloseRef.current = false;
+              }}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
@@ -933,8 +941,19 @@ export function CanopyCard({
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Park or snooze</TooltipContent>
               </Tooltip>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => aside.onPark(item)}>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={() => {
+                  if (!parkAfterCloseRef.current) return;
+                  parkAfterCloseRef.current = false;
+                  requestAnimationFrame(() => aside.onPark(item));
+                }}
+              >
+                <DropdownMenuItem
+                  onSelect={() => {
+                    parkAfterCloseRef.current = true;
+                  }}
+                >
                   <CirclePause className="size-3.5" aria-hidden="true" />
                   Park…
                 </DropdownMenuItem>

@@ -77,22 +77,33 @@ export function CanopyRowMenu({
   // field, or its composer: the menu closing must not hand it back to the row
   // it was opened from, which would end the rename and select that row again.
   const focusMovedRef = useRef(false);
-  // The list of answers opens once the menu has handed the keyboard back to
-  // the row, so the row is what the list's close returns to; opened any
-  // sooner, the menu's own close would take the keyboard back from it.
-  const reviewAfterCloseRef = useRef(false);
+  // The list of answers and the Park dialog open once the menu has handed the
+  // keyboard back to the row, so the row is what their close returns to;
+  // opened any sooner, the menu's own close would take the keyboard from them.
+  // Trash focuses its row itself, which the menu's hand-back would undo by
+  // selecting the row it was opened from, and the arm with it.
+  const afterCloseRef = useRef<{ act: () => void; ownsFocus: boolean } | null>(null);
   return (
-    <ContextMenu onOpenChange={actions.onOpenChange}>
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) afterCloseRef.current = null;
+        actions.onOpenChange(open);
+      }}
+    >
       {/* Contents, so the trigger adds no box between the list and its rows. */}
       <ContextMenuTrigger asChild>
         <div className="contents">{children}</div>
       </ContextMenuTrigger>
       <ContextMenuContent
         onCloseAutoFocus={(event) => {
-          if (reviewAfterCloseRef.current) {
-            reviewAfterCloseRef.current = false;
-            requestAnimationFrame(() => actions.onReviewAnswers(item));
+          const after = afterCloseRef.current;
+          afterCloseRef.current = null;
+          if (after?.ownsFocus) {
+            event.preventDefault();
+            after.act();
+            return;
           }
+          if (after) requestAnimationFrame(after.act);
           if (!focusMovedRef.current) return;
           focusMovedRef.current = false;
           event.preventDefault();
@@ -103,7 +114,10 @@ export function CanopyRowMenu({
         {actions.canReviewAnswers(item) && (
           <ContextMenuItem
             onSelect={() => {
-              reviewAfterCloseRef.current = true;
+              afterCloseRef.current = {
+                act: () => actions.onReviewAnswers(item),
+                ownsFocus: false,
+              };
             }}
           >
             Review answers…
@@ -158,7 +172,13 @@ export function CanopyRowMenu({
         </ContextMenuItem>
         {canSetAside && (
           <>
-            <ContextMenuItem onSelect={() => actions.onPark(item)}>Park…</ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => {
+                afterCloseRef.current = { act: () => actions.onPark(item), ownsFocus: false };
+              }}
+            >
+              Park…
+            </ContextMenuItem>
             {parked && (
               <ContextMenuItem onSelect={() => actions.onUnpark(item)}>Unpark</ContextMenuItem>
             )}
@@ -188,7 +208,9 @@ export function CanopyRowMenu({
         <ContextMenuItem
           destructive
           aria-keyshortcuts={trashChord}
-          onSelect={() => actions.onTrash(item)}
+          onSelect={() => {
+            afterCloseRef.current = { act: () => actions.onTrash(item), ownsFocus: true };
+          }}
         >
           Trash terminal…
           <ContextMenuShortcut shortcut={trashChord} />

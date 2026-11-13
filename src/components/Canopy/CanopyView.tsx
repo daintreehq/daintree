@@ -2383,7 +2383,18 @@ function CanopyInbox({
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>
-          <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
+          <LazyParkRunDialog
+            key={parkRunId}
+            runId={parkRunId}
+            onClose={closePark}
+            // A park is the newest action, and Z can't take it back.
+            onSubmit={clearUndo}
+            // Should the row it was opened from have gone, the selected one.
+            restoreFocusTo={() =>
+              (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+              refreshRef.current
+            }
+          />
         </Suspense>
       )}
       <CanopyBulkTrashDialog

@@ -58,10 +58,13 @@ function toCandidate(run: FleetRunRow): ParkGateCandidate {
 export function ParkRunDialog({
   runId,
   onClose,
+  onSubmit,
   restoreFocusTo,
 }: {
   runId: string;
   onClose: () => void;
+  /** A park or unpark is sent: cancelling the dialog sends neither. */
+  onSubmit?: () => void;
   /** Where focus goes when the dialog closes — the surface the menu opened on. */
   restoreFocusTo?: RestoreFocusTarget;
 }) {
@@ -129,6 +132,7 @@ export function ParkRunDialog({
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setPending(verb);
       setError(null);
+      onSubmit?.();
       request()
         .then(() => onClose())
         .catch((cause: unknown) => {
@@ -136,7 +140,7 @@ export function ParkRunDialog({
           setError({ verb, message: formatErrorMessage(cause, fallback) });
         });
     },
-    [busy, onClose]
+    [busy, onClose, onSubmit]
   );
 
   const park = useCallback(() => {

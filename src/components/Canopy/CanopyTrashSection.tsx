@@ -254,6 +254,19 @@ export function CanopyTrashSection({
     );
   };
   const [removing, setRemoving] = useState<CanopyTrashItem | null>(null);
+  // A confirm asked for from a menu opens once the menu has handed the
+  // keyboard back, so its close returns to the row or button the menu was
+  // opened from; opened any sooner, the menu's close would take the keyboard
+  // out of the confirm.
+  const confirmAfterCloseRef = useRef<(() => void) | null>(null);
+  const confirmAfterClose = () => {
+    const ask = confirmAfterCloseRef.current;
+    confirmAfterCloseRef.current = null;
+    if (ask) requestAnimationFrame(ask);
+  };
+  const menuOpenChanged = (open: boolean) => {
+    if (open) confirmAfterCloseRef.current = null;
+  };
   const confirmRemove = () => {
     const item = removing;
     setRemoving(null);
@@ -276,8 +289,12 @@ export function CanopyTrashSection({
     );
   };
   const askEmpty = () => {
-    if (items.some((item) => !item.ended)) setEmptying(items);
-    else emptyNow(items);
+    const targets = items;
+    if (!targets.some((item) => !item.ended)) {
+      emptyNow(targets);
+      return;
+    }
+    confirmAfterCloseRef.current = () => setEmptying(targets);
   };
   const confirmEmpty = () => {
     const targets = emptying;
@@ -365,7 +382,7 @@ export function CanopyTrashSection({
           }
           menu={
             searching ? undefined : (
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={menuOpenChanged}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -376,7 +393,7 @@ export function CanopyTrashSection({
                     <Ellipsis aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
+                <DropdownMenuContent align="end" onCloseAutoFocus={confirmAfterClose}>
                   <DropdownMenuItem destructive onSelect={askEmpty}>
                     {items.some((item) => !item.ended) ? "Empty trash…" : "Empty trash"}
                   </DropdownMenuItem>
@@ -389,7 +406,7 @@ export function CanopyTrashSection({
       {rowsShown && (
         <div id="canopy-trash" role="listbox" aria-labelledby="canopy-trash-label">
           {shown.map((item) => (
-            <ContextMenu key={item.runId}>
+            <ContextMenu key={item.runId} onOpenChange={menuOpenChanged}>
               {/* Contents, so the trigger adds no box between the list and its rows. */}
               <ContextMenuTrigger asChild>
                 <div className="contents">
@@ -404,7 +421,7 @@ export function CanopyTrashSection({
                   />
                 </div>
               </ContextMenuTrigger>
-              <ContextMenuContent>
+              <ContextMenuContent onCloseAutoFocus={confirmAfterClose}>
                 <ContextMenuItem
                   aria-keyshortcuts="Enter"
                   disabled={item.worktreeRemoved}
@@ -419,7 +436,12 @@ export function CanopyTrashSection({
                     Remove
                   </ContextMenuItem>
                 ) : (
-                  <ContextMenuItem destructive onSelect={() => setRemoving(item)}>
+                  <ContextMenuItem
+                    destructive
+                    onSelect={() => {
+                      confirmAfterCloseRef.current = () => setRemoving(item);
+                    }}
+                  >
                     Remove now…
                   </ContextMenuItem>
                 )}
