@@ -19,6 +19,14 @@ interface DiffNoteDraftState {
   files: Readonly<Record<string, true>>;
   /** Saved notes being rewritten, by note id. */
   edits: Readonly<Record<string, true>>;
+  /**
+   * The editor (by body key) a gesture just opened or moved, until that editor
+   * has taken focus. Claimed after the commit that shows it, so it reaches the
+   * editor wherever and whenever it mounts — a composer moved to another row,
+   * one whose row mounts frames later — and nothing restored without a gesture
+   * (a refresh, a layout switch, a return to the file) ever takes focus.
+   */
+  focus: string | null;
 }
 
 /**
@@ -40,17 +48,12 @@ export interface DiffNoteDraftSession {
   closeEdit: (noteId: string) => void;
   readBody: (bodyKey: string) => string | undefined;
   writeBody: (bodyKey: string, body: string) => void;
-  /**
-   * Asks the editor under `bodyKey` to take focus if it mounts for this
-   * gesture. The ask lapses with the task that made it, so an editor restored
-   * later — by a refresh, a layout switch, a return to the file — stays where
-   * it is instead of pulling focus from wherever the reviewer has gone.
-   */
   requestFocus: (bodyKey: string) => void;
-  wantsFocus: (bodyKey: string) => boolean;
+  /** Called by the editor once it has taken the focus asked for it. */
+  consumeFocus: (bodyKey: string) => void;
 }
 
-const EMPTY_STATE: DiffNoteDraftState = { lines: {}, files: {}, edits: {} };
+const EMPTY_STATE: DiffNoteDraftState = { lines: {}, files: {}, edits: {}, focus: null };
 
 function without<T>(record: Readonly<Record<string, T>>, key: string): Record<string, T> {
   const next = { ...record };
@@ -78,15 +81,15 @@ export function createDiffNoteDraftSession(): DiffNoteDraftSession {
   let state = EMPTY_STATE;
   const listeners = new Set<() => void>();
   const bodies = new Map<string, string>();
-  const focusRequests = new Set<string>();
 
   const update = (next: DiffNoteDraftState) => {
     state = next;
     for (const listener of listeners) listener();
   };
-  const discard = (bodyKey: string) => {
+  // A closed draft drops its text and any focus still waiting for its editor.
+  const discard = (bodyKey: string): Pick<DiffNoteDraftState, "focus"> => {
     bodies.delete(bodyKey);
-    focusRequests.delete(bodyKey);
+    return { focus: state.focus === bodyKey ? null : state.focus };
   };
 
   return {
@@ -100,33 +103,39 @@ export function createDiffNoteDraftSession(): DiffNoteDraftSession {
     openLine: (fileKey, anchor) =>
       update({ ...state, lines: { ...state.lines, [fileKey]: anchor } }),
     closeLine: (fileKey) => {
-      discard(lineDraftBodyKey(fileKey));
-      if (fileKey in state.lines) update({ ...state, lines: without(state.lines, fileKey) });
+      const rest = discard(lineDraftBodyKey(fileKey));
+      if (fileKey in state.lines) {
+        update({ ...state, ...rest, lines: without(state.lines, fileKey) });
+      }
     },
     openFile: (fileKey) => {
       if (!state.files[fileKey]) update({ ...state, files: { ...state.files, [fileKey]: true } });
     },
     closeFile: (fileKey) => {
-      discard(fileDraftBodyKey(fileKey));
-      if (fileKey in state.files) update({ ...state, files: without(state.files, fileKey) });
+      const rest = discard(fileDraftBodyKey(fileKey));
+      if (fileKey in state.files) {
+        update({ ...state, ...rest, files: without(state.files, fileKey) });
+      }
     },
     openEdit: (noteId) => {
       if (!state.edits[noteId]) update({ ...state, edits: { ...state.edits, [noteId]: true } });
     },
     closeEdit: (noteId) => {
-      discard(editDraftBodyKey(noteId));
-      if (noteId in state.edits) update({ ...state, edits: without(state.edits, noteId) });
+      const rest = discard(editDraftBodyKey(noteId));
+      if (noteId in state.edits) {
+        update({ ...state, ...rest, edits: without(state.edits, noteId) });
+      }
     },
     readBody: (bodyKey) => bodies.get(bodyKey),
     writeBody: (bodyKey, body) => {
       bodies.set(bodyKey, body);
     },
     requestFocus: (bodyKey) => {
-      focusRequests.add(bodyKey);
-      // A macrotask, so it outlasts the microtask React commits the gesture in.
-      setTimeout(() => focusRequests.delete(bodyKey), 0);
+      if (state.focus !== bodyKey) update({ ...state, focus: bodyKey });
     },
-    wantsFocus: (bodyKey) => focusRequests.has(bodyKey),
+    consumeFocus: (bodyKey) => {
+      if (state.focus === bodyKey) update({ ...state, focus: null });
+    },
   };
 }
 

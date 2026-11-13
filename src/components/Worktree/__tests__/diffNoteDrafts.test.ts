@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDiffNoteDraftSession,
   diffNoteFileKey,
@@ -17,21 +17,29 @@ const LINES = {
 } as const;
 
 describe("diff note draft session", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("carries a line draft's text when it moves, and drops it when it closes", () => {
     const session = createDiffNoteDraftSession();
     session.openLine(FILE, LINES);
+    expect(session.getState().lines[FILE]).toEqual(LINES);
     session.writeBody(lineDraftBodyKey(FILE), "Moving with it");
 
-    session.openLine(FILE, { ...LINES, endLine: 4 });
+    session.openLine(FILE, { ...LINES, endLine: 4, contentHash: "h2" });
+    expect(session.getState().lines[FILE]).toEqual({ ...LINES, endLine: 4, contentHash: "h2" });
     expect(session.readBody(lineDraftBodyKey(FILE))).toBe("Moving with it");
 
     session.closeLine(FILE);
     expect(session.getState().lines[FILE]).toBeUndefined();
     expect(session.readBody(lineDraftBodyKey(FILE))).toBeUndefined();
+  });
+
+  it("keys drafts by worktree as well as path", () => {
+    const session = createDiffNoteDraftSession();
+    const elsewhere = diffNoteFileKey("/other", "src/a.ts");
+    session.openFile(FILE);
+    session.writeBody(fileDraftBodyKey(FILE), "here");
+
+    expect(session.getState().files[elsewhere]).toBeUndefined();
+    expect(session.readBody(fileDraftBodyKey(elsewhere))).toBeUndefined();
   });
 
   it("closes one kind of draft without touching the others", () => {
@@ -46,32 +54,53 @@ describe("diff note draft session", () => {
     session.closeFile(FILE);
 
     expect(session.getState().files[FILE]).toBeUndefined();
+    expect(session.readBody(fileDraftBodyKey(FILE))).toBeUndefined();
     expect(session.getState().lines[FILE]).toBe(LINES);
     expect(session.getState().edits["note-1"]).toBe(true);
     expect(session.readBody(lineDraftBodyKey(FILE))).toBe("line");
     expect(session.readBody(editDraftBodyKey("note-1"))).toBe("edit");
+
+    session.closeEdit("note-1");
+    expect(session.getState().edits["note-1"]).toBeUndefined();
+    expect(session.readBody(editDraftBodyKey("note-1"))).toBeUndefined();
+    expect(session.readBody(lineDraftBodyKey(FILE))).toBe("line");
   });
 
   it("tells subscribers when a draft opens or closes, but not on every keystroke", () => {
     const session = createDiffNoteDraftSession();
     const listener = vi.fn();
-    session.subscribe(listener);
+    const unsubscribe = session.subscribe(listener);
 
     session.openFile(FILE);
+    expect(listener).toHaveBeenCalledTimes(1);
     session.writeBody(fileDraftBodyKey(FILE), "typing");
+    expect(listener).toHaveBeenCalledTimes(1);
     session.openFile(FILE);
+    expect(listener).toHaveBeenCalledTimes(1);
     session.closeFile(FILE);
+    expect(listener).toHaveBeenCalledTimes(2);
+    session.closeFile(FILE);
+    expect(listener).toHaveBeenCalledTimes(2);
 
+    unsubscribe();
+    session.openFile(FILE);
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  it("lets a focus request lapse once the task that made it is over", () => {
-    vi.useFakeTimers();
+  it("holds a focus request until its own editor takes it, or its draft closes", () => {
     const session = createDiffNoteDraftSession();
+    session.openFile(FILE);
     session.requestFocus(fileDraftBodyKey(FILE));
-    expect(session.wantsFocus(fileDraftBodyKey(FILE))).toBe(true);
 
-    vi.advanceTimersByTime(0);
-    expect(session.wantsFocus(fileDraftBodyKey(FILE))).toBe(false);
+    session.consumeFocus(lineDraftBodyKey(FILE));
+    expect(session.getState().focus).toBe(fileDraftBodyKey(FILE));
+    session.consumeFocus(fileDraftBodyKey(FILE));
+    expect(session.getState().focus).toBeNull();
+
+    session.requestFocus(fileDraftBodyKey(FILE));
+    session.closeLine(FILE);
+    expect(session.getState().focus).toBe(fileDraftBodyKey(FILE));
+    session.closeFile(FILE);
+    expect(session.getState().focus).toBeNull();
   });
 });

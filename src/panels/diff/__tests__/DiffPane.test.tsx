@@ -249,6 +249,13 @@ function sourceEnabledCalls(): boolean[] {
 }
 
 import { DiffPane } from "../DiffPane";
+import { useDiffNotesStore } from "@/store/diffNotesStore";
+import {
+  diffNoteFileKey,
+  editDraftBodyKey,
+  fileDraftBodyKey,
+  type DiffNoteDraftSession,
+} from "@/components/Worktree/diffNoteDrafts";
 import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -328,15 +335,32 @@ afterEach(() => {
 });
 
 describe("DiffPane — unsaved note drafts (#16899)", () => {
-  it("hands the viewer the same draft session after a refresh unmounts it", () => {
+  function viewerSession(): DiffNoteDraftSession {
+    expect(viewerDraftSessions.size).toBe(1);
+    return [...viewerDraftSessions][0] as DiffNoteDraftSession;
+  }
+
+  afterEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+  });
+
+  it("keeps the drafts it holds through a refresh that unmounts the viewer", () => {
     seedPanel({ filePath: "a.ts", fileStatus: "modified" });
     const { rerender } = renderPane();
-    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    const session = viewerSession();
+    const fileKey = diffNoteFileKey(WORKTREE_PATH, "a.ts");
+    act(() => {
+      session.openFile(fileKey);
+      session.writeBody(fileDraftBodyKey(fileKey), "Half a thought");
+      session.openEdit("note-1");
+    });
+    expect(useDiffNotesStore.getState().editingIds["note-1"]).toBe(1);
 
     // A refresh drops the diff while it refetches: the skeleton takes the viewer's place.
     useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
     rerender(paneElement());
     expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(useDiffNotesStore.getState().editingIds["note-1"]).toBe(1);
 
     useDiffContentMock.mockReturnValue({
       content: "diff --git a/a.ts b/a.ts",
@@ -346,8 +370,50 @@ describe("DiffPane — unsaved note drafts (#16899)", () => {
     rerender(paneElement());
     expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
 
-    expect(viewerDraftSessions.size).toBe(1);
-    expect([...viewerDraftSessions][0]).not.toBeNull();
+    expect(viewerSession()).toBe(session);
+    expect(session.getState().files[fileKey]).toBe(true);
+    expect(session.readBody(fileDraftBodyKey(fileKey))).toBe("Half a thought");
+    expect(session.getState().edits["note-1"]).toBe(true);
+  });
+
+  it("lists open drafts in the rendered layout, and carries what's typed there back", async () => {
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const note = useDiffNotesStore.getState().addNote({
+      worktreePath: WORKTREE_PATH,
+      filePath: "docs/guide.md",
+      anchor: { kind: "file" },
+      body: "Saved words",
+    })!;
+    const { rerender } = renderPane();
+    const session = viewerSession();
+    const fileKey = diffNoteFileKey(WORKTREE_PATH, "docs/guide.md");
+    act(() => {
+      session.openFile(fileKey);
+      session.writeBody(fileDraftBodyKey(fileKey), "Half a thought");
+      session.openEdit(note.id);
+      session.writeBody(editDraftBodyKey(note.id), "Rewritten");
+    });
+
+    preferences.diffMarkdownRendered = true;
+    rerender(paneElement());
+    expect(await screen.findByTestId("rendered-markdown-mock")).toBeTruthy();
+
+    const list = screen.getByTestId("diff-pending-file-notes");
+    const draft = within(list).getByLabelText("New file note");
+    const edit = within(list).getByLabelText("Edit file note");
+    expect(draft instanceof HTMLTextAreaElement && draft.value).toBe("Half a thought");
+    expect(edit instanceof HTMLTextAreaElement && edit.value).toBe("Rewritten");
+    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(1);
+    fireEvent.change(draft, { target: { value: "Finished in the rendered view" } });
+
+    preferences.diffMarkdownRendered = false;
+    rerender(paneElement());
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("diff-pending-file-notes")).toBeNull();
+    expect(viewerSession()).toBe(session);
+    expect(session.readBody(fileDraftBodyKey(fileKey))).toBe("Finished in the rendered view");
+    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(1);
   });
 });
 

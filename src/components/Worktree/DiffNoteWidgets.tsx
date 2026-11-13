@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { AlertTriangle, EyeOff, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -85,9 +85,19 @@ function DiffNoteEditor({
   onCancel,
 }: DiffNoteEditorProps) {
   const [body, setBody] = useState(() => session.readBody(bodyKey) ?? initialBody);
-  const [autoFocus] = useState(() => session.wantsFocus(bodyKey));
   const canSave = body.trim().length > 0;
   const hintId = useId();
+
+  // Takes focus only when a gesture asked for this editor; one restored by a
+  // refresh or a layout switch stays out of the way. In a layout effect, as
+  // `autoFocus` would be, so the caret is in place before the first paint.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const focusWanted = useDiffNoteDraftState(session, (state) => state.focus === bodyKey);
+  useLayoutEffect(() => {
+    if (!focusWanted) return;
+    textareaRef.current?.focus();
+    session.consumeFocus(bodyKey);
+  }, [focusWanted, session, bodyKey]);
 
   // On the editor rather than the textarea, so the keys still work once Tab has
   // moved on to Cancel or Save. A keystroke committing an IME composition is the
@@ -109,8 +119,8 @@ function DiffNoteEditor({
   return (
     <div className="flex flex-col gap-3" onKeyDown={handleKeyDown}>
       <Textarea
+        ref={textareaRef}
         aria-label={label}
-        autoFocus={autoFocus}
         density="compact"
         rows={3}
         value={body}
@@ -200,6 +210,7 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
   const addNote = useDiffNotesStore((s) => s.addNote);
   const session = useDiffNoteDraftSession();
   const fileKey = diffNoteFileKey(worktreePath, filePath);
+  const bodyKey = anchor.kind === "file" ? fileDraftBodyKey(fileKey) : lineDraftBodyKey(fileKey);
   const close = (via: DiffNoteCloseVia) => {
     if (anchor.kind === "file") session.closeFile(fileKey);
     else session.closeLine(fileKey);
@@ -216,9 +227,12 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
           <span className="ml-auto text-right">Shift-click another line number to extend</span>
         )}
       </div>
+      {/* Keyed by the draft it edits: a list or file view that stays mounted
+          while it moves to another file must not carry this file's text there. */}
       <DiffNoteEditor
+        key={bodyKey}
         session={session}
-        bodyKey={anchor.kind === "file" ? fileDraftBodyKey(fileKey) : lineDraftBodyKey(fileKey)}
+        bodyKey={bodyKey}
         initialBody=""
         label={`New ${nameAnchor(anchor)}`}
         saveLabel="Add note"
@@ -422,6 +436,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
       </div>
       {editing ? (
         <DiffNoteEditor
+          key={noteId}
           session={session}
           bodyKey={editDraftBodyKey(noteId)}
           initialBody={note.body}
@@ -460,10 +475,20 @@ export function PendingFileNotes({
   );
   const lineDraft = useDiffNoteDraftState(session, (state) => state.lines[fileKey] ?? null);
   const fileDraftOpen = useDiffNoteDraftState(session, (state) => state.files[fileKey] === true);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Nothing in this list opened the draft, so a closed one hands focus to the
+  // pane's path pill, the control naming the same file, as a deleted card does.
+  const handFocusBack = (via: DiffNoteCloseVia) =>
+    returnFocusTo(
+      listRef.current
+        ?.closest("[data-panel-id]")
+        ?.querySelector<HTMLElement>("[data-toolbar-path]") ?? null,
+      via
+    );
   if (notes.length === 0 && !lineDraft && !fileDraftOpen) return null;
   return (
     <DiffNoteDraftContext value={session}>
-      <div className="diff-note-list" data-testid="diff-pending-file-notes">
+      <div ref={listRef} className="diff-note-list" data-testid="diff-pending-file-notes">
         {sortDiffNotes(notes).map((note) => (
           <DiffNoteCard
             key={note.id}
@@ -477,7 +502,7 @@ export function PendingFileNotes({
             filePath={filePath}
             anchor={lineDraft}
             placement="unplaced"
-            onDone={NO_FOCUS_RETURN}
+            onDone={handFocusBack}
           />
         )}
         {fileDraftOpen && (
@@ -485,7 +510,7 @@ export function PendingFileNotes({
             worktreePath={worktreePath}
             filePath={filePath}
             anchor={FILE_ANCHOR}
-            onDone={NO_FOCUS_RETURN}
+            onDone={handFocusBack}
           />
         )}
       </div>
@@ -494,6 +519,3 @@ export function PendingFileNotes({
 }
 
 const FILE_ANCHOR: DiffNoteAnchor = { kind: "file" };
-
-// Nothing here opened the draft, so there's no control to hand focus back to.
-const NO_FOCUS_RETURN = () => {};

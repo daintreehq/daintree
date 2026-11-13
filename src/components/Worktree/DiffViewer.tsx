@@ -1193,7 +1193,9 @@ function FileDiff({
     returnFocusTo(
       (!opener || !opener.isConnected) && root
         ? ((opener && findLineNumber(root, opener)) ??
-            root.querySelector<HTMLElement>('[role="region"]'))
+            root.querySelector<HTMLElement>('[role="region"]') ??
+            // A collapsed file has no diff region to land in.
+            root.querySelector<HTMLElement>("[data-note-file-add]"))
         : opener,
       via
     );

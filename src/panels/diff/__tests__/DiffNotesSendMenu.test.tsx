@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { DiffNoteTarget } from "@/hooks/useDiffNoteDelivery";
 
 const { notifyMock, targetsMock } = vi.hoisted(() => ({
@@ -19,6 +19,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({ TerminalIcon: () => null 
 
 import { DiffNotesSendMenu, offerSentNotesUndo } from "../DiffNotesSendMenu";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
+import { deliverDiffNotes } from "@/hooks/useDiffNoteDelivery";
 
 function add(filePath: string, body = "Fix this"): DiffNote {
   return useDiffNotesStore.getState().addNote({
@@ -100,8 +101,8 @@ function agent(overrides: Partial<DiffNoteTarget> = {}): DiffNoteTarget {
   };
 }
 
-function openMenu(filePath: string) {
-  render(
+function menu(filePath: string) {
+  return (
     <DiffNotesSendMenu
       worktreePath="/repo"
       worktreeId="wt"
@@ -109,8 +110,27 @@ function openMenu(filePath: string) {
       onResult={() => undefined}
     />
   );
+}
+
+function reopen() {
   fireEvent.pointerDown(screen.getByTestId("diff-notes-send"), { button: 0, ctrlKey: false });
   return screen.getByRole("menu");
+}
+
+function openMenu(filePath: string) {
+  const result = render(menu(filePath));
+  reopen();
+  return result;
+}
+
+function close() {
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+}
+
+function sentIds(): string[] {
+  const calls = vi.mocked(deliverDiffNotes).mock.calls;
+  return (calls.at(-1)?.[1] ?? []).map((note) => note.id).sort();
 }
 
 function checkedScope(): string | undefined {
@@ -125,29 +145,58 @@ describe("DiffNotesSendMenu", () => {
   beforeEach(() => {
     useDiffNotesStore.setState({ notes: {}, editingIds: {} });
     targetsMock.current = [agent()];
+    vi.mocked(deliverDiffNotes).mockReset();
+    vi.mocked(deliverDiffNotes).mockReturnValue({
+      ok: true,
+      sent: 0,
+      kept: 0,
+      targetTitle: "Claude",
+      cleared: [],
+    });
   });
 
-  it("aims at the file on screen when it has notes of its own", () => {
-    add("src/a.ts");
+  it("aims at the file on screen when it has notes of its own, and sends only those", () => {
+    const own = add("src/a.ts");
     add("src/b.ts");
     openMenu("src/a.ts");
 
     expect(checkedScope()).toBe("This file");
-    expect(screen.getByRole("menuitem", { name: "Claude, feature" }).dataset.disabled).toBe(
-      undefined
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude, feature" }));
+    expect(sentIds()).toEqual([own.id]);
   });
 
-  it("opens on every file's notes when the file on screen has none", () => {
-    add("src/b.ts");
-    add("src/c.ts");
+  it("opens on every file's notes when the file on screen has none, and sends them all", () => {
+    const notes = [add("src/b.ts"), add("src/c.ts")];
     openMenu("src/a.ts");
 
     expect(checkedScope()).toBe("All files");
     expect(screen.getByText("Paste 2 notes into")).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Claude, feature" }).dataset.disabled).toBe(
-      undefined
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude, feature" }));
+    expect(sentIds()).toEqual(notes.map((note) => note.id).sort());
+  });
+
+  it("chooses the scope afresh on every opening", () => {
+    add("src/a.ts");
+    add("src/b.ts");
+    const { rerender } = openMenu("src/a.ts");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^All files/ }));
+    expect(checkedScope()).toBe("All files");
+    close();
+
+    reopen();
+    expect(checkedScope()).toBe("This file");
+    close();
+
+    rerender(menu("src/empty.ts"));
+    reopen();
+    expect(checkedScope()).toBe("All files");
+    close();
+
+    act(() => {
+      add("src/empty.ts");
+    });
+    reopen();
+    expect(checkedScope()).toBe("This file");
   });
 
   it("says why an agent with locked input can't take the notes", () => {
