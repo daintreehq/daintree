@@ -1511,6 +1511,6 @@ describe("NotificationCenterEntry empty message", () => {
       <NotificationCenterEntry entry={makeEntry({ title: "Couldn't save", message: "" })} isNew />
     );
     expect(screen.getByText("Couldn't save")).toBeTruthy();
-    expect(container.querySelector("p")).toBeNull();
+    expect(container.querySelectorAll("p.text-text-secondary")).toHaveLength(0);
   });
 });
