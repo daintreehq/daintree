@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { act, render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { useState } from "react";
 import type { DiffChangeSetEntry } from "@shared/types/git";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
@@ -99,7 +100,18 @@ function entry(path: string): DiffChangeSetEntry {
   };
 }
 
-function renderSidebar(overrides: Partial<React.ComponentProps<typeof DiffFileSidebar>> = {}) {
+type FilteredSidebarProps = Omit<
+  React.ComponentProps<typeof DiffFileSidebar>,
+  "filter" | "onFilterChange"
+>;
+
+/** Holds the filter the way the pane does, so typing into the box filters. */
+function FilteredSidebar(props: FilteredSidebarProps) {
+  const [filter, setFilter] = useState("");
+  return <DiffFileSidebar {...props} filter={filter} onFilterChange={setFilter} />;
+}
+
+function renderSidebar(overrides: Partial<FilteredSidebarProps> = {}) {
   const onSelect = vi.fn();
   const utils = render(
     <TooltipProvider>
@@ -108,7 +120,7 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof DiffFileSi
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div>
-            <DiffFileSidebar
+            <FilteredSidebar
               files={[entry("src/index.ts")]}
               currentIndex={0}
               worktreePath={WORKTREE}
@@ -276,7 +288,7 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
     const { container } = render(
       <TooltipProvider>
         <VirtuosoMockContext.Provider value={{ itemHeight: 32, viewportHeight: 640 }}>
-          <DiffFileSidebar
+          <FilteredSidebar
             files={files}
             currentIndex={currentIndex}
             worktreePath={WORKTREE}
@@ -484,7 +496,7 @@ describe("DiffFileSidebar — one tab stop, arrows move it", () => {
     render(
       <TooltipProvider>
         <VirtuosoMockContext.Provider value={{ itemHeight: 32, viewportHeight: 320 }}>
-          <DiffFileSidebar
+          <FilteredSidebar
             files={files}
             currentIndex={0}
             worktreePath={WORKTREE}

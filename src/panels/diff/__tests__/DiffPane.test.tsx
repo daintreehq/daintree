@@ -161,12 +161,22 @@ vi.mock("@/components/ui/EmptyState", () => ({
 const sidebarSelect = vi.fn<(index: number) => void>();
 const { sidebarRowViewed } = vi.hoisted(() => ({ sidebarRowViewed: vi.fn() }));
 vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
-  DiffFileSidebar: (props: { files: DiffChangeSetEntry[]; currentIndex: number }) => (
+  DiffFileSidebar: (props: {
+    files: DiffChangeSetEntry[];
+    currentIndex: number;
+    filter: string;
+    onFilterChange: (filter: string) => void;
+  }) => (
     <div
       data-testid="diff-sidebar-mock"
       data-current-index={props.currentIndex}
       data-file-count={props.files.length}
     >
+      <input
+        data-testid="diff-sidebar-filter"
+        value={props.filter}
+        onChange={(event) => props.onFilterChange(event.target.value)}
+      />
       <button
         type="button"
         data-testid="diff-sidebar-row"
@@ -600,10 +610,20 @@ describe("DiffPane — current-file resolution", () => {
     });
     renderPane();
 
-    // currentIndex -1 renders as "0 of n" — and no viewed toggle, since there
-    // is no entry to key the marker on.
-    expect(positionText()).toBe("0 of 2");
+    // No place to report, so the count stands alone — and no viewed toggle,
+    // since there is no entry to key the marker on.
+    expect(positionText()).toBe("2 files");
     expect(screen.queryByLabelText("Viewed")).toBeNull();
+    // Opened on a file that was never seen in the set: no gap to step from, so
+    // stepping starts at the top.
+    pressInPane("]");
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "a.ts",
+      "modified",
+      "working-tree:a.ts",
+      undefined
+    );
   });
 });
 
@@ -662,19 +682,21 @@ describe("DiffPane — file stepping", () => {
     expect(unavailable("Next file")).toBe(true);
   });
 
-  it("clamps the keyboard shortcuts at both boundaries instead of stepping off the set", () => {
+  it("leaves the keyboard shortcuts inert at both boundaries instead of stepping off the set", () => {
     seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet });
     const { unmount } = renderPane();
 
     // `[` is not gated by the button's disabled state, so it is the path that
-    // has to clamp — a bare index-1 decrement would select undefined.
+    // has to stop — a bare index-1 decrement would select undefined.
     pressInPane("[");
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    pressInPane("]");
     expect(setDiffPanelFileMock).toHaveBeenCalledWith(
       PANEL_ID,
-      "a.ts",
-      "modified",
-      changeSet[0]!.viewedKey,
-      changeSet[0]!.side
+      "b.ts",
+      "added",
+      changeSet[1]!.viewedKey,
+      changeSet[1]!.side
     );
     unmount();
 
@@ -683,13 +705,7 @@ describe("DiffPane — file stepping", () => {
     renderPane();
 
     pressInPane("]");
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
-      PANEL_ID,
-      "c.ts",
-      "modified",
-      changeSet[2]!.viewedKey,
-      changeSet[2]!.side
-    );
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
   });
 
   it("keeps the shortcuts inert while the panel is unfocused", () => {
@@ -714,9 +730,9 @@ describe("DiffPane — file stepping", () => {
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
   });
 
-  it("clamps against a change set that shrank while the panel was open", () => {
+  it("keeps the gap a shrunk change set leaves at its end", () => {
     // Opened on the 4th file, then a worktree refresh drops the set to 2. The
-    // resolved index is now -1 and the remembered one (3) is out of range.
+    // resolved index is now -1 and the remembered place (3) is out of range.
     const wide = [entry("a.ts"), entry("b.ts"), entry("c.ts"), entry("d.ts")];
     seedPanel({ filePath: "d.ts", fileStatus: "modified", changeSet: wide });
     const { rerender } = renderPane();
@@ -736,26 +752,21 @@ describe("DiffPane — file stepping", () => {
       />
     );
 
+    // d.ts sat after both survivors, so nothing lies ahead of it — never index
+    // 3 (undefined) or a clamp back onto b.ts.
     pressInPane("]");
-    // Clamped to the shrunk set's last entry — never index 3 (undefined) or 4.
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(positionText()).toBe("2 files");
+
+    // Behind it is the last survivor, b.ts. Decrementing the remembered 3 after
+    // clamping it would land on a.ts and skip b.ts.
+    pressInPane("[");
     expect(setDiffPanelFileMock).toHaveBeenCalledWith(
       PANEL_ID,
       "b.ts",
       "modified",
       narrow[1]!.viewedKey,
       narrow[1]!.side
-    );
-
-    // Backward is what proves the stale index is clamped *before* the step and
-    // not just after it: decrementing the remembered 3 would land on b.ts again.
-    setDiffPanelFileMock.mockReset();
-    pressInPane("[");
-    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
-      PANEL_ID,
-      "a.ts",
-      "modified",
-      narrow[0]!.viewedKey,
-      narrow[0]!.side
     );
   });
 });
@@ -814,7 +825,7 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
     seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a, c] });
     rerender(paneElement());
 
-    expect(positionText()).not.toMatch(/^0 of/);
+    expect(positionText()).toBe("2 files");
     expect(unavailable("Previous file")).toBe(false);
     expect(unavailable("Next file")).toBe(false);
 
@@ -825,6 +836,119 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
     pressInPane("[");
     expectSelected(a);
     fireEvent.click(screen.getByLabelText("Previous file"));
+    expectSelected(a);
+  });
+
+  it("warms the file the stepper would open next, in the sidebar's order", () => {
+    seedPanel({ filePath: "root.ts", fileStatus: "modified", changeSet: unordered });
+    renderPane();
+
+    expect(useDiffContentMock.mock.calls.at(-1)![1]?.filePath).toBe("lib/lib.ts");
+  });
+
+  describe("with the sidebar's filter", () => {
+    const one = entry("src/one.ts");
+    const two = entry("src/two.ts");
+    const other = entry("lib/other.ts");
+    const three = entry("src/three.ts");
+    // Display order: lib/other.ts, src/one.ts, src/two.ts, src/three.ts.
+    const files = [one, two, other, three];
+
+    function filterTo(query: string): void {
+      fireEvent.change(screen.getByTestId("diff-sidebar-filter"), { target: { value: query } });
+    }
+
+    it("counts and steps only through the files the filter shows", () => {
+      seedPanel({ filePath: "src/one.ts", fileStatus: "modified", changeSet: files });
+      const { rerender } = renderPane();
+      filterTo("o");
+      // other.ts, one.ts and two.ts match; three.ts does not.
+      expect(positionText()).toBe("2 of 3");
+
+      fireEvent.click(screen.getByLabelText("Next file"));
+      expectSelected(two);
+
+      seedPanel({ filePath: "src/two.ts", fileStatus: "modified", changeSet: files });
+      rerender(paneElement());
+      expect(positionText()).toBe("3 of 3");
+      expect(unavailable("Next file")).toBe(true);
+      pressInPane("]");
+      expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    });
+
+    it("steps from where a file the filter hides sits to the nearest shown ones", () => {
+      seedPanel({ filePath: "src/two.ts", fileStatus: "modified", changeSet: files });
+      renderPane();
+      filterTo("h");
+      // other.ts and three.ts match, on either side of two.ts.
+      expect(positionText()).toBe("2 files");
+
+      pressInPane("[");
+      expectSelected(other);
+      pressInPane("]");
+      expectSelected(three);
+    });
+
+    it("leaves both directions inert when the filter matches nothing", () => {
+      seedPanel({ filePath: "src/two.ts", fileStatus: "modified", changeSet: files });
+      renderPane();
+      filterTo("zzz");
+
+      expect(positionText()).toBe("0 files");
+      expect(unavailable("Previous file")).toBe(true);
+      expect(unavailable("Next file")).toBe(true);
+      pressInPane("]");
+      pressInPane("[");
+      expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    });
+
+    it("stands the filter down while the sidebar is hidden and restores it when shown", () => {
+      seedPanel({ filePath: "src/one.ts", fileStatus: "modified", changeSet: files });
+      const { rerender } = renderPane();
+      filterTo("src/");
+      expect(positionText()).toBe("1 of 3");
+
+      // Hidden from another pane: the preference is shared.
+      preferences.diffShowFileList = false;
+      rerender(paneElement());
+      expect(positionText()).toBe("2 of 4");
+
+      preferences.diffShowFileList = true;
+      rerender(paneElement());
+      expect((screen.getByTestId("diff-sidebar-filter") as HTMLInputElement).value).toBe("src/");
+      expect(positionText()).toBe("1 of 3");
+    });
+  });
+
+  it("keeps a stepper to reach the one file left after the open one leaves", () => {
+    const a = entry("a.ts");
+    const b = entry("b.ts");
+    seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a, b] });
+    const { rerender } = renderPane();
+
+    seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a] });
+    rerender(paneElement());
+
+    expect(positionText()).toBe("1 file");
+    expect(unavailable("Next file")).toBe(true);
+    fireEvent.click(screen.getByLabelText("Previous file"));
+    expectSelected(a);
+  });
+
+  it("gives a pane sent to another missing file none of the last file's history", () => {
+    const a = entry("a.ts");
+    const b = entry("b.ts");
+    const c = entry("c.ts");
+    seedPanel({ filePath: "c.ts", fileStatus: "modified", changeSet: [a, b, c] });
+    const { rerender } = renderPane();
+
+    // Retargeted by an opener to a file the set doesn't hold: there is no gap
+    // of its own, so stepping starts from the top rather than from c.ts's.
+    seedPanel({ filePath: "elsewhere.ts", fileStatus: "modified", changeSet: [a, b, c] });
+    rerender(paneElement());
+
+    expect(unavailable("Previous file")).toBe(true);
+    pressInPane("]");
     expectSelected(a);
   });
 });

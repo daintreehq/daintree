@@ -48,6 +48,12 @@ export interface DiffFileSidebarProps {
    * `Discard changes` and `Trash file`.
    */
   statusIsLocal?: boolean;
+  /**
+   * The filter box's text. Held by the pane, whose file stepper walks the same
+   * filtered order the shelf shows.
+   */
+  filter: string;
+  onFilterChange: (filter: string) => void;
   onSelect: (index: number) => void;
 }
 
@@ -253,9 +259,10 @@ export function DiffFileSidebar({
   worktreePath,
   worktreeId = null,
   statusIsLocal = true,
+  filter,
+  onFilterChange,
   onSelect,
 }: DiffFileSidebarProps) {
-  const [filter, setFilter] = useState("");
   // The one file-row menu, shared with the worktree card, the file browser and
   // the Review Hub (#11757). Built once for the list, rendered per row.
   const { renderItems: renderFileRowMenuItems } = useFileRowMenuItems({
@@ -445,8 +452,8 @@ export function DiffFileSidebar({
         <SearchField
           size="compact"
           value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          onClear={() => setFilter("")}
+          onChange={(event) => onFilterChange(event.target.value)}
+          onClear={() => onFilterChange("")}
           clearLabel="Clear file filter"
           placeholder="Filter files"
           aria-label="Filter files"
@@ -471,7 +478,7 @@ export function DiffFileSidebar({
             scale="sidebar"
             title="No files match the filter"
             action={
-              <Button variant="subtle" size="sm" onClick={() => setFilter("")}>
+              <Button variant="subtle" size="sm" onClick={() => onFilterChange("")}>
                 Clear filter
               </Button>
             }
