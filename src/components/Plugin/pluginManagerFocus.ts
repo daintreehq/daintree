@@ -48,14 +48,19 @@ function fallbackTarget(): HTMLElement | null {
   const root = document.getElementById("root");
   const shell = root ? edgeTabbable(root, "start") : null;
   if (shell) return shell;
-  const overlays = document.querySelectorAll<HTMLElement>('[aria-modal="true"]');
+  const overlays = Array.from(document.querySelectorAll<HTMLElement>('[aria-modal="true"]'));
+  const closing = overlays.filter(isClosing);
   for (let i = overlays.length - 1; i >= 0; i--) {
     const overlay = overlays[i]!;
-    if (isClosing(overlay)) continue;
+    if (closing.includes(overlay)) continue;
     const target = edgeTabbable(overlay, "start");
     if (target) return target;
   }
-  return edgeTabbable(document.body, "start");
+  const radios = radiosIn(document.body);
+  for (const el of document.body.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR)) {
+    if (!closing.some((overlay) => overlay.contains(el)) && isTabStop(el, radios)) return el;
+  }
+  return null;
 }
 
 // A dialog fading out keeps `aria-modal` and isn't inert. An AppDialog drops

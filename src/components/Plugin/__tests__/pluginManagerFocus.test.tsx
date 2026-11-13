@@ -177,6 +177,23 @@ describe("containTab", () => {
     expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Slow" }));
   });
 
+  it("doesn't let a checked option in a disabled fieldset hide the rest of its group", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <fieldset disabled>
+          <input type="radio" name="mode" aria-label="Fast" defaultChecked />
+        </fieldset>
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const first = screen.getByRole("button", { name: "First" });
+    first.focus();
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Slow" }));
+  });
+
   it("lets Tab leave an unchecked group's first option for a control before its last", () => {
     render(
       <View>
@@ -330,6 +347,25 @@ describe("handFocusBack", () => {
     handFocusBack(null);
 
     expect(document.activeElement).toBe(sheetSearch);
+  });
+
+  it("keeps the last resort out of a dialog fading out, and one Radix reads closed", () => {
+    const { root } = shell();
+    root.setAttribute("inert", "");
+    const closingDialog = document.createElement("div");
+    closingDialog.setAttribute("aria-modal", "true");
+    closingDialog.setAttribute("data-app-dialog-surface", "");
+    closingDialog.appendChild(document.createElement("button"));
+    const closedLayer = document.createElement("div");
+    closedLayer.setAttribute("aria-modal", "true");
+    closedLayer.setAttribute("data-state", "closed");
+    closedLayer.appendChild(document.createElement("button"));
+    const loose = document.createElement("button");
+    document.body.append(closingDialog, closedLayer, loose);
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(loose);
   });
 
   it("prefers the topmost of two open overlays", () => {
