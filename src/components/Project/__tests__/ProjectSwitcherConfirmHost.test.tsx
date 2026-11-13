@@ -15,9 +15,10 @@ import { createRef, useRef } from "react";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import type { ProjectStatusMap } from "@shared/types/ipc/project";
 
 const { projectState, statsState } = vi.hoisted(() => {
-  const statsState = { stats: {} as Record<string, unknown> };
+  const statsState: { stats: ProjectStatusMap } = { stats: {} };
   const projectState = {
     loadProjects: vi.fn().mockResolvedValue(undefined),
     closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
@@ -55,6 +56,26 @@ vi.mock("@/clients", () => ({ projectClient: {} }));
 
 vi.mock("@/hooks/useSettingsOwner", () => ({
   useRemoteHostName: () => null,
+}));
+
+// The layer's boundaries are only there to fence a crash; a passthrough keeps
+// the error store and reporting out of a composition test.
+vi.mock("@/components/ErrorBoundary", () => ({
+  ErrorBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+// The ⌘P palette as the layer sees it: something that attaches its search box
+// to the ref it is handed.
+vi.mock("@/lazyPanels", () => ({
+  LazyProjectSwitcherPalette: ({
+    paletteInputRef,
+  }: {
+    paletteInputRef?: React.RefObject<HTMLInputElement | null>;
+  }) => (
+    <div data-testid="switcher-palette">
+      <input ref={paletteInputRef} data-testid="palette-input" />
+    </div>
+  ),
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", async () => {
@@ -106,11 +127,14 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
   };
 });
 
-import type { SearchableProject } from "@/hooks/projectSwitcher/types";
-import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import type {
+  SearchableProject,
+  UseProjectSwitcherPaletteReturn,
+} from "@/hooks/projectSwitcher/types";
 import type { ProjectSwitcherConfirmSource } from "../ProjectSwitcherConfirmDialogs";
 
 const { ProjectSwitcherConfirmHost } = await import("../ProjectSwitcherConfirmDialogs");
+const { ProjectSwitcherModalLayer } = await import("../ProjectSwitcherModalLayer");
 const { useProjectSwitcherProjectMutations } =
   await import("@/hooks/projectSwitcher/useProjectSwitcherProjectMutations");
 
@@ -164,58 +188,84 @@ function idleSource(): ProjectSwitcherConfirmSource {
   };
 }
 
+/** The source's callbacks that have been called, by name. */
+function calledCallbacks(source: ProjectSwitcherConfirmSource): string[] {
+  return Object.entries(source)
+    .filter(([, value]) => vi.isMockFunction(value) && value.mock.calls.length > 0)
+    .map(([key]) => key);
+}
+
+const BUSY_KEYS = [
+  "isRemovingProject",
+  "isSleepingProject",
+  "isDeletingScratch",
+  "isDeletingAllScratches",
+] as const;
+
 const scratchTarget = { id: "s1", name: "Spike", path: "/tmp/scratches/s1" };
 
 /**
- * Each confirmation the host owns: how to make it pending, how to mark it busy,
- * and which of the source's callbacks its accept and cancel must reach.
+ * Each confirmation the host owns: how to make it pending, the busy flag that
+ * locks it, and which of the source's callbacks its accept and cancel reach.
  */
 const CONFIRMS: Array<{
   kind: string;
   pending: Partial<ProjectSwitcherConfirmSource>;
   /** Absent for the one follow-up with no work of its own to wait on. */
-  busy?: Partial<ProjectSwitcherConfirmSource>;
-  accepted: (s: ProjectSwitcherConfirmSource) => unknown;
-  cancelled: (s: ProjectSwitcherConfirmSource) => { fn: unknown; args: unknown[] };
+  busyKey?: (typeof BUSY_KEYS)[number];
+  acceptKey: keyof ProjectSwitcherConfirmSource;
+  cancelKey: keyof ProjectSwitcherConfirmSource;
+  cancelArgs: unknown[];
 }> = [
   {
     kind: "close project",
     pending: { removeConfirmProject: makeProject() },
-    busy: { isRemovingProject: true },
-    accepted: (s) => s.confirmRemoveProject,
-    cancelled: (s) => ({ fn: s.setRemoveConfirmProject, args: [null] }),
+    busyKey: "isRemovingProject",
+    acceptKey: "confirmRemoveProject",
+    cancelKey: "setRemoveConfirmProject",
+    cancelArgs: [null],
   },
   {
     kind: "sleep project",
     pending: { sleepConfirmProject: makeProject() },
-    busy: { isSleepingProject: true },
-    accepted: (s) => s.confirmSleep,
-    cancelled: (s) => ({ fn: s.setSleepConfirmProject, args: [null] }),
+    busyKey: "isSleepingProject",
+    acceptKey: "confirmSleep",
+    cancelKey: "setSleepConfirmProject",
+    cancelArgs: [null],
   },
   {
     kind: "delete scratch",
     pending: { deleteScratchConfirm: scratchTarget },
-    busy: { isDeletingScratch: true },
-    accepted: (s) => s.confirmDeleteScratch,
-    cancelled: (s) => ({ fn: s.dismissDeleteScratchConfirm, args: [] }),
+    busyKey: "isDeletingScratch",
+    acceptKey: "confirmDeleteScratch",
+    cancelKey: "dismissDeleteScratchConfirm",
+    cancelArgs: [],
   },
   {
     kind: "delete every scratch",
     pending: { deleteAllScratchesConfirm: [scratchTarget] },
-    busy: { isDeletingAllScratches: true },
-    accepted: (s) => s.confirmDeleteAllScratches,
-    cancelled: (s) => ({ fn: s.dismissDeleteAllScratchesConfirm, args: [] }),
+    busyKey: "isDeletingAllScratches",
+    acceptKey: "confirmDeleteAllScratches",
+    cancelKey: "dismissDeleteAllScratchesConfirm",
+    cancelArgs: [],
   },
   {
     kind: "open saved project",
     pending: {
       saveAsProjectConfirm: {
-        scratch: { name: "Spike" },
-        project: { name: "retry-queue", path: "/Users/me/code/retry-queue" },
+        scratch: { id: "s1", name: "Spike" },
+        project: {
+          id: "p2",
+          name: "retry-queue",
+          path: "/Users/me/code/retry-queue",
+          emoji: "🚀",
+          lastOpened: 0,
+        },
       },
     },
-    accepted: (s) => s.openSavedProject,
-    cancelled: (s) => ({ fn: s.dismissSaveAsProjectConfirm, args: [] }),
+    acceptKey: "openSavedProject",
+    cancelKey: "dismissSaveAsProjectConfirm",
+    cancelArgs: [],
   },
 ];
 
@@ -236,8 +286,8 @@ describe("ProjectSwitcherConfirmHost", () => {
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
   });
 
-  describe.each(CONFIRMS)("$kind", ({ pending, accepted, cancelled }) => {
-    it("renders one dialog wired to the source's own accept and cancel", () => {
+  describe.each(CONFIRMS)("$kind", ({ pending, acceptKey, cancelKey, cancelArgs }) => {
+    it("renders one dialog whose accept and cancel reach only their own callbacks", () => {
       const source = { ...idleSource(), ...pending };
       render(
         <ProjectSwitcherConfirmHost
@@ -247,14 +297,16 @@ describe("ProjectSwitcherConfirmHost", () => {
       );
 
       expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
-      expect(screen.getByTestId("confirm-dialog").getAttribute("data-busy")).toBe("false");
+      expect(calledCallbacks(source)).toEqual([]);
 
       fireEvent.click(screen.getByTestId("confirm-accept"));
-      expect(accepted(source)).toHaveBeenCalledTimes(1);
+      expect(calledCallbacks(source)).toEqual([acceptKey]);
+      expect(source[acceptKey]).toHaveBeenCalledTimes(1);
 
+      vi.clearAllMocks();
       fireEvent.click(screen.getByTestId("confirm-cancel"));
-      const { fn, args } = cancelled(source);
-      expect(fn).toHaveBeenCalledWith(...args);
+      expect(calledCallbacks(source)).toEqual([cancelKey]);
+      expect(source[cancelKey]).toHaveBeenCalledWith(...cancelArgs);
     });
 
     it("unmounts the dialog once the source clears it", () => {
@@ -265,6 +317,8 @@ describe("ProjectSwitcherConfirmHost", () => {
           paletteInputRef={paletteInputRef}
         />
       );
+      expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
+
       view.rerender(
         <ProjectSwitcherConfirmHost
           projectSwitcher={idleSource()}
@@ -275,37 +329,33 @@ describe("ProjectSwitcherConfirmHost", () => {
     });
   });
 
-  it.each(CONFIRMS.filter((confirm) => confirm.busy))(
-    "passes the $kind confirm's in-flight state through",
-    ({ pending, busy }) => {
-      render(
-        <ProjectSwitcherConfirmHost
-          projectSwitcher={{ ...idleSource(), ...pending, ...busy }}
-          paletteInputRef={createRef<HTMLInputElement>()}
-        />
-      );
-      expect(screen.getByTestId("confirm-dialog").getAttribute("data-busy")).toBe("true");
+  describe.each(CONFIRMS.filter((confirm) => confirm.busyKey))(
+    "$kind in flight",
+    ({ pending, busyKey }) => {
+      it("locks on its own operation", () => {
+        render(
+          <ProjectSwitcherConfirmHost
+            projectSwitcher={{ ...idleSource(), ...pending, [busyKey!]: true }}
+            paletteInputRef={createRef<HTMLInputElement>()}
+          />
+        );
+        expect(screen.getByTestId("confirm-dialog").getAttribute("data-busy")).toBe("true");
+      });
+
+      it("stays live while only the other operations run", () => {
+        const others = Object.fromEntries(
+          BUSY_KEYS.filter((key) => key !== busyKey).map((key) => [key, true])
+        );
+        render(
+          <ProjectSwitcherConfirmHost
+            projectSwitcher={{ ...idleSource(), ...pending, ...others }}
+            paletteInputRef={createRef<HTMLInputElement>()}
+          />
+        );
+        expect(screen.getByTestId("confirm-dialog").getAttribute("data-busy")).toBe("false");
+      });
     }
   );
-
-  it("names the ⌘P search box as the focus successor while the palette is mounted", () => {
-    function View() {
-      const inputRef = useRef<HTMLInputElement>(null);
-      return (
-        <>
-          <input ref={inputRef} data-testid="palette-input" />
-          <ProjectSwitcherConfirmHost
-            projectSwitcher={{ ...idleSource(), deleteScratchConfirm: scratchTarget }}
-            paletteInputRef={inputRef}
-          />
-        </>
-      );
-    }
-    render(<View />);
-    expect(screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus")).toBe(
-      "palette-input"
-    );
-  });
 });
 
 /**
@@ -316,11 +366,12 @@ describe("ProjectSwitcherConfirmHost", () => {
  */
 describe("cold requests with no switcher mounted", () => {
   function ColdView({ project, close }: { project: SearchableProject; close: () => void }) {
-    const projectStats = statsState.stats as ProjectStatusMap;
     const mutations = useProjectSwitcherProjectMutations({
       close,
       projects: [],
-      projectStats,
+      // The store's own map, so rows come from `searchableProjects` as they do
+      // while the stats the palette was built from are still current.
+      projectStats: statsState.stats,
       searchableProjects: [project],
       rowContext: {
         currentProjectId: project.isActive ? project.id : undefined,
@@ -351,22 +402,53 @@ describe("cold requests with no switcher mounted", () => {
     );
   }
 
-  it("shows one Close confirm and closes nothing until it is accepted", async () => {
-    render(<ColdView project={makeProject()} close={vi.fn()} />);
+  /** Every store call that would close, remove or sleep a project. */
+  function destructiveCalls() {
+    return {
+      closeActiveProject: projectState.closeActiveProject.mock.calls,
+      closeProject: projectState.closeProject.mock.calls,
+      removeProject: projectState.removeProject.mock.calls,
+      sleepProject: projectState.sleepProject.mock.calls,
+    };
+  }
 
+  const NOTHING_DESTROYED = {
+    closeActiveProject: [],
+    closeProject: [],
+    removeProject: [],
+    sleepProject: [],
+  };
+
+  async function requestClose() {
+    render(<ColdView project={makeProject()} close={vi.fn()} />);
     await act(async () => {
       fireEvent.click(screen.getByTestId("request-close"));
     });
+  }
+
+  it("shows one Close confirm, touches nothing, then closes only the project on screen", async () => {
+    await requestClose();
 
     expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
     expect(screen.getByTestId("confirm-title").textContent).toBe("Close 'retry-queue'?");
-    expect(projectState.closeActiveProject).not.toHaveBeenCalled();
+    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("confirm-accept"));
     });
 
-    expect(projectState.closeActiveProject).toHaveBeenCalledWith("p1");
+    expect(destructiveCalls()).toEqual({ ...NOTHING_DESTROYED, closeActiveProject: [["p1"]] });
+    expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
+  });
+
+  it("closes nothing when the Close confirm is cancelled", async () => {
+    await requestClose();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("confirm-cancel"));
+    });
+
+    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
   });
 
@@ -381,13 +463,52 @@ describe("cold requests with no switcher mounted", () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
     expect(screen.getByTestId("confirm-title").textContent).toBe("Sleep 'retry-queue'?");
+    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("confirm-cancel"));
     });
 
-    expect(projectState.sleepProject).not.toHaveBeenCalled();
+    expect(destructiveCalls()).toEqual(NOTHING_DESTROYED);
     expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
+  });
+});
+
+/**
+ * The layer ModalHostLayer mounts once per view: the ⌘P palette only while it
+ * is open, the confirm host always.
+ */
+describe("ProjectSwitcherModalLayer", () => {
+  function renderLayer(isOpen: boolean, confirm: Partial<ProjectSwitcherConfirmSource>) {
+    const palette = {
+      ...idleSource(),
+      ...confirm,
+      isOpen,
+      mode: "modal",
+    } as unknown as UseProjectSwitcherPaletteReturn;
+    render(
+      <ProjectSwitcherModalLayer
+        isProjectSwitcherModalOpen={isOpen}
+        projectSwitcherPalette={palette}
+      />
+    );
+  }
+
+  it("shows a confirm with the palette closed", () => {
+    renderLayer(false, { removeConfirmProject: makeProject() });
+
+    expect(screen.queryByTestId("switcher-palette")).toBeNull();
+    expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
+  });
+
+  it("shows one confirm over the open palette, handing focus back to its search box", () => {
+    renderLayer(true, { deleteScratchConfirm: scratchTarget });
+
+    expect(screen.getAllByTestId("switcher-palette")).toHaveLength(1);
+    expect(screen.getAllByTestId("confirm-dialog")).toHaveLength(1);
+    expect(screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus")).toBe(
+      "palette-input"
+    );
   });
 });
 
@@ -403,25 +524,38 @@ describe("render sites", () => {
       if (entry === "__tests__" || entry === "__bench__" || entry === "node_modules") continue;
       const full = path.join(dir, entry);
       if (statSync(full).isDirectory()) productionSources(full, out);
-      else if (/\.tsx$/.test(entry) && !/\.(test|spec|bench)\.tsx$/.test(entry)) out.push(full);
+      else if (/\.tsx?$/.test(entry) && !/\.(test|spec|bench)\.tsx?$/.test(entry)) out.push(full);
     }
     return out;
   }
 
-  function filesRendering(tag: string): string[] {
-    const pattern = new RegExp(`<${tag}[\\s/>]`);
-    return productionSources(SRC)
-      .filter((file) => pattern.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(SRC, file).split(path.sep).join("/"));
+  /** Where `<Tag` appears in code, by file, with comments stripped. */
+  function renderSites(tag: string): Record<string, number> {
+    const pattern = new RegExp(`<${tag}[\\s/>]`, "g");
+    const sites: Record<string, number> = {};
+    for (const file of productionSources(SRC)) {
+      const code = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      const count = code.match(pattern)?.length ?? 0;
+      if (count > 0) sites[path.relative(SRC, file).split(path.sep).join("/")] = count;
+    }
+    return sites;
   }
 
-  it("mounts the host once, in the per-view modal layer", () => {
-    expect(filesRendering("ProjectSwitcherConfirmHost")).toEqual(["ModalHostLayer.tsx"]);
+  it("mounts the switcher's modal layer once, in the per-view modal host", () => {
+    expect(renderSites("ProjectSwitcherModalLayer")).toEqual({ "ModalHostLayer.tsx": 1 });
+  });
+
+  it("mounts the confirm host once, in that layer", () => {
+    expect(renderSites("ProjectSwitcherConfirmHost")).toEqual({
+      "components/Project/ProjectSwitcherModalLayer.tsx": 1,
+    });
   });
 
   it("renders the dialogs only through the host", () => {
-    expect(filesRendering("ProjectSwitcherConfirmDialogs")).toEqual([
-      "components/Project/ProjectSwitcherConfirmDialogs.tsx",
-    ]);
+    expect(renderSites("ProjectSwitcherConfirmDialogs")).toEqual({
+      "components/Project/ProjectSwitcherConfirmDialogs.tsx": 1,
+    });
   });
 });

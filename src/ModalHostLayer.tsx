@@ -1,4 +1,4 @@
-import { Suspense, useRef } from "react";
+import { Suspense } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
@@ -23,7 +23,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
-import { ProjectSwitcherConfirmHost } from "./components/Project/ProjectSwitcherConfirmDialogs";
+import { ProjectSwitcherModalLayer } from "./components/Project/ProjectSwitcherModalLayer";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
@@ -44,14 +44,12 @@ import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
 import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { MaximizeFlights, PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
-import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
   LazySendToAgentPalette,
   LazyWorktreePalette,
   LazyQuickCreatePalette,
   LazyPanelPalette,
-  LazyProjectSwitcherPalette,
   LazyThemePalette,
   LazyResumeSessionsPalette,
   LazyRecentDictationsPalette,
@@ -300,9 +298,6 @@ export function ModalHostLayer({
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
-  // The ⌘P palette's search box, shared with the confirm host so a confirm
-  // whose opener row is gone hands focus back to it while the palette is open.
-  const projectSwitcherInputRef = useRef<HTMLInputElement>(null);
   const isCanopyOfferShown = useCanopyOfferShown();
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
@@ -490,66 +485,10 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="ProjectSwitcherPalette"
-        resetKeys={[Number(isProjectSwitcherModalOpen)]}
-      >
-        {isProjectSwitcherModalOpen && (
-          <Suspense fallback={null}>
-            <LazyProjectSwitcherPalette
-              isOpen={isProjectSwitcherModalOpen}
-              query={projectSwitcherPalette.query}
-              results={projectSwitcherPalette.results}
-              browseBands={projectSwitcherPalette.browseBands}
-              selectedIndex={projectSwitcherPalette.selectedIndex}
-              cycleRequest={projectSwitcherPalette.cycleRequest}
-              onQueryChange={projectSwitcherPalette.setQuery}
-              onSelectPrevious={projectSwitcherPalette.selectPrevious}
-              onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectRow}
-              onHoverProject={projectSwitcherPalette.onHoverProject}
-              onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
-              onHoverRow={projectSwitcherPalette.hoverRow}
-              fleetLiveness={projectSwitcherPalette.fleetLiveness}
-              onClose={projectSwitcherPalette.close}
-              onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
-              onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-              onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
-              onRestartProject={(projectId) => projectSwitcherPalette.restartProject(projectId)}
-              onLocateProject={(projectId) => {
-                projectSwitcherPalette.locateProject(projectId);
-              }}
-              onMoveOrRenameProject={(projectId) => {
-                projectSwitcherPalette.moveOrRenameProject(projectId);
-              }}
-              onTogglePinProject={(projectId) =>
-                void projectSwitcherPalette.togglePinProject(projectId)
-              }
-              onCopyPath={projectSwitcherPalette.copyPath}
-              onSelectNewWindow={(project) => {
-                projectSwitcherPalette.close();
-                void actionService.dispatch(
-                  "app.newWindow",
-                  { projectPath: project.path },
-                  { source: "user" }
-                );
-              }}
-              rankedSearch={projectSwitcherPalette.isRankedSearch}
-              scratchResults={projectSwitcherPalette.scratchResults}
-              onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
-              onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
-              onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
-              onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
-              onRenameScratch={(scratchId, name) =>
-                void projectSwitcherPalette.renameScratch(scratchId, name)
-              }
-              onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
-              paletteInputRef={projectSwitcherInputRef}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <ProjectSwitcherModalLayer
+        isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
+        projectSwitcherPalette={projectSwitcherPalette}
+      />
       {/*
         Mounted here, once per view, rather than inside the switcher: the
         switcher renders in more than one place, and its menus open these from
@@ -566,17 +505,6 @@ export function ModalHostLayer({
         onClose={() => projectSwitcherPalette.setStopConfirmProjectId(null)}
         onConfirm={projectSwitcherPalette.confirmStopProject}
       />
-      {/*
-        Eager, not lazy: a confirm has to own focus the commit its request lands,
-        and the switcher copies that ask for it come and go. After the ⌘P palette
-        so its Escape registers above the palette's.
-      */}
-      <ErrorBoundary variant="component" componentName="ProjectSwitcherConfirmDialogs">
-        <ProjectSwitcherConfirmHost
-          projectSwitcher={projectSwitcherPalette}
-          paletteInputRef={projectSwitcherInputRef}
-        />
-      </ErrorBoundary>
 
       <ErrorBoundary
         variant="component"
