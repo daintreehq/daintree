@@ -356,8 +356,11 @@ export function useProjectSwitcherProjectMutations({
           notify({
             type: "error",
             title: isActive ? "Couldn't close project" : "Couldn't remove project",
-            message: formatErrorMessage(
-              retryError,
+            message: distinctDetail(
+              formatErrorMessage(
+                retryError,
+                isActive ? "Couldn't close project" : "Couldn't remove project"
+              ),
               isActive ? "Couldn't close project" : "Couldn't remove project"
             ),
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
@@ -367,8 +370,11 @@ export function useProjectSwitcherProjectMutations({
       notify({
         type: "error",
         title: removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project",
-        message: formatErrorMessage(
-          error,
+        message: distinctDetail(
+          formatErrorMessage(
+            error,
+            removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
+          ),
           removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
         ),
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],

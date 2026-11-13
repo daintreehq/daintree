@@ -1015,6 +1015,9 @@ export function notify(payload: NotifyPayload): string {
   }
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
+  // A titled entry whose body would only repeat the title carries an empty
+  // message; it still belongs in the inbox, where the title is the row.
+  const hasHistory = historyMessage !== undefined && (historyMessage !== "" || Boolean(title));
 
   const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
 
@@ -1072,7 +1075,7 @@ export function notify(payload: NotifyPayload): string {
       }
     }
     const entryId =
-      historyMessage && !payload.transient
+      hasHistory && !payload.transient
         ? useNotificationHistoryStore.getState().addEntry({
             type,
             title,
@@ -1171,7 +1174,7 @@ export function notify(payload: NotifyPayload): string {
   ) {
     // A replacement still retires the row it replaces and leaves its own
     // buttons in the inbox; only its toast is held back.
-    if (payload.replaceKey !== undefined && historyMessage) {
+    if (payload.replaceKey !== undefined && hasHistory) {
       useNotificationHistoryStore.getState().addEntry({
         type,
         title,
@@ -1189,7 +1192,7 @@ export function notify(payload: NotifyPayload): string {
   }
 
   const historyEntryId =
-    historyMessage && !payload.transient
+    hasHistory && !payload.transient
       ? useNotificationHistoryStore.getState().addEntry({
           type,
           title,
@@ -1206,10 +1209,10 @@ export function notify(payload: NotifyPayload): string {
 
   if (!notificationsEnabled || isQuiet) return "";
 
-  if (shouldNative && historyMessage && typeof window !== "undefined") {
+  if (shouldNative && hasHistory && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
       title: title ?? "Daintree",
-      body: historyMessage,
+      body: historyMessage ?? "",
     });
   }
 
