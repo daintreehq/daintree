@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type ReactElement,
-  type RefObject,
 } from "react";
 import {
   XCircle,
@@ -263,32 +262,47 @@ function FleetRunStatusLine({
 let focusBeforeRibbon: HTMLElement | null = null;
 
 /**
- * A fleet of other hosts' agents has no pane of its own to hand focus back to
- * when it ends, so whatever in the ribbon held focus (the composer, Exit) would
- * leave it on <body>. Mounted inside the ribbon: its cleanup runs while the
- * ribbon is still in the document, so it can tell whether the ribbon owned it.
+ * The ribbon and its portalled layers (the member list, the selection menu)
+ * carry this, so focus in any of them is the ribbon's. Read from the DOM, not
+ * the ribbon's ref: that attaches after this guard's effect runs on mount and
+ * detaches before its cleanup runs on removal.
  */
-function ReturnFocusOnRemoval({
-  containerRef,
-}: {
-  containerRef: RefObject<HTMLDivElement | null>;
-}): null {
+const RIBBON_LAYER_SELECTOR = "[data-fleet-ribbon-layer]";
+
+/**
+ * Whatever in the ribbon held focus (Exit, the composer, a member list or menu
+ * row) leaves it on <body> when the ribbon goes: exiting, clearing the
+ * selection, or disarming down to one pane. A fleet with a pane here hands it
+ * to the focused pane, which Exit has just made its last-armed member; a fleet
+ * of other hosts' agents has no pane of its own, so it goes back where it came
+ * from. Mounted inside the ribbon: its cleanup runs while the ribbon and its
+ * layers are still in the document, so it can tell whether they owned it.
+ */
+function ReturnFocusOnRemoval({ paneFirst }: { paneFirst: boolean }): null {
   useLayoutEffect(() => {
-    const container = containerRef.current;
     return () => {
-      if (!container?.contains(document.activeElement)) return;
+      if (!document.activeElement?.closest(RIBBON_LAYER_SELECTOR)) return;
       const back = focusBeforeRibbon;
       queueMicrotask(() => {
         // Focus that already landed somewhere is left where it is.
         if (document.activeElement !== document.body && document.activeElement !== null) return;
-        if (back?.isConnected) back.focus({ preventScroll: true });
-        else {
+        const toPane = () => {
           const pane = usePanelStore.getState().focusedId;
-          if (pane) focusPanelInput(pane);
+          return pane !== null && focusPanelInput(pane);
+        };
+        const toBack = () => {
+          if (!back?.isConnected) return false;
+          back.focus({ preventScroll: true });
+          return document.activeElement === back;
+        };
+        if (paneFirst) {
+          if (!toPane()) toBack();
+        } else if (!toBack()) {
+          toPane();
         }
       });
     };
-  }, [containerRef]);
+  }, [paneFirst]);
   return null;
 }
 
@@ -854,9 +868,10 @@ export function FleetArmingRibbon(): ReactElement | null {
             // as a draft wraps, and the bar itself never changes height.
             className={cn(FLEET_RIBBON_SHELL_CLASS, "overflow-x-clip outline-hidden")}
             data-testid="fleet-arming-ribbon"
+            data-fleet-ribbon-layer=""
             {...ribbonMotionProps}
           >
-            {localArmedCount === 0 && <ReturnFocusOnRemoval containerRef={ribbonRef} />}
+            <ReturnFocusOnRemoval paneFirst={localArmedCount > 0} />
             {/* Three areas — a fixed membership anchor, a flexible status slot,
              * and the trailing controls — so the transient centre content can
              * come and go without moving the menu or Exit. */}
@@ -976,6 +991,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                   align="end"
                   sideOffset={4}
                   className="w-[22rem] max-w-[calc(100vw-1rem)]"
+                  data-fleet-ribbon-layer=""
                   onCloseAutoFocus={(e) => {
                     if (!dialogHandoffRef.current) return;
                     dialogHandoffRef.current = false;

@@ -32,10 +32,18 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 }));
 
 // Live manage dialogs: mounted, it holds its panel-store subscriptions.
-const liveManageDialogs = vi.hoisted(() => ({ count: 0 }));
+const liveManageDialogs = vi.hoisted(() => ({
+  count: 0,
+  // Where the dialog hands focus back once the control that opened it is gone.
+  restoreFocusTo: undefined as
+    React.RefObject<HTMLElement | null> | (() => HTMLElement | null) | undefined,
+}));
 vi.mock("../SavedFleetsDialog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../SavedFleetsDialog")>();
   function SavedFleetsDialog(props: React.ComponentProps<typeof actual.SavedFleetsDialog>) {
+    React.useEffect(() => {
+      liveManageDialogs.restoreFocusTo = props.restoreFocusTo;
+    });
     React.useEffect(() => {
       liveManageDialogs.count++;
       return () => {
@@ -844,6 +852,39 @@ describe("FleetPickerPalette", () => {
       // the dialog that just opened.
       expect(consumePaletteFocusRestoreSuppression()).toBe(true);
       expect(screen.getByTestId("fleet-saved-manage-dialog")).toBeTruthy();
+    });
+
+    it("hands focus back to what opened the palette once the dialog closes (#16904)", async () => {
+      useProjectSettingsStore.setState({
+        settings: {
+          runCommands: [],
+          fleetSavedScopes: [
+            { kind: "snapshot", id: "s", name: "Old", terminalIds: ["gone"], createdAt: 1 },
+          ],
+        },
+      });
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      try {
+        const { rerender } = renderPalette([], false);
+        opener.focus();
+        const store = createWorktreeStore();
+        rerender(
+          <WorktreeStoreContext.Provider value={store}>
+            <FleetPickerPalette isOpen onClose={() => {}} />
+          </WorktreeStoreContext.Provider>
+        );
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
+        });
+        // The Manage control leaves with the palette, so the dialog's own
+        // opener is gone by the time it closes.
+        const target = liveManageDialogs.restoreFocusTo;
+        const resolved = typeof target === "function" ? target() : target?.current;
+        expect(resolved).toBe(opener);
+      } finally {
+        opener.remove();
+      }
     });
   });
 });

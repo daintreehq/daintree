@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useInsertionEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -53,6 +61,15 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const [commitMode, setCommitMode] = useState<CommitMode>("replace");
   // The palette stays mounted once used; the dialog only while it's in use.
   const manageDialog = useRetainedDialog();
+  // What opened the palette, for the dialog it hands over to: the palette's
+  // own restore is skipped for that hand-off, and the control that opened the
+  // dialog leaves with the palette. Read before the palette takes focus.
+  const paletteOpenerRef = useRef<HTMLElement | null>(null);
+  useInsertionEffect(() => {
+    if (!isOpen) return;
+    const el = document.activeElement;
+    paletteOpenerRef.current = el instanceof HTMLElement ? el : null;
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) setCommitMode("replace");
@@ -246,6 +263,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
           isOpen={manageDialog.isOpen}
           onClose={manageDialog.close}
           onCloseComplete={manageDialog.onCloseComplete}
+          restoreFocusTo={paletteOpenerRef}
         />
       )}
       <AppPaletteDialog
