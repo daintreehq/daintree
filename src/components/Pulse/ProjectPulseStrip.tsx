@@ -132,6 +132,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   const pulse = usePulseStore((state) => state.getPulse(worktreeId));
   const isLoading = usePulseStore((state) => state.isLoading(worktreeId));
   const error = usePulseStore((state) => state.getError(worktreeId));
+  const rangeDays = usePulseStore((state) => state.rangeDays);
   const fetchPulse = usePulseStore((state) => state.fetchPulse);
 
   const stripButtonRef = useRef<HTMLButtonElement>(null);
@@ -148,11 +149,13 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   // `!error`: a settled null would otherwise keep passing the guard and, since
   // this effect is the fetch trigger, spin a tight refetch loop. The store also
   // dedupes in-flight requests, so a later expand collapses onto this one.
+  // A snapshot kept from before a range change counts as missing: the store
+  // holds it so the card never blanks, not as this range's answer.
   useEffect(() => {
-    if (!pulse && !isLoading && error === undefined) {
+    if ((!pulse || pulse.rangeDays !== rangeDays) && !isLoading && error === undefined) {
       void fetchPulse(worktreeId);
     }
-  }, [worktreeId, pulse, isLoading, error, fetchPulse]);
+  }, [worktreeId, pulse, rangeDays, isLoading, error, fetchPulse]);
 
   // Move focus into the expansion without moving the viewport at all. The
   // collapse control is rendered at the TOP of the expansion, exactly where

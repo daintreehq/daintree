@@ -55,7 +55,17 @@ function getUserFriendlyError(technicalError: string): string | null {
 
 type PulseStore = PulseState & PulseActions;
 
+function deleteKey<V>(map: Map<string, V>, key: string): Map<string, V> {
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
+
 const DEFAULT_RANGE_DAYS: PulseRangeDays = 60;
+
+// Monotonic, never reset: a `Date.now()` id let a 60→120→60 flip inside one
+// millisecond hand the first request's late answer the third one's id.
+let nextRequestId = 0;
 
 export const usePulseStore = create<PulseStore>()((set, get) => ({
   pulses: new Map(),
@@ -91,7 +101,7 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
       }));
     }
 
-    const requestId = Date.now();
+    const requestId = ++nextRequestId;
     const requestedRangeDays = state.rangeDays;
 
     set((prev) => ({
@@ -143,6 +153,12 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
           currentRetries < PULSE_MAX_RETRIES && !forceRefresh && userMessage !== null;
 
         set((prev) => ({
+          // A snapshot kept from another range is not a stale copy of this
+          // one: leaving it up would show the old window under the new pick.
+          pulses:
+            (prev.pulses.get(worktreeId)?.rangeDays ?? requestedRangeDays) !== requestedRangeDays
+              ? deleteKey(prev.pulses, worktreeId)
+              : prev.pulses,
           errors: new Map(prev.errors).set(worktreeId, userMessage),
           loading: new Map(prev.loading).set(worktreeId, false),
           retryCount: shouldRetry
@@ -182,9 +198,12 @@ export const usePulseStore = create<PulseStore>()((set, get) => ({
     const state = get();
     state.retryTimers.forEach((timer) => clearTimeout(timer));
 
+    // Snapshots stay: each carries its own `rangeDays`, so the card keeps the
+    // last window (and its header, with the range control the user is on)
+    // until the new one lands, and consumers refetch a snapshot whose range
+    // no longer matches.
     set({
       rangeDays: days,
-      pulses: new Map(),
       loading: new Map(),
       errors: new Map(),
       requestIds: new Map(),

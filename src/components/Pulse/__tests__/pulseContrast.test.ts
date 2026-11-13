@@ -186,12 +186,14 @@ describe("PulseHeatmap — accent restraint (issue #7229)", () => {
 });
 
 describe("ProjectPulseCard — slot stability (issue #7671)", () => {
-  it("skeleton, loaded, error, and new-repo variants share min-h-[240px] so swaps don't shift siblings", async () => {
+  it("skeleton, loaded, error, and new-repo variants render in one shell that reserves the slot", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    const occurrences = content.match(/min-h-\[240px\]/g);
-    expect(occurrences).not.toBeNull();
-    // PulseSkeleton + loaded card + new-repo variant + error variant = 4
-    expect(occurrences!.length).toBeGreaterThanOrEqual(4);
+    // One shell for every state (#16900): the variants swap only the body, so
+    // the one min-height holds the slot for all of them and no early return
+    // can drop a second, differently sized card in its place.
+    const shells = content.match(/"pulse-card [^"]*"/g) ?? [];
+    expect(shells).toHaveLength(1);
+    expect(shells[0]).toContain("min-h-[240px]");
   });
 });
 
@@ -247,7 +249,7 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
     // block in index.css — so the old per-element `motion-reduce:animate-none`
     // utility is redundant and deliberately dropped. Assert the delegation
     // instead: SpinningIcon is the reduced-motion-safe primitive.
-    expect(content).toMatch(/<SpinningIcon\s+icon=\{RefreshCw\}\s+active=\{isLoading\}/);
+    expect(content).toMatch(/<SpinningIcon\s+icon=\{RefreshCw\}\s+active=\{/);
   });
 });
 

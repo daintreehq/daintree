@@ -116,8 +116,9 @@ describe("pulseStore", () => {
     expect(usePulseStore.getState().retryTimers.has("wt-new")).toBe(false);
   });
 
-  it("clears stale request ids when range changes", () => {
-    const timer = setTimeout(() => {}, 2000);
+  it("clears stale request ids and cancels retries when range changes", () => {
+    const retry = vi.fn();
+    const timer = setTimeout(retry, 2000);
     usePulseStore.setState({
       requestIds: new Map([["wt-3", 123]]),
       retryTimers: new Map([["wt-3", timer]]),
@@ -125,12 +126,106 @@ describe("pulseStore", () => {
       lastRetryTimestamp: new Map([["wt-3", Date.now()]]),
     });
 
-    usePulseStore.getState().setRangeDays(30 as PulseRangeDays);
+    usePulseStore.getState().setRangeDays(120);
 
     const state = usePulseStore.getState();
-    expect(state.rangeDays).toBe(30);
+    expect(state.rangeDays).toBe(120);
     expect(state.requestIds.size).toBe(0);
     expect(state.retryTimers.size).toBe(0);
     expect(state.retryCount.size).toBe(0);
+    vi.advanceTimersByTime(2000);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("keeps every worktree's last snapshot across a range change", () => {
+    const one = makePulse("wt-1", 60);
+    const two = makePulse("wt-2", 60);
+    usePulseStore.setState({
+      pulses: new Map([
+        ["wt-1", one],
+        ["wt-2", two],
+      ]),
+      loading: new Map([["wt-1", true]]),
+      errors: new Map([["wt-2", "Unable to load activity data"]]),
+    });
+
+    usePulseStore.getState().setRangeDays(120);
+
+    const state = usePulseStore.getState();
+    expect(state.getPulse("wt-1")).toBe(one);
+    expect(state.getPulse("wt-2")).toBe(two);
+    expect(state.isLoading("wt-1")).toBe(false);
+    expect(state.getError("wt-2")).toBeUndefined();
+  });
+
+  it("drops a snapshot from another range when the new range fails", async () => {
+    usePulseStore.setState({ pulses: new Map([["wt-1", makePulse("wt-1", 60)]]) });
+    usePulseStore.getState().setRangeDays(120);
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "boom" } });
+
+    await usePulseStore.getState().fetchPulse("wt-1");
+
+    expect(usePulseStore.getState().getPulse("wt-1")).toBeUndefined();
+    expect(usePulseStore.getState().getError("wt-1")).toBe("Unable to load activity data");
+  });
+
+  it("drops a snapshot from another range when the new range has no commits", async () => {
+    usePulseStore.setState({ pulses: new Map([["wt-1", makePulse("wt-1", 60)]]) });
+    usePulseStore.getState().setRangeDays(180);
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "no commits yet" } });
+
+    await usePulseStore.getState().fetchPulse("wt-1");
+
+    expect(usePulseStore.getState().getPulse("wt-1")).toBeUndefined();
+    expect(usePulseStore.getState().getError("wt-1")).toBeNull();
+  });
+
+  it("keeps a same-range snapshot when a refresh fails", async () => {
+    const kept = makePulse("wt-1", 60);
+    usePulseStore.setState({ pulses: new Map([["wt-1", kept]]) });
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "boom" } });
+
+    await usePulseStore.getState().fetchPulse("wt-1");
+
+    expect(usePulseStore.getState().getPulse("wt-1")).toBe(kept);
+  });
+
+  it("ignores a late answer from an earlier request in the same millisecond", async () => {
+    const first = deferred();
+    const third = deferred();
+    dispatchMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockReturnValueOnce(third.promise);
+    const store = usePulseStore.getState();
+
+    const firstFetch = store.fetchPulse("wt-1");
+    store.setRangeDays(120);
+    void store.fetchPulse("wt-1");
+    store.setRangeDays(60);
+    const thirdFetch = store.fetchPulse("wt-1");
+
+    const stale = makePulse("wt-1", 60);
+    first.resolve({ ok: true, result: stale });
+    expect(await firstFetch).toBeNull();
+    expect(usePulseStore.getState().getPulse("wt-1")).toBeUndefined();
+    expect(usePulseStore.getState().isLoading("wt-1")).toBe(true);
+
+    const fresh = makePulse("wt-1", 60);
+    third.resolve({ ok: true, result: fresh });
+    expect(await thirdFetch).toBe(fresh);
+    expect(usePulseStore.getState().getPulse("wt-1")).toBe(fresh);
   });
 });
+
+function makePulse(worktreeId: string, rangeDays: PulseRangeDays): ProjectPulse {
+  return { worktreeId, rangeDays, heatmap: [], generatedAt: Date.now() } as unknown as ProjectPulse;
+}
+
+function deferred() {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}

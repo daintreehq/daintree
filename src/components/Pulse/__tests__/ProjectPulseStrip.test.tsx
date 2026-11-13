@@ -12,6 +12,7 @@ const state = {
   getPulse: (_id: string) => undefined as unknown,
   isLoading: (_id: string) => false,
   getError: (_id: string) => undefined as unknown,
+  rangeDays: 60,
   fetchPulse: vi.fn(),
 };
 vi.mock("@/store", () => ({
@@ -45,6 +46,7 @@ function makePulse(overrides: Record<string, unknown> = {}) {
     activeDays: 5,
     projectAgeDays: 60,
     currentStreakDays: 2,
+    rangeDays: 60,
     ...overrides,
   };
 }
@@ -53,6 +55,7 @@ beforeEach(() => {
   state.getPulse = () => undefined;
   state.isLoading = () => false;
   state.getError = () => undefined;
+  state.rangeDays = 60;
   state.fetchPulse.mockClear();
 });
 
@@ -76,6 +79,13 @@ describe("ProjectPulseStrip", () => {
     state.getPulse = () => makePulse();
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(state.fetchPulse).not.toHaveBeenCalled();
+  });
+
+  it("fetches on mount when the cached snapshot is from another range", () => {
+    state.getPulse = () => makePulse({ rangeDays: 60 });
+    state.rangeDays = 120;
+    render(<ProjectPulseStrip worktreeId="wt1" />);
+    expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
   });
 
   it("does not fetch on mount while a request is already in flight", () => {
