@@ -54,6 +54,7 @@ import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
+import { pickCursorReplacement, type CursorSighting } from "./treeCursor";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
   FILE_BROWSER_SIDEBAR_MAX_WIDTH,
@@ -491,6 +492,7 @@ export function FileBrowserPane({
     listingHasHiddenDotfiles,
     listingHiddenCounts,
     selectionMissing,
+    missingRowStatus,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -504,6 +506,44 @@ export function FileBrowserPane({
     sort,
     selectedPath,
   });
+
+  // Keep the tree cursor on a row. Collapse all, the dotfile toggle, a delete
+  // and a re-root each remove the cursor's row without touching the cursor, and
+  // a cursor that resolves to nothing kills every key that reads it — Enter, the
+  // left and right arrows, the row menu key and Cmd+I — until an up or down
+  // press restarts at row 0. The single-folder collapse has its own rehome in
+  // `handleToggleExpanded`; this is the general one, and it also covers rows
+  // removed by something other than a click (an agent deleting the file).
+  //
+  // Acts only on a cursor whose row was seen on screen and has since gone. A
+  // restored or revealed cursor lands before the listings under it do, and a
+  // cursor that never resolved is not stale, only early. A row that has gone
+  // away is also not proof of absence while an ancestor is unlisted — a re-root
+  // drops every listing but the root's, so a cursor still inside the tree loses
+  // its row for a few frames — which is what `missingRowStatus` rules on.
+  //
+  // Only the tree's own highlight moves. The viewer keeps what it had open, so
+  // this never routes through `handleTreeSelect`, which would open a file.
+  const cursorIndex = useMemo(
+    () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
+    [rows, cursorPath]
+  );
+  const cursorSightingRef = useRef<{ id: string; sighting: CursorSighting } | null>(null);
+  useEffect(() => {
+    if (cursorPath === null) {
+      cursorSightingRef.current = null;
+      return;
+    }
+    if (cursorIndex >= 0) {
+      cursorSightingRef.current = { id, sighting: { path: cursorPath, rows, index: cursorIndex } };
+      return;
+    }
+    const seen = cursorSightingRef.current;
+    if (seen === null || seen.id !== id || seen.sighting.path !== cursorPath) return;
+    if (missingRowStatus(cursorPath) !== "absent") return;
+    cursorSightingRef.current = null;
+    setCursorPath(pickCursorReplacement(seen.sighting, rows));
+  }, [id, cursorPath, cursorIndex, rows, missingRowStatus]);
 
   // Persist the last-known tree at going-away points only (#11367): the
   // document actually being hidden (window minimize, window close, app quit —
@@ -857,7 +897,8 @@ export function FileBrowserPane({
   //
   // Clears the set outright rather than walking it: every expanded path is a
   // child of the root, so there is nothing to preserve, and the cursor is left
-  // alone — `FileTreeView` rehomes a cursor that a collapse put out of view.
+  // alone — the reconcile effect above rehomes a cursor the collapse put out of
+  // view.
   const handleCollapseAll = useCallback(() => {
     setFileBrowserView(id, { browserExpandedPaths: [] });
   }, [id, setFileBrowserView]);
@@ -1111,8 +1152,8 @@ export function FileBrowserPane({
   // shared core. `Copy context` moved into that core, where it covers files as
   // well and stays gated on a real worktree — keeping a folder-only copy here
   // too would render it twice on a directory row.
-  const rowContextMenu = useCallback(
-    (row: FileEntryLike): React.ReactNode =>
+  const renderRowMenu = useCallback(
+    (row: FileEntryLike, advertiseInsertShortcut: boolean): React.ReactNode =>
       // Every item names a path on disk, built by joining the row's relative
       // path onto the root. With no root the join yields a relative path that
       // `file.view` would resolve against whatever project is current — a
@@ -1151,20 +1192,23 @@ export function FileBrowserPane({
               <ContextMenuSeparator />
             </>
           )}
-          {renderFileRowMenuItems({
-            // `basePath` is the true worktree root even when the tree has been
-            // re-rooted to a subfolder, and `row.path` stays relative to it —
-            // so one join gives the absolute path and the row path copies
-            // verbatim.
-            absolutePath: join(basePath, row.path),
-            relativePath: row.path,
-            name: row.name,
-            isDirectory: row.isDirectory,
-            // Exact file status only. A folder's index entry is the worst
-            // status anywhere beneath it, which would offer "Open diff" on a
-            // directory that has no diff of its own.
-            status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
-          })}
+          {renderFileRowMenuItems(
+            {
+              // `basePath` is the true worktree root even when the tree has been
+              // re-rooted to a subfolder, and `row.path` stays relative to it —
+              // so one join gives the absolute path and the row path copies
+              // verbatim.
+              absolutePath: join(basePath, row.path),
+              relativePath: row.path,
+              name: row.name,
+              isDirectory: row.isDirectory,
+              // Exact file status only. A folder's index entry is the worst
+              // status anywhere beneath it, which would offer "Open diff" on a
+              // directory that has no diff of its own.
+              status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
+            },
+            { insertFileReferenceShortcut: advertiseInsertShortcut }
+          )}
         </>
       ),
     [
@@ -1175,6 +1219,18 @@ export function FileBrowserPane({
       basePath,
       gitStatusIndex,
     ]
+  );
+  // Cmd+I is the tree's own key and acts on its cursor row, so only that row's
+  // menu may advertise it: a right-click doesn't move the cursor, and on any
+  // other row the hint would name a file the chord doesn't insert. The folder
+  // listing lives in the viewer, where the chord isn't bound at all.
+  const treeRowContextMenu = useCallback(
+    (row: FileEntryLike): React.ReactNode => renderRowMenu(row, row.path === cursorPath),
+    [renderRowMenu, cursorPath]
+  );
+  const listingRowContextMenu = useCallback(
+    (row: FileEntryLike): React.ReactNode => renderRowMenu(row, false),
+    [renderRowMenu]
   );
 
   // The changed-files summary's rows (#13423): the same core as a tree row,
@@ -1528,7 +1584,7 @@ export function FileBrowserPane({
               folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={handleSelectListingEntry}
-              rowContextMenu={rowContextMenu}
+              rowContextMenu={listingRowContextMenu}
               changeContextMenu={changeContextMenu}
               renderFileMenuItems={basePath === "" ? undefined : renderFileRowMenuItems}
               basePath={basePath}
@@ -1664,7 +1720,7 @@ export function FileBrowserPane({
           onSelect={handleTreeSelect}
           onToggleExpanded={handleToggleExpanded}
           onActivate={handleActivate}
-          rowContextMenu={rowContextMenu}
+          rowContextMenu={treeRowContextMenu}
           onInsertFileReference={handleInsertFileReference}
           canInsertFileReference={canInsertFileReference}
           // Turns a dragged row's relative path absolute (#11576), the same

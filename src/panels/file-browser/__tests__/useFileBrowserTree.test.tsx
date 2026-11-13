@@ -640,6 +640,80 @@ describe("useFileBrowserTree", () => {
     );
   });
 
+  it("says whether a row-less path is gone or just not listed yet (#16918)", async () => {
+    const rootedListing = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation((payload) =>
+      payload.dirPath === "src"
+        ? rootedListing.promise
+        : Promise.resolve([dir("src"), file("README.md")])
+    );
+
+    const { result, rerender } = renderHook(
+      (props: { rootPath: string; expandedPaths: string[] }) =>
+        useFileBrowserTree({
+          source: wtSource("wt-1"),
+          expandedPaths: props.expandedPaths,
+          hideDotfiles: false,
+          alwaysHiddenPatterns: [],
+          rootPath: props.rootPath,
+          changeTick: undefined,
+        }),
+      { initialProps: { rootPath: "", expandedPaths: [] as string[] } }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+
+    // Listed, but its parent no longer holds it.
+    expect(result.current.missingRowStatus("gone.txt")).toBe("absent");
+    // Hidden by a collapsed ancestor: settled, nothing left to wait for.
+    expect(result.current.missingRowStatus("src/app.ts")).toBe("absent");
+
+    // A re-root drops every listing but the root's own, so until it lands no
+    // path is known to be gone — not even one the new root rules out.
+    rerender({ rootPath: "src", expandedPaths: [] });
+    await waitFor(() => expect(result.current.isInitialLoading).toBe(true));
+    expect(result.current.missingRowStatus("src/index.ts")).toBe("pending");
+    expect(result.current.missingRowStatus("README.md")).toBe("pending");
+
+    await act(async () => {
+      rootedListing.resolve([file("src/index.ts")]);
+    });
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+    expect(result.current.missingRowStatus("src/gone.ts")).toBe("absent");
+    // Outside the root, whatever is listed.
+    expect(result.current.missingRowStatus("README.md")).toBe("absent");
+  });
+
+  it("keeps a path under a re-rooted expanded folder pending, then absent once its read fails (#16918)", async () => {
+    const libListing = deferred<FileTreeNode[]>();
+    listDirectory.mockImplementation((payload) =>
+      payload.dirPath === "src/lib"
+        ? libListing.promise
+        : Promise.resolve(payload.dirPath === "src" ? [dir("src/lib")] : [dir("src")])
+    );
+
+    const { result } = renderHook(() =>
+      useFileBrowserTree({
+        source: wtSource("wt-1"),
+        expandedPaths: ["src/lib"],
+        hideDotfiles: false,
+        alwaysHiddenPatterns: [],
+        rootPath: "src",
+        changeTick: undefined,
+      })
+    );
+    await waitFor(() => expect(result.current.rows.map((row) => row.path)).toEqual(["src/lib"]));
+
+    // The root has landed, but the expanded folder under it hasn't: a row in it
+    // may still arrive.
+    expect(result.current.missingRowStatus("src/lib/a.ts")).toBe("pending");
+
+    // Once its read has failed it isn't coming, and the hook won't re-ask.
+    await act(async () => {
+      libListing.reject(new Error("EACCES"));
+    });
+    await waitFor(() => expect(result.current.missingRowStatus("src/lib/a.ts")).toBe("absent"));
+  });
+
   it("ignores a persisted expansion that lies outside the browse root", async () => {
     listDirectory.mockImplementation(async (payload) =>
       payload.dirPath === "src" ? [dir("src/lib")] : [file("other/one.ts")]

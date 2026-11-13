@@ -439,6 +439,8 @@ export function FileBrowserViewer({
           {
             hasChanges: changeStatus !== undefined,
             onOpenDiff: () => setExplicitRenderMode("diff"),
+            // This menu is on the file the viewer is already showing.
+            showOpenFile: false,
           }
         )
       : null;

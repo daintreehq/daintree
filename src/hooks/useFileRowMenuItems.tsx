@@ -238,6 +238,23 @@ export interface FileRowMenuItemOptions {
    * hold, not on the change shown, so neither is offered.
    */
   statusIsLocal?: boolean;
+  /**
+   * Advertise the file browser tree's Cmd+I on the insert item. Off unless a
+   * surface opts in, because the chord is bound by exactly one thing — the
+   * tree's own key handler, which acts on its *cursor* row — so a hint anywhere
+   * else (the changed-files list, the Review Hub, the folder listing, a viewer)
+   * names a key that does nothing there. The tree passes it only for the cursor
+   * row: a right-click doesn't move the cursor, so on any other row the chord
+   * would insert a different file than the one the menu was opened on.
+   */
+  insertFileReferenceShortcut?: boolean;
+  /**
+   * Whether to offer `Open file`. False on a surface that is already showing
+   * this exact file (the file panel, the file browser's viewer): there it opens
+   * a dialog onto what is on screen. `Open in editor` and the other items that
+   * ride the same "a file is on disk" gate are unaffected.
+   */
+  showOpenFile?: boolean;
 }
 
 export interface FileRowMenuSurface {
@@ -488,6 +505,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // exactly what the user wants here and stays. Same call the file browser
       // already makes for its viewer selection (`isSelectedChangedFile`).
       const showOpenCurrent = !isDirectory && status !== "deleted";
+      const showOpenFile = showOpenCurrent && options?.showOpenFile !== false;
+      const advertiseInsertShortcut = options?.insertFileReferenceShortcut === true;
       // Rides the same "there is a current file on disk" gate, then drops the
       // kinds with no text to put on a clipboard. Extension-only by necessity —
       // nothing here has read the file — so an unfamiliar binary still shows
@@ -545,10 +564,12 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             ))}
           {showOpenCurrent && (
             <>
-              <ContextMenuActionItem actionId="file.view" args={{ path: absolutePath }}>
-                <FileText className={ICON_CLASS} />
-                Open file
-              </ContextMenuActionItem>
+              {showOpenFile && (
+                <ContextMenuActionItem actionId="file.view" args={{ path: absolutePath }}>
+                  <FileText className={ICON_CLASS} />
+                  Open file
+                </ContextMenuActionItem>
+              )}
               <ContextMenuActionItem actionId="file.openInEditor" args={{ path: absolutePath }}>
                 <ExternalLink className={ICON_CLASS} />
                 Open in editor
@@ -578,13 +599,17 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             onSelect={() => insert(absolutePath)}
             disabled={!canInsert}
             {...(canInsert
-              ? { "aria-keyshortcuts": insertAriaKeyshortcuts }
+              ? advertiseInsertShortcut
+                ? { "aria-keyshortcuts": insertAriaKeyshortcuts }
+                : {}
               : { "aria-label": insertRefusalLabel })}
           >
             <AtSign className={ICON_CLASS} />
             {INSERT_LABEL}
             {canInsert ? (
-              <ContextMenuShortcut shortcut={INSERT_FILE_REFERENCE_COMBO} />
+              advertiseInsertShortcut && (
+                <ContextMenuShortcut shortcut={INSERT_FILE_REFERENCE_COMBO} />
+              )
             ) : (
               <ContextMenuMeta>{insertRefusalMeta}</ContextMenuMeta>
             )}

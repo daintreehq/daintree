@@ -4796,7 +4796,8 @@ describe("FilePane file menu on its content (#13423)", () => {
         isDirectory: false,
         status: "modified",
       },
-      expect.objectContaining({ hasChanges: true })
+      // `Open file` would open a dialog onto the file this pane is showing.
+      expect.objectContaining({ hasChanges: true, showOpenFile: false })
     );
     // The pane's own prefix rides above the shared items.
     expect(screen.getByRole("menuitem", { name: "Show in file browser" })).toBeTruthy();
