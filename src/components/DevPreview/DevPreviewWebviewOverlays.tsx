@@ -283,16 +283,28 @@ export function DevPreviewWebviewOverlays({
           description="The page may be stuck in a long-running operation."
           severity="warning"
           animated={false}
-          actions={[
-            {
-              id: "restart-dev-server",
-              label: restartLabel,
-              icon: RotateCw,
-              variant: "primary",
-              onClick: onRestartDevServer,
-              ariaLabel: restartLabel,
-            },
-          ]}
+          action={{
+            id: "reload",
+            label: "Reload",
+            icon: RotateCw,
+            variant: "primary",
+            onClick: onHardReload,
+            ariaLabel: "Reload preview page",
+          }}
+          trailingSlot={
+            <BannerOverflowMenu
+              ariaLabel="More preview recovery options"
+              actions={[
+                {
+                  id: "restart-dev-server",
+                  label: restartLabel,
+                  icon: RotateCw,
+                  onClick: onRestartDevServer,
+                  ariaLabel: restartLabel,
+                },
+              ]}
+            />
+          }
           onClose={onCloseUnresponsive}
         />
       )}

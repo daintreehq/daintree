@@ -216,9 +216,12 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
     unmount();
 
     render(<DevPreviewWebviewOverlays {...baseProps({ ...props, crashState: "unresponsive" })} />);
-    const button = screen.getByRole("button", { name: "Restart dev server" });
-    expect(button.textContent).toBe("Restart dev server");
-    button.click();
+    fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
+      key: "Enter",
+    });
+    const unresponsiveItem = await screen.findByRole("menuitem", { name: "Restart dev server" });
+    expect(unresponsiveItem.textContent).toBe("Restart dev server");
+    fireEvent.click(unresponsiveItem);
     expect(onRestartDevServer).toHaveBeenCalledTimes(2);
   });
 
@@ -228,9 +231,13 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
         {...baseProps({ crashState: "unresponsive", onRequestRestartAndClearCache: undefined })}
       />
     );
-    expect(
-      screen.getByRole("button", { name: "Pause and resume resource environment" }).textContent
-    ).toBe("Pause and resume resource environment");
+    fireEvent.keyDown(screen.getByRole("button", { name: "More preview recovery options" }), {
+      key: "Enter",
+    });
+    const unresponsiveEndpointItem = await screen.findByRole("menuitem", {
+      name: "Pause and resume resource environment",
+    });
+    expect(unresponsiveEndpointItem.textContent).toBe("Pause and resume resource environment");
     unmount();
     render(
       <DevPreviewWebviewOverlays
@@ -248,12 +255,23 @@ describe("DevPreviewWebviewOverlays — crash banners", () => {
 
   it("renders the unresponsive banner distinctly and wires its own close handler", () => {
     const onCloseUnresponsive = vi.fn();
+    const onHardReload = vi.fn();
+    const onRestartDevServer = vi.fn();
     render(
       <DevPreviewWebviewOverlays
-        {...baseProps({ crashState: "unresponsive", onCloseUnresponsive })}
+        {...baseProps({
+          crashState: "unresponsive",
+          onCloseUnresponsive,
+          onHardReload,
+          onRestartDevServer,
+        })}
       />
     );
     expect(screen.getByText(/preview is not responding/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restart dev server" })).toBeNull();
+    screen.getByRole("button", { name: /reload preview page/i }).click();
+    expect(onHardReload).toHaveBeenCalledTimes(1);
+    expect(onRestartDevServer).not.toHaveBeenCalled();
     screen.getByRole("button", { name: /dismiss/i }).click();
     expect(onCloseUnresponsive).toHaveBeenCalledTimes(1);
   });

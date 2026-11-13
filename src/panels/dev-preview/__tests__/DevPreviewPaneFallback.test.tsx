@@ -89,6 +89,10 @@ describe("DevPreviewPaneFallback", () => {
       container.querySelectorAll(".animate-pulse-immediate, .animate-pulse-delayed")
     ).toHaveLength(0);
 
+    const toolbarRow = screen.getByTestId("dev-preview-fallback-toolbar");
+    expect(toolbarRow.className).toContain("h-10");
+    expect(toolbarRow.querySelectorAll("[data-skeleton-bone]")).toHaveLength(0);
+
     fireEvent.click(panel!);
     expect(onFocus).toHaveBeenCalledTimes(1);
 
