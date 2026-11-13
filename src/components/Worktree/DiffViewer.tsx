@@ -1158,6 +1158,17 @@ function FileDiff({
   useEffect(() => {
     setLineSelection(null);
   }, [file]);
+  // A gesture's focus waits for its editor's row, which a large table mounts
+  // over several frames. If this view goes first — another file, a layout
+  // without the table, a refresh — the wait goes with it, so the draft it
+  // restores later doesn't take focus from wherever the reviewer has gone.
+  useEffect(() => {
+    if (draftFileKey === null) return;
+    return () => {
+      draftSession.consumeFocus(lineDraftBodyKey(draftFileKey));
+      draftSession.consumeFocus(fileDraftBodyKey(draftFileKey));
+    };
+  }, [draftSession, draftFileKey]);
 
   // Anchors are checked against every rendered row, expanded context included,
   // so a note written on revealed context still matches once it is revealed.

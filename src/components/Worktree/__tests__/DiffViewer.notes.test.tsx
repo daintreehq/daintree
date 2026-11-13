@@ -7,7 +7,13 @@ import { DiffViewer, _flushLangLoadsForTests, _resetLangStateForTests } from "..
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { PendingFileNotes } from "../DiffNoteWidgets";
-import { DiffNoteDraftContext, useOwnDiffNoteDraftSession } from "../diffNoteDrafts";
+import {
+  DiffNoteDraftContext,
+  diffNoteFileKey,
+  lineDraftBodyKey,
+  useOwnDiffNoteDraftSession,
+  type DiffNoteDraftSession,
+} from "../diffNoteDrafts";
 import { buildDiffLineIndex, hashLineRange } from "../diffNotes";
 import { parseDiff } from "react-diff-view";
 
@@ -297,13 +303,16 @@ function Pane({
   diff = DIFF,
   worktreePath = "/repo",
   listFile = "src/a.ts",
+  sessionRef,
 }: {
   body: "table" | "list" | "loading";
   diff?: string;
   worktreePath?: string;
   listFile?: string;
+  sessionRef?: { current: DiffNoteDraftSession | null };
 }) {
   const session = useOwnDiffNoteDraftSession();
+  if (sessionRef) sessionRef.current = session;
   return (
     <TooltipProvider>
       <div data-panel-id="pane">
@@ -372,6 +381,25 @@ describe("unsaved note drafts", () => {
     expect(field("New note on line 2").value).toBe("Half a thought");
     expect(captured.widgets?.I2).toBeDefined();
     // Restored where it was, without taking focus back from where the reviewer went.
+    expect(document.activeElement).toBe(pathPill());
+  });
+
+  it("drops a focus request still waiting for its editor when the view goes first", () => {
+    const sessionRef: { current: DiffNoteDraftSession | null } = { current: null };
+    const { rerender } = render(<Pane body="table" sessionRef={sessionRef} />);
+    clickGutter(1, "new");
+    pathPill().focus();
+
+    // A gesture whose editor hasn't mounted yet (its row is still staging in)
+    // when a refresh takes the table away.
+    act(() => {
+      sessionRef.current!.requestFocus(lineDraftBodyKey(diffNoteFileKey("/repo", "src/a.ts")));
+      rerender(<Pane body="loading" sessionRef={sessionRef} />);
+    });
+    expect(sessionRef.current!.getState().focus).toBeNull();
+
+    rerender(<Pane body="table" sessionRef={sessionRef} />);
+    expect(field("New note on line 2")).toBeTruthy();
     expect(document.activeElement).toBe(pathPill());
   });
 
