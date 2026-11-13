@@ -16,6 +16,12 @@ import { registerDockPopoverLayer } from "@/lib/dockPopoverLayer";
 // jsdom lays nothing out, so a Virtuoso never scrolls there; the palette's
 // requests to its list are recorded instead, passing through unchanged.
 const listScrolls = vi.hoisted((): { method: string; index: number }[] => []);
+// What the palette last handed its list: the element it scrolls, and the last
+// reveal request, whose view-location callback is the part jsdom can't run.
+const listRecord = vi.hoisted((): { scrollParent: unknown; reveal: unknown } => ({
+  scrollParent: null,
+  reveal: null,
+}));
 
 vi.mock("react-virtuoso", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-virtuoso")>();
@@ -26,6 +32,7 @@ vi.mock("react-virtuoso", async (importOriginal) => {
   };
   function RecordingVirtuoso(props: Record<string, unknown> & { ref?: Ref<VirtuosoHandle> }) {
     const { ref, ...rest } = props;
+    listRecord.scrollParent = rest.customScrollParent ?? null;
     const inner = useRef<VirtuosoHandle>(null);
     useImperativeHandle(ref, () => ({
       scrollToIndex: (location) => {
@@ -34,6 +41,7 @@ vi.mock("react-virtuoso", async (importOriginal) => {
       },
       scrollIntoView: (location) => {
         listScrolls.push({ method: "scrollIntoView", index: indexOf(location) });
+        listRecord.reveal = location;
         inner.current?.scrollIntoView(location);
       },
       scrollTo: (location) => inner.current?.scrollTo(location),
@@ -333,6 +341,7 @@ describe("CommandPalette", () => {
     render(inViewport(createElement(Harness)));
     await screen.findByText("Alpha issue");
     const region = screen.getByRole("group", { name: "Go to" });
+    expect(listRecord.scrollParent).toBe(region);
     expect(region.tabIndex).toBe(0);
     expect(region.querySelectorAll('[tabindex]:not([tabindex="-1"])')).toHaveLength(0);
     expect(region.contains(screen.getByRole("listbox"))).toBe(true);
@@ -340,6 +349,38 @@ describe("CommandPalette", () => {
     const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
     fireEvent.keyDown(region, { key: "ArrowDown" });
     expect(active()?.textContent).toBe("Delta issue");
+  });
+
+  it("reveals a row clear of the region's edge fades, which Virtuoso's own reveal ignores", async () => {
+    render(inViewport(createElement(Harness)));
+    await screen.findByText("Alpha issue");
+    const region = screen.getByRole("group", { name: "Go to" });
+    region.style.scrollPaddingTop = "32px";
+    listRecord.reveal = null;
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    expect(listRecord.reveal).not.toBeNull();
+
+    const reveal = listRecord.reveal as {
+      calculateViewLocation: (params: {
+        itemTop: number;
+        itemBottom: number;
+        viewportTop: number;
+        viewportBottom: number;
+        locationParams: { index: number };
+      }) => unknown;
+    };
+    const at = (itemTop: number) =>
+      reveal.calculateViewLocation({
+        itemTop,
+        itemBottom: itemTop + 34,
+        viewportTop: 100,
+        viewportBottom: 400,
+        locationParams: { index: 3 },
+      });
+    // Under the bottom fade but inside the viewport: still scrolled clear.
+    expect(at(350)).toEqual({ index: 3, align: "end", offset: 32 });
+    expect(at(110)).toEqual({ index: 3, align: "start", offset: -32 });
+    expect(at(200)).toBeNull();
   });
 
   it("pages over disabled rows toward the cursor instead of wrapping to the far end", async () => {

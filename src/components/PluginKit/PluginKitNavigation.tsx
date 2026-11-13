@@ -276,6 +276,32 @@ export function demoteDisabled(results: readonly PaletteResult[]): PaletteResult
   ];
 }
 
+/**
+ * Brings a list row into view clear of the results region's edge fades. The
+ * region's scroll padding keeps a natively revealed row out from under them,
+ * but Virtuoso scrolls by number and never reads it, so it is applied here.
+ */
+function revealRow(handle: VirtuosoHandle | null, scroller: HTMLElement | null, index: number) {
+  const inset = scroller ? Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0 : 0;
+  handle?.scrollIntoView({
+    index,
+    calculateViewLocation: ({
+      itemTop,
+      itemBottom,
+      viewportTop,
+      viewportBottom,
+      locationParams,
+    }) => {
+      if (itemTop < viewportTop + inset)
+        return { ...locationParams, align: "start", offset: -inset };
+      if (itemBottom > viewportBottom - inset) {
+        return { ...locationParams, align: "end", offset: inset };
+      }
+      return null;
+    },
+  });
+}
+
 /** The enabled index nearest `from` going `dir`, wrapping; -1 when none is. */
 function stepEnabled(results: readonly PaletteResult[], from: number, dir: 1 | -1): number {
   const count = results.length;
@@ -414,7 +440,7 @@ function KitCommandPalette({
     if (index < 0) return;
     setCursor(index);
     const row = rowOf[index];
-    if (row !== undefined) handle.current?.scrollIntoView({ index: row });
+    if (row !== undefined) revealRow(handle.current, scrollParent, row);
   };
 
   // A new search puts the cursor's row in view: the list keeps its scroll
@@ -430,8 +456,8 @@ function KitCommandPalette({
     if (activeRow === undefined) return;
     // The first row takes its band's heading into view with it.
     if (activeRow <= 1) handle.current?.scrollToIndex({ index: 0 });
-    else handle.current?.scrollIntoView({ index: activeRow });
-  }, [filterQuery, activeRow]);
+    else revealRow(handle.current, scrollParent, activeRow);
+  }, [filterQuery, activeRow, scrollParent]);
 
   const handleQuery = (next: string) => {
     setQuery(next);
