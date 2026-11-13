@@ -29,6 +29,32 @@ describe("buildWorktreeIndex", () => {
     expect(index.get(42)?.id).toBe("b");
   });
 
+  it("ignores issue links owned by another tracker but keeps legacy and GitHub ones", () => {
+    const index = buildWorktreeIndex(
+      [
+        wt({ id: "linear", issueNumber: 42, issueProviderId: "daintree.linear.linear" }),
+        wt({ id: "legacy", issueNumber: 7 }),
+        wt({ id: "gh", issueNumber: 8, issueProviderId: "daintree.github.github" }),
+        wt({ id: "gh-legacy-id", issueNumber: 9, issueProviderId: "github" }),
+      ],
+      "issue",
+      null
+    );
+    expect(index.has(42)).toBe(false);
+    expect(index.get(7)?.id).toBe("legacy");
+    expect(index.get(8)?.id).toBe("gh");
+    expect(index.get(9)?.id).toBe("gh-legacy-id");
+  });
+
+  it("does not apply issue provenance to PR links", () => {
+    const index = buildWorktreeIndex(
+      [wt({ id: "a", prNumber: 42, issueNumber: 42, issueProviderId: "daintree.linear.linear" })],
+      "pr",
+      null
+    );
+    expect(index.get(42)?.id).toBe("a");
+  });
+
   it("skips worktrees that name no resource", () => {
     expect(buildWorktreeIndex([wt({ id: "a" })], "issue", null).size).toBe(0);
   });
