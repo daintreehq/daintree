@@ -1582,13 +1582,27 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it.each([
-    ["no live agent", { detectedAgentId: undefined }],
+    ["no agent identity", { detectedAgentId: undefined, agentId: undefined }],
     ["the Assistant's own terminal", { excludeFromPersistence: true }],
     ["a dialog pane", { location: "dialog" }],
   ])("offers no When done on a pane with %s", (_name, overrides) => {
     renderMenu({ ...agentPane, ...overrides });
     expect(screen.queryByText("When done")).toBeNull();
     expect(screen.queryByText("Keep open")).toBeNull();
+  });
+
+  it("keeps Watch and When done on a configured agent pane before detection settles (#16880)", () => {
+    renderMenu({ ...agentPane, detectedAgentId: undefined, agentId: "claude" });
+    expect(screen.getByText("Watch")).toBeTruthy();
+    expect(screen.getByText("When done")).toBeTruthy();
+  });
+
+  it("keeps When done reachable while a non-keep choice is armed on a non-agent pane (#16880)", () => {
+    useTerminalWhenDoneStore.setState({ choices: { "panel-1": "close" } });
+    renderMenu({ ...agentPane, detectedAgentId: undefined, agentId: undefined });
+    expect(screen.getByText("When done")).toBeTruthy();
+    expect(screen.queryByText("Watch")).toBeNull();
+    useTerminalWhenDoneStore.setState({ choices: {} });
   });
 
   it("runs the watch and fleet rows from where they now sit", () => {
