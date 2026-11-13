@@ -350,6 +350,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   changeSet: false,
   // Cursor into that runtime set — meaningless without it, so it dies with it.
   viewedKey: false,
+  fileSide: false,
 } as const satisfies Record<keyof DiffPanelData, boolean>;
 
 // ── File browser field classification ────────────────────────────────
@@ -757,14 +758,23 @@ describe("panel serializer field coverage", () => {
   it("diff serializer omits the runtime change set and its cursor", () => {
     const withChangeSet: DiffPanelData = {
       ...diffFixture,
-      changeSet: [{ path: "src/app.ts", status: "modified", viewedKey: "modified:src/app.ts" }],
-      viewedKey: "modified:src/app.ts",
+      changeSet: [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          viewedKey: "working-tree:src/app.ts",
+          side: "unstaged",
+        },
+      ],
+      viewedKey: "working-tree:src/app.ts",
+      fileSide: "unstaged",
     };
     const output = getPanelKindConfig("diff")!.serialize!(withChangeSet) as Record<string, unknown>;
     expect(output).not.toHaveProperty("changeSet");
     // The cursor points into that set, so persisting it would resurrect a
     // position in a change set the restored panel no longer has.
     expect(output).not.toHaveProperty("viewedKey");
+    expect(output).not.toHaveProperty("fileSide");
   });
 });
 

@@ -315,8 +315,8 @@ describe("rendererStoreOrchestrator", () => {
       pathCount: 1,
       revision,
     });
-    useDiffViewedStore.getState().setViewed("/repo/wt-a", "unstaged:a.ts", true);
-    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+    useDiffViewedStore.getState().setViewed("/repo/wt-a", "working-tree:a.ts", true);
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "working-tree:b.ts", true);
 
     // The first snapshot a view adopts holds marks made before it: no clearing.
     useReviewMarksStore.setState({ marks: { "/repo/wt-a": mark(1) }, revision: 1, loaded: true });
@@ -330,7 +330,7 @@ describe("rendererStoreOrchestrator", () => {
     // A first mark clears too; clearing a mark leaves Viewed marks alone.
     useReviewMarksStore.setState({ marks: { "/repo/wt-b": mark(3) }, revision: 3 });
     expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]).toBeUndefined();
-    useDiffViewedStore.getState().setViewed("/repo/wt-b", "unstaged:b.ts", true);
+    useDiffViewedStore.getState().setViewed("/repo/wt-b", "working-tree:b.ts", true);
     useReviewMarksStore.setState({ marks: {}, revision: 4 });
     expect(useDiffViewedStore.getState().viewedByWorktree["/repo/wt-b"]?.size).toBe(1);
     _resetReviewMarksStoreForTesting();

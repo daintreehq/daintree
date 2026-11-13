@@ -2,7 +2,7 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { act, cleanup, render, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitStatus } from "@shared/types/git";
+import type { GitDiffSide, GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
 
 // Cross-file stepping, the workspace sidebar and the viewed markers moved off
@@ -182,7 +182,15 @@ vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
 
 const { setDiffPanelFileMock, toggleViewedMock, useDiffContentMock } = vi.hoisted(() => ({
   setDiffPanelFileMock:
-    vi.fn<(id: string, path: string, status: GitStatus, viewedKey?: string) => void>(),
+    vi.fn<
+      (
+        id: string,
+        path: string,
+        status: GitStatus,
+        viewedKey?: string,
+        fileSide?: GitDiffSide
+      ) => void
+    >(),
   toggleViewedMock: vi.fn(),
   useDiffContentMock: vi.fn(),
 }));
@@ -266,7 +274,7 @@ const WORKTREE_ID = "wt-1";
 const WORKTREE_PATH = "/repo";
 
 function entry(path: string, status: GitStatus = "modified"): DiffChangeSetEntry {
-  return { path, status, viewedKey: `${status}:${path}` };
+  return { path, status, viewedKey: `working-tree:${path}` };
 }
 
 function seedPanel(overrides: Record<string, unknown>): void {
@@ -438,49 +446,97 @@ describe("DiffPane — current-file resolution", () => {
     expect(positionText()).toBe(`2 of ${changeSet.length}`);
   });
 
-  it("separates the staged and unstaged twins of a partially staged file by viewedKey", () => {
-    // Partial staging: the same path, the same status, in both sections. Only
-    // the key tells them apart, so a path+status match resolves the staged copy.
+  it("separates the staged and unstaged twins of a partially staged file by side", () => {
+    // Partial staging: the same path, status and Viewed key in both sections.
+    // Only the side tells them apart, so a key match alone resolves the staged copy.
     const changeSet: DiffChangeSetEntry[] = [
-      { path: "a.ts", status: "modified", viewedKey: "staged:a.ts" },
-      { path: "b.ts", status: "modified", viewedKey: "unstaged:b.ts" },
-      { path: "a.ts", status: "modified", viewedKey: "unstaged:a.ts" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+      { path: "b.ts", status: "modified", viewedKey: "working-tree:b.ts", side: "unstaged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "unstaged" },
     ];
     seedPanel({
       filePath: "a.ts",
       fileStatus: "modified",
-      viewedKey: "unstaged:a.ts",
+      viewedKey: "working-tree:a.ts",
+      fileSide: "unstaged",
       changeSet,
     });
     renderPane();
 
-    const expectedIndex = changeSet.findIndex((e) => e.viewedKey === "unstaged:a.ts");
-    expect(positionText()).toBe(`${expectedIndex + 1} of ${changeSet.length}`);
-    expect(screen.getByTestId("diff-sidebar-mock").getAttribute("data-current-index")).toBe(
-      String(expectedIndex)
-    );
+    expect(positionText()).toBe(`3 of ${changeSet.length}`);
+    expect(screen.getByTestId("diff-sidebar-mock").getAttribute("data-current-index")).toBe("2");
+    expect(useDiffContentMock.mock.calls.at(-1)![0]?.source).toBe("unstaged");
 
-    // The viewed marker follows the resolved entry, not the first path match.
+    // Both twins carry the file's one mark.
     fireEvent.click(screen.getByRole("checkbox", { name: "Viewed" }));
-    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "unstaged:a.ts");
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, "working-tree:a.ts");
   });
 
   it("fetches each twin of a partially staged file from its own side of the index", () => {
     const changeSet: DiffChangeSetEntry[] = [
-      { path: "a.ts", status: "modified", viewedKey: "staged:a.ts", side: "staged" },
-      { path: "a.ts", status: "modified", viewedKey: "unstaged:a.ts", side: "unstaged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "unstaged" },
     ];
-    const sourcesFor = (viewedKey: string) => {
+    const sourcesFor = (fileSide: "staged" | "unstaged") => {
       useDiffContentMock.mockClear();
-      seedPanel({ filePath: "a.ts", fileStatus: "modified", viewedKey, changeSet });
+      seedPanel({
+        filePath: "a.ts",
+        fileStatus: "modified",
+        viewedKey: "working-tree:a.ts",
+        fileSide,
+        changeSet,
+      });
       renderPane();
       const [subject, nextSubject] = useDiffContentMock.mock.calls.at(-1)!;
       return [subject?.source, nextSubject?.source];
     };
 
-    expect(sourcesFor("staged:a.ts")).toEqual(["staged", "unstaged"]);
+    expect(sourcesFor("staged")).toEqual(["staged", "unstaged"]);
     cleanup();
-    expect(sourcesFor("unstaged:a.ts")[0]).toBe("unstaged");
+    expect(sourcesFor("unstaged")[0]).toBe("unstaged");
+  });
+
+  it("steps between a partially staged file's twins, carrying each one's side", () => {
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "unstaged" },
+    ];
+    seedPanel({
+      filePath: "a.ts",
+      fileStatus: "modified",
+      viewedKey: "working-tree:a.ts",
+      fileSide: "staged",
+      changeSet,
+    });
+    renderPane();
+
+    fireEvent.click(screen.getByLabelText("Next file"));
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      "a.ts",
+      "modified",
+      "working-tree:a.ts",
+      "unstaged"
+    );
+  });
+
+  it("follows the file to its remaining twin once the selected side is gone", () => {
+    // The unstaged hunks were staged too, so only the staged entry is left.
+    const changeSet: DiffChangeSetEntry[] = [
+      entry("b.ts"),
+      { path: "a.ts", status: "modified", viewedKey: "working-tree:a.ts", side: "staged" },
+    ];
+    seedPanel({
+      filePath: "a.ts",
+      fileStatus: "modified",
+      viewedKey: "working-tree:a.ts",
+      fileSide: "unstaged",
+      changeSet,
+    });
+    renderPane();
+
+    expect(positionText()).toBe(`2 of ${changeSet.length}`);
+    expect(useDiffContentMock.mock.calls.at(-1)![0]?.source).toBe("staged");
   });
 
   it("leaves entries that name no side on the panel's own source", () => {
@@ -492,12 +548,12 @@ describe("DiffPane — current-file resolution", () => {
 
   it("falls back to path+status when the cursor names an entry the set no longer has", () => {
     // A restored panel has no cursor at all, and a live one can outlive its
-    // entry (the file was staged, so its unstaged key is gone).
+    // entry (the opener rebuilt its set under another key).
     const changeSet = [entry("a.ts"), entry("b.ts", "added")];
     seedPanel({
       filePath: "b.ts",
       fileStatus: "added",
-      viewedKey: "unstaged:b.ts",
+      viewedKey: "since-review:b.ts",
       changeSet,
     });
     renderPane();
@@ -535,7 +591,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "b.ts",
       "added",
-      changeSet[1]!.viewedKey
+      changeSet[1]!.viewedKey,
+      changeSet[1]!.side
     );
   });
 
@@ -549,7 +606,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "b.ts",
       "added",
-      changeSet[1]!.viewedKey
+      changeSet[1]!.viewedKey,
+      changeSet[1]!.side
     );
   });
 
@@ -584,7 +642,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "a.ts",
       "modified",
-      changeSet[0]!.viewedKey
+      changeSet[0]!.viewedKey,
+      changeSet[0]!.side
     );
     unmount();
 
@@ -597,7 +656,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "c.ts",
       "modified",
-      changeSet[2]!.viewedKey
+      changeSet[2]!.viewedKey,
+      changeSet[2]!.side
     );
   });
 
@@ -651,7 +711,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "b.ts",
       "modified",
-      narrow[1]!.viewedKey
+      narrow[1]!.viewedKey,
+      narrow[1]!.side
     );
 
     // Backward is what proves the stale index is clamped *before* the step and
@@ -662,7 +723,8 @@ describe("DiffPane — file stepping", () => {
       PANEL_ID,
       "a.ts",
       "modified",
-      narrow[0]!.viewedKey
+      narrow[0]!.viewedKey,
+      narrow[0]!.side
     );
   });
 });
@@ -678,7 +740,8 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
       PANEL_ID,
       target.path,
       target.status,
-      target.viewedKey
+      target.viewedKey,
+      target.side
     );
     setDiffPanelFileMock.mockClear();
   }
@@ -993,18 +1056,29 @@ describe("DiffPane — content-aware toolbar", () => {
   it("hands each twin of a partially staged image its own side of the index", () => {
     isImageDiffCandidateMock.mockReturnValue(true);
     const changeSet: DiffChangeSetEntry[] = [
-      { path: "logo.png", status: "modified", viewedKey: "staged:logo.png", side: "staged" },
-      { path: "logo.png", status: "modified", viewedKey: "unstaged:logo.png", side: "unstaged" },
+      { path: "logo.png", status: "modified", viewedKey: "working-tree:logo.png", side: "staged" },
+      {
+        path: "logo.png",
+        status: "modified",
+        viewedKey: "working-tree:logo.png",
+        side: "unstaged",
+      },
     ];
-    const sideFor = (viewedKey: string) => {
+    const sideFor = (fileSide: "staged" | "unstaged") => {
       cleanup();
-      seedPanel({ filePath: "logo.png", fileStatus: "modified", viewedKey, changeSet });
+      seedPanel({
+        filePath: "logo.png",
+        fileStatus: "modified",
+        viewedKey: "working-tree:logo.png",
+        fileSide,
+        changeSet,
+      });
       renderPane();
       return screen.getByTestId("image-diff-mock").getAttribute("data-side");
     };
 
-    expect(sideFor("staged:logo.png")).toBe("staged");
-    expect(sideFor("unstaged:logo.png")).toBe("unstaged");
+    expect(sideFor("staged")).toBe("staged");
+    expect(sideFor("unstaged")).toBe("unstaged");
   });
 
   it("names no side for a plain working-tree image, even beside sided entries", () => {
