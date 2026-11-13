@@ -139,20 +139,29 @@ describe("file panel state setters", () => {
     });
   });
 
-  it("setFilePanelPath writes a given mode in the same update as the path", () => {
-    seedFilePanel({ filePath: "/repo/a.ts", fileViewMode: "source" });
-    const updates: unknown[] = [];
-    const unsubscribe = usePanelStore.subscribe((state) =>
-      updates.push(state.panelsById["file-1"])
-    );
+  it.each([
+    ["source", "/repo/README.md", "rendered"],
+    ["diff", "/repo/b.ts", "source"],
+  ] as const)(
+    "setFilePanelPath writes a given mode in the same update as the path (%s → %s)",
+    (fromMode, filePath, mode) => {
+      seedFilePanel({ filePath: "/repo/a.ts", fileViewMode: fromMode });
+      const updates: unknown[] = [];
+      const unsubscribe = usePanelStore.subscribe((state) =>
+        updates.push(state.panelsById["file-1"])
+      );
 
-    usePanelStore.getState().setFilePanelPath("file-1", "/repo/README.md", "rendered");
-    unsubscribe();
+      usePanelStore.getState().setFilePanelPath("file-1", filePath, mode);
+      unsubscribe();
 
-    expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({ filePath: "/repo/README.md", fileViewMode: "rendered" });
-    expect(saveMock).toHaveBeenCalledTimes(1);
-  });
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ filePath, fileViewMode: mode });
+      expect(saveMock).toHaveBeenCalledTimes(1);
+      expect(saveMock).toHaveBeenCalledWith([
+        expect.objectContaining({ id: "file-1", filePath, fileViewMode: mode }),
+      ]);
+    }
+  );
 
   it("setFilePanelPath drops a containment root pinned for the previous file", () => {
     seedFilePanel({ filePath: "/tmp/plugin/notes.md", fileContainmentRoot: "/tmp/plugin" });

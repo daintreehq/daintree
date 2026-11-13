@@ -1567,22 +1567,21 @@ describe("FileBrowserViewer Diff mode (#13195)", () => {
     expect(setDiffWrapLinesMock).toHaveBeenCalledWith(true);
   });
 
-  it("sizes the diff by the shared diffFontSize preference, as the diff panel does (#16917)", async () => {
-    viewerPreferences.diffFontSize = "s";
-    readMock.mockResolvedValue({ content: "const a = 1;" });
-    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
-    renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
+  it.each<DiffFontSize>(["s", "l"])(
+    "sizes the diff by the shared diffFontSize preference, as the diff panel does (%s, #16917)",
+    async (size) => {
+      viewerPreferences.diffFontSize = size;
+      readMock.mockResolvedValue({ content: "const a = 1;" });
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
 
-    await clickMode("Diff");
+      await clickMode("Diff");
 
-    const host = screen.getByTestId("file-browser-diff");
-    expect(host.style.getPropertyValue("--diff-font-size")).toBe(
-      diffFontStyle("s")["--diff-font-size"]
-    );
-    expect(host.style.getPropertyValue("--diff-font-size")).not.toBe(
-      diffFontStyle("m")["--diff-font-size"]
-    );
-  });
+      expect(
+        screen.getByTestId("file-browser-diff").style.getPropertyValue("--diff-font-size")
+      ).toBe(diffFontStyle(size)["--diff-font-size"]);
+    }
+  );
 });
 
 describe("folder-selected state (#11620)", () => {
@@ -2007,20 +2006,23 @@ describe("plugin-contributed editing in the file browser", () => {
 
   // The editor is handed the Source view's wrap preference, so Edit carries the
   // same toggle FilePane's Edit does (#16917).
-  it("offers the wrap toggle in Edit, on the preference the editor is handed", async () => {
-    enabled = true;
-    viewerPreferences.markdownWrapLines = true;
-    renderViewer("/repo/notes.md", { editorContext: context });
-    fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
-    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
-    expect(editorProps.at(-1)).toMatchObject({ wrapLines: true });
+  it.each([true, false])(
+    "offers the wrap toggle in Edit, on the preference the editor is handed (wrap %s)",
+    async (wrapLines) => {
+      enabled = true;
+      viewerPreferences.markdownWrapLines = wrapLines;
+      renderViewer("/repo/notes.md", { editorContext: context });
+      fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editorProps.at(-1)).toMatchObject({ wrapLines });
 
-    const wrap = screen.getByRole("button", { name: "Wrap long lines" });
-    expect(wrap.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(wrap);
+      const wrap = screen.getByRole("button", { name: "Wrap long lines" });
+      expect(wrap.getAttribute("aria-pressed")).toBe(String(wrapLines));
+      fireEvent.click(wrap);
 
-    expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(false);
-  });
+      expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(!wrapLines);
+    }
+  );
 
   it("offers Edit without a hint when the plugin is already enabled", async () => {
     enabled = true;

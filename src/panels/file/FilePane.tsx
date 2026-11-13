@@ -600,6 +600,31 @@ export function FilePane({
   // path pill, which names the file, takes focus instead.
   const toolbarPathRef = useRef<HTMLDivElement>(null);
   const previousModeRef = useRef(viewMode);
+  // Whether focus last landed in this pane's toolbar or body. Diff also
+  // vanishes under panes nobody is using, when a commit elsewhere leaves the
+  // file clean, so only the pane that held focus takes it back. Read off focus
+  // events rather than the panel store's selection, which a keyboard user tabs
+  // past without changing. A removed control fires no focusin, so the claim
+  // outlives the segment that held it; a press anywhere else drops it.
+  const focusWasHereRef = useRef(false);
+  useEffect(() => {
+    const isHere = (target: EventTarget | null) =>
+      target instanceof Node &&
+      (heightHoldBodyRef.current?.contains(target) === true ||
+        toolbarPathRef.current?.closest('[role="toolbar"]')?.contains(target) === true);
+    const onFocusIn = (event: FocusEvent) => {
+      focusWasHereRef.current = isHere(event.target);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!isHere(event.target)) focusWasHereRef.current = false;
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [heightHoldBodyRef]);
   // The HTML fallback's View source button unmounts with the view it leaves,
   // so it hands off the same way; ringed only when it was keyboard-activated.
   const sourceFocusRef = useRef<{ focusVisible: boolean } | null>(null);
@@ -610,12 +635,10 @@ export function FilePane({
     const focusLost = document.activeElement === null || document.activeElement === document.body;
     const sourceFocus = sourceFocusRef.current;
     sourceFocusRef.current = null;
-    // Diff also vanishes under a pane nobody is using, when a commit elsewhere
-    // leaves the file clean, so only the focused pane takes focus back for it.
     const previousMode = previousModeRef.current;
     const leftUnmountingMode =
       viewMode !== previousMode &&
-      (previousMode === "edit" || (previousMode === "diff" && isFocused));
+      (previousMode === "edit" || (previousMode === "diff" && focusWasHereRef.current));
     if ((leftUnmountingMode || sourceFocus) && focusLost) {
       const toggle = modeToggleRef.current;
       const target =
@@ -625,7 +648,7 @@ export function FilePane({
       target?.focus({ preventScroll: true, focusVisible: sourceFocus?.focusVisible });
     }
     previousModeRef.current = viewMode;
-  }, [viewMode, isFocused]);
+  }, [viewMode]);
 
   // Answering about a default is about this file too: "Use Daintree's" leaves
   // the default's editor for Source here, not only in panels opened next, and
