@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.51.0] - 2026-11-13
+
+Plugins get a reviewed install path: Install from URL previews exactly what a plugin asks for before anything lands on disk, install links can pin a release by catalog id or SHA-256, and the Plugin Manager can browse a reviewed community catalog. The Daintree Assistant runs on Antigravity beside Claude Code and Codex, every Assistant tab comes back after an update restart, a held composer message gets Send now and Resend last message, pane title bars drop their pills for plain text, and a terminal host or plugin worker hitting its memory cap restarts on its own instead of crashing the app.
+
+### Features
+
+**Plugins**
+
+- Install from URL (and a `daintree://plugin/install?url=` link) shows what the plugin asks for before anything is installed: it downloads the archive, shows the same review a double-clicked `.dntr` gets (identity, authors, capabilities riskiest first, recipes, project templates, the installed version it would replace, the full-privilege warning) and deletes the download, Cancel leaves nothing on disk, and Install accepts only the bytes you reviewed (#16830)
+- Install links can name a catalog release (`daintree://plugin/install?id=<publisher.name>[&version=<semver>]`, resolved against a freshly fetched catalog and checked again at confirm) or pin a URL to its digest (`?url=<https url>&sha256=<hex>`), and `daintree-plugin install <path-or-url> --sha256 <hex>` refuses any archive with another digest before extracting it; a link that is malformed, unlisted, stale or mismatched is refused with its own message and never falls back to an unpinned install (#16853, #16772)
+- The Plugin Manager's Browse toggle lists the community plugin catalog, a reviewed list pinning each release to its GitHub asset and SHA-256: each listing shows its newest release, repository and capabilities with the install preview's risk marks, says it was reviewed for source and bytes rather than safety, marks plugins you already have as Installed, and Install previews that exact release and installs only those bytes; Check for updates on a catalog-installed plugin offers only a newer reviewed release, warns when it comes from a different repository and says when a release has been delisted. The catalog is fetched when Browse opens and starts empty; listings appear as they're reviewed, with no app update, and `plugins/README.md` explains how to propose one (#16860, #16861, #16828)
+- Installed plugins can run actions in a Remote Host's projects: with the new `host:dispatch` capability and the Plugin Manager's Allow host targeting switch (off by default), `host.remoteHosts.list()` lists the hosts this machine drives and their projects and `host.dispatch(actionId, args, { hostId, projectId })` runs an action there, limited to the actions a host's own plugins may run, never confirm-gated ones, and logged in the host's plugin audit log; the host must have Accept remote control on, and project plugins can't use it (#16798)
+- Plugin action handlers receive a second `context` argument saying who dispatched the call, whether it came from the Assistant (`origin: "assistant"`) and whether a person answered Daintree's confirm dialog for it (`approval: "person"`), and a `danger: "confirm"` command can declare `assistantReach: "confirm-only"` to be offered to the project Daintree Assistant's tools at Core and Full (#16773)
+- A plugin's settings with more than 15 fields get a Filter settings box, in the Plugin Manager and in Project settings › Plugins, matching label, description and key and keeping unsaved values through a change of filter; the Settings dialog's search also finds a plugin setting by its key (#16846)
+
+**Assistant**
+
+- The Daintree Assistant runs on Antigravity CLI (`agy` 1.5.5 or later) beside Claude Code and Codex: pick it in the Assistant panel or Settings › Daintree Assistant once `agy` is installed, with the Assistant folder's skills and reference files, schedules and global-Assistant starts; Daintree trusts the session folder through a per-session settings file and leaves `~/.gemini/` untouched, and an Antigravity Assistant has no plugin tools and doesn't load `mcp.json` servers (#16857, #16863)
+- Restarting to install an update brings back every Daintree Assistant tab that was running, each in its own conversation, where before only the first came back and the rest waited under Resume a past session…; nothing resumes after a crash or an ordinary quit (#16755)
+- Settings › Daintree Assistant › Daintree confirmations gains Ask, except for…, a checklist of the calls your Assistant may make without a dialog (Delete a worktree it created, Retire a worktree it created, Change a host's settings) beside the ones that always ask, greyed with why; a `host.settings` change nobody answered now returns `confirmation_timeout` instead of reading as a decline (#16754)
+- The global Assistant can reopen a stopped Assistant tab's conversation with `assistant.resume { slot }`, `assistant.list` reports stopped tabs under `keptSlots` instead of counting them as free, and `assistant.start` skips kept slots instead of starting over one and losing its conversation, refusing one named outright with a pointer to `assistant.resume` (#16771)
+
+**Terminals and agents**
+
+- A composer message held for a busy agent gets Send now beside Edit and Withdraw, typing it in at once with its images whatever state the pane seems to be in, warning first when the pane was last seen at a question or approval, and keeping the text on the row with the reason if it can't go (#16748, #16823)
+- Resend last message, in the command palette and the pane menu's Session submenu, sends the pane's last composer or fleet message again exactly as it went, images included, without touching the draft, for a message that was withdrawn, dropped or swallowed; it follows the pane's hold rules and says why when it's unavailable (#16749)
+- Pane title bars read context, cost, tokens, CPU and memory as plain text joined by dots instead of a row of outlined pills, drop whole items as a pane narrows instead of clipping mid-number, show the branch as its worktree-colour dot and last segment, and no longer reserve an empty status box before the controls; an exit reads `exit 1`, input lock shows a Locked chip, double-clicking a tab no longer maximizes the pane, and grid tabs drop the "Launched with dangerous permissions" shield (#16871, #16833, #16864)
+- Antigravity has a model list read from the installed `agy models` (cached for a day, kept when offline or signed out), so `agent.listModels` returns Antigravity's models, and a pane launched with a model from a preset or `agent.launch` names it in its title, Codex included (`Codex (<model>)` instead of bare Codex), updating when you switch presets (#16848, #16843)
+
+**Canopy**
+
+- Canopy's Assistants section folds like Archived and Trash, remembering the choice; a folded section still lists assistants waiting on you, and a search opens it while active (#16762)
+
+### Bug Fixes
+
+**Memory and stability**
+
+- The terminal host, a plugin's worker or the main-process watchdog running out of its memory cap no longer crashes all of Daintree into crash recovery: the child restarts on its own, as it does after any other crash (#16818)
+- Decisions no longer stops for the rest of the session when the app database is briefly busy, which left every pane launched afterwards without `ask_human` until Decisions was switched off and on: it waits out the lock and otherwise reconnects by itself after 5 s, 30 s and 2 min, and the "Decisions connection lost" warning says it will try again (#16865)
+- On macOS, the window no longer freezes for up to 2 s when Daintree force-stops a plugin worker that won't exit or a terminal host it can no longer reach (#16826)
+
+**Plugins**
+
+- Installing a plugin from a URL that redirects, which includes every GitHub Release asset, no longer fails with "Couldn't download the plugin from that URL."; the fix covers Check for updates, install links and `daintree-plugin install <url>`, and each redirect hop is still refused if it leads to http, a private address or a URL with credentials (#16859)
+
+**Assistant and MCP Server**
+
+- The global Assistant can bring agents back after a restart on the default Core tool set: `agentSessionHistory.list` and `agent.resumeOwned` move from Full to Core, the list works in projects another machine is driving, and asking for a tool the session's tier withholds answers `TIER_NOT_PERMITTED` naming the tier that has it instead of `NOT_FOUND` (#16766)
+- An Assistant whose connection to Daintree's MCP server arrives without its full session binding is refused at connect instead of running on another kind of session's tools (after the 0.50.0 update restart the global Assistant could run a whole session without its `host.*` tools), and `mcp.surface` reports a `role` (`global-assistant`, `project-assistant`, `agent-pane`, `external-client`, `relay`) so a wrong surface shows at once (#16862)
+- Open in Assistant in the Canopy window opens the assistant where it runs, bringing its project window forward or opening one (a Remote Host's in that host's window), instead of always failing with "Open this assistant from its project's Assistant panel." (#16761)
+
+**Terminals and agents**
+
+- Edit on a held or dropped composer message puts its images back as chips instead of only its text, and Withdraw and Dismiss hand the keyboard back to the pane; hiding a pane's scratchpad while typing in it, or pressing Escape there, saves the notes and returns the keyboard to the pane instead of losing focus (#16823, #16831)
+- In Canopy, `Cmd+Up`/`Cmd+Down` (`Alt+Up`/`Alt+Down` on Windows and Linux) inside an open overlay such as the reply's Expanded Editor no longer switches agents and closes the editor mid-edit (#16817)
+- Images pasted into an agent's composer are labelled `Image 14:05` instead of `Screenshot 14:05`, whatever app they came from (#16744)
+
+**Worktrees and files**
+
+- Retry on a failed worktree delete reopens the delete dialog with a fresh preview when the tree may have changed, instead of force-deleting work a relaunched agent wrote since or repeating a delete refused for uncommitted files (#16832)
+- Retry failed in the bulk worktree dialog relaunches only the recipe terminals that failed or crashed, moving dead ones to the Trash, instead of rerunning the whole recipe beside the terminals still running, and the plan's counts and retry branch names no longer shift as worktrees appear mid-run (#16834)
+- Compare worktrees clears the old file list and diff and says what to do next when a compared worktree is removed, detaches its HEAD or checks out the other side's branch, instead of freezing the last comparison on screen, and opening it from a detached worktree picks a worktree on a branch as the base instead of a blank canvas (#16820)
+- A collapsed worktree card's session count updates when an agent changes state even while another terminal in that worktree keeps streaming; moving to another file in the file panel's Edit mode no longer carries over the previous file's compare view, reload-from-disk confirm or Save As path; and Project Settings › Recipes loads the new project's recipes when you switch projects with the tab open (#16838, #16835, #16819)
+
+**Review Hub and forge**
+
+- Review Hub's Commit & push, and Retry from its push error, push only the commit it just made, so an agent commit landing in between (or while the confirm is open) is stopped as a stale review instead of riding along, with Review push on that banner to look again (#16821)
+- Moving a review pane to another worktree clears the selections, diffs, conflict confirms and open push confirm from the old one, which could act on the new worktree's files of the same name or commit the old worktree's message there (#16827)
+- The toolbar's issue and pull request badges follow the list you just opened, where they could keep reading 1 after the last open issue or PR closed, and closing the only open PR no longer makes a phantom open issue appear; compacted counts no longer grow a `+` or float away from their icons, a count that just rose gets a round dot, screen readers hear the exact figure, and hover shows on the light themes where it was invisible (#16868, #16756)
+
+**Dev preview**
+
+- The Portal dock's right-click menu opens above the page instead of underneath it, closing the Portal or hiding the dev servers dashboard puts focus back on your pane or the toolbar toggle, and dismissing the Browser panel's Back or Forward history menu by clicking elsewhere leaves focus where you clicked (#16842, #16837)
+
+**macOS and Windows**
+
+- On macOS, windows restored in native full screen (the Canopy window too) show their traffic lights again when you hover the top edge, where since 0.50.0 the menu bar appeared but the title bar never slid down until full screen was toggled off and on (#16768)
+- Toolbar group dividers show again under Windows High Contrast, where they were drawn in the background colour (#16760)
+
+### Performance
+
+- Canopy's reader process and its model (about 160 MB) shut down after 5 minutes with nothing to read, when the computer sleeps or under memory pressure, and reload on the next screen in under a second (#16849)
+- Terminals no longer stall while an exited shell, dev server or agent with its session kept has its final screen (up to 5 MB) written to disk, and terminal info queries (Codex context checks, context injection's poll) no longer run a `ps` per call on macOS or read `/proc` on Linux (#16839, #16825)
+- An agent working in a background tab of a grid tab group no longer re-renders the shown pane and its tab strip on every status update, which happened at frame rate while it worked (#16847)
+- On macOS the startup Do Not Disturb check no longer delays the first window, crash-recovery backups and the running heartbeat no longer read and write workspace files on the app's main thread, and cached project views frozen to save power are no longer woken every 30 seconds for a memory sample, work that used to pile into the first paint when you switched back (#16836, #16829, #16824)
+- Plugin view hosting, the Fleet ribbon's Save fleet and Saved fleets dialogs and the Open on… host submenu load only when first used, so vanilla Daintree never loads the plugin view code (about 19 KB gzip off the first render) and closed fleet dialogs no longer recount saved fleets on every agent status update (#16854, #16844, #16841)
+
 ## [0.50.0] - 2026-11-10
 
 Canopy moves into a window of its own beside your project windows and is on by default, its 21 MB reader model now shipped inside Daintree. Schedules can start each run in a fresh worktree, Claude Code and Codex panes show the context they carry, a composer send waits for a busy agent's prompt, Jira Cloud joins the issues providers, new worktrees can copy-on-write clone `node_modules` from the main checkout (40k files in 0.8 s), cloning runs in the background, and every agent with an inline mode launches inline.
