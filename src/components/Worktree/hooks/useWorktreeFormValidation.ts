@@ -11,6 +11,8 @@ interface ValidationInput {
   branchInput: string;
   selectedExistingBranch: string | null;
   worktreePath: string;
+  /** False when the path is left to the host the worktree goes to. */
+  requirePath?: boolean;
 }
 
 export interface ValidationResult {
@@ -30,7 +32,9 @@ export function useWorktreeFormValidation() {
       branchInput,
       selectedExistingBranch,
       worktreePath,
+      requirePath = true,
     }: ValidationInput): ValidationResult => {
+      const pathMissing = requirePath && !worktreePath.trim();
       if (branchMode === "existing") {
         if (!selectedExistingBranch) {
           return {
@@ -38,7 +42,7 @@ export function useWorktreeFormValidation() {
             error: { message: "Please select a branch", field: "existing-branch" },
           };
         }
-        if (!worktreePath.trim()) {
+        if (pathMissing) {
           return {
             valid: false,
             error: { message: "Please enter a worktree path", field: "worktree-path" },
@@ -84,7 +88,7 @@ export function useWorktreeFormValidation() {
         };
       }
 
-      if (!worktreePath.trim()) {
+      if (pathMissing) {
         return {
           valid: false,
           error: { message: "Please enter a worktree path", field: "worktree-path" },

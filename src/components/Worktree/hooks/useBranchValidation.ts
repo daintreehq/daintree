@@ -8,10 +8,10 @@ export interface UseBranchValidationResult {
   isCheckingBranch: boolean;
   isGeneratingPath: boolean;
   worktreePath: string;
-  setWorktreePath: React.Dispatch<React.SetStateAction<string>>;
+  /** A path the user typed or browsed to, which suggestions then leave alone until it's emptied. */
+  setCustomWorktreePath: (path: string) => void;
   branchWasAutoResolved: boolean;
   pathWasAutoResolved: boolean;
-  pathTouchedRef: React.MutableRefObject<boolean>;
   consumeBranchResolution: (currentInput: string) => string | null;
 }
 
@@ -45,7 +45,8 @@ export function useBranchValidation({
   const [worktreePath, setWorktreePath] = useState("");
   const [branchWasAutoResolved, setBranchWasAutoResolved] = useState(false);
   const [pathWasAutoResolved, setPathWasAutoResolved] = useState(false);
-  const pathTouchedRef = useRef(false);
+  // A path the user chose outranks every suggestion until they empty the field.
+  const customPathRef = useRef(false);
   // The debounce only *offers* an auto-incremented name; the caller applies it
   // on blur/submit so the availability check can't rewrite the field mid-typing.
   const pendingResolutionRef = useRef<{ requestedName: string; resolvedName: string } | null>(null);
@@ -66,7 +67,7 @@ export function useBranchValidation({
       restoredBranch && restoredPath ? { branch: restoredBranch, path: restoredPath } : null;
     restoredPathRef.current = restored;
     setWorktreePath(restored?.path ?? "");
-    pathTouchedRef.current = false;
+    customPathRef.current = false;
     pendingResolutionRef.current = null;
     acceptedResolutionRef.current = null;
   }, [isOpen, restoredBranch, restoredPath]);
@@ -84,11 +85,18 @@ export function useBranchValidation({
     // Any input change invalidates a resolution computed for the previous value.
     pendingResolutionRef.current = null;
 
+    // A suggestion belongs to the name it was made for, so with no name there
+    // is nothing to suggest; a path the user chose stays theirs.
+    const clearSuggestedPath = () => {
+      setPathWasAutoResolved(false);
+      if (!customPathRef.current) setWorktreePath("");
+    };
+
     if (!trimmedInput || !rootPath) {
       setBranchWasAutoResolved(false);
-      setPathWasAutoResolved(false);
       setIsCheckingBranch(false);
       setIsGeneratingPath(false);
+      clearSuggestedPath();
       return;
     }
 
@@ -98,9 +106,11 @@ export function useBranchValidation({
     // Only a suggestion that lands writes the path, so an effect run cancelled
     // by the next keystroke can't retire the restored one. A restored branch
     // that has since been taken will be submitted under another name, so its
-    // path goes with the old one.
+    // path goes with the old one. Ownership is read as the result lands: the
+    // user may have chosen a path, or emptied one, while it was in flight.
     const applySuggestedPath = (path: string, autoResolved: boolean, branchTaken = false) => {
-      if (keepRestoredPath && !branchTaken) {
+      if (customPathRef.current) return;
+      if (keepRestoredPath && restoredPathRef.current === restored && !branchTaken) {
         setPathWasAutoResolved(false);
         return;
       }
@@ -124,24 +134,21 @@ export function useBranchValidation({
 
       if (parsed.hasPrefix && (!parsed.slug || !parsed.slug.trim())) {
         setBranchWasAutoResolved(false);
-        setPathWasAutoResolved(false);
         setIsCheckingBranch(false);
         setIsGeneratingPath(false);
-        setWorktreePath("");
+        clearSuggestedPath();
         return;
       }
 
       // Use the shared validator that the IPC handler and WorkspaceService
       // both rely on, so the dialog rejects exactly the names the server
-      // would. Clear path/auto-resolve state so a previously valid name's
-      // suggested path doesn't linger and let useWorktreeFormValidation
-      // green-light a submit on a now-invalid input.
+      // would. A previously valid name's suggested path goes with it; the
+      // form validation rejects the name before it looks at any path.
       if (!validateBranchName(fullName).valid) {
         setIsCheckingBranch(false);
         setIsGeneratingPath(false);
-        setWorktreePath("");
         setBranchWasAutoResolved(false);
-        setPathWasAutoResolved(false);
+        clearSuggestedPath();
         return;
       }
 
@@ -246,6 +253,14 @@ export function useBranchValidation({
     };
   }, [effectiveBranchName, rootPath, skipAvailabilityCheck, isOpen]);
 
+  const setCustomWorktreePath = useCallback((path: string) => {
+    customPathRef.current = path.trim() !== "";
+    // The user has answered for the path, so a Retry's stops holding it.
+    restoredPathRef.current = null;
+    setPathWasAutoResolved(false);
+    setWorktreePath(path);
+  }, []);
+
   // Applies the offered name only if it still matches what the field holds right
   // now — the argument is read at acceptance time, never captured when the
   // debounce was scheduled, so a superseded suggestion can't land.
@@ -269,10 +284,9 @@ export function useBranchValidation({
     isCheckingBranch,
     isGeneratingPath,
     worktreePath,
-    setWorktreePath,
+    setCustomWorktreePath,
     branchWasAutoResolved,
     pathWasAutoResolved,
-    pathTouchedRef,
     consumeBranchResolution,
   };
 }

@@ -2894,6 +2894,108 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   });
 });
 
+describe("NewWorktreeDialog — a path the user chose (#16891)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/two" } }
+        : { ok: true, result: undefined }
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    placement.getDraft = null;
+    placement.onCommitChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function typeBranch(value: string) {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), { target: { value } });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  const pathInput = () => screen.getByTestId("worktree-path-input") as HTMLInputElement;
+
+  async function createAndReadPath() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const call = mockDispatch.mock.calls.find(([id]) => id === "worktree.create");
+    return (call?.[1] as { options: { path: string; newBranch: string } } | undefined)?.options;
+  }
+
+  it("keeps a typed path through a later branch edit and creates there", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+    expect(pathInput().value).toBe("/test/root-worktrees/feature/one");
+
+    await act(async () => {
+      fireEvent.change(pathInput(), { target: { value: "/custom/place" } });
+    });
+    await typeBranch("feature/two");
+
+    expect(mockGetAvailableBranch).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(pathInput().value).toBe("/custom/place");
+    expect(await createAndReadPath()).toMatchObject({
+      newBranch: "feature/two",
+      path: "/custom/place",
+    });
+    // Created, the form starts over: the next name gets a suggestion again.
+    expect(pathInput().value).toBe("");
+  });
+
+  it("keeps a browsed path the same way", async () => {
+    const createOnly = mockDispatch.getMockImplementation()!;
+    mockDispatch.mockImplementation(async (actionId: string, ...rest: unknown[]) =>
+      actionId === "project.openDialog"
+        ? { ok: true, result: "/picked/place" }
+        : createOnly(actionId, ...rest)
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a worktree directory" }));
+    });
+    expect(pathInput().value).toBe("/picked/place");
+    await typeBranch("feature/two");
+
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(pathInput().value).toBe("/picked/place");
+    expect(await createAndReadPath()).toMatchObject({ path: "/picked/place" });
+  });
+
+  it("clears a suggested path along with the branch name", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+    expect(pathInput().value).toBe("/test/root-worktrees/feature/one");
+
+    await typeBranch("");
+    expect(pathInput().value).toBe("");
+  });
+});
+
 describe("NewWorktreeDialog — creating on another host (#14991)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -2946,6 +3048,50 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     });
     return submit;
   }
+
+  it("creates on the chosen host with an emptied path, and asks for one again back on this host", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("worktree-path-input"), { target: { value: "" } });
+    });
+    // The row's submit asks the dialog for its draft, as the real one does.
+    const drafts: unknown[] = [];
+    await chooseHost("studio-02", {
+      relativePath: null,
+      submit: () => drafts.push(placement.getDraft!()),
+    });
+
+    expect(screen.queryByTestId("worktree-path-input")).toBeNull();
+    expect(screen.getByTestId("placed-worktree-path").textContent).toBe(
+      "Where studio-02 puts new worktrees"
+    );
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => {
+      fireEvent.click(primary);
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(drafts).toEqual([
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+    ]);
+    expect(screen.queryByText("Please enter a worktree path")).toBeNull();
+
+    await chooseHost(null);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "worktree.create",
+      expect.anything(),
+      expect.anything()
+    );
+  });
 
   it("widens the host label cap only when the summary has moved above the buttons", async () => {
     renderDialog();

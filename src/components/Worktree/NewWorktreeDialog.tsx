@@ -356,10 +356,9 @@ export function NewWorktreeDialog({
     isCheckingBranch,
     isGeneratingPath,
     worktreePath,
-    setWorktreePath,
+    setCustomWorktreePath,
     branchWasAutoResolved,
     pathWasAutoResolved,
-    pathTouchedRef,
     consumeBranchResolution,
   } = useBranchValidation({
     branchInput,
@@ -931,7 +930,7 @@ export function NewWorktreeDialog({
 
     // Reset locally-captured form state so the next dialog open starts clean.
     setBranchInput("");
-    setWorktreePath("");
+    setCustomWorktreePath("");
     setFromRemote(false);
 
     void (async () => {
@@ -1253,12 +1252,11 @@ export function NewWorktreeDialog({
 
   const handleWorktreePathChange = useCallback(
     (value: string) => {
-      setWorktreePath(value);
-      pathTouchedRef.current = true;
+      setCustomWorktreePath(value);
       markTouched("worktreePath");
       clearErrors();
     },
-    [setWorktreePath, pathTouchedRef, markTouched, clearErrors]
+    [setCustomWorktreePath, markTouched, clearErrors]
   );
 
   const handleBrowseClick = useCallback(async () => {
@@ -1267,8 +1265,7 @@ export function NewWorktreeDialog({
         source: "user",
       });
       if (result.ok && result.result) {
-        setWorktreePath(result.result as string);
-        pathTouchedRef.current = true;
+        setCustomWorktreePath(result.result as string);
         markTouched("worktreePath");
         clearErrors();
       }
@@ -1277,7 +1274,7 @@ export function NewWorktreeDialog({
       const message = formatErrorMessage(err, "Failed to open directory picker");
       setValidationError(`Failed to open directory picker: ${message}`, "worktree-path");
     }
-  }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
+  }, [setCustomWorktreePath, markTouched, clearErrors, setValidationError]);
 
   // Another host runs only a team recipe, from its own copy of the repository:
   // a cloned layout or a recipe kept on this host is never sent (#14991).
@@ -1347,7 +1344,9 @@ export function NewWorktreeDialog({
 
   const placedRecipeId = placedRecipe?.id ?? null;
   // The form as it stands, for another host to create: validated here, so the
-  // same errors show on the same fields as a create on this host would.
+  // same errors show on the same fields as a create on this host would. The
+  // path is the exception: its field isn't shown for another host, and an
+  // empty one leaves the folder to that host's own pattern.
   const getPlacementDraft = (): PlacementDraft | null => {
     // Nothing another host can create yet that this one couldn't: the same
     // gates as local Create (a PR branch that didn't resolve, checks in flight).
@@ -1364,6 +1363,7 @@ export function NewWorktreeDialog({
       branchInput,
       selectedExistingBranch,
       worktreePath,
+      requirePath: false,
     });
     if (!result.valid) {
       setValidationError(result.error!.message, result.error!.field);
