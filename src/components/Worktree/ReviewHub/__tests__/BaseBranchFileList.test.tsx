@@ -223,20 +223,76 @@ describe("BaseBranchFileList keyboard rows (#16895)", () => {
       expect(document.activeElement).toBe(row(`file-${String(last - 1).padStart(3, "0")}.ts`));
     });
 
-    it("never takes focus back once the user has left the list", () => {
+    /** Presses End from the first row with the window held still, parking focus on the list. */
+    function parkOnEnd() {
       mountedRange.current = { start: 0, end: 9 };
       const view = renderList(files(count));
       row("file-000.ts").focus();
       press("End");
+      expect(document.activeElement).toBe(screen.getByTestId("base-branch-file-list"));
+      return {
+        ...view,
+        // The window arrives late, after whatever the test did in between.
+        mountLastRows: (
+          range: { start: number; end: number } | null = {
+            start: last - 9,
+            end: last,
+          }
+        ) => {
+          mountedRange.current = range;
+          view.rerenderList({ decorations: {} });
+          expect(row(lastName)).toBeTruthy();
+        },
+      };
+    }
 
+    it("never takes focus from a row the user moved to while the requested one was on its way", () => {
+      const view = parkOnEnd();
+      // Tab out of the parked list lands on a mounted row of the same list.
+      row("file-003.ts").focus();
+      // Mounted together with the requested row, so the chosen one is still there.
+      view.mountLastRows(null);
+      expect(document.activeElement).toBe(row("file-003.ts"));
+    });
+
+    it("never takes focus back once it has left the list, even unseen by the list", () => {
+      const view = parkOnEnd();
+      // The list never hears focus go, so only the delivery's own check stands.
+      const swallow = (e: Event) => e.stopPropagation();
+      document.addEventListener("focusout", swallow, true);
       const outside = screen.getByRole("button", { name: "Outside" });
-      outside.focus();
-      // The window arrives late, after focus has gone elsewhere.
-      mountedRange.current = { start: last - 9, end: last };
-      view.rerenderList({ decorations: {} });
-
-      expect(row(lastName)).toBeTruthy();
+      try {
+        outside.focus();
+      } finally {
+        document.removeEventListener("focusout", swallow, true);
+      }
+      view.mountLastRows();
       expect(document.activeElement).toBe(outside);
+    });
+
+    it("drops the request once focus leaves, so returning to the list does not revive it", () => {
+      const view = parkOnEnd();
+      screen.getByRole("button", { name: "Outside" }).focus();
+      // A click on the list's padding focuses it again, with no key behind it.
+      const list = screen.getByTestId("base-branch-file-list");
+      list.focus();
+      view.mountLastRows();
+      expect(document.activeElement).toBe(list);
+    });
+
+    it("steps from the requested file wherever a refresh has moved it", () => {
+      const view = parkOnEnd();
+      // The requested file is now 21st, still outside the mounted window.
+      const reordered = files(count);
+      reordered.splice(20, 0, reordered.pop()!);
+      view.rerenderList({ files: reordered });
+
+      scrollToIndexMock.mockImplementation(({ index }) => {
+        mountedRange.current = { start: index - 9, end: index };
+      });
+      expect(press("ArrowUp")).toBe(true);
+      expect(scrollToIndexMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 19 }));
+      expect(document.activeElement).toBe(row("file-019.ts"));
     });
   });
 });

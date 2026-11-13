@@ -91,13 +91,13 @@ export function BaseBranchFileList({
   const pendingFocusPathRef = useRef<string | null>(null);
   const virtualized = shouldVirtualizeFileList(files.length);
 
-  // Delivers a held key's focus on the commit that mounts its row, unless
-  // focus has left the list since: a key pressed here must never take focus
-  // back from wherever the user went next.
+  // Delivers a held key's focus on the commit that mounts its row, and only
+  // to focus still parked on the list: once the user has moved it, even Tab
+  // onto another row here, the key must not take it back.
   const handleOpenButton = useCallback((path: string, button: HTMLButtonElement | null) => {
     if (button === null || pendingFocusPathRef.current !== path) return;
     pendingFocusPathRef.current = null;
-    if (!listRef.current?.contains(document.activeElement)) return;
+    if (document.activeElement !== listRef.current) return;
     focusRow(button);
   }, []);
 
@@ -143,8 +143,10 @@ export function BaseBranchFileList({
     virtuosoRef.current?.scrollToIndex({ index: next, align: "start", behavior: "auto" });
   };
 
+  // A request lives only while focus is parked on the list itself, so a later
+  // return to it (a click on its padding) cannot revive a spent one.
   const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) pendingFocusPathRef.current = null;
+    if (e.target === e.currentTarget) pendingFocusPathRef.current = null;
   };
 
   let body: React.ReactNode;

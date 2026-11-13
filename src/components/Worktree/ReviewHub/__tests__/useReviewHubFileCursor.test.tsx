@@ -4,7 +4,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { StagingFileEntry } from "@shared/types";
-import { useReviewHubFileCursor, type ReviewHubNavigableItem } from "../useReviewHubFileCursor";
+import {
+  resolveDisplacedCursor,
+  useReviewHubFileCursor,
+  type ReviewHubNavigableItem,
+} from "../useReviewHubFileCursor";
 
 function entry(path: string): StagingFileEntry {
   return { path, status: "modified", insertions: 1, deletions: 0 } as StagingFileEntry;
@@ -99,17 +103,27 @@ describe("useReviewHubFileCursor — the cursor across a stage or unstage (#1689
   it("still follows a file that stays in its section across a re-sort", () => {
     const before = list(["a"], ["b", "c", "d"]);
     const hook = cursorOn(before, "unstaged:c");
-    const after = list(["a"], ["d", "c", "b"]);
+    const after = list(["a"], ["c", "d", "b"]);
     hook.rerender(after);
     expect(focusedKey(hook, after)).toBe("unstaged:c");
   });
 
   it("lands on the next row that survived when several rows leave together", () => {
+    // The same position in the section would be `e`: `c` left with `b`.
     const before = list([], ["a", "b", "c", "d", "e"]);
     const hook = cursorOn(before, "unstaged:b");
-    const after = list(["b", "c"], ["a", "d", "e"]);
+    const after = list(["a", "b", "c"], ["d", "e"]);
     hook.rerender(after);
     expect(focusedKey(hook, after)).toBe("unstaged:d");
+  });
+
+  it("falls back to the nearest row above that survived when nothing below did", () => {
+    // The same position in the section would be the newly arrived `x`.
+    const before = list(["a", "b"], ["c"]);
+    const hook = cursorOn(before, "staged:b");
+    const after = list(["a", "x"], ["b", "c"]);
+    hook.rerender(after);
+    expect(focusedKey(hook, after)).toBe("staged:a");
   });
 
   it("does not count the file's own copy in the other section as a neighbour", () => {
@@ -123,17 +137,61 @@ describe("useReviewHubFileCursor — the cursor across a stage or unstage (#1689
   });
 
   it("keeps its position in the section when a refresh replaces every row around it", () => {
+    // Staged grew too, so the old flat index would name `x`.
     const before = list(["a"], ["b", "c", "d"]);
     const hook = cursorOn(before, "unstaged:c");
-    const after = list(["a"], ["x", "y", "z"]);
+    const after = list(["a", "s"], ["x", "y", "z"]);
     hook.rerender(after);
     expect(focusedKey(hook, after)).toBe("unstaged:y");
   });
 
-  it("clears the cursor when the list empties", () => {
+  it("holds that position to the section's new end when the replacement is shorter", () => {
+    const before = list(["a"], ["b", "c", "d"]);
+    const hook = cursorOn(before, "unstaged:d");
+    const after = list(["a"], ["x", "y"]);
+    hook.rerender(after);
+    expect(focusedKey(hook, after)).toBe("unstaged:y");
+  });
+
+  it("stays on the row it moved to when the file it left comes back", () => {
+    const before = list(["a"], ["b", "c"]);
+    const hook = cursorOn(before, "unstaged:b");
+    const staged = list(["a", "b"], ["c"]);
+    hook.rerender(staged);
+    expect(focusedKey(hook, staged)).toBe("unstaged:c");
+    const restored = list(["a"], ["b", "c"]);
+    hook.rerender(restored);
+    expect(focusedKey(hook, restored)).toBe("unstaged:c");
+  });
+
+  it("finds its neighbours in the latest order, not the order it first saw", () => {
+    const before = list([], ["a", "b", "c"]);
+    const hook = cursorOn(before, "unstaged:b");
+    hook.rerender(list([], ["c", "b", "a"]));
+    const after = list([], ["c", "a"]);
+    hook.rerender(after);
+    expect(focusedKey(hook, after)).toBe("unstaged:a");
+  });
+
+  it("clears the cursor when the list empties, and leaves it clear when rows return", () => {
     const before = list([], ["a"]);
     const hook = cursorOn(before, "unstaged:a");
     hook.rerender(list([], []));
     expect(hook.result.current.focusedIndex).toBe(-1);
+    hook.rerender(list([], ["a", "b"]));
+    expect(hook.result.current.focusedIndex).toBe(-1);
+  });
+});
+
+describe("resolveDisplacedCursor for a key the previous list never held", () => {
+  const { navigableItems: rows } = list(["s"], ["a", "b", "c"]);
+
+  it("starts from the old index and counts the row sitting there", () => {
+    expect(resolveDisplacedCursor(rows, 2, "unstaged:missing", rows)).toBe(2);
+  });
+
+  it("holds an out-of-range old index to the previous list's ends", () => {
+    expect(resolveDisplacedCursor(rows, -1, "unstaged:missing", rows)).toBe(1);
+    expect(resolveDisplacedCursor(rows, 99, "unstaged:missing", rows)).toBe(3);
   });
 });
