@@ -793,3 +793,100 @@ describe("ProjectSchedulesTab — the editor", () => {
     expect(screen.queryByText("Discard this new schedule?")).toBeNull();
   });
 });
+
+describe("ProjectSchedulesTab — the editor's answer (#16907)", () => {
+  it("never folds an answer the list has moved past into a later opening", async () => {
+    const EDITED = { ...NIGHTLY, name: "Nightly audit, edited", updatedAt: NIGHTLY.updatedAt + 1 };
+    client.update.mockResolvedValue({
+      status: "saved",
+      schedule: EDITED,
+      snapshot: snapshot([EDITED, WEEKLY], 2),
+    });
+    client.remove.mockResolvedValue({ status: "removed", snapshot: snapshot([EDITED], 3) });
+    const { update } = renderTab();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    fireEvent.change(await screen.findByDisplayValue("Nightly audit"), {
+      target: { value: "Nightly audit, edited" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(editor()).toBeNull());
+    expect(await screen.findByText("Nightly audit, edited")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete schedule Weekly triage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete schedule" }));
+    await waitFor(() => expect(screen.queryByText("Weekly triage")).toBeNull());
+
+    // Closed and opened again, the tab waits for its own read rather than
+    // showing the editor's older answer, with the deleted row back in it.
+    let answer: (value: SchedulesSnapshot) => void = () => {};
+    client.list.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const reads = client.list.mock.calls.length;
+    update({ mounted: false });
+    update({ mounted: true });
+    await waitFor(() => expect(client.list).toHaveBeenCalledTimes(reads + 1));
+    expect(screen.queryByText("Weekly triage")).toBeNull();
+    expect(screen.queryByText("Nightly audit, edited")).toBeNull();
+
+    await act(async () => answer(snapshot([EDITED], 3)));
+    expect(await screen.findByText("Nightly audit, edited")).toBeTruthy();
+    expect(screen.queryByText("Weekly triage")).toBeNull();
+  });
+});
+
+describe("ProjectSchedulesTab — waiting on a read (#16907)", () => {
+  it("shows nothing for a read inside the skeleton's gate, and the skeleton once past it", async () => {
+    let answer: (value: SchedulesSnapshot) => void = () => {};
+    client.list.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    renderTab();
+    expect(screen.queryByRole("status", { name: "Loading schedules" })).toBeNull();
+
+    expect(await screen.findByRole("status", { name: "Loading schedules" })).toBeTruthy();
+    await act(async () => answer(snapshot([NIGHTLY, WEEKLY])));
+    expect(await screen.findByText("Nightly audit")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Loading schedules" })).toBeNull();
+  });
+
+  it("shows Last run's Retry busy while it reads, and takes no second click", async () => {
+    client.listRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
+    renderTab();
+    await screen.findByText("Couldn't read run history, so Last run may be out of date");
+
+    let answer: (value: ScheduledRun[]) => void = () => {};
+    client.listRuns.mockImplementationOnce(
+      () => new Promise<ScheduledRun[]>((resolve) => (answer = resolve))
+    );
+    const reads = client.listRuns.mock.calls.length;
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 1));
+    expect(retry.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(retry);
+    fireEvent.click(retry);
+    expect(client.listRuns).toHaveBeenCalledTimes(reads + 1);
+
+    await act(async () => answer([]));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Couldn't read run history, so Last run may be out of date")
+      ).toBeNull()
+    );
+  });
+
+  it("takes Last run's Retry again once a retried read fails too", async () => {
+    client.listRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
+    renderTab();
+    await screen.findByText("Couldn't read run history, so Last run may be out of date");
+
+    client.listRuns.mockRejectedValueOnce(new Error("Still unreadable"));
+    const reads = client.listRuns.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" }).getAttribute("aria-busy")).toBeNull()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 2));
+  });
+});
