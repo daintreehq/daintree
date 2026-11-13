@@ -69,6 +69,14 @@ let diffText: string;
 const A = { path: "a.ts", status: "M", insertions: 1, deletions: 0 };
 const B = { path: "b.ts", status: "M", insertions: 2, deletions: 1 };
 
+function deferred<T = unknown>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function listResponse() {
   return { branch1: "main", branch2: "feature", files: [A, B].map((f) => ({ ...f })) };
 }
@@ -176,5 +184,60 @@ describe("CrossWorktreeDiff swapping Base and Compare", () => {
     expect(useAnnouncerStore.getState().polite?.msg).toBe(
       "Base is now feature, Compare is now main"
     );
+  });
+
+  it("keeps focus on the button so it can be pressed again", async () => {
+    await openComparison();
+    const swap = screen.getByRole("button", { name: SWAP });
+    swap.focus();
+
+    fireEvent.click(swap);
+
+    expect(document.activeElement).toBe(swap);
+  });
+
+  it("opens the reversed comparison on its first file, not the one that was open", async () => {
+    mockCompareWorktrees.mockImplementation((_path, b1, b2, filePath?: string) =>
+      Promise.resolve(filePath === undefined ? listResponse() : `${b1}>${b2}:${filePath}`)
+    );
+    render(tree());
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").textContent).toBe("main>feature:a.ts")
+    );
+    fireEvent.click(fileRow("b.ts")!);
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").textContent).toBe("main>feature:b.ts")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: SWAP }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").textContent).toBe("feature>main:a.ts")
+    );
+  });
+
+  it("drops the old direction's list when it lands after the swap", async () => {
+    const stale = deferred();
+    mockCompareWorktrees.mockImplementation((_path, b1, b2, filePath?: string) => {
+      if (filePath !== undefined) return Promise.resolve(`${b1}>${b2}:${filePath}`);
+      return b1 === "main"
+        ? stale.promise
+        : Promise.resolve({ branch1: "feature", branch2: "main", files: [{ ...B }] });
+    });
+    render(tree());
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+
+    fireEvent.click(screen.getByRole("button", { name: SWAP }));
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").textContent).toBe("feature>main:b.ts")
+    );
+    await act(async () => {
+      stale.resolve(listResponse());
+    });
+
+    expect(fileRow("a.ts")).toBeUndefined();
+    expect(fileRow("b.ts")).toBeDefined();
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("feature>main:b.ts");
   });
 });
