@@ -122,7 +122,7 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
  * hiding behind a first expand. That fetch is a bounded git-log scan — deduped
  * in the store while in flight and cheap on repeat (the service caches under a
  * 60s TTL behind a HEAD probe). Expanding kicks another (deduped) fetch to
- * refresh the peek and open the card on a skeleton rather than a blank frame.
+ * refresh the peek and open the card already loading rather than idle.
  */
 export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   const [expanded, setExpanded] = useState(false);
@@ -182,7 +182,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
 
   const expand = () => {
     toggledRef.current = true;
-    // Kick a fetch before mounting the card so it opens on a skeleton (loading
+    // Kick a fetch before mounting the card so it opens already loading (loading
     // is set synchronously) and the peek reflects the latest activity.
     void fetchPulse(worktreeId);
     setExpanded(true);
