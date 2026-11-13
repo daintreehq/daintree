@@ -740,6 +740,40 @@ describe("ThemeBrowser navigation contract", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBe(darkSchemeAt(3)!.id);
   });
 
+  // An IME confirms its candidate with Enter and pages candidates with Page
+  // keys; those keystrokes belong to the composition, not to the list.
+  describe("while an IME is composing", () => {
+    it.each([
+      ["isComposing", { isComposing: true }],
+      ["keyCode 229", { keyCode: 229 }],
+    ])("leaves Enter to the composition (%s)", async (_label, composing) => {
+      const { appThemeClient } = await import("@/clients/appThemeClient");
+      vi.mocked(appThemeClient.setColorScheme).mockClear();
+      render(<Harness />);
+      const input = screen.getByLabelText("Filter themes");
+      const target = otherDarkScheme();
+      fireEvent.click(findRowByName(target.name));
+
+      fireEvent.keyDown(input, { key: "Enter", ...composing });
+
+      expect(useThemeBrowserStore.getState().isOpen).toBe(true);
+      expect(useAppThemeStore.getState().selectedSchemeId).toBe(DEFAULT_APP_SCHEME_ID);
+      expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+      expect(appThemeClient.setColorScheme).not.toHaveBeenCalled();
+    });
+
+    it.each(["PageDown", "PageUp"])("leaves %s to the composition", (key) => {
+      render(<Harness />);
+      const input = screen.getByLabelText("Filter themes");
+      const target = darkSchemeAt(2)!;
+      fireEvent.click(findRowByName(target.name));
+
+      fireEvent.keyDown(input, { key, isComposing: true });
+
+      expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+    });
+  });
+
   // The cursor is the highlighted row, not a number that outlives the list it
   // was counted in. Every case below changes the list under a cursor and then
   // arrows, and each one used to step from an index the new list never offered.

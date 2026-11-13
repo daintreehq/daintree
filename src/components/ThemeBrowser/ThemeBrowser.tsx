@@ -514,6 +514,9 @@ export function ThemeBrowser() {
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // An IME confirms a candidate with Enter and pages candidates with the
+      // Page keys; until it commits, every keystroke belongs to the field.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (
         e.key === "ArrowDown" ||
         e.key === "ArrowUp" ||
