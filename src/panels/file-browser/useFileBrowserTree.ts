@@ -1313,8 +1313,9 @@ export function useFileBrowserTree({
   }, [sourceKey, rootPath]);
 
   const missingRowStatusOf = useCallback(
-    (path: string) => missingRowStatus(path, listings, expandedSet, rootPath, isVisible),
-    [listings, expandedSet, rootPath, isVisible]
+    (path: string) =>
+      missingRowStatus(path, listings, expandedSet, rootPath, isVisible, failedListings),
+    [listings, expandedSet, rootPath, isVisible, failedListings]
   );
 
   return {

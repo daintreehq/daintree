@@ -653,6 +653,8 @@ beforeEach(() => {
   });
   treeState.rows = defaultRows;
   treeState.missingRowStatus = () => "absent";
+  treeState.listingPath = null;
+  treeState.listingRows = null;
   treeState.rootError = null;
   treeState.isInitialLoading = false;
   treeState.captureSnapshot = () => null;
@@ -1601,6 +1603,8 @@ describe("insert file reference", () => {
   });
 
   it("advertises the shortcut on the cursor row's menu", () => {
+    // The row is in the tree, as the real tree's Cmd+I handler requires.
+    treeState.rows = [...defaultRows, FOLDER_ROW] as unknown as typeof defaultRows;
     renderPane();
     act(() => {
       treeProps.onSelect?.(FOLDER_ROW.path, true);
@@ -1616,6 +1620,27 @@ describe("insert file reference", () => {
       treeProps.onSelect?.("src/app.ts", false);
     });
     expect(insertItem().hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("advertises nothing in the folder listing, even on the row the cursor is on", async () => {
+    // Cmd+I is bound by the tree alone; the listing lives in the viewer.
+    mockPanel.browserSelectedPath = "src";
+    treeState.listingPath = "src";
+    treeState.listingRows = [{ path: "src/app.ts", name: "app.ts", isDirectory: false }];
+    renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    // The listing's own row for the cursor's path, right-clicked open. Radix
+    // hides the rest of the document from the a11y tree while its menu is up, so
+    // what the query sees from then on is that menu alone.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "app.ts" }));
+    await waitFor(() => expect(document.querySelector("[data-radix-menu-content]")).not.toBeNull());
+    const items = screen.getAllByRole("button", { name: /Insert file reference/ });
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
   it("gives the tree the same handler and gate as the menu", () => {
@@ -3468,6 +3493,41 @@ describe("tree cursor reconciliation", () => {
     treeState.missingRowStatus = () => "absent";
     showRows(COLLAPSED, rerender);
     expect(treeProps.cursorPath).toBe("src");
+  });
+
+  it("still repairs the cursor once a wait ends with its row missing", () => {
+    // A hold that discarded what the cursor was last seen on would pass the
+    // test above, where the row comes back; the repair needs it kept.
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    const { rerender } = renderPane();
+    act(() => {
+      treeProps.onSelect?.("src/app.ts", false);
+    });
+
+    treeState.missingRowStatus = () => "pending";
+    showRows(COLLAPSED, rerender);
+    expect(treeProps.cursorPath).toBe("src/app.ts");
+
+    treeState.missingRowStatus = () => "absent";
+    showRows(COLLAPSED, rerender);
+    expect(treeProps.cursorPath).toBe("src");
+  });
+
+  it("does not spend an old sighting on a cursor that never had a row", () => {
+    // The wait leaves the sighting of `src/app.ts` in place; the viewer then
+    // moves to a file whose row has not loaded. That cursor is early, not
+    // stale, whatever the old one's fate.
+    treeState.rows = EXPANDED as unknown as typeof defaultRows;
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const { rerender } = renderPane();
+
+    treeState.missingRowStatus = () => "pending";
+    showRows(COLLAPSED, rerender);
+    mockPanel.browserSelectedPath = "docs/guide.md";
+    treeState.missingRowStatus = () => "absent";
+    showRows(COLLAPSED, rerender);
+
+    expect(treeProps.cursorPath).toBe("docs/guide.md");
   });
 
   it("clears the cursor when the tree has no rows left to hold it", () => {

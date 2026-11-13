@@ -9,10 +9,12 @@ import {
  * Why a path with no row has no row — the question that decides whether a tree
  * cursor naming it is stale or merely early.
  *
- * `pending`: a directory on the way down hasn't been listed yet, so nothing can
- * be concluded. `absent`: everything needed to show the row has been read (or
- * the row is deliberately not shown) and it still isn't there — collapsed
- * above, filtered, outside the root, or gone from its parent's listing.
+ * `pending`: a directory on the way down hasn't been listed yet (or the root
+ * hasn't, so there is no tree to judge against), so nothing can be concluded.
+ * `absent`: everything needed to show the row has been read, or given up on,
+ * or the row is deliberately not shown — and it still isn't there: collapsed
+ * above, filtered, outside the root, gone from its parent's listing, or under a
+ * directory whose listing failed.
  *
  * Only meaningful for a path that is not currently a row; it never answers
  * "visible".
@@ -24,11 +26,17 @@ export function missingRowStatus(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
   rootPath: string,
-  isVisible: (name: string) => boolean
+  isVisible: (name: string) => boolean,
+  failedListings: ReadonlySet<string>
 ): MissingRowStatus {
+  // Nothing is settled before the root is: a re-root starts from an empty tree,
+  // and a cursor on the folder that just became the root (or outside it) would
+  // otherwise be ruled absent with no rows to move it onto — it would clear and
+  // stay clear once the listing landed.
+  if (!listings.has(rootPath)) return "pending";
   // The root is the frame, never a row, so a path equal to it is absent for the
-  // same reason a path above it is. Filtering and the root check come first
-  // because they need no listing: a hidden or out-of-root cursor is settled.
+  // same reason a path above it is. Filtering and the root check need no
+  // further listing: a hidden or out-of-root cursor is settled.
   if (path === rootPath || !isRowPathVisible(path, rootPath, isVisible)) return "absent";
 
   const prefix = rootPath === "" ? "" : `${rootPath}/`;
@@ -39,7 +47,9 @@ export function missingRowStatus(
     // The one non-answer. A restored or revealed cursor lands before the
     // listings under it do, and a root change drops every listing but the
     // root's own — in both, the row appears once its ancestors have been read.
-    if (listed === undefined) return "pending";
+    // A directory whose read failed is not coming, and the hook won't re-ask on
+    // its own, so waiting on it would leave the cursor stale for good.
+    if (listed === undefined) return failedListings.has(dir) ? "absent" : "pending";
     const next = dir === "" ? segments[i]! : `${dir}/${segments[i]}`;
     if (!listed.some((node) => node.path === next)) return "absent";
     if (i === segments.length - 1) break;
