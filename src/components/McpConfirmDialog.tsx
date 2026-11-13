@@ -290,10 +290,6 @@ export function McpConfirmDialog() {
   // that settles meanwhile can't leave the next one hidden.
   const [inspectingId, setInspectingId] = useState<string | null>(null);
   const inspecting = inspectingId !== null && inspectingId === currentRequestId;
-  const inspectingIdRef = useRef(inspectingId);
-  useEffect(() => {
-    inspectingIdRef.current = inspectingId;
-  }, [inspectingId]);
 
   // A request brought up in place of one that expired says so through the
   // announcer rather than a live region (#15700): two in a row can say the same
@@ -318,12 +314,20 @@ export function McpConfirmDialog() {
   // Where to go once the dialog has finished closing. Not before: the close
   // hands focus back to wherever it was when the dialog opened, which would
   // pull it straight out of the pane the user asked to see.
-  const pendingShowRef = useRef<{ requestId: string; identity: McpRequester } | null>(null);
+  const pendingShowRef = useRef<{
+    requestId: string;
+    identity: McpRequester;
+    visit: number;
+  } | null>(null);
+  // Counts visits, so a navigation still under way when its visit ends (a
+  // Review, or another Show panel) can't bring the request back later.
+  const visitRef = useRef(0);
   const showRequester = useCallback((requestId: string, identity: McpRequester) => {
     // A settled request held on screen through its exit has nowhere to step to.
     const live = useMcpConfirmStore.getState().current;
     if (live?.requestId !== requestId || live.expired === true) return;
-    pendingShowRef.current = { requestId, identity };
+    visitRef.current += 1;
+    pendingShowRef.current = { requestId, identity, visit: visitRef.current };
     returnFocusRef.current = null;
     setInspectingId(requestId);
   }, []);
@@ -368,6 +372,7 @@ export function McpConfirmDialog() {
   }, [expiredAside, currentRequestId, dismiss]);
 
   const reviewRequest = useCallback(() => {
+    visitRef.current += 1;
     // Reopened before the exit finished: the close that would have navigated
     // never completes, and a later one, after an answer, must not go instead.
     pendingShowRef.current = null;
@@ -393,7 +398,10 @@ export function McpConfirmDialog() {
     // goes back to where the dialog was opened from first, so the dialog
     // reopened over it returns there in turn.
     const comeBack = () => {
-      if (inspectingIdRef.current !== pending.requestId) return;
+      // Only for this visit, to a request still waiting: once the user has
+      // come back, gone again, or the request has settled, focus is elsewhere.
+      if (visitRef.current !== pending.visit) return;
+      if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
       restoreSkippedFocus?.();
       setInspectingId((id) => (id === pending.requestId ? null : id));
     };
@@ -1602,14 +1610,15 @@ function escapeDismissesPill(event: KeyboardEvent): boolean {
   if (event.isComposing || event.keyCode === 229) return false;
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
   if (document.documentElement.dataset.dragging === "true") return false;
-  // A text field in an open popup that closes on Escape (a dropdown's search
-  // box) keeps it, as the keybinding layer leaves it there; a terminal's own
-  // field is not one of those.
+  // A text field in a popup portaled out of the app that closes on Escape (a
+  // dropdown's search box) keeps it, as the keybinding layer leaves it there.
+  // Fields in the app itself, a terminal's or a composer's, are where the user
+  // went to see the requester.
   const target = event.target instanceof HTMLElement ? event.target : null;
   if (
     target !== null &&
     (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) &&
-    target.closest(".xterm") === null &&
+    target.closest("#root, .xterm") === null &&
     escapeStackHasHandlers()
   ) {
     return false;

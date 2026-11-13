@@ -1513,7 +1513,7 @@ describe("McpConfirmDialog", () => {
 
     describe("where focus goes (#16950)", () => {
       let paneInput: HTMLInputElement;
-      let paneKeys: ReturnType<typeof vi.fn>;
+      let paneKeys: ReturnType<typeof vi.fn<(event: KeyboardEvent) => void>>;
       const appended: HTMLElement[] = [];
       function append<T extends HTMLElement>(element: T): T {
         document.body.appendChild(element);
@@ -1523,7 +1523,7 @@ describe("McpConfirmDialog", () => {
       beforeEach(() => {
         // The requester's pane, which takes focus once it has been navigated to.
         paneInput = append(document.createElement("input"));
-        paneKeys = vi.fn();
+        paneKeys = vi.fn<(event: KeyboardEvent) => void>();
         paneInput.addEventListener("keydown", paneKeys);
         requesterMocks.show.mockImplementation(async () => {
           paneInput.focus();
@@ -1788,8 +1788,9 @@ describe("McpConfirmDialog", () => {
         }
       });
 
-      it("leaves Escape to a popup's own field, but not to a terminal's", async () => {
+      it("leaves Escape to a popup's own field, but not to the app's", async () => {
         vi.useFakeTimers();
+        // The open popup, and the app's own surfaces, both on the escape stack.
         const entry = registerEscape(() => {});
         try {
           await expireAside("req-field");
@@ -1798,17 +1799,79 @@ describe("McpConfirmDialog", () => {
           expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(true);
           expect(screen.getByRole("region", { name: "Approval request" })).toBeTruthy();
 
-          const terminal = append(document.createElement("div"));
-          terminal.className = "xterm";
-          const terminalInput = terminal.appendChild(document.createElement("textarea"));
+          const app = append(document.createElement("div"));
+          app.id = "root";
+          const composer = app.appendChild(document.createElement("textarea"));
           act(() => {
-            fireEvent.keyDown(terminalInput, { key: "Escape" });
+            fireEvent.keyDown(composer, { key: "Escape" });
           });
           expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
         } finally {
           entry.unregister();
           vi.useRealTimers();
         }
+      });
+
+      describe("a navigation that fails late", () => {
+        let navigations: Array<(arrived: boolean) => void>;
+        beforeEach(() => {
+          navigations = [];
+          requesterMocks.show.mockImplementation(
+            () => new Promise<boolean>((resolve) => navigations.push(resolve))
+          );
+        });
+
+        it("doesn't bring the request back from a visit since ended", async () => {
+          void enqueue({
+            requestId: "req-a",
+            danger: "safe",
+            actionTitle: "Push",
+            requester: PANE,
+          });
+          render(<McpConfirmDialog />);
+          await stepAside();
+          press("Review request");
+          await stepAside();
+          expect(navigations).toHaveLength(2);
+
+          await act(async () => {
+            navigations[0]?.(false);
+            await Promise.resolve();
+          });
+
+          expect(screen.getByRole("region", { name: "Approval request" })).toBeTruthy();
+          expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
+        });
+
+        it("doesn't pull focus from the next request once its own has settled", async () => {
+          const opener = focusedOpener();
+          void enqueue({
+            requestId: "req-a",
+            danger: "safe",
+            actionTitle: "Push",
+            requester: PANE,
+          });
+          render(<McpConfirmDialog />);
+          await stepAside();
+          act(() => {
+            useMcpConfirmStore.getState().drop("req-a");
+          });
+          opener.focus();
+          void enqueue({ requestId: "req-b", danger: "safe", actionTitle: "Pull" });
+          await act(async () => {
+            await Promise.resolve();
+          });
+          const cancel = screen.getByRole("button", { name: "Cancel" });
+          cancel.focus();
+
+          await act(async () => {
+            navigations[0]?.(false);
+            await Promise.resolve();
+          });
+
+          expect(document.activeElement).toBe(cancel);
+          expect(screen.getByRole("button", { name: "Pull" })).toBeTruthy();
+        });
       });
 
       it("moves focus to Close when the request times out under a focused Show panel", async () => {
