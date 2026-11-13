@@ -228,10 +228,16 @@ export function AppPaletteDialog({
     // whichever palette is closing now, so leave them for it.
     if (!el) return;
     // Another palette took over as this one closed, or opened while it was on
-    // its way out: the keyboard is that palette's, and so is any hand-off its
-    // pick armed — even when it has already closed again (an Action palette
-    // routing `#` to the Panel palette, and a panel picked inside this exit).
-    if (openingsAtClose !== null && paletteOpeningCount() !== openingsAtClose) return;
+    // its way out: any hand-off its pick armed is its own, even once it has
+    // closed again (an Action palette routing `#` to the Panel palette, and a
+    // panel picked inside this exit), and wherever it put the keyboard stands.
+    // Only a keyboard left stranded here comes back to the opener: one that
+    // palette returned into this one's field as it unmounted.
+    if (openingsAtClose !== null && paletteOpeningCount() !== openingsAtClose) {
+      const dialog = dialogRef.current;
+      if (isFocusUnclaimed(dialog)) returnFocusToOpener(el, dialog);
+      return;
+    }
     // Both are one-shots for this close; read both so a hand-off left behind
     // by a suppressed close can't reach whichever palette is next.
     const suppressed = consumePaletteFocusRestoreSuppression();

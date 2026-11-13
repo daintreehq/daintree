@@ -130,6 +130,37 @@ describe("AppPaletteDialog restore at the end of the exit animation", () => {
     expect(document.activeElement).toBe(target);
   });
 
+  it("takes back a keyboard an incoming palette returned to it as that one unmounted", async () => {
+    function Handoff({ first, second }: { first: boolean; second: boolean | "gone" }) {
+      return (
+        <>
+          <AppPaletteDialog isOpen={first} onClose={() => {}} ariaLabel="Actions" tier="command">
+            <input type="text" placeholder="Actions input" />
+          </AppPaletteDialog>
+          {second !== "gone" && (
+            <AppPaletteDialog isOpen={second} onClose={() => {}} ariaLabel="Agents" tier="command">
+              <input type="text" placeholder="Agents input" />
+            </AppPaletteDialog>
+          )}
+        </>
+      );
+    }
+    const { rerender } = render(<Handoff first second={false} />);
+    await settleOpen();
+
+    // An Action palette command opens a palette whose host unmounts it on close.
+    rerender(<Handoff first={false} second />);
+    await settleOpen();
+    // Escape there before the Action palette has finished leaving: it hands
+    // the keyboard back to the field it was opened from, which is going too.
+    rerender(<Handoff first={false} second="gone" />);
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("Actions input"));
+    await finishExits();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("does not carry a suppression into a palette that opened over the close", async () => {
     const { rerender } = render(<Palettes first />);
     await settleOpen();

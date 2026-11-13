@@ -64,6 +64,8 @@ vi.mock("@/components/ui/paletteFocusRestore", () => ({
   suppressPaletteFocusRestore,
   consumePaletteFocusRestoreSuppression: () => false,
   consumeDeferredPaletteFocusRestore: () => null,
+  notePaletteOpening: () => {},
+  paletteOpeningCount: () => 0,
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: asStore({ showAgentTaskTitles: true }),
