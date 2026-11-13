@@ -219,31 +219,38 @@ describe("portal URL copies asked for from a key", () => {
     await run("portal.copyTabUrl", { tabId: "t2" }, { dispatchSource: "keybinding" });
 
     expect(mainClipboardWriteMock).toHaveBeenCalledWith("https://x/2");
+    expect(politeMessage()).toBe("URL copied");
     expect(getCopyFlash()?.origin).toMatchObject({ kind: "rect", left: 1000, top: 100 });
   });
 
-  it.each(["agent", "user", "context-menu", undefined] as const)(
-    "draws nothing for a %s copy, which is confirmed elsewhere or not watched",
-    async (dispatchSource) => {
+  const COPIES = [
+    ["portal.copyUrl", undefined, "https://x/1"],
+    ["portal.copyTabUrl", { tabId: "t2" }, "https://x/2"],
+  ] as const;
+  const UNCONFIRMED = ["agent", "user", "context-menu", "plugin", undefined] as const;
+
+  it.each(COPIES.flatMap(([id, args, url]) => UNCONFIRMED.map((src) => [id, src, args, url])))(
+    "%s draws nothing for a %s copy, which is confirmed elsewhere or not watched",
+    async (id, dispatchSource, args, url) => {
       setTabs(3, "t1");
       const run = setupActions();
 
-      await run("portal.copyUrl", undefined, { dispatchSource });
+      await run(id, args, { dispatchSource });
 
-      expect(mainClipboardWriteMock).toHaveBeenCalledWith("https://x/1");
+      expect(mainClipboardWriteMock).toHaveBeenCalledWith(url);
       expect(getCopyFlash()).toBeNull();
       expect(politeMessage()).toBeNull();
     }
   );
 
-  it("confirms nothing when the write is refused", async () => {
-    setTabs(2, "t0");
+  it.each(COPIES)("%s confirms nothing when the write is refused", async (id, args) => {
+    setTabs(3, "t1");
     mainClipboardWriteMock.mockRejectedValueOnce(new Error("clipboard unavailable"));
     const run = setupActions();
 
-    await expect(
-      run("portal.copyUrl", undefined, { dispatchSource: "keybinding" })
-    ).rejects.toThrow("clipboard unavailable");
+    await expect(run(id, args, { dispatchSource: "keybinding" })).rejects.toThrow(
+      "clipboard unavailable"
+    );
 
     expect(getCopyFlash()).toBeNull();
     expect(politeMessage()).toBeNull();

@@ -614,7 +614,12 @@ export function PortalToolbar({
             if (!activeUrl) event.preventDefault();
           }}
           tooltipSide="bottom"
-          className={cn(iconButtonClass, "size-auto")}
+          // Sized and inked like the raw buttons beside it, not as a ghost
+          // Button, whose glyph brightens on hover and focus.
+          className={cn(
+            iconButtonClass,
+            "size-auto hover:text-text-secondary focus-visible:text-text-secondary"
+          )}
         />
         <Tooltip>
           <TooltipTrigger asChild>

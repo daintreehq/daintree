@@ -7,13 +7,30 @@ import { primeRadix } from "@/components/ui/radix-loader";
 import type { CopyFlashTicket } from "@/lib/copyFlash";
 import { PortalToolbar } from "../PortalToolbar";
 
-const { claimMock } = vi.hoisted(() => ({ claimMock: vi.fn() }));
-
-vi.mock("@/hooks", () => ({
-  useEffectiveCombo: () => undefined,
-  useAriaKeyshortcuts: () => undefined,
-  useOverlayClaim: claimMock,
+// Claims held right now, and every release in order, kept as the real hook
+// keeps them: taken and dropped in effects, not during render.
+const { claims, released } = vi.hoisted(() => ({
+  claims: new Set<string>(),
+  released: [] as string[],
 }));
+
+vi.mock("@/hooks", async () => {
+  const { useEffect } = await import("react");
+  return {
+    useEffectiveCombo: () => undefined,
+    useAriaKeyshortcuts: () => undefined,
+    useOverlayClaim: (id: string, active: boolean) => {
+      useEffect(() => {
+        if (!active) return;
+        claims.add(id);
+        return () => {
+          claims.delete(id);
+          released.push(id);
+        };
+      }, [id, active]);
+    },
+  };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
@@ -55,7 +72,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  claimMock.mockReset();
+  claims.clear();
+  released.length = 0;
   mainWrite.mockReset().mockResolvedValue(undefined);
   rendererWrite.mockClear();
   Object.defineProperty(window, "electron", {
@@ -103,19 +121,21 @@ describe("PortalToolbar Copy URL", () => {
 
 describe("PortalToolbar tab menu Copy URL", () => {
   it("copies once the menu has let go of the page, confirming by the tab", async () => {
-    const events: string[] = [];
-    claimMock.mockImplementation((id: string, active: boolean) => {
-      if (id === "portal-tab-menu-b") events.push(`claim:${active}`);
-    });
+    let claimHeldAtCopy: boolean | null = null;
     const onCopyTabUrl = vi.fn((_tabId: string, _flash: CopyFlashTicket) => {
-      events.push("copy");
+      claimHeldAtCopy = claims.has("portal-tab-menu-b");
     });
     renderToolbar({ activeTabId: "a", onCopyTabUrl });
     const tab = screen.getByRole("tab", { name: "ChatGPT" });
+    // Where the tab sits while its menu is open; it reads elsewhere once the
+    // menu has closed, so only a capture taken at select time lands here.
     tab.getBoundingClientRect = () =>
-      ({ left: 120, top: 80, right: 220, bottom: 112, width: 100, height: 32 }) as DOMRect;
+      (released.includes("portal-tab-menu-b")
+        ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+        : { left: 120, top: 80, right: 220, bottom: 112, width: 100, height: 32 }) as DOMRect;
 
     fireEvent.contextMenu(tab, { clientX: 140, clientY: 90 });
+    expect(claims.has("portal-tab-menu-b")).toBe(true);
     // Released over the page area, which the page view covers once the menu
     // has closed.
     fireEvent.pointerDown(screen.getByRole("menuitem", { name: "Copy URL" }), {
@@ -128,7 +148,7 @@ describe("PortalToolbar tab menu Copy URL", () => {
     const [tabId, flash] = onCopyTabUrl.mock.calls[0]!;
     expect(tabId).toBe("b");
     expect(flash.origin).toEqual({ kind: "rect", left: 120, top: 80, right: 220, bottom: 112 });
-    expect(events.slice(0, events.indexOf("copy")).at(-1)).toBe("claim:false");
+    expect(claimHeldAtCopy).toBe(false);
   });
 });
 
@@ -151,8 +171,7 @@ describe("PortalToolbar All tabs", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  const allTabsClaim = () =>
-    claimMock.mock.calls.filter(([id]) => id === "portal-all-tabs").at(-1)?.[1];
+  const allTabsClaim = () => claims.has("portal-all-tabs");
 
   function openAllTabs() {
     const trigger = screen.getByRole("button", { name: "All tabs (3)" });
@@ -161,22 +180,20 @@ describe("PortalToolbar All tabs", () => {
   }
 
   it("selects a tab only after the dropdown has released the page", async () => {
-    const events: string[] = [];
-    claimMock.mockImplementation((id: string, active: boolean) => {
-      if (id === "portal-all-tabs") events.push(`claim:${active}`);
-    });
+    // portal.activateTab skips the show while any claim stands.
+    let claimHeldAtSelect: boolean | null = null;
     const onTabClick = vi.fn(() => {
-      events.push("select");
+      claimHeldAtSelect = allTabsClaim();
     });
     renderToolbar({ activeTabId: "a", onTabClick });
 
     openAllTabs();
-    expect(events.at(-1)).toBe("claim:true");
+    expect(allTabsClaim()).toBe(true);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "ChatGPT" }));
 
     await waitFor(() => expect(onTabClick).toHaveBeenCalledWith("b"));
     expect(onTabClick).toHaveBeenCalledOnce();
-    expect(events.slice(0, events.indexOf("select")).at(-1)).toBe("claim:false");
+    expect(claimHeldAtSelect).toBe(false);
   });
 
   it("selects nothing when the dropdown is dismissed", async () => {

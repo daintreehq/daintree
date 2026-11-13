@@ -118,6 +118,25 @@ describe("activatePortalTab overlay guard", () => {
     expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
   });
 
+  it("does not show a loaded tab the user moved off during the bounds wait", async () => {
+    const state = { ...portalStoreMock.getState(), createdTabs: new Set<string>(["tab-1"]) };
+    portalStoreMock.getState.mockReturnValue(state);
+    getPortalPlaceholderBoundsMock.mockImplementationOnce(() => {
+      portalStoreMock.getState.mockReturnValue({ ...state, activeTabId: "tab-2" });
+      return null;
+    });
+    vi.useFakeTimers();
+    try {
+      const activation = activatePortalTab("tab-1");
+      await vi.runAllTimersAsync();
+      await activation;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(showMock).not.toHaveBeenCalled();
+  });
+
   it("does not show a tab the user moved off while it was being created", async () => {
     const state = portalStoreMock.getState();
     createMock.mockImplementationOnce(async () => {

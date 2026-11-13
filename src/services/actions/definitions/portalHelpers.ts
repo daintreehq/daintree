@@ -88,6 +88,10 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
     return;
   }
 
+  // Another tab was selected during the wait; it shows itself, and showing
+  // this one now would cover it.
+  if (usePortalStore.getState().activeTabId !== tabId) return;
+
   try {
     // Read after the bounds wait: an eviction notice may have landed during it.
     if (usePortalStore.getState().createdTabs.has(tabId)) {
@@ -108,8 +112,8 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
         partition: tab.partition,
         isRestore: true,
       });
-      // Another tab was selected while this one loaded; showing it now would
-      // cover that one. It stays unmarked, so selecting it again shows it.
+      // The same, while it loaded. It stays unmarked, so selecting it again
+      // shows it.
       if (usePortalStore.getState().activeTabId !== tabId) return;
       const outcome = await showPortalTabIfNoOverlay(tabId, bounds);
       if (outcome === "suppressed") return;

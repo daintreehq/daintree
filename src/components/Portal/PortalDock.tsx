@@ -4,9 +4,8 @@ import { ListX, PanelRight, Plus, Ruler, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
-import { copyWithToast } from "@/lib/copyWithToast";
 import type { CopyFlashTicket } from "@/lib/copyFlash";
-import { writeMainClipboard } from "@/lib/mainClipboard";
+import { copyPortalTabUrl } from "./copyPortalTabUrl";
 import { PortalToolbar } from "./PortalToolbar";
 import {
   PORTAL_DOCK_ID,
@@ -301,20 +300,10 @@ export function PortalDock() {
     [isSwitching]
   );
 
-  // The tab menu row closes on select, so it confirms like any menu row: a
-  // flash by the tab, and a Retry toast that writes that same URL even if the
-  // tab has moved on. Written through main, since the page may hold focus.
-  const handleCopyTabUrl = useCallback((tabId: string, flash: CopyFlashTicket) => {
-    const url = usePortalStore.getState().tabs.find((t) => t.id === tabId)?.url;
-    if (!url) return;
-    copyWithToast("URL", url, {
-      flash,
-      write: async (text) => {
-        await writeMainClipboard(text);
-        return true;
-      },
-    });
-  }, []);
+  const handleCopyTabUrl = useCallback(
+    (tabId: string, flash: CopyFlashTicket) => copyPortalTabUrl(tabId, flash),
+    []
+  );
 
   const handleOpenTabExternal = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch(
