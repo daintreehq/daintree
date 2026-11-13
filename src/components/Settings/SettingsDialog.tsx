@@ -8,10 +8,17 @@ import {
   useMemo,
   useRef,
   useContext,
+  useSyncExternalStore,
   memo,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import {
+  SettingsDeepLinkProvider,
+  createSettingsDeepLinkHolds,
+  type SettingsDeepLink,
+  type SettingsDeepLinkHolds,
+} from "./settingsDeepLink";
 import { InsetSurface } from "@/components/ui/insetSurface";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage";
@@ -363,7 +370,14 @@ function SettingsDialogInner({
   // `SettingsTabScrollEffect` / `LazyTabContent`) when it commits — that's
   // the only reliable signal that lazy-loaded content is in the DOM, so we
   // drive the scroll from the child rather than polling from the parent.
-  const [scrollToSection, setScrollToSection] = useState<string | null>(null);
+  // A link from search also carries what was typed, for a tab that picks one of
+  // its subtabs by it (Code forge opens the provider the words name).
+  const [scrollTarget, setScrollTarget] = useState<{ sectionId: string; query?: string } | null>(
+    null
+  );
+  const scrollToSection = scrollTarget?.sectionId ?? null;
+  const setScrollToSection = (sectionId: string | null | undefined) =>
+    setScrollTarget(sectionId ? { sectionId } : null);
 
   // activeTab is read non-reactively via useEffectEvent to avoid re-running
   // this reset-on-open effect when the user changes tabs mid-session.
@@ -762,7 +776,7 @@ function SettingsDialogInner({
         setActiveScope(nextScope);
       }
       setActiveTab(tab);
-      setScrollToSection(sectionId ?? null);
+      setScrollTarget(sectionId ? { sectionId, query: cleanSearchQuery } : null);
     });
   };
 
@@ -802,7 +816,7 @@ function SettingsDialogInner({
   };
 
   const handleScrollToSectionHandled = (sectionId: string, landed: boolean) => {
-    setScrollToSection((current) => (current === sectionId ? null : current));
+    setScrollTarget((current) => (current?.sectionId === sectionId ? null : current));
     const requirement = pendingRequirementRef.current;
     pendingRequirementRef.current = null;
     if (requirement && !landed) setHiddenSettingBanner(requirement);
@@ -1416,6 +1430,7 @@ function SettingsDialogInner({
                               onSettingsChange={onSettingsChange}
                               isActive={isActive && !panelsHidden}
                               scrollToSectionId={scrollToSection}
+                              scrollQuery={scrollTarget?.query ?? null}
                               onScrollToSectionHandled={handleScrollToSectionHandled}
                             />
                           </Suspense>
@@ -1487,6 +1502,7 @@ function LazyTabContentImpl({
   onSettingsChange,
   isActive,
   scrollToSectionId,
+  scrollQuery,
   onScrollToSectionHandled,
 }: {
   entry: LazySettingsTabEntry;
@@ -1496,6 +1512,7 @@ function LazyTabContentImpl({
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
+  scrollQuery: string | null;
   onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
   const id = entry.id as SettingsTab;
@@ -1519,13 +1536,21 @@ function LazyTabContentImpl({
     props.isActive = isActive;
   }
 
-  // Runs synchronously after the lazy chunk's Suspense boundary commits, so
-  // the target section element is guaranteed to exist in the DOM. Replaces
-  // the rAF polling loop that was racing the Suspense reveal (#6878).
-  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled, id);
-
+  // Lands after the lazy chunk's Suspense boundary commits, once nothing in the
+  // tab holds it for values still loading in. Replaces the rAF polling loop that
+  // was racing the Suspense reveal (#6878).
   const LazyComp = entry.LazyComponent;
-  return <LazyComp {...props} />;
+  return (
+    <SettingsDeepLinkScope
+      isActive={isActive}
+      scrollToSectionId={scrollToSectionId}
+      query={scrollQuery}
+      onHandled={onScrollToSectionHandled}
+      tab={id}
+    >
+      <LazyComp {...props} />
+    </SettingsDeepLinkScope>
+  );
 }
 
 function ProjectFormTabContent({
@@ -1866,14 +1891,24 @@ export function useHoverIntentPrefetch({
 // `onHandled` learns whether the setting itself was found. A section result that is
 // not on the page is one hidden behind a switch, which is what the dialog's
 // "only appears when" note exists to explain — and only then.
+//
+// `holds` defers the landing while the tab's content is still loading in: its values
+// decide which rows render, and a miss on the first commit would report a setting the
+// user has switched on as hidden. The effect reads the live hold, not the subscribed
+// snapshot, because a child takes its hold in a layout effect of this same commit.
 export function useSettingsScrollToSection(
   isActive: boolean,
   scrollToSectionId: string | null,
   onHandled: (id: string, landed: boolean) => void,
-  tab?: SettingsTab
+  tab?: SettingsTab,
+  holds?: SettingsDeepLinkHolds
 ): void {
+  const held = useSyncExternalStore(
+    holds?.subscribe ?? subscribeToNoHolds,
+    holds?.isHeld ?? isNeverHeld
+  );
   useLayoutEffect(() => {
-    if (!isActive || !scrollToSectionId) return;
+    if (!isActive || !scrollToSectionId || holds?.isHeld()) return;
     const landed =
       scrollAndHighlightSettingsSection(scrollToSectionId) ||
       (tab !== undefined && landOnSettingByText(scrollToSectionId, tab));
@@ -1881,7 +1916,40 @@ export function useSettingsScrollToSection(
       document.getElementById(`settings-tab-${tab}`)?.focus({ preventScroll: true });
     }
     onHandled(scrollToSectionId, landed);
-  }, [isActive, scrollToSectionId, onHandled, tab]);
+  }, [isActive, scrollToSectionId, onHandled, tab, holds, held]);
+}
+
+const subscribeToNoHolds = () => () => {};
+const isNeverHeld = () => false;
+
+/**
+ * A lazy tab's deep-link host: the holds its content takes while loading in, the
+ * link it may act on while showing, and the landing, which runs in this component's
+ * own layout effect and so after every hold its children take in the same commit.
+ */
+export function SettingsDeepLinkScope({
+  isActive,
+  scrollToSectionId,
+  query,
+  onHandled,
+  tab,
+  children,
+}: {
+  isActive: boolean;
+  scrollToSectionId: string | null;
+  query: string | null;
+  onHandled: (id: string, landed: boolean) => void;
+  tab: SettingsTab;
+  children: React.ReactNode;
+}) {
+  const [holds] = useState(createSettingsDeepLinkHolds);
+  useSettingsScrollToSection(isActive, scrollToSectionId, onHandled, tab, holds);
+  const deepLink: SettingsDeepLink = {
+    sectionId: isActive ? scrollToSectionId : null,
+    query: isActive ? query : null,
+    holds,
+  };
+  return <SettingsDeepLinkProvider value={deepLink}>{children}</SettingsDeepLinkProvider>;
 }
 
 function SettingsTabScrollEffect({
