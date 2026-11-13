@@ -25,7 +25,9 @@ vi.mock("@/components/ui/tooltip", () => ({
 import {
   AutocompleteMenu,
   autocompleteOptionId,
+  firstEnabledIndex,
   getComboboxState,
+  stepAutocompleteIndex,
   type AutocompleteItem,
 } from "../AutocompleteMenu";
 
@@ -469,6 +471,30 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  it("does not move the selection onto a disabled row under the pointer", () => {
+    const onHoverIndex = vi.fn();
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta", disabled: true },
+      { key: "c", label: "gamma", insertText: "gamma" },
+    ];
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={vi.fn()}
+        onHoverIndex={onHoverIndex}
+        emptyMessage="No matches"
+      />
+    );
+    const options = screen.getAllByRole("option");
+    fireEvent.pointerMove(options[1]!);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+    fireEvent.pointerMove(options[2]!);
+    expect(onHoverIndex).toHaveBeenCalledWith(2);
+  });
+
   it("marks only stale rows disabled and ignores clicks on them", () => {
     const onSelect = vi.fn();
     const items: AutocompleteItem[] = [
@@ -772,6 +798,49 @@ describe("AutocompleteMenu", () => {
     });
   });
 
+  describe("firstEnabledIndex and stepAutocompleteIndex", () => {
+    const rows = (pattern: string): AutocompleteItem[] =>
+      [...pattern].map((c, i) => ({
+        key: `r${i}`,
+        label: `r${i}`,
+        insertText: `r${i}`,
+        disabled: c === "x",
+      }));
+
+    it("starts on the first enabled row, or the top when none is", () => {
+      expect(firstEnabledIndex(rows("xxo"))).toBe(2);
+      expect(firstEnabledIndex(rows("oxo"))).toBe(0);
+      expect(firstEnabledIndex(rows("xx"))).toBe(0);
+      expect(firstEnabledIndex([])).toBe(0);
+    });
+
+    it("steps over disabled rows in each direction, wrapping at the ends", () => {
+      const list = rows("oxoxo");
+      expect(stepAutocompleteIndex(list, 0, 1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, 1)).toBe(4);
+      expect(stepAutocompleteIndex(list, 4, 1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 4, -1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, -1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 0, -1)).toBe(4);
+    });
+
+    it("takes the first enabled row going down and the last going up from no selection", () => {
+      expect(stepAutocompleteIndex(rows("xoox"), -1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xoox"), -1, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, -1)).toBe(2);
+    });
+
+    it("stays put on a lone row, an empty list, or when every row is disabled", () => {
+      expect(stepAutocompleteIndex(rows("o"), 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("o"), 0, -1)).toBe(0);
+      expect(stepAutocompleteIndex([], 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("xxx"), 1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xxx"), 2, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("xxx"), -1, 1)).toBe(-1);
+    });
+  });
+
   describe("getComboboxState", () => {
     const items: AutocompleteItem[] = [
       { key: "a", label: "alpha", insertText: "alpha" },
@@ -796,6 +865,13 @@ describe("AutocompleteMenu", () => {
       expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
       expect(
         getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId
+      ).toBeNull();
+    });
+
+    it("names no option while the selected one is disabled", () => {
+      const disabled = [items[0]!, { ...items[1]!, disabled: true }];
+      expect(
+        getComboboxState({ ...base, isOpen: true, items: disabled }).activeOptionId
       ).toBeNull();
     });
   });

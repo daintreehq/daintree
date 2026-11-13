@@ -155,6 +155,15 @@ describe("useEditorKeymap", () => {
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
     });
 
+    it("falls through to the normal send when the selected item is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [{ ...fileItem, disabled: true }] })
+      );
+      expect(handlers.onEnter()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
     it("routes stale-Enter on empty text to onSendKey", () => {
       const onSendKey = vi.fn<(key: string) => void>();
       const { handlers } = renderKeymap(
@@ -263,6 +272,22 @@ describe("useEditorKeymap", () => {
     it("swallows Tab when nothing is selected and the first row is stale", () => {
       const { handlers } = renderKeymap(
         makeLatest({ selectedIndex: -1, staleItemKeys: new Set(["src/a.ts"]) })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+    });
+
+    it("swallows Tab without completing when the selected item is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [{ ...fileItem, disabled: true }] })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+    });
+
+    it("swallows Tab when nothing is selected and the first row is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ selectedIndex: -1, autocompleteItems: [{ ...fileItem, disabled: true }] })
       );
       expect(handlers.onTab()).toBe(true);
       expect(applyAutocompleteSelection).not.toHaveBeenCalled();
@@ -475,6 +500,23 @@ describe("useEditorKeymap", () => {
       );
       expect(down).toBe(0);
       expect(up).toBe(2);
+    });
+
+    it("hands the arrows to the step that skips disabled rows", () => {
+      const rows = ["a", "b", "c", "d", "e"].map((key) => ({
+        ...fileItem,
+        key,
+        disabled: key === "b" || key === "d",
+      }));
+      const { handlers } = renderKeymap(makeLatest({ autocompleteItems: rows, selectedIndex: 2 }));
+      const landed = () => {
+        const [update] = setSelectedIndex.mock.calls.at(-1)!;
+        return typeof update === "function" ? update(2) : update;
+      };
+      expect(handlers.onArrowDown()).toBe(true);
+      expect(landed()).toBe(4);
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(landed()).toBe(0);
     });
 
     it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {

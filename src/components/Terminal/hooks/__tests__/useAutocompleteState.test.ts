@@ -100,6 +100,80 @@ describe("useAutocompleteState", () => {
     });
   });
 
+  describe("disabled rows", () => {
+    const disabled = (key: string): AutocompleteItem => ({ ...item(key), disabled: true });
+
+    it("starts a session on the first row that can be acted on", () => {
+      render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), disabled("y"), item("z")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(2);
+    });
+
+    it("moves off a row that turns disabled when items refresh for the same query", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe("disabled rows after a refresh", () => {
+    it("clamps onto an enabled row when the selected key vanishes", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("a"), item("b"), item("c")],
+          selectedIndex: 2,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), { ...item("y"), disabled: true }],
+          selectedIndex: 2,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(0);
+    });
+
+    it("drops a chosen `#` row back to no selection when it turns disabled", () => {
+      const hash: ActiveCompletionContext = { triggerChar: "#", start: 0, tokenEnd: 2, query: "1" };
+      const rows = [item("r1"), item("r2")];
+      const { rerender } = render(
+        base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: -1 })
+      );
+      // The reader arrows onto r1: that is the row the session remembers.
+      rerender(base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: 0 }));
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hash,
+          autocompleteItems: [{ ...item("r1"), disabled: true }, item("r2")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(-1);
+    });
+  });
+
   describe("`#` selection", () => {
     function hashContext(query: string): ActiveCompletionContext {
       return { triggerChar: "#", start: 6, tokenEnd: 7 + query.length, query };
