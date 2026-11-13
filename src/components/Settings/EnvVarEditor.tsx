@@ -201,11 +201,9 @@ interface EnvVarKeyCellProps {
   onChange: (rowId: string, newKey: string) => void;
   onBlur: (rowId: string) => void;
   /**
-   * Picker selection — must commit synchronously. Distinct from `onChange` so
-   * the parent can both update the row AND drive `onChange(env)` in the same
-   * pass (clicking a suggestion otherwise loses the selection: the input's
-   * blur fires before the option's click, and the blur path commits the OLD
-   * key before the click can update the row).
+   * Picker selection — commits synchronously and moves focus on to the row's
+   * value. Distinct from `onChange` so the parent can update the row, drive
+   * `onChange(env)` and place focus in the same pass, with no blur needed.
    */
   onSelect: (rowId: string, newKey: string) => void;
   registerRef: (rowId: string, el: HTMLInputElement | null) => void;
@@ -217,9 +215,12 @@ interface EnvVarKeyCellProps {
  * Replaces the native `<datalist>` indicator (Chromium's is unreliable in
  * Electron — clicks often do nothing, content can't be styled, hint text
  * isn't surfaced). State (open / activeIndex) is local so opening one row's
- * popover doesn't re-render other rows. Focus stays on the input while the
- * popover is open via `onOpenAutoFocus` preventDefault, and is restored on
- * close via `onCloseAutoFocus`.
+ * popover doesn't re-render other rows.
+ *
+ * A combobox: focus never leaves the input for the list. Neither opening nor
+ * closing moves it, and a press anywhere in the list is kept from taking it, so
+ * however the list closes, focus is wherever the user sent it — Tab's next
+ * field, a click's target, or the value field a pick hands it to.
  */
 function EnvVarKeyCell({
   rowId,
@@ -298,7 +299,10 @@ function EnvVarKeyCell({
                 open && activeIndex >= 0 ? `env-key-option-${rowId}-${activeIndex}` : undefined
               }
               onChange={(e) => onChange(rowId, e.target.value)}
-              onBlur={() => onBlur(rowId)}
+              onBlur={() => {
+                setOpen(false);
+                onBlur(rowId);
+              }}
               onFocus={(e) => e.target.select()}
               onKeyDown={(e) => {
                 // Down opens a shut list at its first row; the rest move an open one.
@@ -318,6 +322,9 @@ function EnvVarKeyCell({
                   e.preventDefault();
                   const sel = availableSuggestions[activeIndex];
                   if (sel) handleSelect(sel.key);
+                } else if (e.key === "Tab") {
+                  // Left to the browser, which moves focus on; the list goes with it.
+                  if (open) setOpen(false);
                 } else if (e.key === "Escape") {
                   if (open) {
                     // Close the popover first; don't bubble to the surrounding
@@ -358,10 +365,14 @@ function EnvVarKeyCell({
             sideOffset={4}
             className="p-1 min-w-52 w-auto"
             onOpenAutoFocus={(e) => e.preventDefault()}
-            onCloseAutoFocus={(e) => {
-              e.preventDefault();
-              inputRef.current?.focus();
-            }}
+            // Focus is already where it belongs, so a close never moves it.
+            // Restoring it to the input here is what pulled a Tab or a click
+            // elsewhere straight back into the name field.
+            onCloseAutoFocus={(e) => e.preventDefault()}
+            // Options aren't focusable, so a press would otherwise move focus
+            // to the content itself: the input blurs mid-pick, and the content
+            // unmounting with it strands focus on the body.
+            onMouseDown={(e) => e.preventDefault()}
             data-testid="env-editor-key-suggestions-listbox"
           >
             <div role="listbox" id={listboxId} aria-label="Env var key suggestions">
@@ -460,6 +471,7 @@ export function EnvVarEditor({
   const lastInheritedRef = useRef<Record<string, string> | undefined>(inheritedEnv);
   const lastContextKeyRef = useRef<string | undefined>(contextKey);
   const keyInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const valueInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
   // When the parent's env or inheritedEnv changes externally (different preset
   // selected, programmatic reset, global env updated), reseed the draft rows.
@@ -600,9 +612,7 @@ export function EnvVarEditor({
   };
 
   const handleKeySelect = (rowId: string, newKey: string) => {
-    // Picker selection commits synchronously. The input's blur fires before
-    // the option's click, so a typing-style onChange + later blur loses the
-    // pick (blur commits the OLD key before the click can update rows).
+    // Picker selection commits synchronously rather than waiting on a blur.
     // Mark the row touched so a subsequent blank-out still surfaces the
     // empty-key error.
     setTouchedKeys((prev) => ({ ...prev, [rowId]: true }));
@@ -611,6 +621,8 @@ export function EnvVarEditor({
       commitIfValid(next);
       return next;
     });
+    // A picked name is a finished name: what's left to type is its value.
+    valueInputRefs.current.get(rowId)?.focus();
   };
 
   const handleValueChange = (rowId: string, newValue: string) => {
@@ -726,6 +738,11 @@ export function EnvVarEditor({
   const registerKeyInput = (rowId: string, el: HTMLInputElement | null) => {
     if (el) keyInputRefs.current.set(rowId, el);
     else keyInputRefs.current.delete(rowId);
+  };
+
+  const registerValueInput = (rowId: string, el: HTMLInputElement | null) => {
+    if (el) valueInputRefs.current.set(rowId, el);
+    else valueInputRefs.current.delete(rowId);
   };
 
   const handleImportConfirm = (mergedEnv: Record<string, string>) => {
@@ -887,6 +904,7 @@ export function EnvVarEditor({
               <div className="flex flex-col border-l border-border-subtle">
                 <div className="relative">
                   <input
+                    ref={(el) => registerValueInput(row.rowId, el)}
                     type={valueInputType}
                     className={cn(
                       ENV_CELL_INPUT,

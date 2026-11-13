@@ -38,6 +38,14 @@ vi.mock("lucide-react", () => ({
   Info: () => <span data-testid="info-icon" />,
 }));
 
+type AutoFocusHandler = (event: Event) => void;
+
+// Radix's own open/close focus moves don't happen in jsdom, so the content's
+// handlers are kept against its node and the tests fire them where Radix would.
+const popoverAutoFocus = vi.hoisted(
+  () => new WeakMap<Element, { open?: AutoFocusHandler; close?: AutoFocusHandler }>()
+);
+
 // Render Popover children inline so jsdom doesn't need to wrestle Radix's
 // Portal / focus-trap machinery — we're asserting on the picker behavior,
 // not on portal mechanics.
@@ -45,8 +53,38 @@ vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({
+    children,
+    onOpenAutoFocus,
+    onCloseAutoFocus,
+    onMouseDown,
+  }: {
+    children: React.ReactNode;
+    onOpenAutoFocus?: AutoFocusHandler;
+    onCloseAutoFocus?: AutoFocusHandler;
+    onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
+  }) => (
+    <div
+      ref={(el) => {
+        if (el) popoverAutoFocus.set(el, { open: onOpenAutoFocus, close: onCloseAutoFocus });
+      }}
+      onMouseDown={onMouseDown}
+    >
+      {children}
+    </div>
+  ),
 }));
+
+/** Fires the key cell's popover autofocus handler the way Radix's FocusScope does. */
+function firePopoverAutoFocus(keyInput: HTMLElement, which: "open" | "close"): Event {
+  const listbox = document.getElementById(keyInput.getAttribute("aria-controls") ?? "");
+  const handlers = listbox?.parentElement ? popoverAutoFocus.get(listbox.parentElement) : undefined;
+  const event = new Event(`focusScope.autoFocusOn${which === "open" ? "Mount" : "Unmount"}`, {
+    cancelable: true,
+  });
+  handlers?.[which]?.(event);
+  return event;
+}
 
 interface DialogAction {
   label: string;
@@ -531,6 +569,102 @@ describe("EnvVarEditor", () => {
       expect(controls).toBeTruthy();
       // The listbox referenced by aria-controls must exist in the DOM.
       expect(document.getElementById(controls!)).toBeTruthy();
+    });
+
+    describe("focus", () => {
+      function renderPicker() {
+        const utils = render(
+          <EnvVarEditor
+            env={{ FOO: "v", BAR: "w" }}
+            onChange={onChange}
+            suggestions={sampleSuggestions}
+          />
+        );
+        const keyInput = utils.getAllByTestId("env-editor-key")[0] as HTMLInputElement;
+        const valueInput = utils.getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+        return { ...utils, keyInput, valueInput };
+      }
+
+      it("opening the list leaves focus in the name field", () => {
+        const { keyInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+
+        const opened = firePopoverAutoFocus(keyInput, "open");
+
+        expect(opened.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(keyInput);
+      });
+
+      it("Tab closes an open list and focus stays where Tab sent it", () => {
+        const { keyInput, valueInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        expect(keyInput.getAttribute("aria-expanded")).toBe("true");
+
+        // Tab is not prevented: the browser moves focus on to the value field.
+        expect(fireEvent.keyDown(keyInput, { key: "Tab" })).toBe(true);
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+        valueInput.focus();
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(document.activeElement).toBe(valueInput);
+      });
+
+      it("a close caused by focus moving elsewhere does not pull it back to the name field", () => {
+        const { keyInput, getAllByTestId } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+
+        // Clicking another row's field dismisses the list from outside.
+        const otherValue = getAllByTestId("env-editor-value")[1] as HTMLInputElement;
+        otherValue.focus();
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(document.activeElement).toBe(otherValue);
+      });
+
+      it("Enter on a highlighted suggestion moves focus to that row's value field", () => {
+        const { keyInput, valueInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        fireEvent.keyDown(keyInput, { key: "Enter" });
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.value).toBe("ANTHROPIC_API_KEY");
+        expect(document.activeElement).toBe(valueInput);
+        expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v", BAR: "w" });
+      });
+
+      it("clicking a suggestion keeps focus off the list and lands it in that row's value field", () => {
+        const { keyInput, valueInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        const listbox = document.getElementById(keyInput.getAttribute("aria-controls")!)!;
+        const option = Array.from(listbox.querySelectorAll('[role="option"]')).find((el) =>
+          (el.textContent ?? "").includes("OPENAI_API_KEY")
+        )!;
+
+        // A press on the list must not take focus out of the name field first.
+        expect(fireEvent.mouseDown(option)).toBe(false);
+        fireEvent.click(option);
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.value).toBe("OPENAI_API_KEY");
+        expect(document.activeElement).toBe(valueInput);
+        expect(onChange).toHaveBeenLastCalledWith({ OPENAI_API_KEY: "v", BAR: "w" });
+      });
+
+      it("Escape closes the list and focus stays in the name field", () => {
+        const { keyInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        fireEvent.keyDown(keyInput, { key: "Escape" });
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(keyInput);
+      });
     });
   });
 
