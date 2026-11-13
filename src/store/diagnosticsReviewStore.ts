@@ -19,6 +19,13 @@ export interface DiagnosticsReviewScope {
   sections?: string[];
 }
 
+/**
+ * How a completed save is confirmed. `toast` closes the review and raises a
+ * notification; `inline` keeps the review open on its saved view, for a surface
+ * where no Toaster is mounted yet (the crash-recovery screen).
+ */
+export type DiagnosticsSaveConfirmation = "toast" | "inline";
+
 interface DiagnosticsReviewState {
   isOpen: boolean;
   isCollecting: boolean;
@@ -26,6 +33,18 @@ interface DiagnosticsReviewState {
   reviewPayload: DiagnosticsReviewPayload | null;
   scope: DiagnosticsReviewScope | null;
   downloadError: string | null;
+  /**
+   * A failed save, shown inside the review dialog that attempted it. Kept apart
+   * from `downloadError`, which the surfaces behind the dialog render and which
+   * a modal hides.
+   */
+  saveError: string | null;
+  /**
+   * Set when a save confirmed inline has written the bundle: the review dialog
+   * swaps to its saved view, which links here. Only a save the user completed
+   * sets it; a cancelled or failed one never does. Cleared by the next open.
+   */
+  savedIssueUrl: string | null;
   /**
    * Monotonic counter bumped each time the review opens. Used as the
    * always-mounted host's ErrorBoundary `resetKeys` signal so a crashed host
@@ -39,9 +58,18 @@ interface DiagnosticsReviewState {
   saveReview: (
     enabledSections: Record<string, boolean>,
     replacements: ReplacementRule[],
-    timeWindowStartMs?: number | null
+    timeWindowStartMs?: number | null,
+    confirmation?: DiagnosticsSaveConfirmation
   ) => Promise<void>;
+  /** Opens the issue a saved view links to, then closes the review. */
+  continueToIssue: () => void;
   clearError: () => void;
+}
+
+function openIssue(url: string): void {
+  safeFireAndForget(systemClient.openExternal(url), {
+    context: "Opening GitHub issue from diagnostics save",
+  });
 }
 
 /** Pull the GitHub-issue env summary fields out of the untyped review payload. */
@@ -72,6 +100,8 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   reviewPayload: null,
   scope: null,
   downloadError: null,
+  saveError: null,
+  savedIssueUrl: null,
   requestSeq: 0,
 
   openReview: async (scope) => {
@@ -88,6 +118,8 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
         reviewPayload: payload,
         scope: scope ?? null,
         isCollecting: false,
+        saveError: null,
+        savedIssueUrl: null,
         requestSeq: state.requestSeq + 1,
       }));
     } catch (err) {
@@ -99,53 +131,69 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   },
 
   closeReview: () => {
+    // A failed save's error and the saved view stay until the next open: the
+    // dialog is still fading out on them, and swapping its content mid-exit
+    // would flash the review form back up.
     set({ isOpen: false, scope: null });
   },
 
-  saveReview: async (enabledSections, replacements, timeWindowStartMs) => {
-    const { reviewPayload } = get();
-    if (!reviewPayload || get().isSaving) return;
-    set({ isSaving: true });
+  saveReview: async (enabledSections, replacements, timeWindowStartMs, confirmation = "toast") => {
+    const { reviewPayload, isOpen, isSaving, isCollecting, savedIssueUrl } = get();
+    // Only the open review form saves: not a closed dialog, not one whose
+    // payload a new collection is about to replace, not the saved view.
+    if (!reviewPayload || !isOpen || isSaving || isCollecting || savedIssueUrl) return;
+    set({ isSaving: true, saveError: null });
+    const payload = reviewPayload.payload;
+    let saved: boolean;
     try {
-      const payload = reviewPayload.payload;
-      const saved = await systemClient.saveDiagnosticsBundle({
+      saved = await systemClient.saveDiagnosticsBundle({
         payload,
         enabledSections,
         replacements,
         timeWindowStartMs,
         collectedAtMs: reviewPayload.collectedAtMs,
       });
-      if (saved) {
-        const issueUrl = buildDiagnosticsIssueUrl(extractIssueMetadata(payload));
-        notify({
-          type: "success",
-          title: "Diagnostics saved",
-          message: "Open a GitHub issue and drag the saved ZIP into it.",
-          // The saved ZIP is already revealed in the OS file manager, so this
-          // is a one-shot action prompt — no durable inbox row needed.
-          transient: true,
-          priority: "high",
-          context: { eventKind: "settings" },
-          action: {
-            label: "Continue to GitHub issue",
-            variant: "primary",
-            onClick: () => {
-              safeFireAndForget(systemClient.openExternal(issueUrl), {
-                context: "Opening GitHub issue from diagnostics save",
-              });
-            },
-          },
-        });
-        set({ isSaving: false, isOpen: false, scope: null, downloadError: null });
-      } else {
-        set({ isSaving: false });
-      }
     } catch (err) {
       set({
         isSaving: false,
-        downloadError: formatErrorMessage(err, "Failed to save diagnostics bundle"),
+        saveError: formatErrorMessage(err, "Failed to save diagnostics bundle"),
       });
+      return;
     }
+    // The user dismissed the native save dialog: nothing was written, so the
+    // review stays as it was.
+    if (!saved) {
+      set({ isSaving: false });
+      return;
+    }
+    const issueUrl = buildDiagnosticsIssueUrl(extractIssueMetadata(payload));
+    if (confirmation === "inline") {
+      set({ isSaving: false, savedIssueUrl: issueUrl, downloadError: null });
+      return;
+    }
+    set({ isSaving: false, isOpen: false, scope: null, downloadError: null });
+    notify({
+      type: "success",
+      title: "Diagnostics saved",
+      message: "Open a GitHub issue and drag the saved ZIP into it.",
+      // The saved ZIP is already revealed in the OS file manager, so this
+      // is a one-shot action prompt — no durable inbox row needed.
+      transient: true,
+      priority: "high",
+      context: { eventKind: "settings" },
+      action: {
+        label: "Continue to GitHub issue",
+        variant: "primary",
+        onClick: () => openIssue(issueUrl),
+      },
+    });
+  },
+
+  continueToIssue: () => {
+    const { savedIssueUrl, isOpen } = get();
+    if (!savedIssueUrl || !isOpen) return;
+    openIssue(savedIssueUrl);
+    set({ isOpen: false, scope: null });
   },
 
   clearError: () => set({ downloadError: null }),
