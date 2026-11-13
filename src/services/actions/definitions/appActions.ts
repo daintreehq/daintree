@@ -161,6 +161,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Export configuration…",
     description:
       "Write the portable configuration — custom agents, agent settings, keyboard shortcuts, theme, notification preferences, worktree path pattern, and global recipes — to a JSON file. Opens a save dialog. Secret-bearing values are left out.",
+    paletteDescription: "Save your agents, shortcuts, theme and other portable settings to a JSON file",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -207,6 +208,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Import configuration…",
     description:
       "Merge a previously exported Daintree configuration bundle into this installation. Opens a file dialog, then asks the user to confirm what will be replaced before anything is written. Overwrites existing settings, so it takes over the foreground and should not run during other work.",
+    paletteDescription: "Merge settings from an exported configuration file, after you confirm",
     category: "app",
     kind: "command",
     // Overwrites configuration that git and reflog cannot recover — destructive
@@ -250,6 +252,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Pick theme…",
     description:
       "Open the theme palette so the user can browse and preview themes. This is a user-facing chooser, not a way to set a theme programmatically — nothing changes until the user picks something. It takes over the foreground, so avoid opening it during other work.",
+    paletteDescription: "Browse and preview themes in a palette",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -266,6 +269,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Browse themes…",
     description:
       "Open the theme browser so the user can preview themes in full and commit to one. This is a user-facing chooser — nothing changes until the user decides. It takes over the foreground, so avoid opening it during other work.",
+    paletteDescription: "Preview themes in full and pick one",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -282,6 +286,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     title: "Toggle dark/light theme",
     description:
       "Switch between the user's preferred dark and light themes. This changes the appearance of the whole app immediately and is reversible by calling it again. It flips whichever way the app currently is rather than setting a specific mode.",
+    paletteDescription: "Switch between your preferred dark and light themes",
     category: "app",
     kind: "command",
     danger: "safe",

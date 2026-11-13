@@ -31,6 +31,7 @@ import {
 export interface ActionPaletteItem {
   id: string;
   title: string;
+  /** The entry's `paletteDescription` when it has one, else its `description`. */
   description: string;
   category: string;
   enabled: boolean;
@@ -174,22 +175,32 @@ export function toActionPaletteItem(
 ): ActionPaletteItem {
   const title =
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
-  const description = typeof entry.description === "string" ? entry.description : "";
+  // The palette subtitle stands in for the MCP description everywhere the row
+  // reads it, search included, so agent guidance can't surface as a match excerpt.
+  const description =
+    typeof entry.paletteDescription === "string" && entry.paletteDescription.trim().length > 0
+      ? entry.paletteDescription
+      : typeof entry.description === "string"
+        ? entry.description
+        : "";
   const category = typeof entry.category === "string" ? entry.category : "General";
-  const runs = target ?? entry;
+  const redirectTo =
+    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
+  // A redirect whose target is gone stays pickable, as on the command HUD:
+  // dispatch reports NOT_FOUND instead of the row borrowing the source's state.
+  const runs = target ?? (redirectTo ? undefined : entry);
   // A `requireContext` palette action surfaces as disabled-with-reason: fold
   // its palette-only flags into the row's enabled/disabledReason so the
   // existing disabled-row UX (grayed, inline reason, Enter no-ops) applies
   // without touching the manifest's dispatch-facing `enabled`.
-  const enabled = runs.enabled && runs.paletteDisabled !== true;
-  const disabledReason =
-    typeof runs.paletteDisabledReason === "string"
+  const enabled = runs ? runs.enabled && runs.paletteDisabled !== true : true;
+  const disabledReason = !runs
+    ? undefined
+    : typeof runs.paletteDisabledReason === "string"
       ? runs.paletteDisabledReason
       : typeof runs.disabledReason === "string"
         ? runs.disabledReason
         : undefined;
-  const redirectTo =
-    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
   // The source's own binding already runs the target (resolveInteractiveActionId),
   // so it stays when there is one; otherwise the target's binding is the chord
   // that does what picking this row does.

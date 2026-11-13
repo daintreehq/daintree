@@ -133,6 +133,7 @@ export function registerTerminalLifecycleActions(
     title: "Close panel",
     description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
+    paletteDescription: "Close the focused panel, usually to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -301,6 +302,7 @@ export function registerTerminalLifecycleActions(
     title: "Send to background",
     description:
       "Hide a panel from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
+    paletteDescription: "Hide the focused panel while its process keeps running",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -318,6 +320,7 @@ export function registerTerminalLifecycleActions(
     title: "Remove panel",
     description:
       "Permanently destroy a panel of any kind and its process: no trash, no recovery. A panel running an agent session is left alone unless confirmed, and the call then fails. Name the panel explicitly; close it instead when recovery matters.",
+    paletteDescription: "Remove the focused panel and stop its process, with no trash or undo",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -366,6 +369,7 @@ export function registerTerminalLifecycleActions(
     title: "Restart terminal",
     description:
       "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held panel.",
+    paletteDescription: "Restart the focused terminal's process in the same panel",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -523,6 +527,7 @@ export function registerTerminalLifecycleActions(
     title: "Rename panel",
     description:
       "Set a panel's title, or clear it to the default. Pass the panel and the title: an omitted title opens a dialog an automated caller cannot answer. Returns the title now shown; `applied` is false when a title the user set by hand kept its place.",
+    paletteDescription: "Set or clear the focused panel's title",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -754,6 +759,7 @@ export function registerTerminalLifecycleActions(
     title: "Close all panels",
     description:
       "Close every panel in the active worktree, not just terminals, including the user's shells and other agents' terminals; prefer closing individually. Most go to the trash; remove-on-exit panels are discarded. Internal and dialog panels are spared.",
+    paletteDescription: "Close every panel in the active worktree, not just terminals",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -795,6 +801,7 @@ export function registerTerminalLifecycleActions(
     title: "Remove all panels in project",
     description:
       "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
+    paletteDescription: "Remove every panel in this project, across all worktrees, with no trash or undo",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -836,6 +843,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartService",
     title: "Restart terminal service",
     description: "Restart the PTY host. Available only when the terminal backend is disconnected.",
+    paletteDescription: "Restart the terminal backend after it disconnects",
     category: "terminal",
     kind: "command",
     danger: "safe",

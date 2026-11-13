@@ -23,6 +23,7 @@ export function registerDiagnosticsActions(
     title: "Send diagnostics",
     description:
       "Collect a diagnostics snapshot and open the review dialog, where the user picks sections and adds redaction rules before saving the export themselves. The way to hand logs to someone else: nothing leaves the machine from this call.",
+    paletteDescription: "Collect diagnostics and choose what to include and redact before saving",
     category: "diagnostics",
     kind: "command",
     danger: "safe",
@@ -46,6 +47,7 @@ export function registerDiagnosticsActions(
     title: "Why am I slow?",
     description:
       "Open the diagnostics dock to the performance snapshot: current resource profile and why it triggered, event-loop lag latch, focus throttle, terminal WebGL mode, PTY backpressure, and worktree monitor load.",
+    paletteDescription: "See the performance snapshot: resource profile, event-loop lag and terminal load",
     category: "diagnostics",
     kind: "command",
     danger: "safe",

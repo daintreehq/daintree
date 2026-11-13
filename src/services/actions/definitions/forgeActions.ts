@@ -96,6 +96,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       title: "Open issues",
       description:
         "Open the forge's issue list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the issue-listing capability to actually retrieve issues.",
+      paletteDescription: "Open this project's issue list in your browser",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -111,6 +112,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       title: "Open pull requests",
       description:
         "Open the forge's pull-request list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the pull-request listing capability to actually retrieve PRs.",
+      paletteDescription: "Open this project's pull requests in your browser",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -126,6 +128,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       title: "Open commits",
       description:
         "Open the forge's commit history for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use a git history capability to actually retrieve commits.",
+      paletteDescription: "Open this project's commit history in your browser",
       category: "forge",
       kind: "command",
       danger: "safe",
@@ -141,6 +144,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       title: "Open repository",
       description:
         "Open this project's repository home page on the forge in the system browser, for a human to read; it returns no data. Fails when the forge provider doesn't link to one.",
+      paletteDescription: "Open this project's repository page in your browser",
       category: "forge",
       kind: "command",
       danger: "safe",

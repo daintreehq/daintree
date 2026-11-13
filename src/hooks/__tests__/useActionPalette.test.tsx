@@ -855,6 +855,30 @@ describe("useActionPalette", () => {
       expect(row.keybinding).toBe("⌘K ⌘N");
     });
 
+    it("leaves a row whose target is gone runnable, so dispatch reports it", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: { code: "NOT_FOUND", message: "Action not found" },
+      });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit", false),
+          disabledReason: "Nothing staged",
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(true);
+      expect(row.disabledReason).toBeUndefined();
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).toHaveBeenCalledWith("worktree.openReviewHub", {}, { source: "user" });
+      await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    });
+
     it("keeps a redirect row's own shortcut, which also runs the target", async () => {
       listMock.mockReturnValue([
         {
@@ -870,6 +894,49 @@ describe("useActionPalette", () => {
 
       const { result } = await openOn("commit");
       expect(rowFor(result.current.results, "git.commit").shortcut).toBe("Cmd+K Cmd+C");
+    });
+  });
+
+  describe("palette subtitles", () => {
+    const AGENT_DESCRIPTION =
+      "Rotate the widget. Name the zebrafish target explicitly, or the call fails.";
+
+    it("shows and searches the subtitle, never the MCP description behind it", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("widget.rotate", "Rotate widget"),
+          description: AGENT_DESCRIPTION,
+          paletteDescription: "Turn the focused widget a quarter",
+        },
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("quarter"));
+      await waitFor(() => expect(result.current.results.map((r) => r.id)).toEqual(["widget.rotate"]));
+      expect(result.current.results[0]!.description).toBe("Turn the focused widget a quarter");
+
+      act(() => result.current.setQuery("zebrafish"));
+      await waitFor(() => expect(result.current.results).toEqual([]));
+    });
+
+    it("falls back to the description when no subtitle is declared or it is blank", async () => {
+      listMock.mockReturnValue([
+        { ...makeEntry("widget.rotate", "Rotate widget"), description: AGENT_DESCRIPTION },
+        {
+          ...makeEntry("widget.flip", "Flip widget"),
+          description: "Flip the zebrafish widget",
+          paletteDescription: "   ",
+        },
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("zebrafish"));
+      await waitFor(() => expect(result.current.results).toHaveLength(2));
+      const byId = new Map(result.current.results.map((r) => [r.id, r.description]));
+      expect(byId.get("widget.rotate")).toBe(AGENT_DESCRIPTION);
+      expect(byId.get("widget.flip")).toBe("Flip the zebrafish widget");
     });
   });
 

@@ -336,6 +336,7 @@ export function registerWorktreeContextActions(
       title: "Open Review Hub",
       description:
         "Open the Review Hub for a worktree to review uncommitted changes. With mode 'since-review' it opens the view of what changed since the worktree's review mark, without staging anything",
+      paletteDescription: "Open the Review Hub to review uncommitted changes",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -356,6 +357,7 @@ export function registerWorktreeContextActions(
       title: "Mark reviewed",
       description:
         "Mark a worktree reviewed at the commit, index and working tree its open Review Hub displays. Needs Review Hub open on the worktree; clears its per-file Viewed marks",
+      paletteDescription: "Mark the changes the open Review Hub shows as reviewed",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -399,6 +401,7 @@ export function registerWorktreeContextActions(
       title: "Open changes",
       description:
         "Open the working-tree diff for a worktree on its highest-churn changed file, seeded with the full change set so the diff sidebar can step between every changed file",
+      paletteDescription: "Open the worktree's diff, starting on its most-changed file",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -448,6 +451,7 @@ export function registerWorktreeContextActions(
       title: "Browse files",
       description:
         "Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.",
+      paletteDescription: "Browse the current worktree or project folder in a read-only panel",
       category: "worktree",
       kind: "command",
       danger: "safe",

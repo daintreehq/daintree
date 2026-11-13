@@ -121,6 +121,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     title: "Switch host…",
     description:
       'Move this window to another Daintree host. No args opens the host palette; hostId ("local" or listed) opens this project there, else its last project, else its project list.',
+    paletteDescription: "Move this window to another Daintree host",
     category: "workspace",
     kind: "command",
     // Moves the window the person is looking at to another machine: an agent
@@ -197,6 +198,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     title: "Hosts overview…",
     description:
       "Open the hosts overview: one card per machine with its recent CPU and memory pressure, observed agent counts, open projects, version, link latency, who drives it, and active port forwards. Clicking a card switches this window to that host.",
+    paletteDescription: "See every host's load, agents, projects and port forwards",
     category: "workspace",
     kind: "command",
     danger: "safe",

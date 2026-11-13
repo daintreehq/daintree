@@ -98,6 +98,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     title: "Open Canopy",
     description:
       "Open Canopy's window, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user, or bring it forward. Before Canopy is on, offers to turn it on",
+    paletteDescription: "Open Canopy, the view of every agent across all projects",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -123,6 +124,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     title: "Open Canopy window",
     description:
       "Open Canopy in its own window, with every agent of every project and host, or bring that window forward, restoring it if minimized",
+    paletteDescription: "Open Canopy in its own window, or bring that window forward",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -143,6 +145,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     title: "Mark all Canopy agents as read",
     description:
       "Mark every agent Canopy lists as unread as read, through what it had done when the panel last showed it; anything an agent does after that stays unread",
+    paletteDescription: "Mark every unread agent in Canopy as read",
     category: "project",
     kind: "command",
     danger: "safe",

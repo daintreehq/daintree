@@ -49,6 +49,7 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       title: "Schedules…",
       description:
         "Open the Schedules view for the current project: its scheduled agent runs, when each runs next, and an editor for each",
+      paletteDescription: "See and edit this project's scheduled agent runs",
       category: "project",
       kind: "command",
       danger: "safe",

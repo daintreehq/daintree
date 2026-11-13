@@ -313,6 +313,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Stage all files",
     description:
       "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
+    paletteDescription: "Stage every change in the worktree, including new, deleted and renamed files",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118) despite the wider reach:
@@ -331,6 +332,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Unstage all files",
     description:
       "Clear the staging area entirely, leaving all working-tree changes untouched. This is the inverse of staging everything and discards no edits.",
+    paletteDescription: "Clear the staging area and keep every working-tree change",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118): clears the index only.
@@ -346,6 +348,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Commit",
     description:
       "Commit whatever is currently staged, with a message. Read the staging status first — this commits the index as it stands, including anything staged earlier that you did not intend. The commit stays local until it is pushed, so it is recoverable, but rewriting it afterwards is not something this surface offers.",
+    paletteDescription: "Open the Review Hub to check staged changes and write a commit message",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118): the commit stays local
@@ -383,6 +386,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Push",
     description:
       "Publish local commits to the remote branch, making them visible to everyone working from it. This leaves the local repository and cannot be undone from here — confirm the commits are the intended ones first. It fails rather than overwriting when the remote has diverged.",
+    paletteDescription: "Publish local commits to the remote branch",
     category: "git",
     kind: "command",
     danger: "confirm",
@@ -420,6 +424,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Fetch",
     description:
       "Update this worktree's remote-tracking refs so its ahead/behind counts match the remote. HEAD, the working tree, and local branches are left untouched.",
+    paletteDescription: "Update remote-tracking refs so ahead and behind counts match the remote",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -566,6 +571,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Retry suspended fetches",
     description:
       "Lift the pause on background fetches that Git rejected for authentication and fetch every worktree again. Use after fixing the SSH key or Git credential helper.",
+    paletteDescription: "Resume background fetches after fixing your Git credentials",
     category: "git",
     kind: "command",
     danger: "safe",

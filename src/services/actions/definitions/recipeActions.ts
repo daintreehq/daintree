@@ -270,6 +270,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       title: "Open recipe editor",
       description:
         "Put a recipe draft in front of the user in the editor, either blank for a worktree or loaded from an existing recipe. This is a handoff, not a write: nothing is saved or deleted until the person reviews the draft and saves it, so a success here means the editor is open, never that the recipe exists. An unknown recipe opens a blank draft rather than failing.",
+      paletteDescription: "Open a recipe draft in the editor to review and save",
       category: "recipes",
       kind: "command",
       danger: "safe",

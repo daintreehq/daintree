@@ -8,6 +8,7 @@ export function registerWatchdogActions(actions: ActionRegistry): void {
     title: "Restart crash watchdog",
     description:
       "Restart the main-process deadlock detector after it has been disabled by repeated crashes. Available only when the watchdog is in the disabled state surfaced by the recovery banner.",
+    paletteDescription: "Restart the deadlock detector after repeated crashes turned it off",
     category: "system",
     kind: "command",
     danger: "safe",

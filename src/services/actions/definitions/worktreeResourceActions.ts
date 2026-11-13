@@ -134,6 +134,7 @@ export function registerWorktreeResourceActions(
       title: "Provision resource",
       description:
         "Run the project's provisioning commands for a worktree's remote resource, such as creating a cloud devbox. Creates real infrastructure and may cost money; teardown is separate. Confirm the target worktree first.",
+      paletteDescription: "Run the project's provisioning commands for this worktree, such as creating a cloud devbox",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -177,6 +178,7 @@ export function registerWorktreeResourceActions(
       title: "Tear down resource",
       description:
         "Run the project's teardown commands for a worktree's remote resource, typically destroying a cloud devbox. What is destroyed and whether it is recoverable depends on that config; read it first. Pause is the lighter path if the resource is still needed.",
+      paletteDescription: "Run the project's teardown commands for this worktree, often destroying a cloud devbox",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -230,6 +232,7 @@ export function registerWorktreeResourceActions(
       title: "Resume resource",
       description:
         "Run the project's resume commands to bring a paused remote resource back up. May take time and cost money once it returns; on a resource never paused it does whatever the command does.",
+      paletteDescription: "Run the project's resume commands to bring a paused remote resource back",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -273,6 +276,7 @@ export function registerWorktreeResourceActions(
       title: "Pause resource",
       description:
         "Run the project's pause commands for a worktree's remote resource, typically stopping a cloud devbox to save cost. These are arbitrary project commands; resume is a separate sequence, not guaranteed to undo this.",
+      paletteDescription: "Run the project's pause commands for this worktree, often stopping a cloud devbox",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -316,6 +320,7 @@ export function registerWorktreeResourceActions(
       title: "Check resource status",
       description:
         "Run the project's status command for a worktree's remote resource, such as a cloud devbox, and report its output. Runs a real command and waits. Reports nothing when none is configured; a failing command fails the call rather than returning a cached answer.",
+      paletteDescription: "Run the project's status command for this worktree's remote resource",
       category: "worktree",
       kind: "command",
       danger: "safe",
