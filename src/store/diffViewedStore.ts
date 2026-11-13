@@ -6,16 +6,18 @@ import {
   comparablePath,
   findWorktreeByPath,
 } from "@/lib/diffFreshness";
+import { WORKING_TREE_VIEWED_SECTION } from "@/lib/diffViewedKey";
 import { getViewedMarkSources, type ViewedMarkSources } from "./storeAccessors";
 
 /**
  * Session-scoped "viewed" markers for changeset review, shared by the diff
  * workspace sidebar and the Review Hub file list so a file checked off in one
- * surface reads as reviewed in the other. Keys are caller-owned strings
- * (Review Hub uses `staged:{path}` / `unstaged:{path}`; the worktree change
- * list uses `{status}:{path}`; base-branch review uses `base:{path}`), scoped
- * per worktree path. Deliberately not persisted: a fresh app session starts a
- * fresh review.
+ * surface reads as reviewed in the other. Keys are caller-owned strings, scoped
+ * per worktree path: every working-tree surface shares one
+ * `working-tree:{path}` mark per file (`workingTreeViewedKey`), whichever
+ * staging section the file sits in; base-branch review uses `base:{path}` and
+ * Review Hub's Since review view `since-review:{path}`. Deliberately not
+ * persisted: a fresh app session starts a fresh review.
  *
  * The key stays put across polls, so a mark remembers what Daintree had
  * observed of its file when it was set and lapses the first time a later
@@ -25,17 +27,20 @@ import { getViewedMarkSources, type ViewedMarkSources } from "./storeAccessors";
 
 /**
  * One fingerprint per observation source, each absent while that source had
- * nothing to say. `file` is the worktree store's change entry, the same signal
- * the diff panel's stale banner reads; `section` is the Review Hub row in its
- * staging section; `base` is the commit on each side of a base comparison.
+ * nothing to say. `file` is the worktree store's change entry, read so that
+ * staging leaves it alone; `staging` is whether the Review Hub's last staging
+ * read lists the file in either section; `base` is the commit on each side of
+ * a base comparison.
  */
 interface ViewedBaseline {
   file?: string;
-  section?: string;
+  staging?: string;
   base?: string;
 }
 
-const SIGNALS = ["file", "section", "base"] as const;
+const SIGNALS = ["file", "staging", "base"] as const;
+
+const STAGING_LISTED = "listed";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 const EMPTY_BASELINES: ReadonlyMap<string, ViewedBaseline> = new Map();
@@ -60,14 +65,24 @@ function splitKey(key: string): { section: string; path: string } | null {
   return { section: key.slice(0, colon), path: key.slice(colon + 1) };
 }
 
-function stagingRowSignal(
+// Presence only: which section a file sits in, and how its churn splits
+// between them, moves with every stage and unstage without touching what the
+// mark covers. A content edit lapses the mark through `file` instead.
+//
+// Absence counts only against a mark that has seen the file listed. The
+// staging read is a cache that can be older than the worktree poll, so a file
+// marked from the change list may not be in it yet; recording that as the
+// baseline would lapse the mark the moment the Review Hub caught up.
+function stagingSignal(
   status: StagingStatus,
-  section: "staged" | "unstaged",
-  path: string
-): string {
-  const row = status[section].find((entry) => entry.path === path);
-  if (!row) return FRESHNESS_MISSING;
-  return `${row.status}:${row.insertions ?? ""}:${row.deletions ?? ""}`;
+  path: string,
+  baseline: ViewedBaseline | undefined
+): string | undefined {
+  const listed =
+    status.staged.some((entry) => entry.path === path) ||
+    status.unstaged.some((entry) => entry.path === path);
+  if (listed) return STAGING_LISTED;
+  return baseline?.staging === STAGING_LISTED ? FRESHNESS_MISSING : undefined;
 }
 
 function baseComparisonSignal(
@@ -98,7 +113,8 @@ function observe(
   sources: ViewedMarkSources,
   worktreePath: string,
   key: string,
-  fileIndex: () => ReadonlyMap<string, string> | undefined
+  fileIndex: () => ReadonlyMap<string, string> | undefined,
+  baseline?: ViewedBaseline
 ): ViewedBaseline {
   const parsed = splitKey(key);
   if (!parsed) return {};
@@ -113,8 +129,9 @@ function observe(
   if (index) {
     observed.file = index.get(comparablePath(worktreePath, parsed.path)) ?? FRESHNESS_MISSING;
   }
-  if ((parsed.section === "staged" || parsed.section === "unstaged") && sources.stagingStatus) {
-    observed.section = stagingRowSignal(sources.stagingStatus, parsed.section, parsed.path);
+  if (parsed.section === WORKING_TREE_VIEWED_SECTION && sources.stagingStatus) {
+    const staging = stagingSignal(sources.stagingStatus, parsed.path, baseline);
+    if (staging !== undefined) observed.staging = staging;
   }
   return observed;
 }
@@ -205,8 +222,8 @@ export const useDiffViewedStore = create<DiffViewedState>((set) => ({
         let nextMarks: Set<string> | null = null;
         let nextBaselines: Map<string, ViewedBaseline> | null = null;
         for (const key of marks) {
-          const observed = observe(sources, path, key, fileIndex);
           const baseline = baselines.get(key) ?? {};
+          const observed = observe(sources, path, key, fileIndex, baseline);
           let lapsed = false;
           let adopted: ViewedBaseline | null = null;
           for (const signal of SIGNALS) {

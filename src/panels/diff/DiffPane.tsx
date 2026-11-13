@@ -323,18 +323,25 @@ export function DiffPane({
   const diffSource = panel?.diffSource;
   const panelBaseBranch = panel?.baseBranch;
   const panelViewedKey = panel?.viewedKey;
+  const panelFileSide = panel?.fileSide;
 
   const isWorkspace = (changeSet?.length ?? 0) > 1;
 
   // Resolved by identity, never stored: a change set rebuilt from a later poll
   // can reorder or drop files, so a persisted index would point at the wrong
-  // one. `viewedKey` first — it is the only field that separates the staged and
-  // unstaged copies of a partially staged file, which share path AND status.
-  // Then exact (path + status), then path alone: both fallbacks carry a
-  // restored panel (no key) and a file whose status changed under us.
+  // one. Key and side first — the side is the only field that separates the
+  // staged and unstaged copies of a partially staged file, which share path,
+  // status AND Viewed key. Then the key alone, which follows the file to its
+  // remaining twin once the selected side is gone. Then exact (path + status),
+  // then path alone: both carry a restored panel (no key) and a file whose
+  // status changed under us.
   const currentIndex = useMemo(() => {
     if (!changeSet || filePath === undefined) return -1;
     if (panelViewedKey !== undefined) {
+      const bySide = changeSet.findIndex(
+        (entry) => entry.viewedKey === panelViewedKey && entry.side === panelFileSide
+      );
+      if (bySide !== -1) return bySide;
       const byKey = changeSet.findIndex((entry) => entry.viewedKey === panelViewedKey);
       if (byKey !== -1) return byKey;
     }
@@ -343,7 +350,7 @@ export function DiffPane({
     );
     if (exact !== -1) return exact;
     return changeSet.findIndex((entry) => entry.path === filePath);
-  }, [changeSet, filePath, fileStatus, panelViewedKey]);
+  }, [changeSet, filePath, fileStatus, panelViewedKey, panelFileSide]);
 
   // A working-tree panel lists a partially staged file once per side, and each
   // entry names its own, so the same path fetches a different diff per row. Any
@@ -408,9 +415,9 @@ export function DiffPane({
     (index: number) => {
       const entry = changeSet?.[index];
       if (!entry) return;
-      // Carry the key so the next resolution lands on this exact entry rather
-      // than the first one sharing its path and status.
-      setDiffPanelFile(id, entry.path, entry.status, entry.viewedKey);
+      // Carry the key and side so the next resolution lands on this exact entry
+      // rather than the first one sharing its path, status and key.
+      setDiffPanelFile(id, entry.path, entry.status, entry.viewedKey, entry.side);
     },
     [changeSet, id, setDiffPanelFile]
   );

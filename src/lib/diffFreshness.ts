@@ -17,6 +17,17 @@ function entryFreshnessKey(entry: FileChangeDetail): string {
   return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
 }
 
+// Status moves with the index, not the file: staging takes a new file from
+// `untracked` to `added`, and a file added or renamed then edited reads
+// `modified` until the rest is staged (simple-git lists `AM` and `RM` under
+// both). So status stays out, except deletion, which reads the same staged or
+// not. Counts git can't give (an untracked file's deletions, a binary's lines)
+// read as the 0 the producer fills in once the file is staged.
+function stagingAgnosticKey(entry: FileChangeDetail): string {
+  const deleted = entry.status === "deleted" ? "deleted:" : "";
+  return `${deleted}${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? 0}:${entry.deletions ?? 0}`;
+}
+
 export function findWorktreeByPath(
   worktrees: ReadonlyMap<string, WorktreeSnapshot>,
   worktreePath: string
@@ -49,6 +60,8 @@ export function selectDiffFreshnessKey(
 /**
  * Every file's freshness key for one worktree at once, keyed by
  * {@link comparablePath}, for callers checking many files against one poll.
+ * Unlike {@link selectDiffFreshnessKey}, staging or unstaging a file leaves its
+ * key alone: the change it carries is the same either side of the index.
  * Undefined when the store has no change list for the worktree.
  */
 export function buildFreshnessIndex(
@@ -59,7 +72,7 @@ export function buildFreshnessIndex(
   if (!changes) return undefined;
   const index = new Map<string, string>();
   for (const change of changes) {
-    index.set(comparablePath(worktreePath, change.path), entryFreshnessKey(change));
+    index.set(comparablePath(worktreePath, change.path), stagingAgnosticKey(change));
   }
   return index;
 }

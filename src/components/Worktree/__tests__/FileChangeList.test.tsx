@@ -112,6 +112,7 @@ vi.mock("@/hooks/useFileTreeDecorations", () => ({
 }));
 
 import { FileChangeList, type FileChangeListHandle } from "../FileChangeList";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 
 const ROOT = "/repo";
 
@@ -587,6 +588,9 @@ describe("FileChangeList — diff panel ownership", () => {
     // The cursor has to be the set's own key for that row, not a re-derivation
     // the panel would have to guess at.
     expect(options.viewedKey).toBe(opened!.viewedKey);
+    // And the key the Review Hub's row for the same file marks (#16897), so a
+    // file checked off on either surface reads as reviewed on the other.
+    expect(opened!.viewedKey).toBe(workingTreeViewedKey(String(options.filePath)));
   });
 
   it("stops pushing its change set once another surface owns the dialog", async () => {

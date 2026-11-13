@@ -428,7 +428,8 @@ export interface PanelRegistrySlice {
     id: string,
     filePath: string,
     fileStatus: import("@shared/types/git.js").GitStatus,
-    viewedKey?: string
+    viewedKey?: string,
+    fileSide?: import("@shared/types/git.js").GitDiffSide
   ) => void;
   setDiffPanelChangeSet: (
     id: string,

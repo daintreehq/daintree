@@ -23,11 +23,12 @@ export interface DiffChangeSetEntry {
   insertions?: number | null;
   deletions?: number | null;
   /**
-   * Caller-owned key for the viewed-marker store (scoped per worktree).
-   * Callers keep their existing conventions: `staged:{path}` /
-   * `unstaged:{path}` (Review Hub), `{status}:{path}` (change list),
+   * Caller-owned key for the viewed-marker store (scoped per worktree):
+   * `working-tree:{path}` for every working-tree surface (one mark per file,
+   * shared by the Review Hub's staged and unstaged rows and the change list),
    * `base:{path}` (base-branch review), `since-review:{path}` (Review Hub's
-   * Since review view).
+   * Since review view). Not unique within a set: a partially staged file's two
+   * entries share it and differ by `side`.
    */
   viewedKey: string;
   /**

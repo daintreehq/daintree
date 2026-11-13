@@ -39,6 +39,7 @@ import {
 } from "@/hooks/useFileRowMenuItems";
 import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import {
@@ -415,7 +416,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             fileStatus: change.status,
             diffSource: "working-tree",
             changeSet: diffChangeSet,
-            viewedKey: `${change.status}:${change.relativePath}`,
+            viewedKey: workingTreeViewedKey(change.relativePath),
             title: basename(change.relativePath),
             ...(worktreeId && { worktreeId }),
           })

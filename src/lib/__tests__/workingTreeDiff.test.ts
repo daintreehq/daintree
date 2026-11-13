@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileChangeDetail, GitStatus } from "@shared/types/git";
+import { workingTreeViewedKey } from "../diffViewedKey";
 import {
   buildWorkingTreeDiffModel,
   getWorkingTreeChangeKey,
@@ -153,28 +154,28 @@ describe("buildWorkingTreeDiffModel — change set", () => {
     expect(diffChangeSet[0]!.path).toBe("src/file.ts");
   });
 
-  it("varies the viewed key with both status and path, and with nothing else", () => {
+  it("varies the viewed key with the path, and with nothing else", () => {
     // Uniqueness alone would also hold for index-based or random keys, which
     // would break viewed-marker persistence across polls. Pin what it varies on.
     const keyFor = (path: string, status: GitStatus, insertions: number) =>
       buildWorkingTreeDiffModel([change(path, status, insertions, 0)], ROOT)["diffChangeSet"][0]!
         .viewedKey;
 
-    const base = keyFor("a.ts", "modified", 1);
-    expect(keyFor("a.ts", "added", 1)).not.toBe(base);
-    expect(keyFor("b.ts", "modified", 1)).not.toBe(base);
+    const base = keyFor("a.ts", "untracked", 1);
+    expect(keyFor("b.ts", "untracked", 1)).not.toBe(base);
+    // Staging a new file flips its status; the mark must survive it (#16897).
+    expect(keyFor("a.ts", "added", 1)).toBe(base);
     // Churn changes every poll; a key that moved with it would lose the marker.
-    expect(keyFor("a.ts", "modified", 999)).toBe(base);
+    expect(keyFor("a.ts", "untracked", 999)).toBe(base);
   });
 
-  it("keeps a staged and an unstaged copy of one path separately addressable", () => {
+  it("keys each file as the Review Hub's rows do, so a mark reads on both", () => {
     const { diffChangeSet } = buildWorkingTreeDiffModel(
-      [change("same.ts", "modified", 4, 0), change("same.ts", "added", 4, 0)],
+      [change(`${ROOT}/src/deep/a.ts`, "modified", 4, 0)],
       ROOT
     );
 
-    const viewedKeys = diffChangeSet.map((entry) => entry.viewedKey);
-    expect(new Set(viewedKeys).size).toBe(viewedKeys.length);
+    expect(diffChangeSet[0]!.viewedKey).toBe(workingTreeViewedKey("src/deep/a.ts"));
   });
 
   it("carries churn counts through unchanged, including nulls", () => {

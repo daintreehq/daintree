@@ -3,6 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import { isFileRowMenuKey, openFileRowMenuFromKeyboard } from "@/hooks/useFileRowMenuItems";
 import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
 import type { FileStageRowSection } from "./FileStageRow";
@@ -264,7 +265,7 @@ export function useReviewHubKeyboard({
           if (!item) return;
           e.preventDefault();
           e.stopPropagation();
-          const viewedKey = `${item.section}:${item.file.path}`;
+          const viewedKey = workingTreeViewedKey(item.file.path);
           handleViewedChange(viewedKey, !viewedFiles.has(viewedKey));
         }
         return;

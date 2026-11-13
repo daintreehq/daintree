@@ -16,7 +16,7 @@ import type {
   TerminalScratchpad,
   TerminalFirstPrompt,
 } from "./panel.js";
-import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalSpawnSource, AddPanelFocusPolicy, ScheduledRunRef } from "./panel.js";
@@ -485,11 +485,13 @@ export interface DiffPanelOptions extends AddPanelOptionsBase {
    */
   changeSet?: DiffChangeSetEntry[];
   /**
-   * `changeSet` entry the panel opens on. Pass it whenever the set can hold
-   * two entries with the same path and status (partial staging) — they differ
-   * only by this key. Runtime-only, like the set itself.
+   * `changeSet` entry the panel opens on, by its Viewed key and, with
+   * `fileSide`, its side. Pass both whenever the set can list one file twice
+   * (partial staging): the twins share path, status and key and differ only by
+   * side. Runtime-only, like the set itself.
    */
   viewedKey?: string;
+  fileSide?: GitDiffSide;
 }
 
 /**

@@ -14,6 +14,7 @@ import type { StagingFileEntry, GitStatus } from "@shared/types";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -631,8 +632,9 @@ export function ReviewHubContent({
 
   // Changesets handed to the diff modals so they can render the
   // review-workspace sidebar. Indexed identically to the modal's
-  // `currentFileIndex`, and viewed keys match the hub's own conventions so
-  // markers stay in sync across both surfaces.
+  // `currentFileIndex`, and viewed keys match the hub's own rows so markers
+  // stay in sync across both surfaces; `side` tells a partially staged file's
+  // twins apart.
   const workingTreeChangeSet = useMemo(
     (): DiffChangeSetEntry[] =>
       navigableItems.map((item) => ({
@@ -640,7 +642,7 @@ export function ReviewHubContent({
         status: item.file.status,
         insertions: item.file.insertions,
         deletions: item.file.deletions,
-        viewedKey: `${item.section}:${item.file.path}`,
+        viewedKey: workingTreeViewedKey(item.file.path),
         side: item.section,
       })),
     [navigableItems]
@@ -728,14 +730,13 @@ export function ReviewHubContent({
   const liveWorkingTreeItem =
     selectedFileIndex !== null ? navigableItems[selectedFileIndex] : undefined;
   const liveWorkingTreeStatus = liveWorkingTreeItem?.file.status ?? selectedFile?.status;
-  // Section-scoped, matching `workingTreeChangeSet`: it is the only thing that
-  // separates the staged and unstaged rows of a partially staged file, which
-  // otherwise share both path and status.
-  const liveWorkingTreeViewedKey = liveWorkingTreeItem
-    ? `${liveWorkingTreeItem.section}:${liveWorkingTreeItem.file.path}`
-    : selectedFile
-      ? `${selectedFile.section}:${selectedFile.path}`
-      : undefined;
+  // The panel's cursor, matching `workingTreeChangeSet`: the side is the only
+  // thing that separates the staged and unstaged rows of a partially staged
+  // file, which otherwise share path, status and Viewed key.
+  const liveWorkingTreePath = liveWorkingTreeItem?.file.path ?? selectedFile?.path;
+  const liveWorkingTreeViewedKey =
+    liveWorkingTreePath === undefined ? undefined : workingTreeViewedKey(liveWorkingTreePath);
+  const liveWorkingTreeSide = liveWorkingTreeItem?.section ?? selectedFile?.section;
   useEffect(() => {
     if (!selectedFile || !liveWorkingTreeStatus) return;
     const store = usePanelDialogStore.getState();
@@ -746,7 +747,8 @@ export function ReviewHubContent({
           diffPanelId,
           selectedFile.path,
           liveWorkingTreeStatus,
-          liveWorkingTreeViewedKey
+          liveWorkingTreeViewedKey,
+          liveWorkingTreeSide
         );
       return;
     }
@@ -758,6 +760,7 @@ export function ReviewHubContent({
       changeSet: changeSetsRef.current.workingTree,
       title: basename(selectedFile.path),
       ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
+      ...(liveWorkingTreeSide && { fileSide: liveWorkingTreeSide }),
       ...(worktreeId && { worktreeId }),
     })
       // A refused or superseded open resolves null. Drop the selection with it,
@@ -767,6 +770,7 @@ export function ReviewHubContent({
     selectedFile,
     liveWorkingTreeStatus,
     liveWorkingTreeViewedKey,
+    liveWorkingTreeSide,
     diffPanelId,
     worktreeId,
     openDiffDialog,

@@ -285,6 +285,8 @@ import { isHoldingUnrecoverableWork } from "@/services/plugin/panelRecoveryHold"
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
+import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
+import { usePanelStore } from "@/store/panelStore";
 import { getCachedStagingStatus, resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -908,7 +910,7 @@ describe("ReviewHub", () => {
       expect(openPanelDialogMock).not.toHaveBeenCalled();
     });
 
-    it("tracks Viewed state independently for staged and unstaged copies of the same path", async () => {
+    it("shares one Viewed mark between the staged and unstaged copies of the same path", async () => {
       // Partial-staging scenario: the same file is both staged and unstaged
       // (e.g. user staged some hunks, left others unstaged).
       getStagingStatusMock.mockResolvedValue(
@@ -931,15 +933,16 @@ describe("ReviewHub", () => {
 
       fireEvent.click(firstCheckbox);
 
-      // Only the clicked row flips to "viewed"; the sibling row stays unchecked.
-      const checkedAfter = screen.getAllByRole("checkbox", {
-        name: "Mark src/dual.ts as viewed",
-      });
-      expect(checkedAfter).toHaveLength(2);
-      const viewedCount = checkedAfter.filter(
-        (cb) => cb.getAttribute("aria-checked") === "true"
-      ).length;
-      expect(viewedCount).toBe(1);
+      // One mark per file (#16897): the change list shows it once, so both
+      // rows read and write the same mark.
+      const states = () =>
+        screen
+          .getAllByRole("checkbox", { name: "Mark src/dual.ts as viewed" })
+          .map((cb) => cb.getAttribute("aria-checked"));
+      expect(states()).toEqual(["true", "true"]);
+
+      fireEvent.click(screen.getAllByRole("checkbox", { name: "Mark src/dual.ts as viewed" })[1]!);
+      expect(states()).toEqual(["false", "false"]);
     });
 
     it("keeps Viewed state when the modal closes and reopens", async () => {
@@ -977,6 +980,23 @@ describe("ReviewHub", () => {
     };
 
     it("reads unviewed once a poll delivers new content for a Viewed file", async () => {
+      const observeChanges = (indexMtime: number) => {
+        const main = worktreeStoreData.current.get("main-wt")!;
+        const changes = [
+          { path: `${WORKTREE_PATH}/src/index.ts`, mtimeMs: indexMtime },
+          { path: `${WORKTREE_PATH}/src/app.ts`, mtimeMs: 100 },
+        ].map((entry) => ({ ...entry, status: "modified", insertions: 1, deletions: 0 }));
+        worktreeStoreData.current.set("main-wt", {
+          ...main,
+          worktreeChanges: {
+            worktreeId: "main-wt",
+            rootPath: WORKTREE_PATH,
+            changes,
+            changedFileCount: changes.length,
+          },
+        } as typeof main);
+      };
+      observeChanges(100);
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));
 
@@ -984,6 +1004,7 @@ describe("ReviewHub", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
       expect(viewedState("src/index.ts")).toBe("true");
 
+      observeChanges(200);
       await poll(
         makeStatus({
           staged: [{ path: "src/index.ts", status: "modified", insertions: 9, deletions: 2 }],
@@ -1006,6 +1027,54 @@ describe("ReviewHub", () => {
       expect(viewedState("src/index.ts")).toBe("true");
     });
 
+    it("keeps a Viewed mark when its unchanged file is staged and unstaged (#16897)", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      const appRow = {
+        path: "src/app.ts",
+        status: "modified" as const,
+        insertions: 3,
+        deletions: 1,
+      };
+      await poll(makeStatus({ staged: [...makeStatus().staged, appRow], unstaged: [] }));
+      const inStaged = () =>
+        screen
+          .getByTestId("review-hub-file-section-staged")
+          .contains(screen.getByTestId("file-stage-row-src/app.ts"));
+      await waitFor(() => expect(inStaged()).toBe(true));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      await poll(makeStatus());
+      await waitFor(() => expect(inStaged()).toBe(false));
+      expect(viewedState("src/app.ts")).toBe("true");
+    });
+
+    it("shares marks with the change list's diff panel in both directions (#16897)", async () => {
+      // The change list keys its absolute store paths; the hub keys git's
+      // relative ones. Both must land on the same mark.
+      const changeListKey = (path: string) =>
+        buildWorkingTreeDiffModel(
+          [{ path: `${WORKTREE_PATH}/${path}`, status: "modified", insertions: 1, deletions: 0 }],
+          WORKTREE_PATH
+        ).diffChangeSet[0]!.viewedKey;
+      useDiffViewedStore.getState().setViewed(WORKTREE_PATH, changeListKey("src/app.ts"), true);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/index.ts as viewed" }));
+      expect(
+        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has(
+          changeListKey("src/index.ts")
+        )
+      ).toBe(true);
+    });
+
     it("reads unviewed when a Viewed file leaves the list and comes back unchanged", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("app.ts"));
@@ -1017,7 +1086,7 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByText("app.ts")).toBeNull());
       // The mark goes when the row does, not when it comes back.
       expect(
-        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has("unstaged:src/app.ts")
+        selectViewedSet(useDiffViewedStore.getState(), WORKTREE_PATH).has("working-tree:src/app.ts")
       ).toBe(false);
 
       await poll(makeStatus());
@@ -1605,6 +1674,57 @@ describe("ReviewHub", () => {
       expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
       expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     }
+
+    it("opens a partially staged file's twin by side and follows it when the rest is staged (#16897)", async () => {
+      const dual = (insertions: number) => ({
+        path: "src/dual.ts",
+        status: "modified" as const,
+        insertions,
+        deletions: 0,
+      });
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [dual(1)], unstaged: [dual(2)] })
+      );
+      const setDiffPanelFile = vi.fn();
+      const realSetDiffPanelFile = usePanelStore.getState().setDiffPanelFile;
+      usePanelStore.setState({ setDiffPanelFile });
+      try {
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getAllByText("dual.ts"));
+        openPanelDialogMock.mockClear();
+        const unstagedRow = within(
+          screen.getByTestId("review-hub-file-section-unstaged")
+        ).getByTestId("file-stage-row-src/dual.ts");
+        await act(async () => {
+          fireEvent.click(within(unstagedRow).getByText("dual.ts").closest("button")!);
+        });
+        await act(async () => {});
+
+        expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+        expect(openPanelDialogMock.mock.calls[0]![0]).toMatchObject({
+          filePath: "src/dual.ts",
+          viewedKey: "working-tree:src/dual.ts",
+          fileSide: "unstaged",
+        });
+
+        getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [dual(3)], unstaged: [] }));
+        await act(async () => {
+          capturedUpdateCallback!(makeWorktreeState());
+          await Promise.resolve();
+        });
+        await waitFor(() =>
+          expect(setDiffPanelFile).toHaveBeenLastCalledWith(
+            HUB_PANEL_ID,
+            "src/dual.ts",
+            "modified",
+            "working-tree:src/dual.ts",
+            "staged"
+          )
+        );
+      } finally {
+        usePanelStore.setState({ setDiffPanelFile: realSetDiffPanelFile });
+      }
+    });
 
     it("does not reopen the dialog the user just closed", async () => {
       await openDiffFor("index.ts");

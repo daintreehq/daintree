@@ -90,7 +90,13 @@ const WORKTREE = "/repo";
 const OUTER_SENTINEL = "Enclosing menu sentinel";
 
 function entry(path: string): DiffChangeSetEntry {
-  return { path, status: "modified", insertions: 1, deletions: 0, viewedKey: `modified:${path}` };
+  return {
+    path,
+    status: "modified",
+    insertions: 1,
+    deletions: 0,
+    viewedKey: `working-tree:${path}`,
+  };
 }
 
 function renderSidebar(overrides: Partial<React.ComponentProps<typeof DiffFileSidebar>> = {}) {
@@ -464,7 +470,7 @@ describe("DiffFileSidebar — one tab stop, arrows move it", () => {
     const button = tabbable()[0]!;
     button.focus();
     fireEvent.keyDown(button, { key: "v" });
-    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE, "modified:src/b.ts");
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE, "working-tree:src/b.ts");
 
     toggleViewedMock.mockClear();
     fireEvent.keyDown(button, { key: "v", metaKey: true });
