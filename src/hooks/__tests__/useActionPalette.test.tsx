@@ -6,6 +6,8 @@ const {
   listMock,
   dispatchMock,
   getDisplayComboMock,
+  getEffectiveComboMock,
+  getMock,
   getContextMock,
   notifyMock,
   selfNotifiesMock,
@@ -13,7 +15,9 @@ const {
 } = vi.hoisted(() => ({
   listMock: vi.fn(),
   dispatchMock: vi.fn(),
-  getDisplayComboMock: vi.fn(() => ""),
+  getDisplayComboMock: vi.fn<(id: string) => string>(() => ""),
+  getEffectiveComboMock: vi.fn<(id: string) => string | undefined>(() => undefined),
+  getMock: vi.fn<(id: string) => unknown>(() => null),
   getContextMock: vi.fn(),
   notifyMock: vi.fn(),
   selfNotifiesMock: vi.fn<(id: string) => boolean>(() => false),
@@ -23,6 +27,7 @@ const {
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     list: listMock,
+    get: getMock,
     dispatch: dispatchMock,
     getContext: getContextMock,
     selfNotifiesOnExecutionError: selfNotifiesMock,
@@ -37,7 +42,7 @@ vi.mock("@/lib/notify", () => ({
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getDisplayCombo: getDisplayComboMock,
-    getEffectiveCombo: () => undefined,
+    getEffectiveCombo: getEffectiveComboMock,
   },
 }));
 
@@ -105,6 +110,9 @@ describe("useActionPalette", () => {
     // per-test so a stale `true` can't leak across tests and silence one.
     selfNotifiesMock.mockReturnValue(false);
     paletteArgsMock.mockReturnValue(null);
+    getMock.mockReturnValue(null);
+    getDisplayComboMock.mockReturnValue("");
+    getEffectiveComboMock.mockReturnValue(undefined);
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
@@ -717,6 +725,152 @@ describe("useActionPalette", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  describe("redirect rows", () => {
+    async function openOn(query: string) {
+      const hook = renderHook(() => useActionPalette());
+      act(() => hook.result.current.open());
+      act(() => hook.result.current.setQuery(query));
+      await waitFor(() => expect(hook.result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+      return hook;
+    }
+
+    function rowFor(rows: readonly { id: string }[], id: string) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) throw new Error(`no row for ${id}`);
+      return row as ReturnType<typeof useActionPalette>["results"][number];
+    }
+
+    it("greys a redirect row out with its target's reason when the target can't run", async () => {
+      dispatchMock.mockResolvedValue({ ok: true });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        {
+          ...makeEntry("worktree.openReviewHub", "Open Review Hub", false),
+          disabledReason: "Select a worktree first",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("Select a worktree first");
+      expect(row.title).toBe("Commit");
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves a redirect row runnable when only its headless source is disabled", async () => {
+      dispatchMock.mockResolvedValue({ ok: true });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit", false),
+          disabledReason: "Nothing staged",
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        makeEntry("worktree.openReviewHub", "Open Review Hub"),
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(true);
+      expect(row.disabledReason).toBeUndefined();
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).toHaveBeenCalledWith("worktree.openReviewHub", {}, { source: "user" });
+    });
+
+    it("carries a target's palette-only precondition onto the redirect row", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        {
+          ...makeEntry("worktree.openReviewHub", "Open Review Hub"),
+          paletteHidden: true,
+          paletteDisabled: true,
+          paletteDisabledReason: "Open a worktree first",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("Open a worktree first");
+    });
+
+    it("reads a target that list() leaves out through get()", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+      ]);
+      getMock.mockImplementation((id) =>
+        id === "worktree.openReviewHub"
+          ? {
+              ...makeEntry("worktree.openReviewHub", "Open Review Hub", false),
+              disabledReason: "No worktree here",
+            }
+          : null
+      );
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("No worktree here");
+    });
+
+    it("shows the target's shortcut when the redirect row has none of its own", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("worktree.createWithRecipe", "Create managed worktree"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.createDialog.open",
+        },
+        makeEntry("worktree.createDialog.open", "New worktree"),
+      ]);
+      getEffectiveComboMock.mockImplementation((id) =>
+        id === "worktree.createDialog.open" ? "Cmd+K Cmd+N" : undefined
+      );
+      getDisplayComboMock.mockImplementation((id) =>
+        id === "worktree.createDialog.open" ? "⌘K ⌘N" : ""
+      );
+
+      const { result } = await openOn("managed");
+      const row = rowFor(result.current.results, "worktree.createWithRecipe");
+      expect(row.shortcut).toBe("Cmd+K Cmd+N");
+      expect(row.keybinding).toBe("⌘K ⌘N");
+    });
+
+    it("keeps a redirect row's own shortcut, which also runs the target", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        makeEntry("worktree.openReviewHub", "Open Review Hub"),
+      ]);
+      getEffectiveComboMock.mockImplementation((id) =>
+        id === "git.commit" ? "Cmd+K Cmd+C" : id === "worktree.openReviewHub" ? "Cmd+R" : undefined
+      );
+
+      const { result } = await openOn("commit");
+      expect(rowFor(result.current.results, "git.commit").shortcut).toBe("Cmd+K Cmd+C");
+    });
   });
 
   it("renders a requireContext (paletteDisabled) row as disabled-with-reason and no-ops on Enter", async () => {
