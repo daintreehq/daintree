@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveFocusOpener } from "../focusOpener";
+import { APP_PALETTE_SURFACE_ATTR, recordPaletteOpener, resolveFocusOpener } from "../focusOpener";
 
 function menu(labelledBy: string, ...children: HTMLElement[]): HTMLElement {
   const el = document.createElement("div");
@@ -52,5 +52,48 @@ describe("resolveFocusOpener", () => {
     expect(resolveFocusOpener(panel)).toBe(panel);
     expect(resolveFocusOpener(orphan)).toBe(orphan);
     expect(resolveFocusOpener(null)).toBeNull();
+  });
+
+  function palette(open: boolean, opener: HTMLElement | null): HTMLInputElement {
+    const surface = document.createElement("div");
+    surface.setAttribute("role", "dialog");
+    surface.setAttribute(APP_PALETTE_SURFACE_ATTR, "");
+    surface.setAttribute("aria-modal", open ? "true" : "false");
+    const field = document.createElement("input");
+    surface.appendChild(field);
+    document.body.appendChild(surface);
+    recordPaletteOpener(surface, opener);
+    return field;
+  }
+
+  it("records a closing palette's field as whatever opened the palette", () => {
+    const terminal = document.createElement("textarea");
+    document.body.appendChild(terminal);
+
+    expect(resolveFocusOpener(palette(false, terminal))).toBe(terminal);
+  });
+
+  it("keeps the field of a palette that stays open", () => {
+    const terminal = document.createElement("textarea");
+    document.body.appendChild(terminal);
+    const field = palette(true, terminal);
+
+    expect(resolveFocusOpener(field)).toBe(field);
+  });
+
+  it("keeps the field when the palette recorded no opener", () => {
+    const field = palette(false, null);
+
+    expect(resolveFocusOpener(field)).toBe(field);
+  });
+
+  it("walks a palette opened from a menu item out to the menu's trigger", () => {
+    const trigger = document.createElement("button");
+    trigger.id = "trigger";
+    document.body.appendChild(trigger);
+    const selected = item();
+    menu("trigger", selected);
+
+    expect(resolveFocusOpener(palette(false, selected))).toBe(trigger);
   });
 });

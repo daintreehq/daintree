@@ -15,12 +15,13 @@ import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import {
-  getVisibleTabbableElements,
-  INTERACTIVE_CONTROL_SELECTOR,
-  TRUNCATION_DISCLOSURE_ATTR,
-} from "@/lib/accessibility";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { resolveFocusOpener } from "@/lib/focusOpener";
+import {
+  DIALOG_CLOSE_ATTR,
+  firstDialogFocusTarget,
+  focusAfterOverlayCloses,
+} from "@/lib/openModalFocus";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
@@ -406,11 +407,10 @@ export function AppDialog({
       target.focus();
       if (document.activeElement === target) return;
     }
-    // Otherwise hand focus to the first tabbable child of the app shell rather
-    // than letting it silently fall to <body>.
-    const root = document.getElementById("root");
-    const fallback = root ? getVisibleTabbableElements(root)[0] : undefined;
-    fallback?.focus();
+    // Otherwise into the dialog still open underneath, if any — this one
+    // portals outside `#root`, so the app shell is behind that dialog's
+    // backdrop — and only then the shell.
+    focusAfterOverlayCloses(dialogRef.current);
   }, []);
 
   const onCloseCompleteRef = useRef(onCloseComplete);
@@ -489,6 +489,14 @@ export function AppDialog({
     previousActiveElement.current = resolveFocusOpener(active);
   }, [isOpen]);
 
+  // Resolved again once this commit's DOM is in: a palette that closes in the
+  // same commit this dialog opens in may not have marked itself closing yet
+  // when the insertion pass read its field.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    previousActiveElement.current = resolveFocusOpener(previousActiveElement.current);
+  }, [isOpen]);
+
   useEffect(() => {
     if (isOpen) {
       initialFocusOwedRef.current = effectiveInitialFocus !== "none";
@@ -530,21 +538,11 @@ export function AppDialog({
       if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
         target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
       }
-      if (!target) {
-        // The header's close button is first in DOM order, but it is the one
-        // control that answers nothing — arriving there makes a reflexive
-        // Enter throw the dialog away. Land on it only when nothing else is
-        // tabbable.
-        // Nor on a truncated label made tabbable only to show its full text:
-        // focus there opens its tooltip the moment the dialog appears.
-        // The marker can also land on a real control (a custom `Button` child
-        // looks non-interactive to the tooltip), so only a non-control counts.
-        const tabbable = getVisibleTabbableElements(root).filter(
-          (el) =>
-            !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR) || el.matches(INTERACTIVE_CONTROL_SELECTOR)
-        );
-        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
-      }
+      // The header's close button is first in DOM order, but it is the one
+      // control that answers nothing: land on it only when nothing else is
+      // tabbable. A custom `Button` child looks non-interactive to the
+      // truncation tooltip, so its marker can land on a real control.
+      target ??= firstDialogFocusTarget(root);
       if (target) {
         target.focus();
       } else {
@@ -898,9 +896,6 @@ function dialogRuleClass(visible: boolean): string {
  * the hang drops there.
  */
 const DIALOG_LEADING_ACTION_HANG = "-ml-4 contrast-more:ml-0 forced-colors:ml-0";
-
-/** Marks the header close button, which initial focus passes over. */
-const DIALOG_CLOSE_ATTR = "data-dialog-close";
 
 // Footer actions announce unavailability with `aria-disabled`, never the native
 // attribute — a natively-disabled button leaves the tab order and refuses focus,

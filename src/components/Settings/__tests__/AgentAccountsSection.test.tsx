@@ -221,6 +221,66 @@ describe("AgentAccountsSection (#16040)", () => {
     expect(removeAccount).toHaveBeenCalledWith("codex", "company");
   });
 
+  describe("focus after the remove confirmation", () => {
+    // Initial focus lands on Cancel a frame after the confirm mounts; waiting
+    // for it means a later check sees the restore, not focus never having left.
+    async function openConfirm(remove: HTMLElement) {
+      remove.focus();
+      fireEvent.click(remove);
+      const cancel = await screen.findByRole("button", { name: "Cancel" });
+      await waitFor(() => expect(document.activeElement).toBe(cancel));
+    }
+
+    it("goes to Add account once a removal is confirmed, and back to the row on cancel", async () => {
+      // Still saving: the row, and the button that opened the confirm, stay put.
+      const removeAccount = vi.fn(() => new Promise<void>(() => {}));
+      useAgentSettingsStore.setState({ removeAccount });
+      renderSection({ accounts: [COMPANY] });
+      const remove = screen.getByRole("button", { name: "Remove Company" });
+
+      await openConfirm(remove);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(document.activeElement).toBe(remove));
+
+      await openConfirm(remove);
+      fireEvent.click(screen.getByRole("button", { name: "Remove account" }));
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add account" }))
+      );
+
+      // Reopened, a cancel is a cancel again, not the last confirmation.
+      await openConfirm(remove);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(document.activeElement).toBe(remove));
+    });
+
+    it("follows Add account into the empty row when the last removal saves after the confirm closed", async () => {
+      let finishSave: () => void = () => {};
+      const removeAccount = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSave = resolve;
+          })
+      );
+      useAgentSettingsStore.setState({ removeAccount });
+      const view = renderSection({ accounts: [COMPANY] });
+
+      await openConfirm(screen.getByRole("button", { name: "Remove Company" }));
+      fireEvent.click(screen.getByRole("button", { name: "Remove account" }));
+      const headingAdd = screen.getByRole("button", { name: "Add account" });
+      await waitFor(() => expect(document.activeElement).toBe(headingAdd));
+
+      await act(async () => finishSave());
+      view.rerender(
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [] }} />
+      );
+
+      const emptyRowAdd = screen.getByRole("button", { name: "Add account" });
+      expect(emptyRowAdd).not.toBe(headingAdd);
+      expect(document.activeElement).toBe(emptyRowAdd);
+    });
+  });
+
   describe("offering the panes stopped on a usage limit (#16136)", () => {
     const limitedPane: PtyPanelData = {
       id: "p1",

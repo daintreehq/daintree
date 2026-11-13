@@ -11,6 +11,8 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
+import { APP_PALETTE_SURFACE_ATTR, recordPaletteOpener } from "@/lib/focusOpener";
+import { focusAfterOverlayCloses, focusHeldByOtherModal } from "@/lib/openModalFocus";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
@@ -211,6 +213,10 @@ export function AppPaletteDialog({
     // own focus, so skip restore entirely — and skip the overlay clear
     // below, which would wipe overlays the incoming palette owns.
     if (usePaletteStore.getState().activePaletteId) return;
+    // A command that opened a dialog: it has the keyboard now, and this
+    // palette's opener is behind its backdrop. The dialog hands focus back
+    // there itself when it closes.
+    if (focusHeldByOtherModal(dialogRef.current)) return;
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
     // through Radix's focus path, and this runs an exit animation after
@@ -220,8 +226,7 @@ export function AppPaletteDialog({
       el.focus();
       return;
     }
-    const root = document.getElementById("root");
-    root?.querySelector<HTMLElement>(TABBABLE_SELECTOR)?.focus();
+    focusAfterOverlayCloses(dialogRef.current);
   }, []);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
@@ -260,6 +265,9 @@ export function AppPaletteDialog({
 
   useLayoutEffect(() => {
     if (isOpen) {
+      // The surface exists only from this commit on; a dialog a command opens
+      // as the palette closes reads it to find what opened the palette.
+      if (dialogRef.current) recordPaletteOpener(dialogRef.current, previousFocusRef.current);
       // Own keyboard input immediately when the modal commits. The first
       // tabbable still receives focus on the next animation frame, but leaving
       // the prior terminal/input focused during that gap lets it stop Escape
@@ -404,6 +412,7 @@ export function AppPaletteDialog({
         aria-modal={isOpen ? "true" : "false"}
         aria-label={ariaLabel}
         {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        {...{ [APP_PALETTE_SURFACE_ATTR]: "" }}
         tabIndex={-1}
         className={cn(
           // `surface-overlay` is the floating-surface material shared with every

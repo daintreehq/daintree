@@ -52,6 +52,31 @@ export function AgentAccountsSection({
   const removeAccount = useAgentSettingsStore((state) => state.removeAccount);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [removing, setRemoving] = useState<AgentAccount | null>(null);
+  // The removed row's button may outlive the confirm by however long the save
+  // takes, so a confirmed removal hands focus to Add account rather than to a
+  // button about to unmount. Cancelling still returns to the row.
+  const [removeConfirmed, setRemoveConfirmed] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  // Removing the last account moves Add account from the heading into the
+  // empty row, a different button, so focus on the old one moves with it.
+  const addButtonFocusedRef = useRef(false);
+  const attachAddButton = (node: HTMLButtonElement | null) => {
+    addButtonRef.current = node;
+    if (!node) return;
+    const handOff = addButtonFocusedRef.current;
+    addButtonFocusedRef.current = false;
+    const active = document.activeElement;
+    if (handOff && (!active || active === document.body)) node.focus();
+    return () => {
+      // Runs before the button leaves the document, so it can still be focused.
+      addButtonFocusedRef.current = document.activeElement === node;
+      if (addButtonRef.current === node) addButtonRef.current = null;
+    };
+  };
+  const confirmRemove = (account: AgentAccount) => {
+    setRemoveConfirmed(false);
+    setRemoving(account);
+  };
   // The panes stopped on a usage limit that a new default or a new account
   // could take (#16136), offered once, under the change that raised it.
   const [offer, setOffer] = useState<AccountSwitchNoticeState | null>(null);
@@ -102,7 +127,7 @@ export function AgentAccountsSection({
   };
 
   const addButton = (
-    <Button size="sm" variant="outline" onClick={() => setIsAddOpen(true)}>
+    <Button ref={attachAddButton} size="sm" variant="outline" onClick={() => setIsAddOpen(true)}>
       <Plus aria-hidden="true" />
       Add account
     </Button>
@@ -136,7 +161,7 @@ export function AgentAccountsSection({
                     size="icon-sm"
                     variant="ghost-danger"
                     aria-label={`Remove ${account.name}`}
-                    onClick={() => setRemoving(account)}
+                    onClick={() => confirmRemove(account)}
                   >
                     <Trash2 aria-hidden="true" />
                   </Button>
@@ -254,11 +279,14 @@ export function AgentAccountsSection({
         isOpen={removing !== null}
         variant="destructive"
         onClose={() => setRemoving(null)}
+        restoreFocusTo={addButtonRef}
+        preferRestoreFocusTo={removeConfirmed}
         title={`Remove '${removing?.name ?? "account"}'?`}
         description={`Daintree forgets this account, and launches set to it go back to the default. Its folder and the login in it stay where they are, and terminals running on it keep running.`}
         confirmLabel="Remove account"
         onConfirm={() => {
           const account = removing;
+          setRemoveConfirmed(true);
           setRemoving(null);
           if (!account) return;
           void removeAccount(agentId, account.id).then(onSettingsChange, (error: unknown) => {
@@ -267,7 +295,7 @@ export function AgentAccountsSection({
               title: "Couldn't remove account",
               message: formatErrorMessage(error, "The account is still saved."),
               context: { eventKind: "agent" },
-              action: { label: "Retry", onClick: () => setRemoving(account) },
+              action: { label: "Retry", onClick: () => confirmRemove(account) },
             });
           });
         }}
