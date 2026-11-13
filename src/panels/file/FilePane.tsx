@@ -27,6 +27,8 @@ import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
+import { defaultFileViewMode, fileOpenTarget } from "@/components/FileViewer/fileViewPolicy";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -165,6 +167,7 @@ export function FilePane({
   // across every surface that shows a diff.
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
+  const diffFontSize = usePreferencesStore((state) => state.diffFontSize);
 
   // Destructured: handing one field of the hook's object to `ref` makes the
   // compiler read every other field of it as a ref read during render.
@@ -553,9 +556,9 @@ export function FilePane({
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
   }, [isFocused, heightHoldBodyRef]);
 
-  // Rendered HTML opens in the browser; every other view opens in the editor.
-  // Reveal is a third, always-present target that sits alongside this one.
-  const openTarget: "browser" | "editor" = isHtml && viewMode === "rendered" ? "browser" : "editor";
+  // By the file's type, as in the file browser's viewer, whichever mode is
+  // showing. Reveal is a further, always-present target alongside this one.
+  const openTarget = filePath ? fileOpenTarget(filePath) : "editor";
 
   const externalOpen = useFileExternalOpen({
     panelId: id,
@@ -565,10 +568,11 @@ export function FilePane({
   });
   const { handleOpenExternal } = externalOpen;
 
-  // A browser here can't open a page on an ssh host: a copy saved here stands in for it.
-  const savesPageInstead = openTarget === "browser" && remoteFile?.saveTarget != null;
+  // A default app or browser here can't open a file on an ssh host: a copy
+  // saved here stands in for it.
+  const savesCopyInstead = openTarget !== "editor" && remoteFile?.saveTarget != null;
   const runOpenTarget = () => {
-    if (savesPageInstead) {
+    if (savesCopyInstead) {
       if (filePath) void saveHostFile(filePath);
       return;
     }
@@ -589,9 +593,13 @@ export function FilePane({
 
   // Leaving Edit unmounts the editor, and with it whatever had keyboard focus;
   // the mode toggle is the control the user is conceptually holding, so focus
-  // lands on its active segment rather than falling to <body> (#12323).
+  // lands on its active segment rather than falling to <body> (#12323). Diff
+  // vanishes the same way when the file goes clean, taking its own segment.
   const modeToggleRef = useRef<HTMLDivElement>(null);
-  const wasEditModeRef = useRef(viewMode === "edit");
+  // The toggle itself is gone when Diff was the only mode beyond Source; the
+  // path pill, which names the file, takes focus instead.
+  const toolbarPathRef = useRef<HTMLDivElement>(null);
+  const previousModeRef = useRef(viewMode);
   // The HTML fallback's View source button unmounts with the view it leaves,
   // so it hands off the same way; ringed only when it was keyboard-activated.
   const sourceFocusRef = useRef<{ focusVisible: boolean } | null>(null);
@@ -602,15 +610,22 @@ export function FilePane({
     const focusLost = document.activeElement === null || document.activeElement === document.body;
     const sourceFocus = sourceFocusRef.current;
     sourceFocusRef.current = null;
-    if (((wasEditModeRef.current && viewMode !== "edit") || sourceFocus) && focusLost) {
+    // Diff also vanishes under a pane nobody is using, when a commit elsewhere
+    // leaves the file clean, so only the focused pane takes focus back for it.
+    const previousMode = previousModeRef.current;
+    const leftUnmountingMode =
+      viewMode !== previousMode &&
+      (previousMode === "edit" || (previousMode === "diff" && isFocused));
+    if ((leftUnmountingMode || sourceFocus) && focusLost) {
       const toggle = modeToggleRef.current;
-      const active =
-        toggle?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]') ??
-        toggle?.querySelector<HTMLButtonElement>("button");
-      active?.focus({ preventScroll: true, focusVisible: sourceFocus?.focusVisible });
+      const target =
+        toggle?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]') ??
+        toggle?.querySelector<HTMLElement>("button") ??
+        toolbarPathRef.current?.querySelector<HTMLElement>("[data-toolbar-path]");
+      target?.focus({ preventScroll: true, focusVisible: sourceFocus?.focusVisible });
     }
-    wasEditModeRef.current = viewMode === "edit";
-  }, [viewMode]);
+    previousModeRef.current = viewMode;
+  }, [viewMode, isFocused]);
 
   // Answering about a default is about this file too: "Use Daintree's" leaves
   // the default's editor for Source here, not only in panels opened next, and
@@ -658,6 +673,7 @@ export function FilePane({
       viewMode={viewMode}
       toggleOptions={toggleOptions}
       modeToggleRef={modeToggleRef}
+      pathRef={toolbarPathRef}
       onViewModeChange={handleViewModeChange}
       editorPicker={editorPicker}
       pinnedEditor={pinnedEditor}
@@ -669,7 +685,7 @@ export function FilePane({
       revealWorktreeId={revealWorktreeId}
       reveal={reveal}
       openTarget={openTarget}
-      savesPageInstead={savesPageInstead}
+      savesCopyInstead={savesCopyInstead}
       onRunOpenTarget={runOpenTarget}
       externalOpen={externalOpen}
       defaultNoticeSlot={
@@ -777,6 +793,8 @@ export function FilePane({
           className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
             viewMode === "diff" ? " diff-scroll-root" : ""
           }`}
+          // The diff's own size preference, shared with the diff panel.
+          style={viewMode === "diff" ? diffFontStyle(diffFontSize) : undefined}
           data-testid="file-pane-body"
         >
           {/* Ahead of every load-state branch on purpose: a deleted file fails
@@ -829,7 +847,11 @@ export function FilePane({
               {pickerRoot && (
                 <FilePanePicker
                   rootPath={pickerRoot}
-                  onOpen={(absolutePath) => setFilePanelPath(id, absolutePath)}
+                  // The pane has shown no file yet, so the picked one opens in
+                  // its type's own mode, as it would in the file browser.
+                  onOpen={(absolutePath) =>
+                    setFilePanelPath(id, absolutePath, defaultFileViewMode(absolutePath))
+                  }
                 />
               )}
             </div>
@@ -1043,9 +1065,13 @@ export function FilePane({
                 className="min-h-full"
               />
             ) : (
-              // min-h-full column (mirrors FileViewerModal): the editor surface
-              // stretches to the bottom of the pane even for files shorter than it.
-              <div className="flex min-h-full flex-col">
+              // Pinned to the pane's height, never grown to the document's: the
+              // viewer below the metadata strip is its own scrollport on both
+              // axes, which is what keeps its sticky scope header live and its
+              // horizontal scrollbar at the bottom of the visible pane rather
+              // than below the last line. A dialog sizes to its content, so
+              // there the column still grows with the file.
+              <div className="flex h-full min-h-0 flex-col">
                 {/* Source mode always carries the metadata bar, markdown included —
                   it describes the bytes on disk, which is exactly what source
                   mode shows. Rendered mode omits it (the document is the view). */}
@@ -1064,7 +1090,7 @@ export function FilePane({
                     viewMode="source"
                     initialLine={panel?.initialLine}
                     wrapLines={markdownWrapLines}
-                    className="flex-1"
+                    className="min-h-0 flex-1"
                   />
                 ) : (
                   <CodeViewer
@@ -1072,7 +1098,7 @@ export function FilePane({
                     content={sourceText ?? content}
                     filePath={filePath}
                     initialLine={panel?.initialLine}
-                    className="flex-1"
+                    className="min-h-0 flex-1"
                   />
                 )}
               </div>

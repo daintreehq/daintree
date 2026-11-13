@@ -9,6 +9,7 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import { ControlRefusedState, SaveHostFileButton } from "@/components/FileViewer/hostFileActions";
 import type { RevealCopy } from "@/components/FileViewer/revealCopy";
+import type { FileOpenTarget } from "@/components/FileViewer/fileViewPolicy";
 import { RevealActionButton } from "@/components/FileViewer/revealFeedback";
 import {
   isAudioFilePath,
@@ -96,7 +97,7 @@ export function FilePaneUnavailable({
   filePath: string;
   fileName: string;
   reveal: RevealCopy;
-  openTarget: "browser" | "editor";
+  openTarget: FileOpenTarget;
   canOpenInDefaultApp: boolean;
   remote: RemoteFileContext | null;
   onRetry: () => void;

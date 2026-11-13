@@ -2,9 +2,7 @@ import type { ComponentProps, RefObject } from "react";
 import {
   Copy,
   Download,
-  ExternalLink,
   FileDiff as FileDiffIcon,
-  Globe,
   RefreshCw,
   WrapText,
   XCircle,
@@ -23,6 +21,7 @@ import {
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { saveHostFileLabel } from "@/services/hostFileSave";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import { FILE_OPEN_ACTION_COPY, type FileOpenTarget } from "@/components/FileViewer/fileViewPolicy";
 import type { RevealCopy } from "@/components/FileViewer/revealCopy";
 import { runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -49,6 +48,8 @@ export interface FilePaneToolbarProps {
   /** One entry per available mode; the toggle shows only when there is a choice. */
   toggleOptions: Array<{ value: FileViewMode; label: string }>;
   modeToggleRef: RefObject<HTMLDivElement | null>;
+  /** Around the path pill, the focus fallback when the mode toggle is gone. */
+  pathRef: RefObject<HTMLDivElement | null>;
   onViewModeChange: (mode: FileViewMode) => void;
   editorPicker: FileEditorPickerModel | null;
   pinnedEditor: string | undefined;
@@ -59,8 +60,9 @@ export interface FilePaneToolbarProps {
   copyableContents: string | null;
   revealWorktreeId: string;
   reveal: RevealCopy;
-  openTarget: "browser" | "editor";
-  savesPageInstead: boolean;
+  openTarget: FileOpenTarget;
+  /** A remote file the open target can't reach from here: the action saves a copy instead. */
+  savesCopyInstead: boolean;
   onRunOpenTarget: () => void;
   externalOpen: FileExternalOpen;
   /** The default editor slot still waiting on the user's answer, if one is on offer here. */
@@ -85,6 +87,7 @@ export function FilePaneToolbar({
   viewMode,
   toggleOptions,
   modeToggleRef,
+  pathRef,
   onViewModeChange,
   editorPicker,
   pinnedEditor,
@@ -96,7 +99,7 @@ export function FilePaneToolbar({
   revealWorktreeId,
   reveal,
   openTarget,
-  savesPageInstead,
+  savesCopyInstead,
   onRunOpenTarget,
   externalOpen,
   defaultNoticeSlot,
@@ -121,6 +124,9 @@ export function FilePaneToolbar({
   } = externalOpen;
   const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
   const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
+  const openAction = savesCopyInstead
+    ? { label: saveHostFileLabel(), icon: Download }
+    : FILE_OPEN_ACTION_COPY[openTarget];
 
   return (
     <>
@@ -157,11 +163,13 @@ export function FilePaneToolbar({
             }}
           />
         )}
-        <FileViewerToolbar.Path
-          path={displayPath}
-          icon={getFileTypeIcon(fileName ?? filePath).Icon}
-          copyText={filePath || null}
-        />
+        <div ref={pathRef} className="contents">
+          <FileViewerToolbar.Path
+            path={displayPath}
+            icon={getFileTypeIcon(fileName ?? filePath).Icon}
+            copyText={filePath || null}
+          />
+        </div>
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive
             wide={
@@ -231,23 +239,8 @@ export function FilePaneToolbar({
                   path={filePath}
                   onReveal={() => handleOpenExternal("reveal")}
                 />
-                <FileViewerToolbar.IconButton
-                  label={
-                    savesPageInstead
-                      ? saveHostFileLabel()
-                      : openTarget === "browser"
-                        ? "Open in browser"
-                        : "Open in editor"
-                  }
-                  onClick={onRunOpenTarget}
-                >
-                  {savesPageInstead ? (
-                    <Download className={TOOLBAR_ICON_CLASS} />
-                  ) : openTarget === "browser" ? (
-                    <Globe className={TOOLBAR_ICON_CLASS} />
-                  ) : (
-                    <ExternalLink className={TOOLBAR_ICON_CLASS} />
-                  )}
+                <FileViewerToolbar.IconButton label={openAction.label} onClick={onRunOpenTarget}>
+                  <openAction.icon className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
               </>
             }
@@ -308,22 +301,12 @@ export function FilePaneToolbar({
                     {reveal.label}
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={onRunOpenTarget}>
-                    {savesPageInstead ? (
-                      <Download className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    ) : openTarget === "browser" ? (
-                      <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    ) : (
-                      <ExternalLink
-                        className="mr-2 h-3.5 w-3.5"
-                        aria-hidden="true"
-                        data-menu-icon
-                      />
-                    )}
-                    {savesPageInstead
-                      ? saveHostFileLabel()
-                      : openTarget === "browser"
-                        ? "Open in browser"
-                        : "Open in editor"}
+                    <openAction.icon
+                      className="mr-2 h-3.5 w-3.5"
+                      aria-hidden="true"
+                      data-menu-icon
+                    />
+                    {openAction.label}
                   </DropdownMenuItem>
                 </FileViewerToolbar.MoreActions>
               </>
