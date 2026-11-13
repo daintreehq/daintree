@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../config/agentRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (id: string) =>
+      id === "lineless"
+        ? { capabilities: { noInputLineWhileWorking: true } }
+        : actual.getEffectiveAgentConfig(id),
+  };
+});
+
 import {
   ASSISTANT_SEND_GATE,
   EXACT_PROMPT_GATE,
+  composerSendHoldCause,
   decisionGateOptionsFor,
   evaluateWakeGate,
   isAtChoiceDialog,
@@ -170,5 +183,43 @@ describe("isAtChoiceDialog (#16209)", () => {
     expect(isAtChoiceDialog({ ...AT_DIALOG, detectedAgentId: undefined })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, isExited: true })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, hasPty: false })).toBe(false);
+  });
+});
+
+describe("composerSendHoldCause (#16872)", () => {
+  const WORKING: WakeGateSnapshot = { ...AT_PROMPT, agentState: "working" };
+  const AT_DIALOG: WakeGateSnapshot = { ...AT_PROMPT, waitingReason: "approval" };
+
+  it("holds at a choice dialog, whatever the CLI", () => {
+    expect(composerSendHoldCause(AT_DIALOG)).toBe("choice-dialog");
+    expect(composerSendHoldCause({ ...AT_DIALOG, detectedAgentId: "antigravity" })).toBe(
+      "choice-dialog"
+    );
+  });
+
+  it("holds mid-turn only for a CLI known to take down its input line", () => {
+    expect(composerSendHoldCause({ ...WORKING, detectedAgentId: "lineless" })).toBe(
+      "no-input-line"
+    );
+    for (const agentId of ["claude", "codex", "antigravity", "gemini", "unknown-cli"]) {
+      expect(composerSendHoldCause({ ...WORKING, detectedAgentId: agentId })).toBeNull();
+    }
+  });
+
+  it("sends at once at a prompt, a prose question, an error, idle, and in a shell", () => {
+    expect(composerSendHoldCause(AT_PROMPT)).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, waitingReason: "question" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, waitingReason: "error" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, agentState: "idle" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_DIALOG, detectedAgentId: undefined })).toBeNull();
+  });
+
+  it("sends at once to a pane gone or going", () => {
+    for (const snapshot of [AT_DIALOG, { ...WORKING, detectedAgentId: "lineless" }]) {
+      expect(composerSendHoldCause({ ...snapshot, hasPty: false })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isExited: true })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isTrashed: true })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isClosing: true })).toBeNull();
+    }
   });
 });

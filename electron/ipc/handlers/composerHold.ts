@@ -4,7 +4,7 @@ import { COMPOSER_HOLD_METHOD_CHANNELS } from "./composerHold.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { composerSendHoldCause } from "../../../shared/utils/terminalWakeGate.js";
 import {
   isImageAttachmentPath,
   MAX_SUBMIT_IMAGE_PATHS,
@@ -18,9 +18,10 @@ import type {
 import type { NotifyTerminalInfo } from "../../services/mcp-server/terminalNotify.js";
 
 /**
- * A pane composer's sends held while its agent works (#16379). No op takes a
- * project id: main resolves it from the sender's own view, so a view holds
- * and withdraws only for the project it shows.
+ * A pane composer's sends held while its pane has no line to take them
+ * (#16379, #16872). No op takes a project id: main resolves it from the
+ * sender's own view, so a view holds and withdraws only for the project it
+ * shows.
  */
 
 function requireTerminalId(terminalId: unknown): string {
@@ -38,18 +39,12 @@ function requireToken(token: unknown): string {
 }
 
 /**
- * Whether a send now would land mid-turn in an agent not declared to queue
- * it: the only case a send is held. Waiting at any prompt, idle, a shell and
- * a queuing CLI all keep today's immediate send.
+ * Whether a send now would have nowhere to go (#16872): a choice dialog on
+ * screen, or a turn in a CLI known to take down its input line. The only
+ * cases a send is held; every other pane keeps today's immediate send.
  */
 export function holdsComposerSend(info: NotifyTerminalInfo | null): info is NotifyTerminalInfo {
-  if (info === null) return false;
-  if (info.hasPty === false || info.isExited === true) return false;
-  if (info.isTrashed === true || info.isClosing === true) return false;
-  if (info.detectedAgentId === undefined || info.agentState !== "working") return false;
-  return (
-    getEffectiveAgentConfig(info.detectedAgentId)?.capabilities?.queuesInputWhileWorking !== true
-  );
+  return info !== null && composerSendHoldCause(info) !== null;
 }
 
 /** Whether `ctx`'s screen drives `projectId`, read now: a lease can move at any time. */

@@ -99,8 +99,8 @@ describe("resendLastComposerSend (#16746)", () => {
     }
   });
 
-  it("goes at once to a working agent declared to queue input mid-turn", async () => {
-    pane({ agentState: "working", detectedAgentId: "claude" });
+  it.each(["claude", "antigravity"])("goes at once to a working %s pane", async (agentId) => {
+    pane({ agentState: "working", detectedAgentId: agentId });
     noteLastComposerSend("t1", "and then", [], claimComposerSendSeq());
 
     await expect(resendLastComposerSend("t1")).resolves.toBe(true);
@@ -109,8 +109,8 @@ describe("resendLastComposerSend (#16746)", () => {
     expect(client.submit).toHaveBeenCalledWith("t1", "and then");
   });
 
-  it("is held for a working agent that doesn't queue input, as a typed send is", async () => {
-    pane({ agentState: "working", detectedAgentId: "gemini" });
+  it("is held at a choice dialog, as a typed send is", async () => {
+    pane({ agentState: "waiting", waitingReason: "approval", detectedAgentId: "claude" });
     noteLastComposerSend("t1", "ship it", [], claimComposerSendSeq());
     holdClient.hold.mockResolvedValue({ held: true, send: HELD });
 
@@ -165,8 +165,8 @@ describe("resendUnavailableReason", () => {
     noteLastComposerSend("t1", "again", [], claimComposerSendSeq());
     expect(reason()).toBeUndefined();
 
-    // A working agent that doesn't queue input is no reason: the resend is held.
-    pane({ agentState: "working", detectedAgentId: "gemini" });
+    // A choice dialog is no reason: the resend is held.
+    pane({ agentState: "waiting", waitingReason: "approval", detectedAgentId: "claude" });
     expect(reason()).toBeUndefined();
 
     for (const notRunning of [
