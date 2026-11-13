@@ -966,10 +966,9 @@ describe("useGettingStartedChecklist", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      const marks = onboardingMock.markChecklistItem.mock.calls.filter(
-        ([item]) => item === "openedProject"
-      );
-      expect(marks).toHaveLength(1);
+      // The open project is the only step the stores hold.
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledTimes(1);
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
       expect(result.current.checklist?.items.openedProject).toBe(true);
       expect(result.current.forced).toBe(true);
     });
