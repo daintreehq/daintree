@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
@@ -46,6 +46,7 @@ interface AgentScopeEditorProps {
 export function AgentScopeEditor(props: AgentScopeEditorProps) {
   const { defaultDangerousArg } = props;
   const scope = useAgentScope(props);
+  const addPresetButtonRef = useRef<HTMLButtonElement>(null);
   const agentName = scope.agentCfg?.name ?? props.agentId;
   const agentColor = scope.agentCfg?.color ?? "var(--theme-text-secondary)";
   // The rows below would edit the agent's own settings, which isn't what a
@@ -61,6 +62,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
       description="A preset bundles environment variables, arguments and permissions under one name"
       action={
         <Button
+          ref={addPresetButtonRef}
           size="sm"
           variant="outline"
           data-testid="preset-add-button"
@@ -211,7 +213,11 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           never mixed into a group of ordinary ones. */}
       {scope.scopeKind === "custom" && scope.selectedPreset && (
         <SettingsGroup key={`delete-${scope.selectedPreset.id}`}>
-          <PresetDeleteRow preset={scope.selectedPreset} onDelete={scope.handleDeletePreset} />
+          <PresetDeleteRow
+            preset={scope.selectedPreset}
+            onDelete={scope.handleDeletePreset}
+            restoreFocusTo={addPresetButtonRef}
+          />
         </SettingsGroup>
       )}
     </SettingsSection>

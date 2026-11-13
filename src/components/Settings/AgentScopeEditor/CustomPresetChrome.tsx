@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
@@ -181,11 +182,17 @@ export function CustomPresetChrome({
 export function PresetDeleteRow({
   preset,
   onDelete,
+  restoreFocusTo,
 }: {
   preset: AgentPreset;
   onDelete: (presetId: string) => void;
+  /** Where focus goes once the preset is deleted: this row goes with it. */
+  restoreFocusTo?: RestoreFocusTarget;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // The row can outlive the confirm by however long the save takes, so a
+  // confirmed delete goes straight to the successor; a cancel returns here.
+  const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   return (
     <>
       <SettingsRow
@@ -196,7 +203,10 @@ export function PresetDeleteRow({
           <Button
             size="sm"
             variant="ghost-danger"
-            onClick={() => setConfirmOpen(true)}
+            onClick={() => {
+              setDeleteConfirmed(false);
+              setConfirmOpen(true);
+            }}
             aria-label={`Delete ${preset.name}`}
           >
             Delete preset
@@ -208,9 +218,12 @@ export function PresetDeleteRow({
         variant="destructive"
         onClose={() => setConfirmOpen(false)}
         onConfirm={() => {
+          setDeleteConfirmed(true);
           setConfirmOpen(false);
           onDelete(preset.id);
         }}
+        restoreFocusTo={restoreFocusTo}
+        preferRestoreFocusTo={deleteConfirmed}
         title={`Delete '${preset.name}'?`}
         description="Its environment variables, arguments and fallbacks are deleted, and new sessions launch with the agent's own settings instead."
         confirmLabel="Delete preset"
