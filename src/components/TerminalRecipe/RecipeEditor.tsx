@@ -326,10 +326,13 @@ export function RecipeEditor({
     if (error) errorRef.current?.scrollIntoView({ block: "nearest" });
   }, [error]);
 
+  // A discard still waiting on the confirm's exit belongs to the draft it was
+  // asked of: a close or any new draft in the meantime supersedes it.
   useEffect(() => {
-    // A discard still waiting on the confirm's exit belongs to the draft it was
-    // asked of: a close or a new draft in the meantime supersedes it.
     discardOnConfirmCloseRef.current = false;
+  }, [isOpen, recipe, initialTerminals, worktreeId, defaultScope]);
+
+  useEffect(() => {
     if (!isOpen) return;
     typeStashRef.current.clear();
     setLeftTypes({});
@@ -423,6 +426,12 @@ export function RecipeEditor({
   // that opened the editor (Settings, #16906).
   const handleDiscard = useCallback(() => {
     discardOnConfirmCloseRef.current = true;
+    closeConfirm();
+  }, [closeConfirm]);
+  // A confirm reopened during that exit (Escape on the editor) is a new
+  // question; cancelling it keeps the editor.
+  const handleKeepEditing = useCallback(() => {
+    discardOnConfirmCloseRef.current = false;
     closeConfirm();
   }, [closeConfirm]);
   const handleConfirmCloseComplete = useCallback(() => {
@@ -1129,7 +1138,7 @@ export function RecipeEditor({
 
       <ConfirmDialog
         isOpen={isConfirmOpen}
-        onClose={closeConfirm}
+        onClose={handleKeepEditing}
         variant="destructive"
         zIndex="nested"
         title={

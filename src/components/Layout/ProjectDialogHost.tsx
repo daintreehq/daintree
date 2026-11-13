@@ -183,6 +183,9 @@ function ProjectDialogHost() {
         variant="component"
         componentName="RecipeManager"
         resetKeys={[Number(isRecipeManagerOpen)]}
+        // A manager that fails mid-exit never completes it; a pick waiting on
+        // that exit goes ahead without it.
+        onError={handleRecipeManagerCloseComplete}
       >
         {shouldMountRecipeManager && (
           <Suspense fallback={null}>

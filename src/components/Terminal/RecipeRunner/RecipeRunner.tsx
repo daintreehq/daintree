@@ -66,11 +66,24 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
       ...deleteSuccessorIdsRef.current,
       "recipe-option-create",
     ];
+    // In search mode the rows are the filter field's options and its arrow keys
+    // drive them, so focus goes to the field with the row as its active option.
+    const filter = document.querySelector<HTMLElement>(
+      '[role="combobox"][aria-controls="recipe-listbox"]'
+    );
     for (const id of candidates) {
       const option = id ? document.getElementById(id) : null;
-      if (option) return option;
+      if (!option || option.matches(":disabled")) continue;
+      if (!filter) return option;
+      const flat = runner.getFlatRecipes();
+      const index =
+        id === "recipe-option-create"
+          ? flat.length
+          : flat.findIndex((recipe) => recipeOptionId(recipe.id) === id);
+      if (index !== -1) runner.setFocusedIndex(index);
+      return filter;
     }
-    return createButtonRef.current;
+    return filter ?? createButtonRef.current;
   };
 
   // Second child of the returned fragment in both states, so a confirm that

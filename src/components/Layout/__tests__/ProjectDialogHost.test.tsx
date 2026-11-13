@@ -17,7 +17,10 @@ const {
   MANAGER_RECIPE,
   surfaceState,
   switchedState,
+  managerFault,
 } = vi.hoisted(() => {
+  // Set to make the manager mock fail as it starts to close.
+  const managerFault = { throwOnClose: false };
   const MANAGER_RECIPE: TerminalRecipe = {
     id: "recipe-managed",
     name: "Managed",
@@ -40,6 +43,7 @@ const {
     MANAGER_RECIPE,
     surfaceState: { current: null as { config: { id: string } } | null },
     switchedState: { current: null as { config: { id: string } } | null },
+    managerFault,
   };
 });
 
@@ -191,14 +195,17 @@ vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
     onCloseComplete?: () => void;
     onEditRecipe: (recipe: TerminalRecipe) => void;
     onCreateRecipe: (scope: "global" | "project") => void;
-  }) => (
-    <div data-testid="recipe-manager" data-open={String(isOpen)}>
-      <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
-      <button onClick={() => onCreateRecipe("project")}>new team recipe</button>
-      {/* Stands in for the dialog's exit finishing and handing focus back. */}
-      <button onClick={() => onCloseComplete?.()}>finish manager exit</button>
-    </div>
-  ),
+  }) => {
+    if (!isOpen && managerFault.throwOnClose) throw new Error("manager failed while closing");
+    return (
+      <div data-testid="recipe-manager" data-open={String(isOpen)}>
+        <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
+        <button onClick={() => onCreateRecipe("project")}>new team recipe</button>
+        {/* Stands in for the dialog's exit finishing and handing focus back. */}
+        <button onClick={() => onCloseComplete?.()}>finish manager exit</button>
+      </div>
+    );
+  },
 }));
 
 import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
@@ -586,7 +593,7 @@ describe("ProjectDialogHost", () => {
       expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
     });
 
-    it("hands a captured draft's omissions to the editor and drops them on close (#14968)", async () => {
+    it("hands a captured draft's omissions to the editor, through its close, and not to the next (#14968)", async () => {
       render(<ProjectDialogHost />);
       const omitted = { panelKinds: { browser: 2 }, cappedTerminalCount: 1 };
       const open = (detail: Record<string, unknown>) =>
@@ -852,7 +859,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("recipe-editor")).toBeNull();
     });
 
-    it("opens a request that arrives during the hand-off at once, in place of the pick", async () => {
+    it("puts a request that arrives during the hand-off in place of the pick, still waiting", async () => {
       render(<ProjectDialogHost />);
       act(() => {
         window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
@@ -869,14 +876,33 @@ describe("ProjectDialogHost", () => {
       });
 
       expect(acknowledge).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("recipe-editor")).toBeNull();
+
+      fireEvent.click(screen.getByText("finish manager exit"));
       const editor = await screen.findByTestId("recipe-editor");
       expect(editor.dataset.open).toBe("true");
       expect(editor.dataset.recipe).toBe("");
       expect(editor.dataset.worktree).toBe("wt-1");
+    });
 
-      fireEvent.click(screen.getByText("close recipe editor"));
-      fireEvent.click(screen.getByText("finish manager exit"));
-      expect(editor.dataset.open).toBe("false");
+    it("goes ahead with the pick when the manager fails before finishing its exit", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        render(<ProjectDialogHost />);
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+        });
+        const edit = await screen.findByText("edit recipe");
+        managerFault.throwOnClose = true;
+        fireEvent.click(edit);
+
+        const editor = await screen.findByTestId("recipe-editor");
+        expect(editor.dataset.open).toBe("true");
+        expect(editor.dataset.recipe).toBe("recipe-managed");
+      } finally {
+        managerFault.throwOnClose = false;
+        consoleError.mockRestore();
+      }
     });
 
     it("hands a new recipe from the manager to a blank editor in the chosen scope", async () => {

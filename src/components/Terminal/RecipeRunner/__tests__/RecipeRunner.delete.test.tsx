@@ -42,6 +42,7 @@ vi.mock("../RecipeRunnerItem", () => ({
     recipe,
     id,
     tabIndex,
+    disabled,
     buttonRef,
     onFocus,
     onDelete,
@@ -49,6 +50,7 @@ vi.mock("../RecipeRunnerItem", () => ({
     recipe: TerminalRecipe;
     id: string;
     tabIndex?: number;
+    disabled?: boolean;
     buttonRef?: Ref<HTMLButtonElement>;
     onFocus?: () => void;
     onDelete: (id: string) => void;
@@ -63,6 +65,7 @@ vi.mock("../RecipeRunnerItem", () => ({
           id={id}
           ref={buttonRef}
           tabIndex={tabIndex}
+          disabled={disabled}
           onFocus={onFocus}
         >
           {recipe.name}
@@ -139,7 +142,9 @@ describe("RecipeRunner delete confirm (#16906)", () => {
 
   async function askToDelete(recipes: TerminalRecipe[], name: string) {
     useRecipeStore.setState({ recipes });
-    render(<RecipeRunner activeWorktreeId="wt-1" defaultCwd="/repo" />, { container: root });
+    const view = render(<RecipeRunner activeWorktreeId="wt-1" defaultCwd="/repo" />, {
+      container: root,
+    });
     await settle();
     const trigger = screen.getByRole("button", { name: `Delete ${name}` });
     trigger.focus();
@@ -147,8 +152,10 @@ describe("RecipeRunner delete confirm (#16906)", () => {
     await settle();
     const dialog = screen.getByRole("alertdialog");
     expect(within(dialog).getByText(`Delete '${name}'?`)).toBeTruthy();
-    return dialog;
+    return Object.assign(dialog, { rerender: view.rerender });
   }
+
+  const three = () => [recipe("r1", "Dev server"), recipe("r2", "Docs"), recipe("r3", "Lint")];
 
   it("returns focus to the recipe's card when the delete is cancelled", async () => {
     const dialog = await askToDelete(
@@ -179,6 +186,43 @@ describe("RecipeRunner delete confirm (#16906)", () => {
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(document.activeElement?.id).toBe("recipe-option-r2");
+  });
+
+  it("focuses the card before the last one when the last is deleted", async () => {
+    const dialog = await askToDelete(three(), "Lint");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete recipe" }));
+    await settle();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "recipe.delete",
+      { recipeId: "r3" },
+      { source: "user", confirmed: true }
+    );
+    expect(document.activeElement?.id).toBe("recipe-option-r2");
+  });
+
+  it("passes over cards that can't take focus, to Create", async () => {
+    const dialog = await askToDelete(three(), "Docs");
+
+    // The worktree's folder went away while the confirm was open.
+    dialog.rerender(<RecipeRunner activeWorktreeId="wt-1" defaultCwd={undefined} />);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await settle();
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Create new recipe/ }));
+  });
+
+  it("returns focus to the filter, on the recipe's row, in search mode", async () => {
+    const many = Array.from({ length: 7 }, (_, i) => recipe(`r${i + 1}`, `Recipe ${i + 1}`));
+    const dialog = await askToDelete(many, "Recipe 4");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await settle();
+
+    const filter = screen.getByRole("combobox", { name: "Filter recipes" });
+    expect(document.activeElement).toBe(filter);
+    expect(filter.getAttribute("aria-activedescendant")).toBe("recipe-option-r4");
   });
 
   it("keeps the dialog through the switch to the empty state, then focuses Create", async () => {

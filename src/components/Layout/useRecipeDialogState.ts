@@ -78,6 +78,13 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     return () => useRecipeEditorActivityStore.getState().leave();
   }, [isRecipeManagerOpen]);
 
+  // While a pick in the manager waits on its exit, a newer request takes its
+  // place and waits with it: opened now, the editor would lose focus to that
+  // exit's restore just the same.
+  const showEditor = useCallback(() => {
+    if (!isEditorAwaitingManager) setIsRecipeEditorOpen(true);
+  }, [isEditorAwaitingManager]);
+
   const handleOpenRecipeEditor = useCallback(
     (
       worktreeId: string | undefined,
@@ -87,15 +94,14 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       // A new draft replaces whatever the editor held: left in place, an
       // existing recipe would win over the capture and take its save.
       setIsRecipeManagerOpen(false);
-      setIsEditorAwaitingManager(false);
       setRecipeManagerEdit(undefined);
       setRecipeEditorDefaultScope(undefined);
       setRecipeEditorWorktreeId(worktreeId);
       setRecipeEditorInitialTerminals(initialTerminals);
       setRecipeEditorLayoutOmissions(layoutOmissions);
-      setIsRecipeEditorOpen(true);
+      showEditor();
     },
-    []
+    [showEditor]
   );
 
   useEffect(() => {
@@ -124,13 +130,12 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
         const recipe = useRecipeStore.getState().getRecipeById(d.recipeId);
         if (recipe) {
           setIsRecipeManagerOpen(false);
-          setIsEditorAwaitingManager(false);
           setRecipeEditorWorktreeId(recipe.worktreeId);
           setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
           setRecipeEditorInitialTerminals(undefined);
           setRecipeEditorLayoutOmissions(undefined);
           setRecipeManagerEdit(recipe);
-          setIsRecipeEditorOpen(true);
+          showEditor();
           acknowledge();
           return;
         }
@@ -156,7 +161,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       signal: controller.signal,
     });
     return () => controller.abort();
-  }, [handleOpenRecipeEditor]);
+  }, [handleOpenRecipeEditor, showEditor]);
 
   useEffect(() => {
     const handleOpenRecipeManagerEvent = () => {

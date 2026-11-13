@@ -50,18 +50,28 @@ const RECIPE: TerminalRecipe = {
   terminals: [{ type: "terminal", title: "API", command: "npm run api", env: {} }],
 };
 
+const DOCS: TerminalRecipe = { ...RECIPE, id: "r2", name: "Docs" };
+
 // Project settings → Recipes: the editor opens over the Settings dialog, from
 // a control inside it.
 function SettingsWithEditor() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [recipe, setRecipe] = useState(RECIPE);
+  const edit = (next: TerminalRecipe) => {
+    setRecipe(next);
+    setIsEditorOpen(true);
+  };
   return (
     <AppDialog isOpen onClose={() => {}} data-testid="settings">
       <AppDialog.Body>
-        <button type="button" onClick={() => setIsEditorOpen(true)}>
+        <button type="button" onClick={() => edit(RECIPE)}>
           Edit Full stack
         </button>
+        <button type="button" onClick={() => edit(DOCS)}>
+          Edit Docs
+        </button>
       </AppDialog.Body>
-      <RecipeEditor recipe={RECIPE} isOpen={isEditorOpen} onClose={() => setIsEditorOpen(false)} />
+      <RecipeEditor recipe={recipe} isOpen={isEditorOpen} onClose={() => setIsEditorOpen(false)} />
     </AppDialog>
   );
 }
@@ -98,8 +108,8 @@ describe("RecipeEditor discard focus (#16906)", () => {
 
   // In steps finer than a frame, each its own act, so the two dialogs' exits
   // and first-frame focus land in the order they would on screen.
-  const settle = async () => {
-    for (let elapsed = 0; elapsed < 500; elapsed += 4) {
+  const settle = async (ms = 500) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += 4) {
       await act(() => vi.advanceTimersByTimeAsync(4));
     }
   };
@@ -143,5 +153,33 @@ describe("RecipeEditor discard focus (#16906)", () => {
     const name = document.getElementById("recipe-name") as HTMLInputElement;
     expect(name.value).toBe("Full stack, renamed");
     expect(name.closest("[data-app-dialog-surface]")?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps a draft that replaced the discarded one while the confirm closed", async () => {
+    await askToDiscard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Docs" }));
+    await settle();
+
+    expect((document.getElementById("recipe-name") as HTMLInputElement | null)?.value).toBe("Docs");
+  });
+
+  it("keeps the editor when a confirm reopened during the discard's exit is cancelled", async () => {
+    await askToDiscard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    await settle(40);
+    // Escape on the editor while the confirm is still on its way out asks again.
+    fireEvent.keyDown(document.getElementById("recipe-name")!, { key: "Escape" });
+    await settle(40);
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })
+    );
+    await settle();
+
+    expect((document.getElementById("recipe-name") as HTMLInputElement | null)?.value).toBe(
+      "Full stack, renamed"
+    );
   });
 });

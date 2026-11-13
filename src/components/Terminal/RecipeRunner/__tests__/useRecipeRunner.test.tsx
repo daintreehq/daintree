@@ -1311,21 +1311,24 @@ describe("useRecipeRunner — delete confirm flow", () => {
     );
   });
 
-  it("keeps naming the recipe after the confirm closes, through its exit (#16906)", async () => {
+  it("keeps naming the recipe it was asked about, through its exit (#16906)", async () => {
     recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
     );
 
     act(() => {
       result.current.handleDelete("r1");
     });
+    // A rename while the confirm is open doesn't change the question asked.
+    recipeStoreState.recipes = [makeRecipe({ id: "r1", name: "Renamed" })];
+    rerender();
     expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
 
     // The store drops the recipe as the delete lands; the closing dialog must
     // not fall back to a generic title.
     dispatchMock.mockImplementationOnce(async () => {
-      recipes.length = 0;
+      recipeStoreState.recipes = [];
       return { ok: true, result: undefined };
     });
     act(() => {
@@ -1333,8 +1336,77 @@ describe("useRecipeRunner — delete confirm flow", () => {
     });
     await flush();
 
+    expect(result.current.recipes).toEqual([]);
     expect(result.current.pendingDeleteId).toBeNull();
     expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
+  });
+
+  it("keeps a failure's error through a cancel's exit and clears it for the next request", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+    act(() => {
+      result.current.cancelDelete();
+    });
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteError).toBeTruthy();
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    expect(result.current.deleteError).toBeNull();
+  });
+
+  it("leaves a later confirm alone when a delete settles after a worktree switch", async () => {
+    recipes.push(
+      makeRecipe({ id: "r1", name: "Dev server" }),
+      makeRecipe({ id: "r2", name: "Docs" })
+    );
+    let settle: (value: unknown) => void = () => {};
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ worktreeId }) => useRecipeRunner({ activeWorktreeId: worktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { worktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    rerender({ worktreeId: "wt-2" });
+    act(() => {
+      result.current.handleDelete("r2");
+    });
+    await act(async () => {
+      settle({ ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(result.current.pendingDeleteId).toBe("r2");
+    expect(result.current.deleteError).toBeNull();
+    expect(result.current.isDeleting).toBe(false);
   });
 
   it("is busy while the delete runs, and a cancel then is ignored", async () => {

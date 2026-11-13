@@ -138,6 +138,9 @@ export function useRecipeRunner({
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
   const isConfirmingDeleteRef = useRef(false);
+  // Bumped by every delete request and worktree switch: a delete that settles
+  // after either has no confirm left to answer.
+  const deleteRequestRef = useRef(0);
   const lastRunRecipeIdRef = useRef<string | null>(null);
   // The run waiting on the missing-variables confirm, so a worktree switch or
   // unmount can withdraw a question about a target that's no longer here.
@@ -213,6 +216,7 @@ export function useRecipeRunner({
     // Drop any in-flight delete confirmation — a pending recipe id belongs to
     // the previous worktree's filtered list; confirming it after the switch
     // would delete a recipe out of its original context.
+    deleteRequestRef.current += 1;
     setIsDeleteOpen(false);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
@@ -515,6 +519,7 @@ export function useRecipeRunner({
   // RecipesTab — never call the store's deleteRecipe directly (Tier D1 gate).
   const handleDelete = useCallback(
     (recipeId: string) => {
+      deleteRequestRef.current += 1;
       setDeleteError(null);
       setDeleteTarget({ id: recipeId, name: getRecipeById(recipeId)?.name ?? "recipe" });
       setIsDeleteOpen(true);
@@ -531,6 +536,7 @@ export function useRecipeRunner({
     if (isConfirmingDeleteRef.current) return;
     isConfirmingDeleteRef.current = true;
     setIsDeleting(true);
+    const request = deleteRequestRef.current;
     void (async () => {
       setDeleteError(null);
       try {
@@ -539,6 +545,7 @@ export function useRecipeRunner({
           { recipeId },
           { source: "user", confirmed: true }
         );
+        if (request !== deleteRequestRef.current) return;
         if (result.ok) {
           setIsDeleteOpen(false);
         } else {

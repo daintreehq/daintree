@@ -139,4 +139,23 @@ describe("recipe manager → editor focus (#16906)", () => {
       expect(document.activeElement).toBe(opener);
     }
   );
+
+  it("keeps focus in the editor for a request that arrives while the manager closes", async () => {
+    render(<Harness />, { container: root });
+    const opener = screen.getByRole("button", { name: "Recipes" });
+    opener.focus();
+    fireEvent.click(opener);
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("daintree:open-recipe-editor", { detail: { worktreeId: "wt-9" } })
+      );
+    });
+    await settle();
+
+    expect(screen.queryByTestId("manager")).toBeNull();
+    expect(screen.getByTestId("editor").contains(document.activeElement)).toBe(true);
+  });
 });

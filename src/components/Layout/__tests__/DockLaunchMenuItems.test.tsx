@@ -285,7 +285,7 @@ describe("DockLaunchMenuItems", () => {
     const { getByText } = renderItems();
 
     fireEvent.click(getByText("Create a recipe"));
-    expect(actionDispatchMock).toHaveBeenCalledWith("recipe.editor.open", {}, { source: "menu" });
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
   });
 
   it("scopes the create-recipe cue to the active worktree when there is one", () => {
