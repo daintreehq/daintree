@@ -104,7 +104,6 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
-  const panelHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   // The text this view last handed the controller, so a store update that
   // echoes our own typing is not re-applied to the buffer.
@@ -132,8 +131,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   // change, and on taking the disk version over a conflict.
   useEffect(() => {
     const host = hostRef.current;
-    const panelHost = panelHostRef.current;
-    if (!ready || !host || !panelHost || !language || !controller) return;
+    if (!ready || !host || !language || !controller) return;
     const inputs = liveInputsRef.current;
     const text = currentText(controller.record()) ?? "";
     lastLocalTextRef.current = text;
@@ -149,10 +147,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           polarity: inputs.polarity,
           wrapLines: inputs.wrapLines,
           ariaLabel: inputs.fileName,
-          pinnedHeader: {
-            panelContainer: panelHost,
-            height: () => headerRef.current?.offsetHeight ?? 0,
-          },
+          pinnedTopInset: () => headerRef.current?.offsetHeight ?? 0,
           callbacks: {
             onChange: (next) => {
               lastLocalTextRef.current = next;
@@ -370,8 +365,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           cell and in a content-sized dialog alike. A scroller of the view's own
           would need `h-full`, which collapses to the content's height inside a
           dialog and leaves that scroller never scrolling. Opaque, because the
-          document passes beneath it; the find bar docks under the strip so the
-          two stack rather than sticking to the same edge. */}
+          document passes beneath it. */}
       <div
         ref={headerRef}
         className="sticky top-0 z-10 shrink-0 bg-surface-canvas"
@@ -389,12 +383,11 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           saveBlocked={record.conflict !== null}
           onSave={() => void handleSave()}
         />
-        <div ref={panelHostRef} />
       </div>
 
-      {/* `isolate` keeps CodeMirror's gutters (z-index 200) and the comparison's
-          sticky file header inside this layer, so neither paints over the
-          header as it scrolls beneath. */}
+      {/* `isolate` keeps CodeMirror's gutters (z-index 200), its find bar (300)
+          and the comparison's sticky file header inside this layer, so none
+          paints over the strip as it scrolls beneath. */}
       <div className="isolate flex flex-1 flex-col">
         {record.status === "unavailable" && (
           <Callout
@@ -529,7 +522,11 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         <div
           ref={hostRef}
           className={cn(
-            "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+            // The find bar stays inside the editor, where its horizontal-scroll
+            // follow and the find-mode highlight rules reach it, and sticks
+            // just under the strip: `top-7` is the strip's fixed `h-7`
+            // (FILE_METADATA_STRIP_CLASS).
+            "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible [&_.cm-panels-top]:!top-7",
             !ready && "hidden"
           )}
           data-testid="markdown-editor-host"

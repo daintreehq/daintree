@@ -57,6 +57,26 @@ export function MarkdownEditorStatusBar({
   onSave,
 }: MarkdownEditorStatusBarProps) {
   const state = saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved";
+  const saveDisabled = !dirty || saveBlocked;
+  const saveButton = (
+    <Button
+      variant="ghost"
+      size="xs"
+      onClick={onSave}
+      // `saving` is deliberately absent from `disabled` and carried by
+      // `loading` instead: the primitive blocks activation through ARIA
+      // precisely so the button keeps focus across the write, and a native
+      // `disabled` here would drop a keyboard user out of the strip the
+      // moment they pressed it.
+      disabled={saveDisabled}
+      loading={saving}
+      aria-label="Save file"
+      data-testid="markdown-editor-save"
+      icon={<Save />}
+    >
+      Save
+    </Button>
+  );
 
   return (
     <div data-testid="markdown-editor-status" className={FILE_METADATA_STRIP_CLASS}>
@@ -97,28 +117,17 @@ export function MarkdownEditorStatusBar({
             </span>
           }
         >
-          {/* The trigger is a wrapper, not the button: a natively disabled
-              button takes no pointer events, and the shortcut is worth
-              learning while the document is clean too. */}
-          <span className="inline-flex" data-testid="markdown-editor-save-tooltip">
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={onSave}
-              // `saving` is deliberately absent from `disabled` and carried by
-              // `loading` instead: the primitive blocks activation through ARIA
-              // precisely so the button keeps focus across the write, and a native
-              // `disabled` here would drop a keyboard user out of the strip the
-              // moment they pressed it.
-              disabled={!dirty || saveBlocked}
-              loading={saving}
-              aria-label="Save file"
-              data-testid="markdown-editor-save"
-              icon={<Save />}
-            >
-              Save
-            </Button>
-          </span>
+          {/* A natively disabled button takes no pointer events, so only while
+              Save is unavailable does a wrapper carry the hover. Enabled, the
+              button is the trigger itself, so the tooltip's description and
+              its close-time focus suppression land on the focused element. */}
+          {saveDisabled ? (
+            <span className="inline-flex" data-testid="markdown-editor-save-tooltip">
+              {saveButton}
+            </span>
+          ) : (
+            saveButton
+          )}
         </Tooltip>
       </span>
     </div>

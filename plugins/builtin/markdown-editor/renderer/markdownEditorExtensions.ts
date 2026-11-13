@@ -7,7 +7,6 @@ import {
   rectangularSelection,
   crosshairCursor,
   dropCursor,
-  panels,
 } from "@codemirror/view";
 import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -82,14 +81,13 @@ export function buildMarkdownEditorExtensions(options: {
   ariaLabel: string;
   callbacks: MarkdownEditorCallbacks;
   /**
-   * Chrome pinned over the top of the document as it scrolls (the view's
-   * sticky header). The find bar docks in `panelContainer` so it stacks under
-   * that chrome rather than sticking to the same edge beneath it, and
-   * `height` keeps the cursor and search matches from scrolling under it.
+   * The height of chrome pinned over the document's top edge as it scrolls
+   * (the view's sticky strip). With the open top panels' own height it is the
+   * scroll margin, so the cursor and search matches never land beneath either.
    */
-  pinnedHeader?: { panelContainer: HTMLElement; height: () => number };
+  pinnedTopInset?: () => number;
 }): Extension[] {
-  const { language, polarity, wrapLines, ariaLabel, callbacks, pinnedHeader } = options;
+  const { language, polarity, wrapLines, ariaLabel, callbacks, pinnedTopInset } = options;
   return [
     // Save is a DOM-level handler rather than a keymap entry: a keymap that
     // runs preventDefaults but lets the event bubble, and the panel around
@@ -126,11 +124,14 @@ export function buildMarkdownEditorExtensions(options: {
     crosshairCursor(),
     highlightSelectionMatches(),
     search({ top: true, createPanel: createEditorSearchPanel }),
-    pinnedHeader
-      ? [
-          panels({ topContainer: pinnedHeader.panelContainer }),
-          EditorView.scrollMargins.of(() => ({ top: pinnedHeader.height() })),
-        ]
+    pinnedTopInset
+      ? EditorView.scrollMargins.of((view) => ({
+          // CodeMirror's own margin for a docked panel measures from the
+          // window's top, not from the pane that scrolls here.
+          top:
+            pinnedTopInset() +
+            (view.dom.querySelector<HTMLElement>(".cm-panels-top")?.offsetHeight ?? 0),
+        }))
       : [],
     keymap.of([
       ...searchKeymap,
