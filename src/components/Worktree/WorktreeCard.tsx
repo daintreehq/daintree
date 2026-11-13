@@ -11,8 +11,7 @@ import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewCon
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
-import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
-import { isPanelDragMovableToWorktree } from "../DragDrop/dropResolution";
+import { isPanelDragOverWorktreeCard } from "../DragDrop/dropResolution";
 import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
@@ -832,7 +831,7 @@ export function WorktreeCard({
   // catch a terminal dropped onto the view in front of it.
   const isHiddenInSidebar = useBuiltInSidebarViewHidden();
 
-  const { setNodeRef, isOver, over, active } = useDroppable({
+  const { setNodeRef, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
       type: "worktree",
@@ -847,18 +846,16 @@ export function WorktreeCard({
     cardRootRef.current = node;
   };
 
-  const isMovablePanelDrag = isPanelDragMovableToWorktree(
-    active?.data.current as Partial<WorktreeDragData> | undefined,
-    worktree.id
-  );
-  // The sidebar row stacks two same-size droppables (this drop target inside
-  // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
-  // by registration order — `over` can be either id, so match both. Mirrors
-  // the dual-id handling in DndProvider's handleDragEnd.
+  // `over` can be this drop target, the same-size SortableWorktreeCard sortable
+  // around it, or a session row in its expanded list (#16920); handleDragEnd
+  // moves the panel here from all three, so all three light the card.
   const isPanelDropTarget =
     (!isActive || isCrossWorktreePanelDrag) &&
-    isMovablePanelDrag &&
-    (isOver || over?.id === getWorktreeSortDragId(worktree.id));
+    isPanelDragOverWorktreeCard(
+      active?.data.current as Partial<WorktreeDragData> | undefined,
+      over,
+      worktree.id
+    );
 
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isPanelDropTarget;
