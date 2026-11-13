@@ -6,12 +6,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const getChecklistMock = vi.fn(() =>
   Promise.resolve({
-      items: {
-        openedProject: false,
-        launchedAgent: false,
-        createdWorktree: false,
-        ranSecondParallelAgent: false,
-      },
+    items: {
+      openedProject: false,
+      launchedAgent: false,
+      createdWorktree: false,
+      ranSecondParallelAgent: false,
+    },
     dismissed: false,
     celebrationShown: false,
   })
@@ -822,7 +822,12 @@ describe("useGettingStartedChecklist", () => {
         panelIds: ["t1"],
         focusedId: null,
       };
-      worktreeState = { worktrees: new Map([["main", {}], ["feature", {}]]) };
+      worktreeState = {
+        worktrees: new Map([
+          ["main", {}],
+          ["feature", {}],
+        ]),
+      };
       act(() => {
         for (const sub of projectSubscribers) sub(projectState, { currentProject: null });
         for (const sub of terminalSubscribers)

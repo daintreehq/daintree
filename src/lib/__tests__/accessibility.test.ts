@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { closeAndAnnounce, handFocusOff, restoreFocusTo, TABBABLE_SELECTOR } from "../accessibility";
+import {
+  closeAndAnnounce,
+  handFocusOff,
+  restoreFocusTo,
+  TABBABLE_SELECTOR,
+} from "../accessibility";
 import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
