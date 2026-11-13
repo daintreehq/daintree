@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { hostFileManagerRevealLabel, isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
+import { hostFileManagerRevealLabel, revealCopiesHostPath } from "@/hooks/useHostPlatform";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { cn } from "@/lib/utils";
 import { SidebarFooter } from "./SidebarFooter";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -9,6 +10,7 @@ import {
   ContextMenu,
   ContextMenuActionItem,
   ContextMenuContent,
+  ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
@@ -81,6 +83,8 @@ export function Sidebar({
 
   const startResizing = useCallback(
     (e: React.MouseEvent) => {
+      // A secondary button belongs to the context menu, not to a drag.
+      if (e.button !== 0) return;
       e.preventDefault();
       isResizingRef.current = true;
       onResizeStart?.();
@@ -134,18 +138,25 @@ export function Sidebar({
 
   const resize = useCallback(
     (e: MouseEvent) => {
-      if (isResizing && sidebarRef.current) {
+      if (!isResizing) return;
+      // The release can land outside the window, where no mouseup reaches us.
+      if (e.buttons === 0) {
+        stopResizing();
+        return;
+      }
+      if (sidebarRef.current) {
         const newWidth = e.clientX - sidebarRef.current.getBoundingClientRect().left;
         onResize(newWidth);
       }
     },
-    [isResizing, onResize]
+    [isResizing, onResize, stopResizing]
   );
 
   useEffect(() => {
     if (isResizing) {
       document.addEventListener("mousemove", resize);
       document.addEventListener("mouseup", stopResizing);
+      window.addEventListener("blur", stopResizing);
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     }
@@ -153,6 +164,7 @@ export function Sidebar({
     return () => {
       document.removeEventListener("mousemove", resize);
       document.removeEventListener("mouseup", stopResizing);
+      window.removeEventListener("blur", stopResizing);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
@@ -202,7 +214,6 @@ export function Sidebar({
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
             onReset={handleResetWidth}
-            onContextMenu={(e) => e.stopPropagation()}
           />
         </aside>
       </ContextMenuTrigger>
@@ -221,20 +232,28 @@ export function Sidebar({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuActionItem
-          actionId="system.openPath"
-          args={revealPath ? { path: revealPath } : undefined}
-          disabled={!revealPath}
-        >
-          <FolderOpen className={ICON_CLASS} />
-          {/* The card menus' wording for the host's file manager, so this
-              row stops saying Finder on Windows and Linux. */}
-          {isRemoteWindow() && !isWslWindow()
-            ? projectId != null
-              ? "Reveal project in Finder"
-              : "Reveal workspace in Finder"
-            : hostFileManagerRevealLabel()}
-        </ContextMenuActionItem>
+        {revealCopiesHostPath() ? (
+          <ContextMenuItem
+            disabled={!revealPath}
+            onSelect={() => {
+              if (revealPath) copyWithToast("Path", revealPath);
+            }}
+          >
+            <FolderOpen className={ICON_CLASS} />
+            {projectId != null ? "Copy project path" : "Copy workspace path"}
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuActionItem
+            actionId="system.openPath"
+            args={revealPath ? { path: revealPath } : undefined}
+            disabled={!revealPath}
+          >
+            <FolderOpen className={ICON_CLASS} />
+            {/* The card menus' wording for the host's file manager, so this
+                row stops saying Finder on Windows and Linux. */}
+            {hostFileManagerRevealLabel()}
+          </ContextMenuActionItem>
+        )}
         {projectId != null && (
           <ContextMenuActionItem actionId="project.settings.open">
             <Settings className={ICON_CLASS} />
