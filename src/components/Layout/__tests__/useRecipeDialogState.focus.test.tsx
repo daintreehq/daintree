@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeDialogState } from "../useRecipeDialogState";
 
@@ -191,6 +192,30 @@ describe("recipe manager → editor focus (#16906)", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("opens a request kept through a manager reopen once that manager closes", async () => {
+    render(<Harness />, { container: root });
+    const opener = screen.getByRole("button", { name: "Recipes" });
+    opener.focus();
+    fireEvent.click(opener);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent("daintree:open-recipe-editor", { detail: {} }));
+      window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+    });
+    await settle();
+    expect(screen.queryByTestId("editor")).toBeNull();
+
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await settle();
+    expect(screen.getByTestId("editor").contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await settle();
+    expect(document.activeElement).toBe(opener);
+    expect(useRecipeEditorActivityStore.getState().openCount).toBe(0);
   });
 
   it("keeps focus in the editor for a request that arrives while the manager closes", async () => {
