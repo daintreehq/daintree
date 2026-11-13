@@ -25,7 +25,9 @@ vi.mock("@/components/ui/tooltip", () => ({
 import {
   AutocompleteMenu,
   autocompleteOptionId,
+  firstEnabledIndex,
   getComboboxState,
+  stepAutocompleteIndex,
   type AutocompleteItem,
 } from "../AutocompleteMenu";
 
@@ -793,6 +795,49 @@ describe("AutocompleteMenu", () => {
       expect(opensForm.spoken.some((t) => /Enter or Tab to open form/.test(t))).toBe(true);
       expect(header(1).text).toMatch(/fill draft/);
       expect(header(-1).text).toMatch(/open form first/);
+    });
+  });
+
+  describe("firstEnabledIndex and stepAutocompleteIndex", () => {
+    const rows = (pattern: string): AutocompleteItem[] =>
+      [...pattern].map((c, i) => ({
+        key: `r${i}`,
+        label: `r${i}`,
+        insertText: `r${i}`,
+        disabled: c === "x",
+      }));
+
+    it("starts on the first enabled row, or the top when none is", () => {
+      expect(firstEnabledIndex(rows("xxo"))).toBe(2);
+      expect(firstEnabledIndex(rows("oxo"))).toBe(0);
+      expect(firstEnabledIndex(rows("xx"))).toBe(0);
+      expect(firstEnabledIndex([])).toBe(0);
+    });
+
+    it("steps over disabled rows in each direction, wrapping at the ends", () => {
+      const list = rows("oxoxo");
+      expect(stepAutocompleteIndex(list, 0, 1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, 1)).toBe(4);
+      expect(stepAutocompleteIndex(list, 4, 1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 4, -1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, -1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 0, -1)).toBe(4);
+    });
+
+    it("takes the first enabled row going down and the last going up from no selection", () => {
+      expect(stepAutocompleteIndex(rows("xoox"), -1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xoox"), -1, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, -1)).toBe(2);
+    });
+
+    it("stays put on a lone row, an empty list, or when every row is disabled", () => {
+      expect(stepAutocompleteIndex(rows("o"), 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("o"), 0, -1)).toBe(0);
+      expect(stepAutocompleteIndex([], 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("xxx"), 1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xxx"), 2, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("xxx"), -1, 1)).toBe(-1);
     });
   });
 

@@ -502,33 +502,21 @@ describe("useEditorKeymap", () => {
       expect(up).toBe(2);
     });
 
-    it("steps over disabled rows going down and up, wrapping", () => {
-      const rows = ["a", "b", "c", "d"].map((key) => ({
+    it("hands the arrows to the step that skips disabled rows", () => {
+      const rows = ["a", "b", "c", "d", "e"].map((key) => ({
         ...fileItem,
         key,
         disabled: key === "b" || key === "d",
       }));
-      const { handlers } = renderKeymap(makeLatest({ autocompleteItems: rows, selectedIndex: 0 }));
-      const step = (from: number) => {
+      const { handlers } = renderKeymap(makeLatest({ autocompleteItems: rows, selectedIndex: 2 }));
+      const landed = () => {
         const [update] = setSelectedIndex.mock.calls.at(-1)!;
-        return typeof update === "function" ? update(from) : update;
+        return typeof update === "function" ? update(2) : update;
       };
-      handlers.onArrowDown();
-      expect(step(0)).toBe(2);
-      handlers.onArrowDown();
-      expect(step(2)).toBe(0);
-      handlers.onArrowUp();
-      expect(step(0)).toBe(2);
-      handlers.onArrowUp();
-      expect(step(2)).toBe(0);
-    });
-
-    it("keeps the selection when every row is disabled", () => {
-      const rows = ["a", "b"].map((key) => ({ ...fileItem, key, disabled: true }));
-      const { handlers } = renderKeymap(makeLatest({ autocompleteItems: rows, selectedIndex: 0 }));
       expect(handlers.onArrowDown()).toBe(true);
-      const [update] = setSelectedIndex.mock.calls.at(-1)!;
-      expect(typeof update === "function" ? update(0) : update).toBe(0);
+      expect(landed()).toBe(4);
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(landed()).toBe(0);
     });
 
     it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {

@@ -188,8 +188,8 @@ describe("useEditorDomHandlers Enter from beforeinput", () => {
   });
 });
 
-describe("useEditorDomHandlers Enter on a disabled completion row", () => {
-  it("never applies the disabled row and sends as typed instead", () => {
+describe("useEditorDomHandlers Enter on a completion row", () => {
+  function enterOn(row: { disabled?: boolean }) {
     const onSendKey = vi.fn<(key: string) => void>();
     const p = params();
     p.latestRef = {
@@ -198,7 +198,7 @@ describe("useEditorDomHandlers Enter on a disabled completion row", () => {
         voiceId: "t1",
         disabled: false,
         isAutocompleteOpen: true,
-        autocompleteItems: [{ key: "a", label: "a", insertText: "a", disabled: true }],
+        autocompleteItems: [{ key: "a", label: "a", insertText: "a", ...row }],
         staleItemKeys: new Set<string>(),
         selectedIndex: 0,
         value: "",
@@ -207,11 +207,21 @@ describe("useEditorDomHandlers Enter on a disabled completion row", () => {
         isExpanded: false,
       },
     };
-    const apply = p.applyAutocompleteSelection;
     const { result } = renderHook(() => useEditorDomHandlers(p));
     if (!registersBeforeInput(result.current)) throw new Error("no beforeinput handler");
     const event = new InputEvent("beforeinput", { inputType: "insertParagraph", cancelable: true });
     result.current.beforeinput(event, {});
+    return { apply: p.applyAutocompleteSelection, onSendKey };
+  }
+
+  it("applies an enabled row", () => {
+    const { apply, onSendKey } = enterOn({});
+    expect(apply).toHaveBeenCalledWith("enter");
+    expect(onSendKey).not.toHaveBeenCalled();
+  });
+
+  it("never applies a disabled row, and Enter goes on as it would with none", () => {
+    const { apply, onSendKey } = enterOn({ disabled: true });
     expect(apply).not.toHaveBeenCalled();
     expect(onSendKey).toHaveBeenCalledWith("enter");
   });

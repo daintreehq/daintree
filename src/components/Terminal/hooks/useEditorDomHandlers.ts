@@ -6,11 +6,12 @@ import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { agentAltChordKey, isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
 import { isComposerSendHeld } from "../uploads/pendingUploads";
+import type { AutocompleteItem } from "../AutocompleteMenu";
 
 interface LatestRefShape {
   disabled: boolean;
   isAutocompleteOpen: boolean;
-  autocompleteItems: { key: string }[];
+  autocompleteItems: AutocompleteItem[];
   staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
   value: string;

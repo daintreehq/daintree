@@ -134,6 +134,43 @@ describe("useAutocompleteState", () => {
     });
   });
 
+  describe("disabled rows after a refresh", () => {
+    it("clamps onto an enabled row when the selected key vanishes", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("a"), item("b"), item("c")],
+          selectedIndex: 2,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), { ...item("y"), disabled: true }],
+          selectedIndex: 2,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(0);
+    });
+
+    it("keeps a `#` menu unselected when its rows turn disabled", () => {
+      const hash: ActiveCompletionContext = { triggerChar: "#", start: 0, tokenEnd: 2, query: "1" };
+      const { rerender } = render(
+        base({ activeCompletionContext: hash, autocompleteItems: [item("r1")], selectedIndex: -1 })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hash,
+          autocompleteItems: [{ ...item("r1"), disabled: true }, item("r2")],
+          selectedIndex: -1,
+        })
+      );
+      expect(setSelectedIndex).not.toHaveBeenCalled();
+    });
+  });
+
   describe("`#` selection", () => {
     function hashContext(query: string): ActiveCompletionContext {
       return { triggerChar: "#", start: 6, tokenEnd: 7 + query.length, query };
