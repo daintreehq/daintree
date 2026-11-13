@@ -857,12 +857,12 @@ describe("FleetPickerPalette", () => {
       });
       const store = createWorktreeStore();
       store.getState().applySnapshot([], { epoch: "test", seq: 1 });
-      let open!: () => void;
       function Harness() {
         const [isOpen, setIsOpen] = React.useState(false);
-        open = () => setIsOpen(true);
         return (
           <WorktreeStoreContext.Provider value={store}>
+            {/* A click here leaves focus where it is, on the opener below. */}
+            <button type="button" data-testid="harness-open" onClick={() => setIsOpen(true)} />
             <FleetPickerPalette isOpen={isOpen} onClose={() => setIsOpen(false)} />
           </WorktreeStoreContext.Provider>
         );
@@ -872,15 +872,16 @@ describe("FleetPickerPalette", () => {
       try {
         const { unmount } = render(<Harness />);
         opener.focus();
-        act(() => open());
+        fireEvent.click(screen.getByTestId("harness-open"));
+        expect(document.activeElement).not.toBe(opener);
         await act(async () => {
           fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
         });
         // The palette has closed, taking the Manage control the dialog opened from.
         expect(screen.queryByTestId("fleet-picker-saved-manage")).toBeNull();
         expect(screen.getByTestId("fleet-saved-manage-dialog")).toBeTruthy();
-        // Moved off the opener meanwhile, so only the dialog's restore brings it back.
-        act(() => (document.activeElement as HTMLElement | null)?.blur());
+
+        expect(document.activeElement).not.toBe(opener);
 
         // The dialog hands focus back as it leaves.
         unmount();

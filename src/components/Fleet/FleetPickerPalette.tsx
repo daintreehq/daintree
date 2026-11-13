@@ -64,14 +64,16 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   // What opened the palette, for the dialog it hands over to: the palette's
   // own restore is skipped for that hand-off, and the control that opened the
   // dialog leaves with the palette. Read before the palette takes focus; a
-  // reopen before the last close finished still has focus in the palette, and
-  // keeps the opener it had.
+  // reopen before the last close finished still has focus on the palette (its
+  // surface or a field in it), and keeps the opener it had.
   const paletteOpenerRef = useRef<HTMLElement | null>(null);
   const paletteBodyRef = useRef<HTMLDivElement>(null);
   useInsertionEffect(() => {
     if (!isOpen) return;
     const el = document.activeElement;
-    if (el && paletteBodyRef.current?.contains(el)) return;
+    const body = paletteBodyRef.current;
+    const surface = body?.closest<HTMLElement>('[role="dialog"]') ?? body;
+    if (el && surface?.contains(el)) return;
     paletteOpenerRef.current = el instanceof HTMLElement ? el : null;
   }, [isOpen]);
 

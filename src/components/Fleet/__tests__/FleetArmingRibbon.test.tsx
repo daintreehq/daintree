@@ -2679,7 +2679,9 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
     screen.getByTestId("fleet-exit").focus();
     act(() => useFleetArmingStore.getState().armId("a"));
     expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
-    (document.activeElement as HTMLElement).blur();
+    const exit = screen.getByTestId("fleet-exit");
+    expect(document.activeElement).toBe(exit);
+    exit.blur();
     await flushMicrotasks();
 
     // The ribbon stayed: nothing hands focus anywhere.
