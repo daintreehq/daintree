@@ -5,10 +5,12 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import { usePanelStore, useTerminalInputStore } from "@/store";
 import { selectHomeFocusTarget } from "@/store/terminalInputStore";
-import { isAssistantFocused } from "@/store/macroFocusStore";
+import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore";
 import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
+import { isProjectViewCached } from "@/lib/viewCacheState";
+import { enterFocusedPanel } from "@/components/Terminal/contentGridFocus";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
-import { TABBABLE_SELECTOR } from "@/lib/accessibility";
+import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 
 interface UseHelpPanelRevealFocusOptions {
   panelRef: RefObject<HTMLElement | null>;
@@ -37,6 +39,10 @@ export function useHelpPanelRevealFocus({
   // it on close so keyboard users return to where they were rather than
   // body. Mirrors the pattern in AppDialog/AppPaletteDialog.
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Whether the panel has been on screen since it last left it, so only the run
+  // that takes it away hands focus back: mounting closed, or a re-run while
+  // closed, never held the keyboard.
+  const revealedRef = useRef(false);
   // Invalidates any deferred reveal-focus frame whose authorizing effect run has
   // already been torn down. Mirrors HybridInputBar's `focusGenerationRef`
   // (#8487) — a frame that was already dequeued can't be stopped by
@@ -72,6 +78,7 @@ export function useHelpPanelRevealFocus({
       lastCompleted.focusRequest !== focusRequest;
 
     if (isOpen && isVisible) {
+      revealedRef.current = true;
       // Only remember a restore target when this run is actually authorized to
       // move focus. A structural re-run that the ownership gate goes on to
       // reject must not overwrite it with whatever unrelated pane the user
@@ -209,13 +216,12 @@ export function useHelpPanelRevealFocus({
           }
         }
 
-        const candidates = panelRef.current?.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR);
-        let first: HTMLElement | undefined;
-        for (const el of candidates ?? []) {
-          if (el.getAttribute("role") === "separator") continue;
-          first = el;
-          break;
-        }
+        // Visible ones only: a hidden control's `.focus()` is a silent no-op.
+        const first = panelRef.current
+          ? getVisibleTabbableElements(panelRef.current).find(
+              (el) => el.getAttribute("role") !== "separator"
+            )
+          : undefined;
         if (first) {
           first.focus();
         } else {
@@ -241,6 +247,9 @@ export function useHelpPanelRevealFocus({
 
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
+    const wasRevealed = revealedRef.current;
+    revealedRef.current = false;
+    if (!wasRevealed) return undefined;
     // Hand focus back only if the assistant still had it. Closing a panel the
     // user already left must not drag them out of wherever they went — that is
     // the same steal this effect exists to prevent, just on the way out.
@@ -251,23 +260,30 @@ export function useHelpPanelRevealFocus({
       activeOnClose === null ||
       activeOnClose === document.body ||
       panelRef.current?.contains(activeOnClose) === true;
-    if (
-      el &&
-      assistantStillOwnedFocus &&
-      document.contains(el) &&
-      !panelRef.current?.contains(el)
-    ) {
-      // Radix opens tooltips on focus as well as hover, so handing focus back
-      // to a tooltip trigger — the toolbar assistant button is the usual opener
-      // — pops a tooltip nothing is hovering. Same failure the dialog
-      // primitives already arm against (#11030); the suppression window is
-      // honored by both the tooltip open path and useShortcutHintHover's focus
-      // branch, and any real pointerenter clears it, so genuine hovers still
-      // teach. Inside the guard on purpose: a restore we decline must not
-      // suppress a tooltip the user did ask for.
-      dismissAllTooltips();
+    if (!assistantStillOwnedFocus) return undefined;
+    // A cached view is off screen; its keyboard is not ours to move.
+    if (isProjectViewCached()) return undefined;
+
+    // Radix opens tooltips on focus as well as hover, so handing focus back
+    // to a tooltip trigger — the toolbar assistant button is the usual opener
+    // — pops a tooltip nothing is hovering. Same failure the dialog
+    // primitives already arm against (#11030); the suppression window is
+    // honored by both the tooltip open path and useShortcutHintHover's focus
+    // branch, and any real pointerenter clears it, so genuine hovers still
+    // teach. Past the ownership guard on purpose: a restore we decline must
+    // not suppress a tooltip the user did ask for.
+    dismissAllTooltips();
+    if (el && el !== document.body && document.contains(el) && !panelRef.current?.contains(el)) {
       el.focus();
+      if (document.activeElement === el) return undefined;
     }
+    // No opener that can take it back: it was removed or disabled meanwhile,
+    // or the panel opened with nothing focused. Closing the last session slides
+    // the panel out with whatever held focus, so leaving it here strands the
+    // keyboard on `<body>`. The focused panel, then the grid's own region, so
+    // it lands somewhere it can move on from even with no panel focused.
+    if (enterFocusedPanel(usePanelStore.getState().focusedId)) return undefined;
+    restoreFocusTo(useMacroFocusStore.getState().refs.get("grid"));
     return undefined;
   }, [
     panelRef,

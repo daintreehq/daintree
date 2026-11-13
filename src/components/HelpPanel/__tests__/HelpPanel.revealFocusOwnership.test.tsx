@@ -64,6 +64,7 @@ const { focusMock, helpPanelState, panelStoreState, terminalInputState, hybridHa
         string,
         { agentState?: string; cwd?: string; spawnStatus?: string; isInputLocked?: boolean }
       >,
+      focusedId: null as string | null,
       removePanel: vi.fn(),
       addPanel: vi.fn().mockResolvedValue(""),
     },
@@ -225,7 +226,6 @@ vi.mock("@shared/config/agentIds", () => ({
     typeof v === "string" && ["claude", "codex", "claude-code"].includes(v),
 }));
 vi.mock("../../../shared/utils/agentAvailability", () => ({ isAgentInstalled: () => true }));
-vi.mock("@/lib/accessibility", () => ({ TABBABLE_SELECTOR: "button" }));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(), getContext: () => ({}) },
 }));
@@ -313,8 +313,14 @@ vi.mock("@/store/macroFocusStore", () => {
   let assistantRoot: HTMLElement | null = null;
   const state = {
     focusedRegion: null as string | null,
+    refs: new Map<string, HTMLElement>(),
     setRegionRef: vi.fn((region: string, el: HTMLElement | null) => {
       if (region === "assistant") assistantRoot = el;
+      if (el) state.refs.set(region, el);
+      else state.refs.delete(region);
+    }),
+    clearFocus: vi.fn(() => {
+      state.focusedRegion = null;
     }),
   };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
@@ -328,6 +334,13 @@ vi.mock("@/store/macroFocusStore", () => {
   };
 });
 
+// Whether main has this project view cached, per test.
+let viewCached = false;
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => viewCached,
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
@@ -340,6 +353,8 @@ import {
 } from "@/lib/tooltipDismissRegistry";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 
 // The service mock never evaluates the real module, so nothing builds it.
 await loadTerminalService();
@@ -357,6 +372,46 @@ function flushFrame(): void {
 
 // A focusable element standing in for Ask Codex's CodeMirror in another pane.
 let foreignEditor: HTMLTextAreaElement;
+
+// Undone in afterEach, so a failed assertion can't leak a handler, an element or a
+// region into the next test.
+const cleanups: (() => void)[] = [];
+
+function mountFocusable<T extends HTMLElement>(el: T): T {
+  document.body.appendChild(el);
+  cleanups.push(() => el.remove());
+  return el;
+}
+
+function mountGridRegion(): HTMLDivElement {
+  const grid = document.createElement("div");
+  grid.tabIndex = -1;
+  mountFocusable(grid);
+  useMacroFocusStore.getState().setRegionRef("grid", grid);
+  cleanups.push(() => useMacroFocusStore.getState().setRegionRef("grid", null));
+  return grid;
+}
+
+function registerFocusedPane(id: string, input: HTMLElement): ReturnType<typeof vi.fn> {
+  const handler = vi.fn(() => {
+    input.focus();
+    return document.activeElement === input;
+  });
+  panelStoreState.focusedId = id;
+  cleanups.push(registerPanelFocusHandler(id, handler));
+  return handler;
+}
+
+/** Mount closed, open, and settle the open grab inside the assistant. */
+function renderOpenedAndSettled() {
+  helpPanelState.isOpen = false;
+  const view = render(<HelpPanel width={380} />);
+  helpPanelState.isOpen = true;
+  view.rerender(<HelpPanel width={380} />);
+  act(() => flushFrame());
+  act(() => flushFrame());
+  return view;
+}
 
 function focusForeignEditor(): void {
   act(() => {
@@ -444,6 +499,9 @@ beforeEach(() => {
   helpPanelState.dictationFocusRequest = null;
   terminalInputState.hybridInputAutoFocus = true;
   setPanel("t-1");
+  panelStoreState.focusedId = null;
+  viewCached = false;
+  useMacroFocusStore.setState({ focusedRegion: null });
 
   foreignEditor = document.createElement("textarea");
   foreignEditor.className = "cm-editor";
@@ -467,6 +525,7 @@ beforeEach(() => {
 
 afterEach(() => {
   foreignEditor.remove();
+  for (const undo of cleanups.splice(0).reverse()) undo();
 });
 
 /** Render, settle the authorized open grab, then hand focus to the other pane. */
@@ -896,6 +955,96 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       opener.remove();
     });
 
+    it("hands focus to the focused panel when the opener can no longer take it", () => {
+      const opener = mountFocusable(document.createElement("button"));
+      opener.focus();
+      const paneInput = mountFocusable(document.createElement("textarea"));
+      registerFocusedPane("pane-1", paneInput);
+
+      const { rerender } = renderOpenedAndSettled();
+      // Still connected, but a `.focus()` on it is a silent no-op.
+      opener.disabled = true;
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(paneInput);
+    });
+
+    it("still prefers the opener over the focused panel", () => {
+      const opener = mountFocusable(document.createElement("button"));
+      opener.focus();
+      const paneInput = mountFocusable(document.createElement("textarea"));
+      const handler = registerFocusedPane("pane-1", paneInput);
+
+      const { rerender } = renderOpenedAndSettled();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(opener);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("lands on the grid's region when it opened from nowhere and no panel is focused", () => {
+      const grid = mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+
+      const { rerender } = renderOpenedAndSettled();
+      expect(document.activeElement).not.toBe(document.body);
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(grid);
+    });
+
+    it("moves nothing when the panel mounts closed", () => {
+      mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      // A structural re-run while closed is not a close either.
+      helpPanelState.terminalId = "t-2";
+      setPanel("t-2");
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("hands focus back once per close, not again on a re-run while closed", () => {
+      const grid = mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      const { rerender } = renderOpenedAndSettled();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+      expect(document.activeElement).toBe(grid);
+
+      act(() => grid.blur());
+      helpPanelState.terminalId = "t-2";
+      setPanel("t-2");
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves a cached view's keyboard alone", () => {
+      const dismissed = vi.fn();
+      cleanups.push(registerTooltipDismiss(dismissed));
+      mountGridRegion();
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      const { rerender } = renderOpenedAndSettled();
+      const settled = document.activeElement;
+      expect(settled).not.toBe(document.body);
+      viewCached = true;
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(settled);
+      expect(dismissed).not.toHaveBeenCalled();
+    });
+
     it("leaves tooltips alone when it declines to restore focus", () => {
       // Guards against hoisting the call out of the restore predicate: no focus
       // moves here, so there is nothing to suppress but plenty to swallow.
@@ -938,6 +1087,23 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
 
       expect(anyFocusWriterCalled()).toBe(false);
+    });
+
+    it("passes over a hidden control when no terminal can take focus", () => {
+      helpPanelState.isOpen = false;
+      const { container, rerender } = render(<HelpPanel width={380} />);
+      const aside = container.querySelector<HTMLElement>("#daintree-assistant-panel")!;
+      const hidden = document.createElement("button");
+      hidden.hidden = true;
+      const shown = document.createElement("button");
+      aside.prepend(hidden, shown);
+
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      setPanel("t-1", "failed");
+      act(() => flushFrame());
+
+      expect(document.activeElement).toBe(shown);
     });
 
     it.each(["failed", "missing-cli"])(
