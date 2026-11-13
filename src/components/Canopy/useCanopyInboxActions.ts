@@ -472,14 +472,19 @@ export function useCanopyInboxActions({
   const closePark = useCallback(() => setParkRunId(null), []);
   const asideFailed = (title: string, error: unknown, retry: () => void) =>
     failToast(title, error, { label: "Retry", onClick: retry });
+  // Each gives Z up on the host it was done on: a toast's Retry once another
+  // host is shown leaves that host's Z alone.
   const setAside = {
     canSetAside,
+    // Opened once the menu has closed: by then the panel may show another host.
     onPark: (item: CanopyItem) => {
-      if (canSetAside(item)) setParkRunId(placeOf(item, hostId, ownHostId).runId);
+      if (canSetAside(item) && showsHost(hostId)) {
+        setParkRunId(placeOf(item, hostId, ownHostId).runId);
+      }
     },
     onUnpark: function unpark(item: CanopyItem) {
       const { runId } = placeOf(item, hostId, ownHostId);
-      clearUndo();
+      if (showsHost(hostId)) clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .unparkRun(runId)
@@ -490,7 +495,7 @@ export function useCanopyInboxActions({
     },
     onSnooze: function snooze(item: CanopyItem, option: AgentSnoozeDurationOption) {
       const { runId } = placeOf(item, hostId, ownHostId);
-      clearUndo();
+      if (showsHost(hostId)) clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .snoozeRun(runId, option)
@@ -501,7 +506,7 @@ export function useCanopyInboxActions({
     },
     onWake: function wake(item: CanopyItem) {
       const { runId } = placeOf(item, hostId, ownHostId);
-      clearUndo();
+      if (showsHost(hostId)) clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .unsnoozeRun(runId)
@@ -557,7 +562,9 @@ export function useCanopyInboxActions({
     },
     onArchive: handlers.onArchive,
     onRename: askRename,
+    // Armed once the menu has closed, so only on the host it was asked of.
     onTrash: (item) => {
+      if (!showsHost(hostId)) return;
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },

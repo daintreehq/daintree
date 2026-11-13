@@ -47,6 +47,8 @@ import {
   type CanopyTrashItem,
 } from "./canopyTrash";
 
+/** The Trash bar's own menu, beside each row's (keyed by its run). */
+const TRASH_OPTIONS_MENU = "trash-options";
 /** How often a shown row's "Closed 12s ago" moves on. */
 const CLOCK_TICK_MS = 1000;
 /** A run that leaves this close to its deadline left because its time ran out. */
@@ -254,18 +256,33 @@ export function CanopyTrashSection({
     );
   };
   const [removing, setRemoving] = useState<CanopyTrashItem | null>(null);
-  // A confirm asked for from a menu opens once the menu has handed the
+  // A confirm asked for from a menu opens once that menu has handed the
   // keyboard back, so its close returns to the row or button the menu was
   // opened from; opened any sooner, the menu's close would take the keyboard
-  // out of the confirm.
-  const confirmAfterCloseRef = useRef<(() => void) | null>(null);
-  const confirmAfterClose = () => {
-    const ask = confirmAfterCloseRef.current;
-    confirmAfterCloseRef.current = null;
-    if (ask) requestAnimationFrame(ask);
+  // out of the confirm. Held for the menu it was asked from (another's close
+  // can land first), and only for the host it was asked of.
+  const confirmAfterCloseRef = useRef<{ menu: string; ask: () => void } | null>(null);
+  const scopeNowRef = useRef(scopeKey);
+  useLayoutEffect(() => {
+    scopeNowRef.current = scopeKey;
+  });
+  const askAfterClose = (menu: string, ask: () => void) => {
+    const scope = scopeKey;
+    confirmAfterCloseRef.current = {
+      menu,
+      ask: () => {
+        if (scopeNowRef.current === scope) ask();
+      },
+    };
   };
-  const menuOpenChanged = (open: boolean) => {
-    if (open) confirmAfterCloseRef.current = null;
+  const confirmAfterClose = (menu: string) => {
+    const pending = confirmAfterCloseRef.current;
+    if (pending?.menu !== menu) return;
+    confirmAfterCloseRef.current = null;
+    requestAnimationFrame(pending.ask);
+  };
+  const menuOpenChanged = (menu: string, open: boolean) => {
+    if (open && confirmAfterCloseRef.current?.menu === menu) confirmAfterCloseRef.current = null;
   };
   const confirmRemove = () => {
     const item = removing;
@@ -294,7 +311,7 @@ export function CanopyTrashSection({
       emptyNow(targets);
       return;
     }
-    confirmAfterCloseRef.current = () => setEmptying(targets);
+    askAfterClose(TRASH_OPTIONS_MENU, () => setEmptying(targets));
   };
   const confirmEmpty = () => {
     const targets = emptying;
@@ -382,7 +399,7 @@ export function CanopyTrashSection({
           }
           menu={
             searching ? undefined : (
-              <DropdownMenu onOpenChange={menuOpenChanged}>
+              <DropdownMenu onOpenChange={(open) => menuOpenChanged(TRASH_OPTIONS_MENU, open)}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
@@ -393,7 +410,10 @@ export function CanopyTrashSection({
                     <Ellipsis aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" onCloseAutoFocus={confirmAfterClose}>
+                <DropdownMenuContent
+                  align="end"
+                  onCloseAutoFocus={() => confirmAfterClose(TRASH_OPTIONS_MENU)}
+                >
                   <DropdownMenuItem destructive onSelect={askEmpty}>
                     {items.some((item) => !item.ended) ? "Empty trash…" : "Empty trash"}
                   </DropdownMenuItem>
@@ -406,7 +426,10 @@ export function CanopyTrashSection({
       {rowsShown && (
         <div id="canopy-trash" role="listbox" aria-labelledby="canopy-trash-label">
           {shown.map((item) => (
-            <ContextMenu key={item.runId} onOpenChange={menuOpenChanged}>
+            <ContextMenu
+              key={item.runId}
+              onOpenChange={(open) => menuOpenChanged(item.runId, open)}
+            >
               {/* Contents, so the trigger adds no box between the list and its rows. */}
               <ContextMenuTrigger asChild>
                 <div className="contents">
@@ -421,7 +444,7 @@ export function CanopyTrashSection({
                   />
                 </div>
               </ContextMenuTrigger>
-              <ContextMenuContent onCloseAutoFocus={confirmAfterClose}>
+              <ContextMenuContent onCloseAutoFocus={() => confirmAfterClose(item.runId)}>
                 <ContextMenuItem
                   aria-keyshortcuts="Enter"
                   disabled={item.worktreeRemoved}
@@ -439,7 +462,7 @@ export function CanopyTrashSection({
                   <ContextMenuItem
                     destructive
                     onSelect={() => {
-                      confirmAfterCloseRef.current = () => setRemoving(item);
+                      askAfterClose(item.runId, () => setRemoving(item));
                     }}
                   >
                     Remove now…

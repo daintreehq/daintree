@@ -508,6 +508,25 @@ describe("CanopyView Trash", () => {
     };
     const confirmDialog = () =>
       document.querySelector<HTMLElement>("[role=alertdialog], [role=dialog]");
+    /**
+     * Chooses `item` and runs frames before the menu has handed the keyboard
+     * back, as a real menu's exit animation does: no confirm may open before
+     * then. jsdom has no exit, so its hand-back would otherwise always land
+     * before a confirm's first frame.
+     */
+    const chooseWhileMenuCloses = (item: HTMLElement) => {
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      try {
+        act(() => {
+          fireEvent.keyDown(item, { key: "Enter" });
+          vi.advanceTimersToNextFrame();
+          vi.advanceTimersToNextFrame();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(confirmDialog()).toBeNull();
+    };
 
     it("for Remove now, back on the row when cancelled", async () => {
       await open(TRASH);
@@ -519,9 +538,7 @@ describe("CanopyView Trash", () => {
         name: "Remove now…",
         hidden: true,
       });
-      await act(async () => {
-        fireEvent.keyDown(item, { key: "Enter" });
-      });
+      chooseWhileMenuCloses(item);
       await settle();
       expect(confirmDialog()?.textContent).toContain("Remove 'Fix newer'?");
       expect(confirmDialog()!.contains(document.activeElement)).toBe(true);
@@ -545,13 +562,7 @@ describe("CanopyView Trash", () => {
         name: "Empty trash…",
         hidden: true,
       });
-      await act(async () => {
-        fireEvent.keyDown(item, { key: "Enter" });
-      });
-      // Not before the menu has handed the keyboard back: a real menu's exit
-      // animation outlasts the confirm's first frame, and would take the
-      // keyboard from it there. jsdom has no exit to race.
-      expect(confirmDialog()).toBeNull();
+      chooseWhileMenuCloses(item);
       await settle();
       expect(confirmDialog()?.textContent).toContain("Empty trash?");
       expect(confirmDialog()!.contains(document.activeElement)).toBe(true);

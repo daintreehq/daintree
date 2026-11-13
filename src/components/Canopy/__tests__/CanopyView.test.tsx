@@ -1904,9 +1904,20 @@ describe("CanopyView", () => {
     expect(fleetApi.parkRun).not.toHaveBeenCalled();
   });
 
-  // Z takes back the newest action; a snooze is one it can't, so it must not
-  // reach past it to an archive done before.
-  it("leaves Z nothing to take back once a run is snoozed after an archive", async () => {
+  // Z takes back the newest action; a snooze, wake or unpark is one it can't,
+  // so it must not reach past it to an archive done before.
+  it.each([
+    { action: "snooze", aside: {}, path: ["Snooze…", "15 minutes"] },
+    { action: "wake", aside: { snooze: { option: "15m" } }, path: ["Snooze…", "Wake now"] },
+    { action: "unpark", aside: { park: { parkedAt: NOW - 1000 } }, path: ["Unpark"] },
+  ])("leaves Z nothing to take back after a $action", async ({ action, aside, path }) => {
+    const fleet = useFleetSnapshotStore.getState().snapshot!;
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        ...fleet,
+        runs: fleet.runs.map((r) => (r.runId === "asking" ? ({ ...r, ...aside } as typeof r) : r)),
+      },
+    });
     const canopy = installElectron();
     const { container } = render(<CanopyView frame={frame} />);
     await frames();
@@ -1914,15 +1925,21 @@ describe("CanopyView", () => {
       fireEvent.keyDown(cards(container)[0]!, { key: "e" });
     });
     expect(canopy.archive).toHaveBeenCalledTimes(1);
-    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
-    const trigger = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
-      (item) => item.textContent?.startsWith("Snooze")
-    )!;
-    fireEvent.keyDown(trigger, { key: "ArrowRight" });
-    fireEvent.click(
-      await within(document.body).findByRole("menuitem", { name: "15 minutes", hidden: true })
-    );
-    expect(fleetApi.snoozeRun).toHaveBeenCalledTimes(1);
+    const target = cards(container).find((card) => card.id.endsWith("asking"))!;
+    fireEvent.contextMenu(target, { clientX: 5, clientY: 5 });
+    for (const [step, name] of path.entries()) {
+      const item = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
+        (candidate) => candidate.firstChild?.textContent === name
+      )!;
+      if (step < path.length - 1) fireEvent.keyDown(item, { key: "ArrowRight" });
+      else fireEvent.click(item);
+    }
+    const sent = {
+      snooze: fleetApi.snoozeRun,
+      wake: fleetApi.unsnoozeRun,
+      unpark: fleetApi.unparkRun,
+    };
+    expect(sent[action as keyof typeof sent]).toHaveBeenCalledTimes(1);
     await frames();
     fireEvent.keyDown(cards(container)[0]!, { key: "z" });
     expect(canopy.unarchive).not.toHaveBeenCalled();
@@ -1944,11 +1961,25 @@ describe("CanopyView", () => {
       (await within(document.body).findByTestId("park-run-dialog")).closest<HTMLElement>(
         "[role=dialog]"
       )!;
+    /**
+     * Chooses the item and runs frames before the menu has handed the
+     * keyboard back, as a real menu's exit animation does: no dialog may open
+     * before then. jsdom has no exit, so its hand-back would otherwise always
+     * land before a dialog's first frame.
+     */
     const choose = async (name: string) => {
       const item = await within(document.body).findByRole("menuitem", { name, hidden: true });
-      await act(async () => {
-        fireEvent.keyDown(item, { key: "Enter" });
-      });
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      try {
+        act(() => {
+          fireEvent.keyDown(item, { key: "Enter" });
+          vi.advanceTimersToNextFrame();
+          vi.advanceTimersToNextFrame();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(within(document.body).queryByTestId("park-run-dialog")).toBeNull();
       await settle();
     };
 
@@ -2018,18 +2049,21 @@ describe("CanopyView", () => {
         name: "Park or snooze",
         hidden: true,
       });
-      act(() => trigger.focus());
-      await act(async () => {
-        fireEvent.keyDown(trigger, { key: "Enter" });
-      });
-      await choose("Park…");
-      const dialog = await parkDialog();
-      await settle();
-      expect(dialog.contains(document.activeElement)).toBe(true);
-      await act(async () => {
-        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel", hidden: true }));
-      });
-      await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+      // Twice, as from the row's menu: the second opening has the code to hand.
+      for (let opening = 0; opening < 2; opening++) {
+        act(() => trigger.focus());
+        await act(async () => {
+          fireEvent.keyDown(trigger, { key: "Enter" });
+        });
+        await choose("Park…");
+        const dialog = await parkDialog();
+        await settle();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        await act(async () => {
+          fireEvent.click(within(dialog).getByRole("button", { name: "Cancel", hidden: true }));
+        });
+        await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+      }
     });
   });
 
