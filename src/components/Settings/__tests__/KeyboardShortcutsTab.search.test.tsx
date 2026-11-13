@@ -23,6 +23,12 @@ class ResizeObserverStub implements ResizeObserver {
 }
 globalThis.ResizeObserver ??= ResizeObserverStub;
 
+const platform = vi.hoisted(() => ({ mac: false }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => platform.mac,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
@@ -212,5 +218,44 @@ describe("KeyboardShortcutsTab search on another keyboard layout", () => {
 
     await search(`${modifier}/`);
     expect(rowLabels()).toContain("Show shortcut reference");
+  });
+});
+
+describe("KeyboardShortcutsTab search field", () => {
+  afterEach(() => {
+    platform.mac = false;
+  });
+
+  it.each([
+    [true, "⇧⇧"],
+    [false, "Shift Shift"],
+  ])("finds the double-tap gesture by the keys it shows (macOS: %s)", async (mac, keys) => {
+    platform.mac = mac;
+    await renderTab();
+
+    await search(keys);
+    expect(screen.getByText("Double-tap Shift opens Canopy")).toBeTruthy();
+
+    await search("⌥⌥");
+    expect(screen.queryByText("Double-tap Shift opens Canopy")).toBeNull();
+  });
+
+  it("clears a search on the first Escape and keeps the key from the dialog around it", async () => {
+    const dialogEscape = vi.fn();
+    document.addEventListener("keydown", dialogEscape);
+    try {
+      await renderTab();
+      await search("save");
+      const input = screen.getByRole("textbox", { name: "Search shortcuts" }) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Escape" });
+      });
+
+      expect(input.value).toBe("");
+      expect(dialogEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", dialogEscape);
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
+import { useState, useEffect, useEffectEvent, useCallback, useId, useMemo, useRef } from "react";
 import { InlineError } from "@/components/ui/field";
 import { AlertTriangle } from "lucide-react";
 import { isMac } from "@/lib/platform";
@@ -64,9 +64,9 @@ export interface SettingsShortcutCaptureProps {
    */
   currentCombo?: string;
   /**
-   * Finish on the first non-modifier key instead of waiting out the chord window.
-   * For bindings that cannot be chords, where the wait only delays the result and
-   * a quick Enter or Tab afterwards would be recorded as a second step.
+   * Finish on the first non-modifier key instead of waiting out the chord window,
+   * for bindings that cannot be chords, where the wait only delays the result and
+   * any quick second key would be recorded as a second step.
    */
   singleStroke?: boolean;
   /**
@@ -138,6 +138,9 @@ export function SettingsShortcutCapture({
   const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chordTokenRef = useRef(0);
+  // Steps captured in this recording that are still waiting for a second key, read
+  // by the window listener, which never sees state newer than its own render.
+  const pendingStepsRef = useRef<string[]>([]);
   const [conflictRefreshKey, setConflictRefreshKey] = useState(0);
   const [isUnbinding, setIsUnbinding] = useState(false);
   // Modifiers down right now, so the field shows the recorder hearing ⌘⌥ before
@@ -195,24 +198,27 @@ export function SettingsShortcutCapture({
     }
   }, []);
 
-  const finishRecording = useCallback(
-    (combos: string[]) => {
-      clearChordTimeout();
-      setHeld([]);
-      const combo = combos.join(" ");
-      if (validateCombo?.(combo)) {
-        setRejected(combo);
-        setCapturedCombos([]);
-        setChordStep("first");
-        return;
-      }
-      setRejected(null);
-      setCapturedCombos(combos);
-      setRecording(false);
-      setChordStep("complete");
-    },
-    [clearChordTimeout, validateCombo]
-  );
+  // Effect events, so a new validator or onCancel (the settings list rebuilds both
+  // when an Unbind lands mid-window) never restarts the listener and kills the
+  // chord timer it armed.
+  const finishRecording = useEffectEvent((combos: string[]) => {
+    clearChordTimeout();
+    chordTokenRef.current += 1;
+    pendingStepsRef.current = [];
+    setHeld([]);
+    const combo = combos.join(" ");
+    if (validateCombo?.(combo)) {
+      setRejected(combo);
+      setCapturedCombos([]);
+      setChordStep("first");
+      return;
+    }
+    setRejected(null);
+    setCapturedCombos(combos);
+    setRecording(false);
+    setChordStep("complete");
+  });
+  const cancelRecording = useEffectEvent(() => onCancel());
 
   useEffect(() => {
     if (!recording) return;
@@ -236,6 +242,7 @@ export function SettingsShortcutCapture({
       if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         clearChordTimeout();
         chordTokenRef.current += 1;
+        pendingStepsRef.current = [];
         setRecording(false);
         setChordStep("first");
         setHeld([]);
@@ -248,17 +255,28 @@ export function SettingsShortcutCapture({
           setFocusRequest((n) => n + 1);
         } else {
           setCapturedCombos([]);
-          onCancel();
+          cancelRecording();
         }
         return;
       }
 
-      // Tab can never be a single-stroke binding, so rather than record it the
-      // recorder stands down and hands the keyboard back: Remove and Cancel are
-      // otherwise out of reach until some valid combo has been captured.
-      if (singleStroke && e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // Tab and Shift+Tab move focus, so they are never recorded: with a first key
+      // waiting they end the chord window on it, and Enter does too, so a quick
+      // Enter meant for Save is not taken as the second key.
+      const navigationTab = e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey;
+      const bareEnter = e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+      if (pendingStepsRef.current.length > 0 && (navigationTab || bareEnter)) {
+        finishRecording(pendingStepsRef.current);
+        return;
+      }
+
+      // With nothing captured, the recorder stands down and hands the keyboard
+      // back: Remove and Cancel are otherwise out of reach until some valid combo
+      // has been captured.
+      if (navigationTab) {
         clearChordTimeout();
         chordTokenRef.current += 1;
+        pendingStepsRef.current = [];
         setRecording(false);
         setHeld([]);
         setRejected(null);
@@ -288,30 +306,27 @@ export function SettingsShortcutCapture({
       setRejected(null);
 
       if (singleStroke) {
-        chordTokenRef.current += 1;
         finishRecording([combo]);
         return;
       }
 
-      setCapturedCombos((prev) => {
-        const newCombos = [...prev, combo];
+      const pending = pendingStepsRef.current;
+      if (pending.length > 0) {
+        finishRecording([...pending, combo]);
+        return;
+      }
 
-        if (prev.length === 0) {
-          setChordStep("waiting");
-          clearChordTimeout();
-          chordTokenRef.current += 1;
-          const token = chordTokenRef.current;
-          chordTimeoutRef.current = setTimeout(() => {
-            if (chordTokenRef.current !== token) return;
-            finishRecording(newCombos);
-          }, CHORD_TIMEOUT_MS);
-        } else {
-          chordTokenRef.current += 1;
-          finishRecording(newCombos);
-        }
-
-        return newCombos;
-      });
+      const steps = [combo];
+      pendingStepsRef.current = steps;
+      setCapturedCombos(steps);
+      setChordStep("waiting");
+      clearChordTimeout();
+      chordTokenRef.current += 1;
+      const token = chordTokenRef.current;
+      chordTimeoutRef.current = setTimeout(() => {
+        if (chordTokenRef.current !== token) return;
+        finishRecording(steps);
+      }, CHORD_TIMEOUT_MS);
     };
 
     // A released modifier arrives as keyup, and the event's flags already exclude it.
@@ -327,12 +342,13 @@ export function SettingsShortcutCapture({
       // tray dropdown can become un-dismissable after a mid-capture alt-tab.
       clearChordTimeout();
       chordTokenRef.current += 1;
+      pendingStepsRef.current = [];
       setRecording(false);
       setCapturedCombos([]);
       setChordStep("first");
       setHeld([]);
       setRejected(null);
-      onCancel();
+      cancelRecording();
     };
 
     window.addEventListener("keydown", handler, { capture: true });
@@ -345,7 +361,7 @@ export function SettingsShortcutCapture({
       clearChordTimeout();
       releaseCapture();
     };
-  }, [recording, singleStroke, clearChordTimeout, finishRecording, onCancel]);
+  }, [recording, singleStroke, clearChordTimeout]);
 
   // Land on Save once a combo is in, so Enter commits it; a combo that fails
   // validation has no Save to land on and keeps focus where it was.
@@ -375,6 +391,7 @@ export function SettingsShortcutCapture({
 
   const handleStartRecording = () => {
     previousDraftRef.current = capturedCombos;
+    pendingStepsRef.current = [];
     setCapturedCombos([]);
     setChordStep("first");
     setHeld([]);
