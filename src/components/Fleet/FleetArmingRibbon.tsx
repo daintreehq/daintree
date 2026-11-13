@@ -59,6 +59,7 @@ import {
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import {
   useFleetRunStore,
   summarizeFleetRun,
@@ -321,6 +322,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   const armAll = useFleetArmingStore((s) => s.armAll);
   const pending = useFleetPendingActionStore((s) => s.pending);
   const clearPending = useFleetPendingActionStore((s) => s.clear);
+  const failureActive = useFleetFailureStore((s) => s.failedIds.size > 0);
 
   const progressCompleted = useFleetBroadcastProgressStore((s) => s.completed);
   const progressTotal = useFleetBroadcastProgressStore((s) => s.total);
@@ -695,8 +697,21 @@ export function FleetArmingRibbon(): ReactElement | null {
     );
   }
 
+  // A failure keeps its banner, Retry included, after the fleet it came from
+  // drops below what shows the ribbon: auto-disarming the targets that died
+  // can leave one pane armed. Same position as the ribbon's group, so the
+  // banner keeps its state when the ribbon goes.
   if (!ribbonVisible) {
-    return <>{fleetDialogs}</>;
+    return (
+      <>
+        {fleetDialogs}
+        {failureActive && (
+          <div data-testid="fleet-arming-ribbon-group">
+            <FleetFailureBanner />
+          </div>
+        )}
+      </>
+    );
   }
 
   const selectionMenuItems = (

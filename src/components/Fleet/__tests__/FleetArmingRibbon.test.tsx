@@ -118,6 +118,7 @@ import { runManagedFleetBroadcast } from "../fleetEnterBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
+import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { useFleetRunStore, type FleetRun, type FleetRunTarget } from "@/store/fleetRunStore";
@@ -2375,4 +2376,42 @@ describe("FleetArmingRibbon — exiting during a send (#15560)", () => {
       });
     }
   );
+});
+
+describe("FleetArmingRibbon — a failure outlives the ribbon (#16904)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetFailureStore.getState().clear();
+  });
+
+  afterEach(() => {
+    useFleetFailureStore.getState().clear();
+  });
+
+  it("keeps the failure banner and its Retry once only one pane is left armed", () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    act(() => {
+      // "b" died during the send and was disarmed; "a" rejected the write.
+      useFleetFailureStore.getState().recordFailure("ls\r", ["a"], 1);
+      useFleetArmingStore.getState().disarmId("b");
+    });
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Broadcast failed");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("leaves nothing behind for one armed pane once the failure is cleared", () => {
+    seed([makeAgent("a")]);
+    useFleetArmingStore.getState().armIds(["a"]);
+    useFleetFailureStore.getState().recordFailure("ls\r", ["a"]);
+    render(<FleetArmingRibbon />);
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    act(() => useFleetFailureStore.getState().clear());
+    expect(screen.queryByTestId("fleet-arming-ribbon-group")).toBeNull();
+  });
 });
