@@ -2,7 +2,7 @@ import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { BrowserHistory } from "./browser.js";
-import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
 import {
   BUILT_IN_PANEL_KINDS,
@@ -1157,16 +1157,18 @@ export interface DiffPanelData extends BasePanelData {
    */
   changeSet?: DiffChangeSetEntry[];
   /**
-   * Cursor into `changeSet` for the open file. Runtime-only (never
-   * serialized), because it only means anything alongside the live set.
-   *
-   * (path, status) is not unique: partial staging puts the same path with the
-   * same status in both the staged and unstaged sections, and those entries
-   * differ only by `viewedKey`. Without this cursor the panel resolves to the
-   * first match, so selecting the unstaged copy highlights the staged row and
-   * marks the wrong file viewed.
+   * Cursor into `changeSet` for the open file, with `fileSide`. Runtime-only
+   * (never serialized), because it only means anything alongside the live set.
    */
   viewedKey?: string;
+  /**
+   * The open entry's `side`. Partial staging lists the same file in both the
+   * staged and unstaged sections with the same path, status and Viewed key
+   * (one mark per file), so only the side tells them apart. Without it the
+   * panel resolves to the first twin, and selecting the unstaged copy shows
+   * the staged diff. Runtime-only, like `viewedKey`.
+   */
+  fileSide?: GitDiffSide;
 }
 
 /**

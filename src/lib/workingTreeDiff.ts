@@ -1,5 +1,6 @@
 import type { DiffChangeSetEntry, FileChangeDetail, GitStatus } from "@shared/types/git";
 import { isAbsolute, normalize } from "@shared/utils/path";
+import { workingTreeViewedKey } from "./diffViewedKey";
 
 /**
  * Tie-break order for changes with identical churn. Modified-first matches how
@@ -81,14 +82,14 @@ export function buildWorkingTreeDiffModel(
       return a.path.localeCompare(b.path);
     });
 
-  // Viewed keys are status-scoped: this set mixes staged and unstaged changes,
-  // so it can't use the Review Hub's `section:path` namespace.
+  // One entry per path, so one Viewed mark per path: the same key the Review
+  // Hub's staged and unstaged rows use, which keeps the two surfaces in step.
   const diffChangeSet: DiffChangeSetEntry[] = sortedChanges.map((change) => ({
     path: change.relativePath,
     status: change.status,
     insertions: change.insertions,
     deletions: change.deletions,
-    viewedKey: `${change.status}:${change.relativePath}`,
+    viewedKey: workingTreeViewedKey(change.relativePath),
   }));
 
   const indexByKey = new Map<string, number>();

@@ -5,6 +5,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import { ChevronDown, ChevronUp, Minus, Plus, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -168,7 +169,7 @@ function computeSectionRowKey(_index: number, file: StagingFileEntry, ctx: Secti
  */
 function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRowContext) {
   const rowIndex = ctx.indexOffset + index;
-  const viewedKey = `${ctx.section}:${file.path}`;
+  const viewedKey = workingTreeViewedKey(file.path);
   return (
     <FileStageRow
       id={`review-hub-row-${rowIndex}`}
@@ -580,8 +581,8 @@ export function FileSection({
                 onToggle={onToggle}
                 onRowClick={onRowClick}
                 density={view.density}
-                viewed={viewedFiles.has(`${section}:${file.path}`)}
-                onViewedChange={(v) => onViewedChange(`${section}:${file.path}`, v)}
+                viewed={viewedFiles.has(workingTreeViewedKey(file.path))}
+                onViewedChange={(v) => onViewedChange(workingTreeViewedKey(file.path), v)}
                 renderRowMenu={renderRowMenu}
               />
             ))}
