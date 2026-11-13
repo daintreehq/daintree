@@ -120,6 +120,7 @@ export function registerTerminalInputActions(
     title: "Inject context",
     description:
       "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong terminal. Target an idle terminal.",
+    paletteDescription: "Write the active worktree's prepared context into the focused terminal",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -557,6 +558,7 @@ export function registerTerminalInputActions(
     title: "Resend last message",
     description:
       "Send a panel's last message from its composer or a fleet broadcast again, with the same text and images, leaving the composer's draft as it is",
+    paletteDescription: "Resend the focused panel's last message with the same text and images",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -693,6 +695,7 @@ export function registerTerminalInputActions(
     title: "Disarm all",
     description:
       "Clear the fleet arming set entirely, so no terminal receives the user's broadcast input until something is armed again. This silently changes where the user's next broadcast lands, so prefer disarming individual terminals unless resetting is genuinely the intent.",
+    paletteDescription: "Disarm every terminal, so broadcast input reaches none until you arm one",
     category: "terminal",
     kind: "command",
     danger: "safe",

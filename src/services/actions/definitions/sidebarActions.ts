@@ -50,6 +50,7 @@ export function registerSidebarActions(
     title: "Switch sidebar view",
     description:
       "Show a sidebar view: the built-in worktree list or a plugin's. With no viewId, open the sidebar's view switcher.",
+    paletteDescription: "Choose which view the sidebar shows",
     category: "navigation",
     kind: "command",
     danger: "safe",

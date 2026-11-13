@@ -344,6 +344,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Launch terminal",
     description:
       "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
+    paletteDescription: "Open a plain shell with no agent attached",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -373,10 +374,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next waiting agent",
     description:
       "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
+    paletteDescription: "Focus the next agent that's waiting on you",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["blocked"],
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.focusNextWaiting", args, ctx, callbacks),
   }));
@@ -386,6 +389,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next waiting agent (all projects)",
     description:
       "Jump to the next project with a waiting agent. Cycles across all projects in sidebar order, wrapping around.",
+    paletteDescription: "Jump to the next project with a waiting agent, in sidebar order",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -399,6 +403,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next working agent",
     description:
       "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
+    paletteDescription: "Focus the next agent that's working",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -412,6 +417,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next agent",
     description:
       "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
+    paletteDescription: "Focus the next agent panel, wrapping to the first",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -861,6 +867,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus previous agent",
     description:
       "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
+    paletteDescription: "Focus the previous agent panel, wrapping to the last",
     category: "agent",
     kind: "command",
     danger: "safe",

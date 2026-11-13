@@ -22,6 +22,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     title: "Toggle portal",
     description:
       "Show or hide the portal browser panel, whichever it currently is not. Hiding closes no tab, though one left hidden for an hour may be released, reloading at its address with login kept when next shown. Because it toggles rather than sets, calling it blind can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
+    paletteDescription: "Show or hide the portal browser panel",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -182,6 +183,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     title: "New portal tab",
     description:
       "Open a new tab in the portal browser for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
+    paletteDescription: "Open a portal tab at your default address, or a blank one",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -401,6 +403,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     title: "Toggle dev server dashboard",
     description:
       "Show or hide the dashboard that lists dev servers across every worktree. This changes what the user sees and starts or stops no server itself. Because it toggles rather than sets, calling it blind can hide a view the user is reading.",
+    paletteDescription: "Show or hide the dashboard of dev servers across every worktree",
     category: "portal",
     kind: "command",
     danger: "safe",

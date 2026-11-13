@@ -51,6 +51,7 @@ export function registerPortActions(actions: ActionRegistry, callbacks: ActionCa
     title: "Forward port…",
     description:
       "Forward a port from a remote host so this machine's browser reaches it as localhost. With port, forwards it from hostId (default: this window's host) and returns the local port; with no args, opens the Ports view.",
+    paletteDescription: "Open the Ports view to forward a remote host's port to this machine",
     category: "workspace",
     kind: "command",
     danger: "safe",

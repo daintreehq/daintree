@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
-import type { ActionDanger, ActionManifestEntry } from "@shared/types/actions";
+import type { ActionDanger, ActionId, ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
@@ -31,6 +31,7 @@ import {
 export interface ActionPaletteItem {
   id: string;
   title: string;
+  /** The entry's `paletteDescription` when it has one, else its `description`. */
   description: string;
   category: string;
   enabled: boolean;
@@ -163,24 +164,48 @@ export const RECENTLY_USED_SECTION_ID = "recently-used";
 const resolveMaxResults = (query: string): number =>
   query.trim() ? MAX_RESULTS : Number.POSITIVE_INFINITY;
 
-export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
+/**
+ * @param target The entry a redirect row dispatches, when it has one. The row
+ *   keeps the source's name, which is what the user searched for, but whether
+ *   it can run is the target's, since that is what Enter runs.
+ */
+export function toActionPaletteItem(
+  entry: ActionManifestEntry,
+  target?: ActionManifestEntry
+): ActionPaletteItem {
   const title =
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
-  const description = typeof entry.description === "string" ? entry.description : "";
+  // The palette subtitle stands in for the MCP description everywhere the row
+  // reads it, search included, so agent guidance can't surface as a match excerpt.
+  const description =
+    typeof entry.paletteDescription === "string" && entry.paletteDescription.trim().length > 0
+      ? entry.paletteDescription
+      : typeof entry.description === "string"
+        ? entry.description
+        : "";
   const category = typeof entry.category === "string" ? entry.category : "General";
+  const redirectTo =
+    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
+  // A redirect whose target is gone stays pickable, as on the command HUD:
+  // dispatch reports NOT_FOUND instead of the row borrowing the source's state.
+  const runs = target ?? (redirectTo ? undefined : entry);
   // A `requireContext` palette action surfaces as disabled-with-reason: fold
   // its palette-only flags into the row's enabled/disabledReason so the
   // existing disabled-row UX (grayed, inline reason, Enter no-ops) applies
   // without touching the manifest's dispatch-facing `enabled`.
-  const enabled = entry.enabled && entry.paletteDisabled !== true;
-  const disabledReason =
-    typeof entry.paletteDisabledReason === "string"
-      ? entry.paletteDisabledReason
-      : typeof entry.disabledReason === "string"
-        ? entry.disabledReason
+  const enabled = runs ? runs.enabled && runs.paletteDisabled !== true : true;
+  const disabledReason = !runs
+    ? undefined
+    : typeof runs.paletteDisabledReason === "string"
+      ? runs.paletteDisabledReason
+      : typeof runs.disabledReason === "string"
+        ? runs.disabledReason
         : undefined;
-  const redirectTo =
-    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
+  // The source's own binding already runs the target (resolveInteractiveActionId),
+  // so it stays when there is one; otherwise the target's binding is the chord
+  // that does what picking this row does.
+  const shortcutOwner =
+    target && !keybindingService.getEffectiveCombo(entry.id) ? target.id : entry.id;
   const dangerRationale =
     typeof entry.dangerRationale === "string" && entry.dangerRationale.trim().length > 0
       ? entry.dangerRationale.trim()
@@ -201,8 +226,8 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
     dangerRationale,
     disabledReason,
     redirectTo,
-    keybinding: keybindingService.getDisplayCombo(entry.id),
-    shortcut: keybindingService.getEffectiveCombo(entry.id) || undefined,
+    keybinding: keybindingService.getDisplayCombo(shortcutOwner),
+    shortcut: keybindingService.getEffectiveCombo(shortcutOwner) || undefined,
     kind: entry.kind,
     pluginId: entry.pluginId,
     titleLower: title.toLowerCase(),
@@ -232,6 +257,12 @@ export function useActionPalette(): UseActionPaletteReturn {
     // Palette rows never read the JSON schemas — skip their compilation and
     // cloning so first open doesn't pay the deferred ~300-action compile.
     const entries = actionService.list(undefined, { includeSchemas: false });
+    // Indexed before filtering: a redirect target is often palette-hidden or
+    // arg-taking itself. `list()` drops actions hidden by `isVisible`, which
+    // dispatch still reaches through `get()`, so a miss falls back to it.
+    const entryById = new Map(entries.map((e) => [e.id, e]));
+    const redirectTarget = (id: ActionId): ActionManifestEntry | undefined =>
+      entryById.get(id) ?? actionService.get(id, undefined, { includeSchemas: false }) ?? undefined;
     return entries
       .filter((e) => {
         if (e.kind !== "command") return false;
@@ -253,10 +284,12 @@ export function useActionPalette(): UseActionPaletteReturn {
         return e.pluginId !== undefined && actionService.getPluginPaletteArgs(e.id) !== null;
       })
       .map((e) => {
-        const item = toActionPaletteItem(e);
+        const target = e.paletteRedirectTo ? redirectTarget(e.paletteRedirectTo) : undefined;
+        const item = toActionPaletteItem(e, target);
         if (e.requiresArgs && !e.paletteRedirectTo) item.promptsForArgs = true;
-        if (e.pluginId !== undefined) {
-          const enablement = pluginGates.get(e.id)?.enablement;
+        const runs = target ?? e;
+        if (runs.pluginId !== undefined) {
+          const enablement = pluginGates.get(runs.id)?.enablement;
           if (enablement && !evaluateWhenClause(enablement, pluginWhenContext)) {
             item.enabled = false;
             item.disabledReason = item.disabledReason ?? PLUGIN_DISABLED_REASON;

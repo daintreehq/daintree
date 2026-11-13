@@ -35,6 +35,7 @@ export function registerWorkflowCreationActions(
       title: "Create managed worktree",
       description:
         "Create a managed git worktree: Daintree also copies project config, initializes submodules and runs setup. Pick one source mode. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
+      paletteDescription: "Open the new worktree dialog to pick a branch and an optional recipe",
       category: "worktree",
       kind: "command",
       danger: "safe",

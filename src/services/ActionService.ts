@@ -1080,6 +1080,7 @@ export class ActionService {
     if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
     if (paletteHidden) entry.paletteHidden = true;
     if (paletteRedirectTo) entry.paletteRedirectTo = paletteRedirectTo;
+    if (definition.paletteDescription) entry.paletteDescription = definition.paletteDescription;
     if (paletteDisabled) entry.paletteDisabled = true;
     if (paletteDisabledReason) entry.paletteDisabledReason = paletteDisabledReason;
     return entry;

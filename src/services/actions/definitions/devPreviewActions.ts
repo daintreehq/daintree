@@ -55,10 +55,12 @@ export function registerDevPreviewActions(
     title: "Reload preview",
     description:
       "Reload the dev preview page without restarting its dev server. Try this first when the preview looks stale; restart the server only when its process is wedged or its config changed.",
+    paletteDescription: "Reload the dev preview page without restarting its server",
     category: "devServer",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["stale"],
     palette: {
       mode: "requireContext",
       isReady: () => isDevPreviewFocused(),
@@ -82,6 +84,7 @@ export function registerDevPreviewActions(
     title: "Restart dev server",
     description:
       "Stop the dev server and start it again, keeping caches and dependencies. The preview is down until it returns; reload the page first unless the server process itself is the problem.",
+    paletteDescription: "Stop and restart the dev server, keeping caches and dependencies",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -149,6 +152,8 @@ export function registerDevPreviewActions(
     title: "Open in portal",
     description:
       "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
+    paletteDescription:
+      "Open the dev preview's URL in a portal tab, sharing its cookies and storage",
     category: "devServer",
     kind: "command",
     danger: "safe",

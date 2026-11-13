@@ -438,6 +438,14 @@ export interface ActionDefinition<
    */
   palette?: PaletteBehavior;
   /**
+   * The action palette's subtitle for this row, in place of `description`.
+   * `description` is the MCP tool contract and is written for agents, so it
+   * often carries call guidance no person should read. When set, the palette
+   * shows and searches this instead; put the human synonyms it drops in
+   * `keywords`. One short sentence, no trailing period.
+   */
+  paletteDescription?: string;
+  /**
    * Declares that *every* exception escaping `run()` has already produced a
    * user-visible error notification. The action palette reads this (via
    * `ActionService.selfNotifiesOnExecutionError`) to suppress its generic
@@ -578,6 +586,8 @@ export interface ActionManifestEntry {
   paletteHidden?: boolean;
   /** `palette.mode === "redirect"` — dispatch this id instead when picked. */
   paletteRedirectTo?: ActionId;
+  /** {@link ActionDefinition.paletteDescription}: the palette row's subtitle. */
+  paletteDescription?: string;
   /** `palette.mode === "requireContext"` and `isReady(ctx)` was false at list() time. */
   paletteDisabled?: boolean;
   /** Reason shown on a `requireContext`-disabled palette row. */
