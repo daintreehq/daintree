@@ -431,28 +431,30 @@ export function DiffPane({
     [changeSet, effectiveFilter, fullOrder]
   );
 
-  // The shelf as it stood when the open file was last in it, tagged with the
-  // cursor it was taken for: once the file leaves the set, stepping resumes
-  // from the gap it left, and a pane sent to some other missing file gets none
-  // of this file's history.
-  const cursorKey = `${filePath ?? ""}\0${fileStatus ?? ""}\0${panelViewedKey ?? ""}\0${panelFileSide ?? ""}`;
+  // The shelf as it stood when the open file was last in it, tagged with its
+  // path: once the file leaves the set, stepping resumes from the gap it left,
+  // and a pane sent to some other missing file gets none of this one's history.
+  // The path alone, not the whole cursor: an opener that loses the file can
+  // re-aim the pane at it under its old status or side (the Review Hub falls
+  // back to its original selection), and that is still the same gap.
   const [anchorState, setAnchorState] = useState<{
-    cursorKey: string;
+    filePath: string;
     anchor: DiffFileAnchor;
   } | null>(null);
   useEffect(() => {
-    if (!changeSet || currentIndex === -1) return;
+    if (!changeSet || filePath === undefined || currentIndex === -1) return;
     const position = fullOrder.indexOf(currentIndex);
     setAnchorState((current) =>
-      current?.cursorKey === cursorKey &&
+      current?.filePath === filePath &&
       current.anchor.files === changeSet &&
       current.anchor.order === fullOrder &&
       current.anchor.position === position
         ? current
-        : { cursorKey, anchor: { files: changeSet, order: fullOrder, position } }
+        : { filePath, anchor: { files: changeSet, order: fullOrder, position } }
     );
-  }, [changeSet, fullOrder, currentIndex, cursorKey]);
-  const anchor = anchorState?.cursorKey === cursorKey ? anchorState.anchor : null;
+  }, [changeSet, fullOrder, currentIndex, filePath]);
+  const anchor =
+    anchorState !== null && anchorState.filePath === filePath ? anchorState.anchor : null;
 
   const navigation = useMemo(
     () => resolveDiffFileNavigation(changeSet ?? [], fullOrder, visibleOrder, currentIndex, anchor),

@@ -46,10 +46,17 @@ describe("groupDiffChangeSet", () => {
     ]);
   });
 
+  it("sorts folders by locale, not by code point", () => {
+    // Code-point order would put `B` ahead of `a`.
+    const files = [entry("B/x.ts"), entry("a/y.ts")];
+
+    expect(groupDiffChangeSet(files).map((group) => group.dir)).toEqual(["a", "B"]);
+  });
+
   it("keeps only paths containing the trimmed filter, case-insensitively", () => {
     const files = [entry("src/Alpha.ts"), entry("lib/beta.ts"), entry("ALPHA.md")];
 
-    expect(pathsOf(files, diffDisplayOrder(groupDiffChangeSet(files, "  alpha ")))).toEqual([
+    expect(pathsOf(files, diffDisplayOrder(groupDiffChangeSet(files, "  ALpHa ")))).toEqual([
       "ALPHA.md",
       "src/Alpha.ts",
     ]);
@@ -162,11 +169,39 @@ describe("resolveDiffFileNavigation", () => {
       const staged = entry("a.ts", "staged");
       const unstaged = entry("a.ts", "unstaged");
       const z = entry("z.ts");
-      // The staged twin was open and goes; the unstaged twin after it survives.
-      expect(afterRemoval([staged, unstaged, z], "a.ts", [unstaged, z])).toMatchObject({
-        previous: null,
-        next: "a.ts",
+      // b.ts sat between the twins, which share a Viewed key: only the side
+      // says its successor is the unstaged one, not the staged one ahead of it.
+      expect(afterRemoval([staged, b, unstaged, z], "b.ts", [staged, unstaged, z])).toMatchObject({
+        previousIndex: 0,
+        nextIndex: 1,
       });
+    });
+
+    it("places the gap before its surviving successor, ahead of a file new to the set", () => {
+      const x = entry("x.ts");
+      // x.ts arrived where b.ts was; the old successor c.ts still marks the gap.
+      expect(afterRemoval([a, b, c], "b.ts", [a, x, c])).toMatchObject({
+        previous: "x.ts",
+        next: "c.ts",
+      });
+    });
+
+    it("finds the gap in the full order when the filter hides its neighbours", () => {
+      const keepB = entry("keep-b.ts");
+      const keepE = entry("keep-e.ts");
+      const before = [a, keepB, c, d, keepE];
+      const files = [a, keepB, d, keepE];
+      const fullOrder = diffDisplayOrder(groupDiffChangeSet(files));
+      const visible = diffDisplayOrder(groupDiffChangeSet(files, "keep-"));
+      const nav = resolveDiffFileNavigation(
+        files,
+        fullOrder,
+        visible,
+        -1,
+        anchorAt(before, "c.ts")
+      );
+      // c.ts's successor d.ts is hidden but still marks the gap.
+      expect(nav).toEqual({ position: null, total: 2, previousIndex: 1, nextIndex: 3 });
     });
 
     it("falls back to its old place when none of its neighbours survive", () => {

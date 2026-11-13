@@ -829,6 +829,7 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
     expect(unavailable("Previous file")).toBe(false);
     expect(unavailable("Next file")).toBe(false);
 
+    expect(useDiffContentMock.mock.calls.at(-1)![1]?.filePath).toBe("c.ts");
     pressInPane("]");
     expectSelected(c);
     fireEvent.click(screen.getByLabelText("Next file"));
@@ -840,10 +841,11 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
   });
 
   it("warms the file the stepper would open next, in the sidebar's order", () => {
-    seedPanel({ filePath: "root.ts", fileStatus: "modified", changeSet: unordered });
+    // lib/lib.ts is last in the raw set, so raw order has nothing after it.
+    seedPanel({ filePath: "lib/lib.ts", fileStatus: "modified", changeSet: unordered });
     renderPane();
 
-    expect(useDiffContentMock.mock.calls.at(-1)![1]?.filePath).toBe("lib/lib.ts");
+    expect(useDiffContentMock.mock.calls.at(-1)![1]?.filePath).toBe("src/zed.ts");
   });
 
   describe("with the sidebar's filter", () => {
@@ -925,6 +927,10 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
     const b = entry("b.ts");
     seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a, b] });
     const { rerender } = renderPane();
+    // A filter that hides the survivor: once the shelf goes with the
+    // workspace, its filter must go with it.
+    fireEvent.change(screen.getByTestId("diff-sidebar-filter"), { target: { value: "b" } });
+    expect(positionText()).toBe("1 of 1");
 
     seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a] });
     rerender(paneElement());
@@ -933,6 +939,34 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
     expect(unavailable("Next file")).toBe(true);
     fireEvent.click(screen.getByLabelText("Previous file"));
     expectSelected(a);
+  });
+
+  it("keeps the gap when an opener re-aims the pane at the missing file under another cursor", () => {
+    const a = entry("a.ts");
+    const b: DiffChangeSetEntry = { ...entry("b.ts"), side: "staged" };
+    const c = entry("c.ts");
+    seedPanel({
+      filePath: "b.ts",
+      fileStatus: "modified",
+      viewedKey: b.viewedKey,
+      fileSide: "staged",
+      changeSet: [a, b, c],
+    });
+    const { rerender } = renderPane();
+
+    // Committed: the Review Hub falls back to the selection it first opened,
+    // re-aiming the pane at b.ts with that one's status and side.
+    seedPanel({
+      filePath: "b.ts",
+      fileStatus: "added",
+      viewedKey: b.viewedKey,
+      fileSide: "unstaged",
+      changeSet: [a, c],
+    });
+    rerender(paneElement());
+
+    pressInPane("]");
+    expectSelected(c);
   });
 
   it("gives a pane sent to another missing file none of the last file's history", () => {

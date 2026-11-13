@@ -162,6 +162,59 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+describe("DiffFileSidebar — a filter its owner holds (#16898)", () => {
+  const FILES = [entry("src/a.ts"), entry("lib/b.ts")];
+
+  function renderOwned(filter: string, onFilterChange = vi.fn()) {
+    const element = (value: string) => (
+      <TooltipProvider>
+        <DiffFileSidebar
+          files={FILES}
+          currentIndex={0}
+          worktreePath={WORKTREE}
+          worktreeId="wt-1"
+          filter={value}
+          onFilterChange={onFilterChange}
+          onSelect={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    const utils = render(element(filter));
+    return { onFilterChange, rerender: (value: string) => utils.rerender(element(value)) };
+  }
+
+  const rowLabels = () =>
+    screen.queryAllByTestId("diff-sidebar-file").map((row) => row.getAttribute("aria-label"));
+  const filterBox = () => screen.getByTestId("diff-sidebar-filter") as HTMLInputElement;
+
+  it("shows the filter it is given and follows it when the owner changes it", () => {
+    const { rerender } = renderOwned("src/");
+    expect(filterBox().value).toBe("src/");
+    expect(rowLabels()).toEqual(["Open src/a.ts"]);
+
+    rerender("lib/");
+    expect(filterBox().value).toBe("lib/");
+    expect(rowLabels()).toEqual(["Open lib/b.ts"]);
+  });
+
+  it("hands typing and both clears to the owner instead of filtering on its own", () => {
+    const { onFilterChange } = renderOwned("src/");
+    fireEvent.change(filterBox(), { target: { value: "src/a" } });
+    expect(onFilterChange).toHaveBeenLastCalledWith("src/a");
+    // Still the owner's value until the owner says otherwise.
+    expect(filterBox().value).toBe("src/");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear file filter" }));
+    expect(onFilterChange).toHaveBeenLastCalledWith("");
+    cleanup();
+
+    const empty = renderOwned("nothing");
+    expect(rowLabels()).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(empty.onFilterChange).toHaveBeenLastCalledWith("");
+  });
+});
+
 describe("DiffFileSidebar — file row menu", () => {
   it("opens the shared file menu on a row and claims the event", async () => {
     renderSidebar();
