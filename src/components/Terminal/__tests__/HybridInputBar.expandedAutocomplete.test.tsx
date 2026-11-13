@@ -178,6 +178,32 @@ describe("HybridInputBar completions in the Expanded Editor", () => {
     expect(dialog().contains(view.dom)).toBe(true);
   });
 
+  it("inserts the selected row on Enter without sending", async () => {
+    const { view, onSend, type, openExpandedEditor, press } = await mount();
+    await openExpandedEditor();
+    await type("@dif");
+
+    await press("Enter");
+
+    expect(view.state.doc.toString()).toMatch(/^@diff/);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`)).not.toBeNull();
+  });
+
+  it("closes a menu left open in the bar when the editor moves into the dialog", async () => {
+    const { container, view, type, openExpandedEditor } = await mount();
+    await type("@");
+    expect(menuIn(container)).not.toBeNull();
+
+    await openExpandedEditor();
+
+    expect(view.contentDOM.getAttribute("aria-expanded")).not.toBe("true");
+    expect(menuIn(dialog())).toBeNull();
+
+    await type(" @");
+    expect(menuIn(dialog())).not.toBeNull();
+  });
+
   // The editor is the dialog's last tab stop, where its focus trap wraps Tab
   // round to the first: a Tab the menu took is not one to wrap.
   it("completes on Tab and keeps the caret in the editor", async () => {

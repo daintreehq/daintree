@@ -45,7 +45,7 @@ function samePlacement(a: MenuPlacement, b: MenuPlacement): boolean {
 }
 
 interface CaretFrame {
-  rect: DOMRect;
+  rect: Pick<DOMRectReadOnly, "left" | "top" | "right" | "bottom">;
   clientLeft: number;
   clientTop: number;
   clientHeight: number;
