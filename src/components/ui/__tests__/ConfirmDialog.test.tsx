@@ -1445,3 +1445,51 @@ describe("ConfirmDialog — close button while the confirm runs", () => {
     expect(closeButton().hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("ConfirmDialog — repeat presses on the primary (#16943)", () => {
+  function renderConfirm(onConfirm: () => void, confirmCooldownMs?: number) {
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Allow 'Grid' to open links to example.com?"
+        confirmLabel="Allow and remember"
+        onConfirm={onConfirm}
+        variant="default"
+        confirmCooldownMs={confirmCooldownMs}
+      />
+    );
+    return screen.getByRole("button", { name: "Allow and remember" });
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("answers a press and the keyboard, but not the second press of a double-click", () => {
+    const onConfirm = vi.fn();
+    const button = renderConfirm(onConfirm);
+
+    fireEvent.click(button, { detail: 1 });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    fireEvent.click(button, { detail: 2 });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    // Enter and Space activate with no click count.
+    fireEvent.click(button, { detail: 0 });
+    expect(onConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a press that can't answer from taking focus to the primary", () => {
+    vi.useFakeTimers();
+    const button = renderConfirm(vi.fn(), 1_200);
+
+    // `fireEvent` returns false once the default, here the focus move, is prevented.
+    expect(fireEvent.mouseDown(button, { detail: 1 })).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1_200);
+    });
+    expect(fireEvent.mouseDown(button, { detail: 1 })).toBe(true);
+    expect(fireEvent.mouseDown(button, { detail: 2 })).toBe(false);
+  });
+});

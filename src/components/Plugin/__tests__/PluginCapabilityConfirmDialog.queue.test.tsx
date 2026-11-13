@@ -127,6 +127,7 @@ afterEach(() => {
 const ADVANCES: Array<[Kind, Kind]> = [
   ["capability", "capability"],
   ["capability", "restore"],
+  ["restore", "restore"],
   ["restore", "capability"],
   ["site", "site"],
   ["site", "capability"],
@@ -155,11 +156,15 @@ describe("PluginCapabilityConfirmDialog — advancing the queue (#16943)", () =>
       const allow = screen.getByRole("button", { name: PRIMARY_LABEL[firstKind] });
       act(() => {
         allow.focus();
+      });
+      expect(document.activeElement).toBe(allow);
+      act(() => {
         fireEvent.click(allow);
       });
       await expect(first).resolves.toBe("approved-and-pin");
-      // The scroll reset lands before paint, so it's already in.
-      expect(bodyScroller().scrollTop).toBe(0);
+      // The same scroller, put back at the top: a remounted one would read 0 anyway.
+      expect(bodyScroller()).toBe(scroller);
+      expect(scroller.scrollTop).toBe(0);
 
       // Focus comes back to the safe answer rather than staying on the primary.
       await advance(16);
@@ -184,4 +189,24 @@ describe("PluginCapabilityConfirmDialog — advancing the queue (#16943)", () =>
       await expect(second).resolves.toBe("approved-and-pin");
     }
   );
+
+  it("doesn't answer a promoted link prompt with the second press of a double-click", async () => {
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    act(() => {
+      first = requestPluginCapabilityConsent(request("site", "first"));
+      second = requestPluginCapabilityConsent(request("site", "second"));
+    });
+    render(<PluginCapabilityConfirmDialog />);
+
+    act(() => {
+      fireEvent.click(primary(), { detail: 1 });
+    });
+    await expect(first).resolves.toBe("approved-and-pin");
+    expect(fireEvent.mouseDown(primary(), { detail: 2 })).toBe(false);
+    act(() => {
+      fireEvent.click(primary(), { detail: 2 });
+    });
+    await expectStillPending(second);
+  });
 });

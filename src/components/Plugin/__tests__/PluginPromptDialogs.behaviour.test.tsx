@@ -560,6 +560,8 @@ describe("PluginConfirmPromptDialog — advancing the queue (#16943)", () => {
   }
 
   afterEach(() => {
+    cleanup();
+    usePluginPromptStore.getState().reset();
     vi.useRealTimers();
   });
 
@@ -574,7 +576,8 @@ describe("PluginConfirmPromptDialog — advancing the queue (#16943)", () => {
       expect(primary().getAttribute("aria-disabled") === "true").toBe(destructive);
       await advance(5_000);
 
-      Object.defineProperty(scroller(), "scrollTop", {
+      const body = scroller();
+      Object.defineProperty(body, "scrollTop", {
         value: 40,
         writable: true,
         configurable: true,
@@ -582,11 +585,16 @@ describe("PluginConfirmPromptDialog — advancing the queue (#16943)", () => {
       const confirm = primary();
       act(() => {
         confirm.focus();
+      });
+      expect(document.activeElement).toBe(confirm);
+      act(() => {
         fireEvent.click(confirm);
       });
       await expect(first).resolves.toBe(true);
       expect(document.body.textContent).toContain("Question q2?");
-      expect(scroller().scrollTop).toBe(0);
+      // The same scroller, put back at the top: a remounted one would read 0 anyway.
+      expect(scroller()).toBe(body);
+      expect(body.scrollTop).toBe(0);
 
       await advance(16);
       expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");

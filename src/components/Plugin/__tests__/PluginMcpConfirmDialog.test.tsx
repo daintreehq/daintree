@@ -268,9 +268,13 @@ describe("PluginMcpConfirmDialog structure", () => {
       const allow = screen.getByRole("button", { name: "Allow and remember" });
       act(() => {
         allow.focus();
+      });
+      expect(document.activeElement).toBe(allow);
+      act(() => {
         allow.click();
       });
       expect(screen.getByText("other_tool")).toBeTruthy();
+      expect(allow.getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(16);
       });
@@ -284,6 +288,8 @@ describe("PluginMcpConfirmDialog structure", () => {
       expect(allow.hasAttribute("aria-disabled")).toBe(false);
       expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
     } finally {
+      act(() => usePluginMcpConfirmStore.getState().reset());
+      cleanup();
       vi.useRealTimers();
     }
   });

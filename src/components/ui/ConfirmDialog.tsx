@@ -361,6 +361,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             isCooldownActive ||
             (isBusy && !isConfirmLoading),
           intent: variant === "destructive" ? "destructive" : "default",
+          ignoresRepeatPress: true,
         }}
       />
     </AppDialog>

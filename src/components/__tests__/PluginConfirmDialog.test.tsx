@@ -246,8 +246,14 @@ describe("PluginConfirmDialog", () => {
       const aBtn = screen.getByRole("button", { name: "Delete worktree" });
       act(() => {
         aBtn.focus();
+      });
+      expect(document.activeElement).toBe(aBtn);
+      act(() => {
         aBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
+      expect(
+        screen.getByRole("button", { name: "Reset branch" }).getAttribute("aria-disabled")
+      ).toBe("true");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(16);
       });
