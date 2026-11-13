@@ -66,6 +66,29 @@ describe("KeybindingProfileActions", () => {
     expect(notifyMock.mock.calls[0]![0]).toMatchObject({ message: "No shortcuts were applied" });
   });
 
+  it("keeps focus on Import while the file dialog is open, and blocks Export meanwhile", async () => {
+    let finish!: (result: unknown) => void;
+    importProfile.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    render(<KeybindingProfileActions onImportComplete={vi.fn()} />);
+    const importButton = screen.getByRole("button", { name: "Import" }) as HTMLButtonElement;
+    const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
+    act(() => importButton.focus());
+
+    await click("Import");
+
+    // A natively disabled button gives up focus, so the busy one must not be.
+    expect(importButton.disabled).toBe(false);
+    expect(importButton.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(importButton);
+    expect(exportButton.disabled).toBe(true);
+
+    await act(async () => finish({ ok: true, applied: 1, skipped: 0, errors: [] }));
+
+    expect(importButton.getAttribute("aria-busy")).toBeNull();
+    expect(exportButton.disabled).toBe(false);
+    expect(document.activeElement).toBe(importButton);
+  });
+
   it("still reports a failed import", async () => {
     importProfile.mockResolvedValue({ ok: false, errors: ["Bad file"] });
     render(<KeybindingProfileActions onImportComplete={vi.fn()} />);

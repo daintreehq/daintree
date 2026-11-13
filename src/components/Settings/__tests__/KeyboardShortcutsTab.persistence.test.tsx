@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, within, fireEvent } from "@testing-library/react";
+import { render, screen, act, within, fireEvent, waitFor } from "@testing-library/react";
 
 // jsdom ships no matchMedia; InlineStatusBanner reads it to honour reduced motion.
 Object.defineProperty(window, "matchMedia", {
@@ -302,6 +302,29 @@ describe("KeyboardShortcutsTab — failed reset all", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(loadOverrides).toHaveBeenCalledTimes(2); // mount + successful reset
+  });
+
+  it("puts focus on search once a landed reset leaves Reset all with nothing to reset", async () => {
+    dispatch.mockImplementation(async () => {
+      overrides.clear();
+      return SUCCESS;
+    });
+
+    await renderTab();
+    const resetAll = screen.getByRole("button", { name: "Reset all" }) as HTMLButtonElement;
+    act(() => resetAll.focus());
+    await act(async () => resetAll.click());
+    // Pressed from the keyboard, so focus is inside the dialog when it closes.
+    const confirm = screen.getByRole("button", { name: "Reset shortcuts" });
+    act(() => confirm.focus());
+    await act(async () => confirm.click());
+
+    expect(resetAll.disabled).toBe(true);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search shortcuts" })
+      )
+    );
   });
 });
 

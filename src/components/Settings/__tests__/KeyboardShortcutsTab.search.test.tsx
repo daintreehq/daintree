@@ -214,3 +214,35 @@ describe("KeyboardShortcutsTab search on another keyboard layout", () => {
     expect(rowLabels()).toContain("Show shortcut reference");
   });
 });
+
+describe("KeyboardShortcutsTab search field", () => {
+  it("finds the double-tap gesture by the keys the rail would show for it", async () => {
+    await renderTab();
+    await search(
+      parseChord("Shift Shift", isMac())
+        .map((step) => step.join(""))
+        .join("")
+    );
+
+    expect(screen.getByText("Double-tap Shift opens Canopy")).toBeTruthy();
+  });
+
+  it("clears a search on the first Escape and keeps the key from the dialog around it", async () => {
+    const dialogEscape = vi.fn();
+    document.addEventListener("keydown", dialogEscape);
+    try {
+      await renderTab();
+      await search("save");
+      const input = screen.getByRole("textbox", { name: "Search shortcuts" }) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Escape" });
+      });
+
+      expect(input.value).toBe("");
+      expect(dialogEscape).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", dialogEscape);
+    }
+  });
+});
