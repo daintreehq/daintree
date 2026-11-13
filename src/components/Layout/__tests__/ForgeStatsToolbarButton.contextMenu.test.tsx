@@ -23,16 +23,23 @@ interface WorktreeFixture {
 const dispatchMock = vi.hoisted(() => vi.fn());
 const getRepoUrlMock = vi.hoisted(() => vi.fn<(cwd: string) => Promise<string | null>>());
 const refreshStatsMock = vi.hoisted(() => vi.fn());
-const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ entry: null }));
+const providerState = vi.hoisted(
+  (): { entry: ForgeProviderEntry | null; issuesEntry: ForgeProviderEntry | null } => ({
+    entry: null,
+    issuesEntry: null,
+  })
+);
 const statsState = vi.hoisted(
   (): {
     isTokenError: boolean;
     error: string | null;
+    issueError: string | undefined;
     rateLimitResetAt: number | null;
     rateLimitKind: "primary" | "secondary" | null;
   } => ({
     isTokenError: false,
     error: null,
+    issueError: undefined,
     rateLimitResetAt: null,
     rateLimitKind: null,
   })
@@ -50,7 +57,7 @@ vi.mock("@/clients/forgeClient", () => ({
 
 vi.mock("@/hooks/useRepositoryStats", () => ({
   useRepositoryStats: () => ({
-    stats: { issueCount: 3, prCount: 2, commitCount: 5 },
+    stats: { issueCount: 3, prCount: 2, commitCount: 5, issueError: statsState.issueError },
     loading: false,
     error: statsState.error,
     isTokenError: statsState.isTokenError,
@@ -68,11 +75,17 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
     entry: providerState.entry,
     providerId: providerState.entry ? "daintree.github.github" : null,
     resolvedVia: providerState.entry ? "hostname" : null,
-    issues: {
-      entry: providerState.entry,
-      providerId: providerState.entry ? "daintree.github.github" : null,
-      resolvedVia: providerState.entry ? "code" : null,
-    },
+    issues: providerState.issuesEntry
+      ? {
+          entry: providerState.issuesEntry,
+          providerId: `${providerState.issuesEntry.pluginId}.${providerState.issuesEntry.contribution.id}`,
+          resolvedVia: "override",
+        }
+      : {
+          entry: providerState.entry,
+          providerId: providerState.entry ? "daintree.github.github" : null,
+          resolvedVia: providerState.entry ? "code" : null,
+        },
     loading: false,
     refresh: () => {},
   }),
@@ -141,8 +154,10 @@ beforeEach(() => {
   getRepoUrlMock.mockReset();
   getRepoUrlMock.mockResolvedValue("https://github.com/acme/proj");
   providerState.entry = GITHUB;
+  providerState.issuesEntry = null;
   statsState.isTokenError = false;
   statsState.error = null;
+  statsState.issueError = undefined;
   statsState.rateLimitResetAt = null;
   statsState.rateLimitKind = null;
   worktrees.set("wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" });
@@ -368,5 +383,129 @@ describe("ForgeStatsToolbarButton context menus", () => {
 
     expect(itemLabels(menu)).toEqual([TOOLBAR_CUSTOMIZE_LABEL, TOOLBAR_UNPIN_LABEL]);
     expect(getRepoUrlMock).not.toHaveBeenCalled();
+  });
+});
+
+const LINEAR: ForgeProviderEntry = {
+  pluginId: "daintree.linear",
+  contribution: { id: "linear", name: "Linear", matches: [], roles: ["issues"] },
+};
+
+describe("ForgeStatsToolbarButton with issues on another tracker (#16944)", () => {
+  beforeEach(() => {
+    providerState.issuesEntry = LINEAR;
+  });
+
+  function stubCredentialStatus(): void {
+    Object.defineProperty(window, "electron", {
+      writable: true,
+      configurable: true,
+      value: {
+        forge: {
+          getCredentialStatus: vi
+            .fn()
+            .mockResolvedValue({ hasCredential: true, fingerprint: "fp" }),
+        },
+      },
+    });
+  }
+
+  it("names the tracker on the issues pill and its menu, and keeps the repository the code forge's", async () => {
+    await renderStats();
+    const pill = screen.getByTestId("forge-stat-pill-issues");
+
+    expect(pill.getAttribute("aria-label")).toContain("open issues on Linear");
+    fireEvent.focus(pill);
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Browse Linear issues");
+
+    const menu = await openMenu(pill);
+    expect(itemLabels(menu)).toEqual(["View all issues on Linear", ...CHROME_MENU]);
+    const prMenuPill = screen.getByTestId("forge-stat-pill-prs");
+    expect(prMenuPill.getAttribute("aria-label")).not.toContain("Linear");
+  });
+
+  it("keeps a healthy tracker's pill out of the code forge's token prompt", async () => {
+    statsState.isTokenError = true;
+    statsState.error = "GitHub token not configured. Set it in Settings.";
+    await renderStats();
+
+    const issues = screen.getByTestId("forge-stat-pill-issues");
+    expect(issues.getAttribute("aria-label")).not.toContain("GitHub");
+    expect(issues.getAttribute("aria-label")).toContain("open issues on Linear");
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toBe(
+      "Configure GitHub token to see pull requests"
+    );
+
+    fireEvent.click(issues);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openIssues",
+      { projectPath: PROJECT.path },
+      { source: "user" }
+    );
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["No Linear API key configured. Add one in Settings → Code forge.", "Configure Linear token"],
+    ["Linear rejected the API key", "Reconnect Linear"],
+  ])("asks for the tracker's own credentials after %j", async (issueError, verb) => {
+    statsState.issueError = issueError;
+    await renderStats();
+
+    const issues = screen.getByTestId("forge-stat-pill-issues");
+    expect(issues.getAttribute("aria-label")).toBe(`${verb} to see issues`);
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toContain(
+      "open pull requests"
+    );
+
+    fireEvent.click(issues);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: "daintree.linear.linear" },
+      { source: "user" }
+    );
+  });
+
+  it("says the tracker's data is unavailable when it fails for another reason", async () => {
+    statsState.issueError = "Couldn't reach Linear";
+    await renderStats();
+
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).toContain(
+      "Linear data unavailable"
+    );
+  });
+
+  it("leaves the code forge's rate limit off the tracker's pill", async () => {
+    statsState.rateLimitResetAt = Date.now() + 10 * 60_000;
+    await renderStats();
+
+    expect(screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-label")).not.toContain(
+      "rate limit"
+    );
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-label")).toContain(
+      "GitHub rate limit"
+    );
+  });
+
+  it("points the code forge's reconnect callout at the PR pill, promising only PR counts", async () => {
+    stubCredentialStatus();
+    statsState.isTokenError = true;
+    statsState.error = "Invalid GitHub token. Please update in Settings.";
+    await renderStats();
+    await act(async () => {});
+
+    const callout = screen.getByTestId("forge-token-callout");
+    expect(screen.getByTestId("forge-stat-pill-prs").getAttribute("aria-describedby")).toBe(
+      callout.id
+    );
+    expect(
+      screen.getByTestId("forge-stat-pill-issues").getAttribute("aria-describedby")
+    ).toBeNull();
+    expect(callout.textContent).toContain("restore pull request counts.");
+    expect(callout.textContent).not.toContain("issue");
   });
 });
