@@ -63,31 +63,40 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Set by a test that needs an overlay the pane opened: a React child of the
 // pane portalled out of its DOM, the way a menu or popover is.
-const { viewerOverlay } = vi.hoisted(() => ({ viewerOverlay: { open: false } }));
+const { viewerOverlay, viewerDraftSessions } = vi.hoisted(() => ({
+  viewerOverlay: { open: false },
+  // Every note-draft session a mounted viewer was handed.
+  viewerDraftSessions: new Set<unknown>(),
+}));
 vi.mock("@/components/Worktree/DiffViewer", async () => {
   const { createPortal } = await import("react-dom");
+  const { use } = await import("react");
+  const { DiffNoteDraftContext } = await import("@/components/Worktree/diffNoteDrafts");
   return {
     // Surfaces `wrapLines` so the auto/override resolution is observable from the
     // prop the viewer actually receives, not just from the toolbar's pressed state.
     // `diff` rides along so a test can prove the viewer received the patch it
     // names, not merely that something mounted.
-    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
-      <div
-        data-testid="diff-viewer-mock"
-        data-wrap-lines={String(props.wrapLines)}
-        data-diff={props.diff}
-      >
-        {viewerOverlay.open &&
-          createPortal(
-            <div role="menu" aria-label="Viewer overlay">
-              <button type="button" role="menuitem">
-                Overlay item
-              </button>
-            </div>,
-            document.body
-          )}
-      </div>
-    ),
+    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => {
+      viewerDraftSessions.add(use(DiffNoteDraftContext));
+      return (
+        <div
+          data-testid="diff-viewer-mock"
+          data-wrap-lines={String(props.wrapLines)}
+          data-diff={props.diff}
+        >
+          {viewerOverlay.open &&
+            createPortal(
+              <div role="menu" aria-label="Viewer overlay">
+                <button type="button" role="menuitem">
+                  Overlay item
+                </button>
+              </div>,
+              document.body
+            )}
+        </div>
+      );
+    },
     FULL_FILE_MAX_LINES: 5000,
   };
 });
@@ -297,6 +306,7 @@ beforeEach(() => {
   });
   viewedKeys.clear();
   viewerOverlay.open = false;
+  viewerDraftSessions.clear();
   sidebarRowViewed.mockReset();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
@@ -315,6 +325,30 @@ beforeEach(() => {
 afterEach(() => {
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   sidebarSelect.mockReset();
+});
+
+describe("DiffPane — unsaved note drafts (#16899)", () => {
+  it("hands the viewer the same draft session after a refresh unmounts it", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified" });
+    const { rerender } = renderPane();
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+
+    // A refresh drops the diff while it refetches: the skeleton takes the viewer's place.
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+    rerender(paneElement());
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/a.ts b/a.ts",
+      stale: false,
+      retry: vi.fn(),
+    });
+    rerender(paneElement());
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+
+    expect(viewerDraftSessions.size).toBe(1);
+    expect([...viewerDraftSessions][0]).not.toBeNull();
+  });
 });
 
 describe("DiffPane — current-file resolution", () => {

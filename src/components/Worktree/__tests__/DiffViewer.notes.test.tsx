@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventMap, HunkData } from "react-diff-view";
 import { DiffViewer, _flushLangLoadsForTests, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { PendingFileNotes } from "../DiffNoteWidgets";
+import { DiffNoteDraftContext, useOwnDiffNoteDraftSession } from "../diffNoteDrafts";
 
 const { captured } = vi.hoisted(() => ({
   captured: {} as {
@@ -256,5 +257,202 @@ describe("DiffViewer review notes", () => {
     expect(list.textContent).toContain("Still needed");
     expect(list.textContent).toContain("Not shown");
     expect(list.textContent).not.toContain("Other file");
+  });
+});
+
+const OTHER_FILE_DIFF = `diff --git a/src/b.ts b/src/b.ts
+index 1111111..2222222 100644
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,2 +1,2 @@
+ keep
+-old
++new`;
+
+/**
+ * Stands in for the diff pane: it owns the draft session above whatever body
+ * is showing, the way the pane holds it above the table, its loading skeleton,
+ * rendered Markdown and the fallback list.
+ */
+function Pane({ body, diff = DIFF }: { body: "table" | "list" | "loading"; diff?: string }) {
+  const session = useOwnDiffNoteDraftSession();
+  return (
+    <TooltipProvider>
+      <DiffNoteDraftContext value={session}>
+        {body === "table" && <DiffViewer diff={diff} annotations={{ worktreePath: "/repo" }} />}
+        {body === "list" && <PendingFileNotes worktreePath="/repo" filePath="src/a.ts" />}
+      </DiffNoteDraftContext>
+    </TooltipProvider>
+  );
+}
+
+function textOf(label: string): string {
+  const field = screen.getByLabelText(label);
+  if (!(field instanceof HTMLTextAreaElement)) throw new Error(`${label} isn't a textarea`);
+  return field.value;
+}
+
+function addFileNote(body: string): string {
+  const note = useDiffNotesStore.getState().addNote({
+    worktreePath: "/repo",
+    filePath: "src/a.ts",
+    anchor: { kind: "file" },
+    body,
+  });
+  return note!.id;
+}
+
+describe("unsaved note drafts", () => {
+  beforeEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+    captured.widgets = undefined;
+  });
+
+  afterEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+  });
+
+  it("keeps an open line draft and its text through a refresh that unmounts the table", async () => {
+    const { rerender } = render(<Pane body="table" />);
+    clickGutter(1, "new");
+    fireEvent.change(screen.getByLabelText("New note on line 2"), {
+      target: { value: "Half a thought" },
+    });
+    // The refresh lands in a later task than the click that opened the draft.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    rerender(<Pane body="loading" />);
+    expect(screen.queryByTestId("diff-note-composer")).toBeNull();
+    rerender(<Pane body="table" />);
+
+    expect(textOf("New note on line 2")).toBe("Half a thought");
+    expect(captured.widgets?.I2).toBeDefined();
+    // Restored where it was, not handed focus the reviewer has since taken elsewhere.
+    expect(document.activeElement).not.toBe(screen.getByLabelText("New note on line 2"));
+  });
+
+  it("lists a draft whose rows changed under a refresh as outdated, and saves it against what was read", () => {
+    const { rerender } = render(<Pane body="table" />);
+    clickGutter(1, "new");
+    fireEvent.change(screen.getByLabelText("New note on line 2"), {
+      target: { value: "Why add this?" },
+    });
+
+    // A new revision of the file: the table remounts, and line 2 now reads differently.
+    rerender(<Pane body="loading" />);
+    rerender(<Pane body="table" diff={REFRESHED_DIFF} />);
+
+    expect(captured.widgets).toBeUndefined();
+    const detached = screen.getByTestId("diff-file-notes");
+    expect(detached.textContent).toContain("Outdated");
+    expect(textOf("New note on line 2")).toBe("Why add this?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    const [note] = Object.values(useDiffNotesStore.getState().notes);
+    expect(note?.body).toBe("Why add this?");
+    // Still marked outdated once saved: it was written against the old line 2.
+    expect(screen.getByTestId("diff-file-notes").textContent).toContain("Outdated");
+  });
+
+  it("keeps a file's drafts while another file is on screen", () => {
+    const { rerender } = render(<Pane body="table" />);
+    fireEvent.click(screen.getByLabelText("Add file note"));
+    fireEvent.change(screen.getByLabelText("New file note"), {
+      target: { value: "Split this file" },
+    });
+
+    rerender(<Pane body="table" diff={OTHER_FILE_DIFF} />);
+    expect(screen.queryByLabelText("New file note")).toBeNull();
+
+    rerender(<Pane body="table" />);
+    expect(textOf("New file note")).toBe("Split this file");
+  });
+
+  it("keeps a line draft and a file draft apart", () => {
+    render(<Pane body="table" />);
+    clickGutter(1, "new");
+    fireEvent.change(screen.getByLabelText("New note on line 2"), {
+      target: { value: "About this line" },
+    });
+
+    fireEvent.click(screen.getByLabelText("Add file note"));
+
+    expect(textOf("New file note")).toBe("");
+    expect(textOf("New note on line 2")).toBe("About this line");
+    expect(document.activeElement).toBe(screen.getByLabelText("New file note"));
+
+    fireEvent.change(screen.getByLabelText("New file note"), {
+      target: { value: "About the file" },
+    });
+    const fileComposer = screen
+      .getByLabelText("New file note")
+      .closest<HTMLElement>("[data-testid='diff-note-composer']")!;
+    fireEvent.click(within(fileComposer).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByLabelText("New file note")).toBeNull();
+    expect(textOf("New note on line 2")).toBe("About this line");
+  });
+
+  it("lists unsaved drafts with the notes where the layout has no table", () => {
+    const { rerender } = render(<Pane body="table" />);
+    clickGutter(1, "new");
+    fireEvent.change(screen.getByLabelText("New note on line 2"), {
+      target: { value: "Line draft" },
+    });
+    fireEvent.click(screen.getByLabelText("Add file note"));
+    fireEvent.change(screen.getByLabelText("New file note"), {
+      target: { value: "File draft" },
+    });
+
+    rerender(<Pane body="list" />);
+
+    const list = screen.getByTestId("diff-pending-file-notes");
+    expect(textOf("New note on line 2")).toBe("Line draft");
+    expect(textOf("New file note")).toBe("File draft");
+    expect(list.textContent).toContain("Not shown");
+
+    rerender(<Pane body="table" />);
+    expect(captured.widgets?.I2).toBeDefined();
+    expect(textOf("New note on line 2")).toBe("Line draft");
+  });
+
+  it("keeps a note's rewrite open, and held back from sending, while its card is gone", () => {
+    const id = addFileNote("First");
+    const { rerender, unmount } = render(<Pane body="table" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    fireEvent.change(screen.getByLabelText("Edit file note"), { target: { value: "Second" } });
+
+    rerender(<Pane body="loading" />);
+    expect(useDiffNotesStore.getState().editingIds[id]).toBe(1);
+
+    // Back in the fallback list, a different card picks up the same rewrite.
+    rerender(<Pane body="list" />);
+    expect(textOf("Edit file note")).toBe("Second");
+    expect(useDiffNotesStore.getState().editingIds[id]).toBe(1);
+
+    rerender(<Pane body="table" />);
+    expect(textOf("Edit file note")).toBe("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(useDiffNotesStore.getState().notes[id]?.body).toBe("Second");
+    expect(useDiffNotesStore.getState().editingIds[id]).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    expect(useDiffNotesStore.getState().editingIds[id]).toBe(1);
+    // Closing the pane drops its drafts, and with them the send guard.
+    unmount();
+    expect(useDiffNotesStore.getState().editingIds[id]).toBeUndefined();
+  });
+
+  it("starts an edit from the saved note once the last one was cancelled", () => {
+    addFileNote("Saved words");
+    render(<Pane body="table" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    fireEvent.change(screen.getByLabelText("Edit file note"), { target: { value: "Discarded" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    expect(textOf("Edit file note")).toBe("Saved words");
   });
 });

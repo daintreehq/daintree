@@ -80,6 +80,10 @@ import {
   type DiffNoteSendRequest,
 } from "./DiffNotesSendMenu";
 import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
+import {
+  DiffNoteDraftContext,
+  useOwnDiffNoteDraftSession,
+} from "@/components/Worktree/diffNoteDrafts";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -485,6 +489,7 @@ export function DiffPane({
     () => (worktreePath ? { worktreePath } : undefined),
     [worktreePath]
   );
+  const draftSession = useOwnDiffNoteDraftSession();
   const hasPendingNotes = useDiffNotesStore(
     useCallback(
       (state) =>
@@ -1296,7 +1301,7 @@ export function DiffPane({
     </>
   ) : undefined;
 
-  return (
+  const view = (
     <ContentPanel
       id={id}
       title={displayTitle}
@@ -1641,6 +1646,11 @@ export function DiffPane({
       )}
     </ContentPanel>
   );
+
+  // Above every body the pane swaps between — the diff table, its loading
+  // skeleton, rendered Markdown, the fallback note list — so a note being
+  // written outlives all of them.
+  return <DiffNoteDraftContext value={draftSession}>{view}</DiffNoteDraftContext>;
 }
 
 /**

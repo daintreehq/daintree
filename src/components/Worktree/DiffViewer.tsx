@@ -92,6 +92,7 @@ import {
   hashLineRange,
   lineForChange,
   placeDiffNote,
+  placeDiffNoteAnchor,
   sortDiffNotes,
   type DiffNote,
   type DiffNoteAnchor,
@@ -99,7 +100,6 @@ import {
   type DiffNoteSide,
 } from "./diffNotes";
 import {
-  clearComposerDraft,
   DiffNoteCard,
   DiffNoteComposer,
   nameAnchor,
@@ -107,6 +107,14 @@ import {
   type DiffNoteCardPlacement,
   type DiffNoteCloseVia,
 } from "./DiffNoteWidgets";
+import {
+  DiffNoteDraftContext,
+  diffNoteFileKey,
+  fileDraftBodyKey,
+  lineDraftBodyKey,
+  useDiffNoteDraftSession,
+  useDiffNoteDraftState,
+} from "./diffNoteDrafts";
 import {
   findLineNumber,
   selectionLines,
@@ -980,6 +988,7 @@ interface FileDiffProps {
 const EMPTY_NOTES: readonly DiffNote[] = [];
 const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
+const FILE_NOTE_ANCHOR: DiffNoteAnchor = { kind: "file" };
 
 interface PendingHeaderFocus {
   file: FileDiffProps["file"];
@@ -993,8 +1002,6 @@ interface ExpandedHunks {
   oldSource: string[] | null;
   hunks: HunkData[];
 }
-
-type DiffNoteDraft = { kind: "file" } | DiffNoteLines;
 
 function FileDiff({
   file,
@@ -1123,24 +1130,34 @@ function FileDiff({
     () => makeGutterRenderer(movedKeys, notesEnabled ? noteKeysHintId : null),
     [movedKeys, notesEnabled, noteKeysHintId]
   );
-  const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  // Open drafts live in the pane's session, keyed by file, so a refresh, a
+  // revision change that remounts this view, a layout without the table, or a
+  // visit to another file leaves them where the reviewer left them. The line
+  // draft and the file draft are separate entries: opening one never takes
+  // over the other's text.
+  const draftSession = useDiffNoteDraftSession();
+  const draftFileKey = notesEnabled ? diffNoteFileKey(notesWorktree, relPath) : null;
+  const lineDraft = useDiffNoteDraftState(draftSession, (state) =>
+    draftFileKey === null ? null : (state.lines[draftFileKey] ?? null)
+  );
+  const fileDraftOpen = useDiffNoteDraftState(
+    draftSession,
+    (state) => draftFileKey !== null && state.files[draftFileKey] === true
+  );
   const [lineSelection, setLineSelection] = useState<DiffNoteLineSelection | null>(null);
-  // Whatever held focus when the composer opened — a line number, the diff region
-  // after a click beside one, or the Add file note button — so closing it hands
-  // focus back.
-  const draftOpenerRef = useRef<HTMLElement | null>(null);
+  // Whatever held focus when each composer opened — a line number, the diff
+  // region after a click beside one, or the Add file note button — so closing
+  // it hands focus back.
+  const lineDraftOpenerRef = useRef<HTMLElement | null>(null);
+  const fileDraftOpenerRef = useRef<HTMLElement | null>(null);
   const fileRootRef = useRef<HTMLDivElement | null>(null);
-  const rememberDraftOpener = useCallback(() => {
+  const rememberOpener = useCallback((ref: { current: HTMLElement | null }) => {
     const active = document.activeElement;
-    draftOpenerRef.current = active instanceof HTMLElement ? active : null;
+    ref.current = active instanceof HTMLElement ? active : null;
   }, []);
-  const draftOwnerId = useId();
   useEffect(() => {
-    setNoteDraft(null);
     setLineSelection(null);
-    clearComposerDraft(draftOwnerId);
-  }, [file, draftOwnerId]);
-  useEffect(() => () => clearComposerDraft(draftOwnerId), [draftOwnerId]);
+  }, [file]);
 
   // Anchors are checked against every rendered row, expanded context included,
   // so a note written on revealed context still matches once it is revealed.
@@ -1157,39 +1174,41 @@ function FileDiff({
     return keys;
   }, [notesEnabled, isCollapsed, visibleHunks]);
 
-  const draftPlacement = useMemo<{
-    anchor: DiffNoteAnchor;
-    keys: string[];
-  } | null>(() => {
-    if (!noteDraft) return null;
-    if (noteDraft.kind === "file") return { anchor: { kind: "file" }, keys: [] };
-    if (!renderedLineIndex) return null;
-    const { side, startLine, endLine } = noteDraft;
-    const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
-    if (contentHash === null) return null;
-    return {
-      anchor: { kind: "lines", side, startLine, endLine, contentHash },
-      keys: changeKeysForLines(renderedLineIndex, side, startLine, endLine),
-    };
-  }, [noteDraft, renderedLineIndex]);
+  // Placed the way a saved note is: under its rows only while they're on
+  // screen and still read as they did when the draft was opened.
+  const lineDraftPlacement = useMemo(() => {
+    if (!lineDraft || !renderedLineIndex) return null;
+    const placement = placeDiffNoteAnchor(lineDraft, renderedLineIndex);
+    return placement.status === "anchored" && !visibleChangeKeys?.has(placement.widgetKey)
+      ? ({ status: "unplaced" } as const)
+      : placement;
+  }, [lineDraft, renderedLineIndex, visibleChangeKeys]);
 
-  const closeNoteDraft = useCallback(
-    (via: DiffNoteCloseVia) => {
-      // A layout switch under an open draft remounts whatever opened it.
-      const opener = draftOpenerRef.current;
-      const root = fileRootRef.current;
-      returnFocusTo(
-        opener && !opener.isConnected && root
-          ? (findLineNumber(root, opener) ?? root.querySelector<HTMLElement>('[role="region"]'))
-          : opener,
-        via
-      );
-      draftOpenerRef.current = null;
-      setNoteDraft(null);
-      clearComposerDraft(draftOwnerId);
-    },
-    [draftOwnerId]
-  );
+  // The session has already closed the draft; this only hands focus back.
+  const handLineDraftFocusBack = useCallback((via: DiffNoteCloseVia) => {
+    // A layout switch under an open draft remounts whatever opened it, and a
+    // draft restored after a refresh has no opener at all.
+    const opener = lineDraftOpenerRef.current;
+    const root = fileRootRef.current;
+    returnFocusTo(
+      (!opener || !opener.isConnected) && root
+        ? ((opener && findLineNumber(root, opener)) ??
+            root.querySelector<HTMLElement>('[role="region"]'))
+        : opener,
+      via
+    );
+    lineDraftOpenerRef.current = null;
+  }, []);
+  const handFileDraftFocusBack = useCallback((via: DiffNoteCloseVia) => {
+    const opener = fileDraftOpenerRef.current;
+    returnFocusTo(
+      opener?.isConnected
+        ? opener
+        : (fileRootRef.current?.querySelector<HTMLElement>("[data-note-file-add]") ?? null),
+      via
+    );
+    fileDraftOpenerRef.current = null;
+  }, []);
 
   // Notes that can't sit under their lines — file notes, stale ones, and any
   // whose rows are collapsed or not yet revealed — are listed above the table
@@ -1222,9 +1241,12 @@ function FileDiff({
   }, [fileNotes, renderedLineIndex, visibleChangeKeys]);
 
   const draftWidgetKey =
-    draftPlacement && draftPlacement.anchor.kind === "lines"
-      ? draftPlacement.keys[draftPlacement.keys.length - 1]
-      : undefined;
+    lineDraftPlacement?.status === "anchored" ? lineDraftPlacement.widgetKey : undefined;
+  const detachedLineDraft =
+    lineDraft &&
+    (lineDraftPlacement?.status === "stale" || lineDraftPlacement?.status === "unplaced")
+      ? { anchor: lineDraft, placement: lineDraftPlacement.status }
+      : null;
 
   const widgets = useMemo(() => {
     if (rowNotes.size === 0 && !draftWidgetKey) return undefined;
@@ -1237,58 +1259,59 @@ function FileDiff({
           {rowNotes.get(key)?.map((note) => (
             <DiffNoteCard key={note.id} note={note} />
           ))}
-          {key === draftWidgetKey && draftPlacement && (
+          {key === draftWidgetKey && lineDraft && (
             <DiffNoteComposer
-              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
-              anchor={draftPlacement.anchor}
-              onDone={closeNoteDraft}
+              anchor={lineDraft}
+              onDone={handLineDraftFocusBack}
             />
           )}
         </div>
       );
     }
     return result;
-  }, [
-    rowNotes,
-    draftWidgetKey,
-    draftPlacement,
-    draftOwnerId,
-    notesWorktree,
-    relPath,
-    closeNoteDraft,
-  ]);
+  }, [rowNotes, draftWidgetKey, lineDraft, notesWorktree, relPath, handLineDraftFocusBack]);
 
   // Click a line number to note that line; shift-click extends the open draft
   // across a contiguous run of rows on the same side.
-  const startLineDraft = useCallback(
-    ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
-      rememberDraftOpener();
-      setLineSelection(null);
-      setNoteDraft((current) => {
-        if (extend && current?.kind === "lines" && current.side === noteSide) {
-          const startLine = Math.min(current.startLine, line);
-          const endLine = Math.max(current.endLine, line);
-          if (
-            renderedLineIndex &&
-            hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
-          ) {
-            return { kind: "lines", side: noteSide, startLine, endLine };
-          }
-        }
-        return { kind: "lines", side: noteSide, startLine: line, endLine: line };
-      });
-    },
-    [renderedLineIndex, rememberDraftOpener]
-  );
+  // Opening or moving the draft hashes the rows it now covers, as they read on
+  // screen: the one gesture that re-anchors it to the text in front of it.
   const openLineDraft = useCallback(
     (lines: DiffNoteLines) => {
-      rememberDraftOpener();
-      setNoteDraft(lines);
+      if (draftFileKey === null || !renderedLineIndex) return;
+      const { side, startLine, endLine } = lines;
+      const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
+      if (contentHash === null) return;
+      rememberOpener(lineDraftOpenerRef);
+      draftSession.requestFocus(lineDraftBodyKey(draftFileKey));
+      draftSession.openLine(draftFileKey, { kind: "lines", side, startLine, endLine, contentHash });
     },
-    [rememberDraftOpener]
+    [draftFileKey, renderedLineIndex, draftSession, rememberOpener]
   );
+  const startLineDraft = useCallback(
+    ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
+      setLineSelection(null);
+      const current =
+        draftFileKey === null ? undefined : draftSession.getState().lines[draftFileKey];
+      if (extend && current?.side === noteSide && renderedLineIndex) {
+        const startLine = Math.min(current.startLine, line);
+        const endLine = Math.max(current.endLine, line);
+        if (hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null) {
+          openLineDraft({ kind: "lines", side: noteSide, startLine, endLine });
+          return;
+        }
+      }
+      openLineDraft({ kind: "lines", side: noteSide, startLine: line, endLine: line });
+    },
+    [draftFileKey, draftSession, renderedLineIndex, openLineDraft]
+  );
+  const openFileDraft = useCallback(() => {
+    if (draftFileKey === null) return;
+    rememberOpener(fileDraftOpenerRef);
+    draftSession.requestFocus(fileDraftBodyKey(draftFileKey));
+    draftSession.openFile(draftFileKey);
+  }, [draftFileKey, draftSession, rememberOpener]);
   const gutterEvents = useMemo<EventMap | undefined>(() => {
     if (!notesEnabled) return undefined;
     return {
@@ -1318,7 +1341,8 @@ function FileDiff({
     return changeKeysForLines(renderedLineIndex, side, startLine, endLine);
   }, [lineSelection, renderedLineIndex]);
   const selectedChanges =
-    selectionKeys ?? (draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS);
+    selectionKeys ??
+    (lineDraftPlacement?.status === "anchored" ? lineDraftPlacement.selectedKeys : EMPTY_KEYS);
 
   const searchRanges = useMemo(
     () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
@@ -1871,7 +1895,7 @@ function FileDiff({
     </div>
   );
 
-  return (
+  const view = (
     <div
       ref={fileRootRef}
       className="mb-2"
@@ -1911,10 +1935,7 @@ function FileDiff({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      onClick={() => {
-                        rememberDraftOpener();
-                        setNoteDraft({ kind: "file" });
-                      }}
+                      onClick={openFileDraft}
                       aria-label="Add file note"
                       data-note-file-add=""
                       // The copy beside it is a CopyButton; one glyph size per row.
@@ -1970,7 +1991,7 @@ function FileDiff({
             <p ref={noteKeysHintRef} id={noteKeysHintId} className="diff-note-keys">
               Arrow keys move <FactSeparator /> Shift+arrows select lines <FactSeparator /> Enter
               adds a note
-              {noteDraft?.kind === "lines" && (
+              {lineDraft && (
                 <>
                   {" "}
                   <FactSeparator /> Shift+Enter extends the open note
@@ -1980,18 +2001,26 @@ function FileDiff({
           )}
         </div>
       )}
-      {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (
+      {notesEnabled && (detachedNotes.length > 0 || detachedLineDraft || fileDraftOpen) && (
         <div className="diff-note-thread" data-testid="diff-file-notes">
           {detachedNotes.map(({ note, placement }) => (
             <DiffNoteCard key={note.id} note={note} placement={placement} />
           ))}
-          {draftPlacement?.anchor.kind === "file" && (
+          {detachedLineDraft && (
             <DiffNoteComposer
-              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
-              anchor={draftPlacement.anchor}
-              onDone={closeNoteDraft}
+              anchor={detachedLineDraft.anchor}
+              placement={detachedLineDraft.placement}
+              onDone={handLineDraftFocusBack}
+            />
+          )}
+          {fileDraftOpen && (
+            <DiffNoteComposer
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={FILE_NOTE_ANCHOR}
+              onDone={handFileDraftFocusBack}
             />
           )}
         </div>
@@ -2059,4 +2088,8 @@ function FileDiff({
         ))}
     </div>
   );
+
+  // Re-provided so the cards and composers in this file share its session even
+  // where no pane hands one down.
+  return <DiffNoteDraftContext value={draftSession}>{view}</DiffNoteDraftContext>;
 }
