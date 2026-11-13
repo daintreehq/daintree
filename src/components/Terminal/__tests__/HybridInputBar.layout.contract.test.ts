@@ -138,10 +138,13 @@ describe("HybridInputBar layout contract", () => {
     const text = declarations();
     const markers = text.split("data-composer-marker").slice(1);
     expect(markers, "the clickable and the inert marker").toHaveLength(2);
-    for (const marker of markers) {
-      const props = marker.slice(0, marker.indexOf("❯"));
-      expect(props).toMatch(/className=\{(cn\()?COMPOSER_MARKER_CLASS\b/);
-    }
+    // Exactly the box class, plus only the hover on the clickable one: a
+    // utility added beside either would escape the checks on the constants.
+    const boxes = markers.map((marker) => /className=\{([^}]*)\}/.exec(marker)?.[1]);
+    expect(boxes.sort()).toEqual([
+      "COMPOSER_MARKER_CLASS",
+      "cn(COMPOSER_MARKER_CLASS, COMPOSER_MARKER_HOVER_CLASS)",
+    ]);
     const box = /const COMPOSER_MARKER_CLASS = cn\(([\s\S]*?)\);/.exec(text)?.[1] ?? "";
     expect(box).toMatch(/\bh-6\b/);
     expect(box).toMatch(/\bshrink-0\b/);
@@ -161,17 +164,6 @@ describe("HybridInputBar layout contract", () => {
       .split(/\s+/)
       .filter((c) => /^(hover:)?((min-|max-)?w-|p[xlr]?-|m[xlr]?-|-m[xlr]?-)/.test(c));
     expect(sizing).toEqual([]);
-  });
-
-  it("names the clickable `❯` as a button and keeps it out of the Tab order", () => {
-    const text = declarations();
-    const at = text.indexOf("<button", text.indexOf("historyOffered ?"));
-    const button = text.slice(at, text.indexOf("❯", at));
-
-    expect(button).toMatch(/data-composer-marker/);
-    expect(button).toMatch(/tabIndex=\{-1\}/);
-    expect(button).toMatch(/aria-label="[^"]+"/);
-    expect(button).not.toMatch(/aria-hidden/);
   });
 
   it("gives the canvas track a zero min-width so it can actually shrink", () => {

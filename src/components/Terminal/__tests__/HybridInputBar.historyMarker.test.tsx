@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { Project } from "@shared/types/project";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -17,6 +18,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { _resetUserPromptTemplateStoreForTest } from "@/store/userPromptTemplateStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { hostScopedKey } from "@/hooks/useHostPlatform";
+import { isolatedComposerScope } from "@/lib/draftKey";
 import { HybridInputBar } from "../HybridInputBar";
 
 // CodeMirror measures text through Range rects, and the palette's scroll
@@ -71,14 +73,19 @@ beforeEach(() => {
   useTerminalInputStore.setState({ draftInputs: new Map() });
   usePluginRuntimeStore.setState({ promptTemplates: [] });
   _resetUserPromptTemplateStoreForTest();
-  useProjectStore.setState({
-    currentProject: { id: PROJECT_ID, name: "Alpha", path: "/repo" } as never,
-  });
+  const project: Project = {
+    id: PROJECT_ID,
+    name: "Alpha",
+    path: "/repo",
+    emoji: "🌲",
+    lastOpened: 0,
+  };
+  useProjectStore.setState({ currentProject: project });
+  const sent = [{ id: "h1", prompt: SENT, agentId: "claude", addedAt: Date.now() - 60_000 }];
   useCommandHistoryStore.setState({
     history: {
-      [hostScopedKey(PROJECT_ID)]: [
-        { id: "h1", prompt: SENT, agentId: "claude", addedAt: Date.now() - 60_000 },
-      ],
+      [hostScopedKey(PROJECT_ID)]: sent,
+      [hostScopedKey(isolatedComposerScope())]: sent,
     },
   });
   useCanopyStore.setState({ isOpen: false });
@@ -108,7 +115,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderComposer(props: { disabled?: boolean; onActivate?: () => void } = {}) {
+async function renderComposer(
+  props: {
+    disabled?: boolean;
+    onActivate?: () => void;
+    isolated?: boolean;
+    otherHostId?: string;
+  } = {}
+) {
   const { container } = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
@@ -130,6 +144,10 @@ async function renderComposer(props: { disabled?: boolean; onActivate?: () => vo
 }
 
 const paletteOpen = () => usePaletteStore.getState().activePaletteId === "prompt-history";
+const nextFrame = () =>
+  act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+  });
 
 /** A real press as the browser orders it: down, up, then the click. */
 async function press(el: HTMLElement) {
@@ -168,33 +186,65 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     expect(view.state.doc.toString()).toBe(SENT);
   });
 
-  it("leaves the editor as the palette's opener, so closing it returns there", async () => {
+  it("keeps focus off the marker itself, so the press leaves it with the editor", async () => {
     const { marker, view } = await renderComposer();
     view.contentDOM.blur();
 
-    // The press focuses the editor, and the marker itself refuses focus.
     await act(async () => {
       fireEvent.pointerDown(marker, { button: 0 });
     });
     const focusTaken = fireEvent.mouseDown(marker, { button: 0 });
     expect(focusTaken).toBe(false);
     expect(document.activeElement).toBe(view.contentDOM);
+  });
 
+  it("hands focus to the palette's search, and back to the editor when it closes", async () => {
+    const { marker, view } = await renderComposer();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+
+    // A click with no press first, so nothing but the marker's own handler
+    // can have put the editor under the palette as its opener.
     await act(async () => {
-      fireEvent.click(marker, { button: 0 });
+      fireEvent.click(marker);
     });
     expect(paletteOpen()).toBe(true);
+    const search = screen.getByRole("combobox", { name: "Search prompt history" });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+
+    await act(async () => {
+      fireEvent.keyDown(search, { key: "Escape" });
+    });
+    expect(paletteOpen()).toBe(false);
+    await waitFor(() => expect(document.activeElement).toBe(view.contentDOM));
+    elsewhere.remove();
   });
 
   it("opens from an unselected pane, which the press selects", async () => {
     usePanelStore.setState({ focusedId: null });
     const onActivate = vi.fn(() => usePanelStore.setState({ focusedId: TERMINAL_ID }));
     const { marker } = await renderComposer({ onActivate });
+    expect(onActivate).not.toHaveBeenCalled();
 
-    await press(marker);
-
+    // The press alone selects the pane and mounts its palette, before any click.
+    await act(async () => {
+      fireEvent.pointerDown(marker, { button: 0 });
+      fireEvent.mouseDown(marker, { button: 0 });
+    });
     expect(onActivate).toHaveBeenCalled();
+    expect(usePanelStore.getState().focusedId).toBe(TERMINAL_ID);
+    expect(paletteOpen()).toBe(false);
+    const activations = onActivate.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.pointerUp(marker, { button: 0 });
+      fireEvent.mouseUp(marker, { button: 0 });
+      fireEvent.click(marker, { button: 0 });
+    });
     expect(paletteOpen()).toBe(true);
+    // The palette was already there to open: the click asked for no selection.
+    expect(onActivate).toHaveBeenCalledTimes(activations);
   });
 
   it("opens from an unselected pane on a click with no press before it", async () => {
@@ -219,9 +269,7 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     });
     expect(paletteOpen()).toBe(false);
     // The frame after the click ends the request.
-    await act(async () => {
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await nextFrame();
 
     act(() => usePanelStore.setState({ focusedId: TERMINAL_ID }));
     await act(async () => {});
@@ -234,6 +282,12 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
     expect(screen.queryByRole("button", { name: "Search prompt history" })).toBeNull();
     expect(marker.tagName).toBe("SPAN");
     expect(marker.getAttribute("aria-hidden")).toBe("true");
+    // The same glyph-wide box as the clickable marker, with nothing that sizes it.
+    expect(
+      marker.className
+        .split(/\s+/)
+        .filter((c) => /^(min-|max-)?w-|^size-|^p[xlr]?-|^(hover|focus|focus-visible):/.test(c))
+    ).toEqual([]);
   });
 
   it("stays an inert glyph on a grid pane while Canopy's composer holds the palette", async () => {
@@ -242,5 +296,36 @@ describe("HybridInputBar prompt marker opens prompt history", () => {
 
     expect(screen.queryByRole("button", { name: "Search prompt history" })).toBeNull();
     expect(marker.getAttribute("aria-hidden")).toBe("true");
+  });
+  it("stays an inert glyph on a composer typing to another host", async () => {
+    const { marker } = await renderComposer({ isolated: true, otherHostId: "studio" });
+
+    expect(screen.queryByRole("button", { name: "Search prompt history" })).toBeNull();
+    expect(marker.getAttribute("aria-hidden")).toBe("true");
+    await act(async () => {
+      fireEvent.click(marker);
+    });
+    expect(paletteOpen()).toBe(false);
+  });
+
+  it("opens history from this machine's isolated composer, Canopy open or not", async () => {
+    useCanopyStore.setState({ isOpen: true });
+    usePanelStore.setState({ focusedId: null });
+    const { marker } = await renderComposer({ isolated: true });
+
+    await press(marker);
+
+    expect(paletteOpen()).toBe(true);
+  });
+
+  it("names the action and its chord in a tooltip on hover", async () => {
+    const { marker } = await renderComposer();
+
+    await act(async () => {
+      fireEvent.pointerMove(marker, { pointerType: "mouse" });
+    });
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tooltip.textContent).toContain("Search prompt history");
+    expect(tooltip.textContent).toMatch(/R/);
   });
 });
