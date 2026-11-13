@@ -291,6 +291,69 @@ describe("TourPlayer", () => {
     expect(player.getTime()).toBe(0);
   });
 
+  it("ends the chapter when a paused seek reaches its end", () => {
+    const { player, audios, advance } = setup([voiced(5, "a")]);
+    player.play();
+    audios[0]!.fire("canplaythrough");
+    advance(16);
+    player.pause();
+    player.seek(5);
+    expect(player.getState().status).toBe("ended");
+    expect(player.getTime()).toBe(5);
+    expect(audios[0]!.playing).toBe(false);
+    advance(1000);
+    expect(player.getState().status).toBe("ended");
+  });
+
+  it("ends the chapter when a seek overshoots its end before the tour has started", () => {
+    const { player } = setup([silent(5)]);
+    player.seek(99);
+    expect(player.getState()).toMatchObject({ status: "ended" });
+    expect(player.getTime()).toBe(5);
+  });
+
+  it("ends the chapter at once when a playing seek reaches its end", () => {
+    const { player, advance } = setup([silent(5)]);
+    player.play();
+    advance(16);
+    player.seek(5);
+    expect(player.getState().status).toBe("ended");
+  });
+
+  it("stays paused when a paused seek stops short of the end", () => {
+    const { player } = setup([silent(5)]);
+    player.play();
+    player.pause();
+    player.seek(4.9);
+    expect(player.getState().status).toBe("paused");
+  });
+
+  it("leaves an ended chapter ended when it is sought to the end again, and pauses when sought back", () => {
+    const { player } = setup([silent(5)]);
+    player.play();
+    player.pause();
+    player.seek(5);
+    let emits = 0;
+    player.subscribe(() => emits++);
+    player.seek(5);
+    expect(player.getState().status).toBe("ended");
+    expect(emits).toBe(0);
+    player.seek(0);
+    expect(player.getState().status).toBe("paused");
+  });
+
+  it("replays from the start after a paused seek ended the chapter", () => {
+    const { player, advance } = setup([silent(5)]);
+    player.play();
+    player.pause();
+    player.seek(5);
+    player.play();
+    expect(player.getState().status).toBe("playing");
+    expect(player.getTime()).toBe(0);
+    advance(1000);
+    expect(player.getTime()).toBeCloseTo(1);
+  });
+
   it("replays from the start after ending", () => {
     const { player, advance } = setup([silent(1)]);
     player.play();
