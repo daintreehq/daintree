@@ -9,7 +9,8 @@ import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 /** Marks a dialog header's close button, which focus passes over on its way in. */
 export const DIALOG_CLOSE_ATTR = "data-dialog-close";
 
-const MODAL_SELECTOR = '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
+const MODAL_SELECTOR =
+  '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
 
 /**
  * Where focus lands entering a dialog: its first control, never the header's
