@@ -74,6 +74,7 @@ import {
   type NotificationFilter,
 } from "./notificationTriageModel";
 import { useNotificationRowActions } from "./useNotificationRowActions";
+import { setInboxDialogOpen } from "./notificationNavigation";
 import { useNotificationListKeyboard } from "./useNotificationListKeyboard";
 import { ChronoSection, NeedsAttentionSection } from "./NotificationCenterSections";
 
@@ -175,6 +176,15 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const [filter, setFilter] = useState<NotificationFilter>("all");
   const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
+  // Tells a row action still running that this confirm is the inbox's own (see
+  // setInboxDialogOpen). Only the closing edge lives here: the opening one is
+  // set where Clear all is chosen, because the dialog's overlay claim lands
+  // before this component's effects run, and a cleanup that reset the flag on
+  // every change would clear it just ahead of that claim.
+  useEffect(() => {
+    if (!clearAllConfirmOpen) return;
+    return () => setInboxDialogOpen(false);
+  }, [clearAllConfirmOpen]);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
   const filterScrollRef = useRef<Map<NotificationFilter, number>>(new Map());
   const pendingScrollRestoreRef = useRef<number | null>(null);
@@ -833,7 +843,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                       // docs/architecture/destructive-action-safeguards.md, which
                       // requires a ConfirmDialog and a verb-noun button; the
                       // in-repo precedent is `logs.clear`.
-                      onSelect={() => setClearAllConfirmOpen(true)}
+                      onSelect={() => {
+                        setInboxDialogOpen(true);
+                        setClearAllConfirmOpen(true);
+                      }}
                     >
                       <Trash2 data-menu-icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Clear all…

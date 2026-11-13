@@ -245,6 +245,18 @@ export function panelActionContext(
 }
 
 /**
+ * Up while the inbox shows a dialog of its own (Clear all's confirm). That
+ * dialog is the inbox's child, so an action closing the inbox under it would
+ * take it down unanswered. Set by the inbox before the dialog mounts: the
+ * dialog's overlay claim lands before any effect of the inbox's would.
+ */
+let inboxDialogOpen = false;
+
+export function setInboxDialogOpen(open: boolean): void {
+  inboxDialogOpen = open;
+}
+
+/**
  * A row's action button, and Mod+Enter on its first one. The inbox is a
  * popover that stays up through overlays of its own (Clear all's confirm), so
  * whatever the action opens would otherwise sit under it. It closes once the
@@ -267,7 +279,7 @@ export async function runNotificationAction(
   if (!manifest?.enabled) return false;
 
   const ui = useUIStore;
-  const epochBefore = ui.getState().overlayClaimEpoch;
+  let epochSeen = ui.getState().overlayClaimEpoch;
   // Set once the inbox has closed by any hand while this runs, so a late
   // result never closes an inbox the user has opened again since.
   let inboxLeft = !ui.getState().notificationCenterOpen;
@@ -275,10 +287,15 @@ export async function runNotificationAction(
     if (inboxLeft) return;
     if (!state.notificationCenterOpen) {
       inboxLeft = true;
-    } else if (state.overlayClaimEpoch !== epochBefore) {
-      inboxLeft = true;
-      state.closeNotificationCenter();
+      return;
     }
+    if (state.overlayClaimEpoch === epochSeen) return;
+    // Each claim is judged once, so the inbox's own dialog doesn't count as
+    // the action's on the next unrelated store write after it.
+    epochSeen = state.overlayClaimEpoch;
+    if (inboxDialogOpen) return;
+    inboxLeft = true;
+    state.closeNotificationCenter();
   });
 
   let result: Awaited<ReturnType<typeof actionService.dispatch>>;
@@ -289,6 +306,6 @@ export async function runNotificationAction(
   }
 
   const ran = result.ok || isStagedConfirmation(result.error);
-  if (ran && !inboxLeft) ui.getState().closeNotificationCenter();
+  if (ran && !inboxLeft && !inboxDialogOpen) ui.getState().closeNotificationCenter();
   return ran;
 }

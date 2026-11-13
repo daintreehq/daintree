@@ -25,6 +25,7 @@ import {
   navigateToNotificationSource,
   resolveLiveNotificationDestination,
   runNotificationAction,
+  setInboxDialogOpen,
 } from "../notificationNavigation";
 
 type PanelSeed = { location: string; worktreeId?: string };
@@ -472,17 +473,59 @@ describe("runNotificationAction (#16937)", () => {
     const pending = run();
     useUIStore.getState().closeNotificationCenter();
     useUIStore.getState().openNotificationCenter();
+    // Neither a dialog that opens after the reopen nor the late result is the
+    // action's business any more.
+    useUIStore.getState().addOverlayClaim("later-dialog");
+    expect(inboxOpen()).toBe(true);
     settle({ ok: true });
     await pending;
     expect(inboxOpen()).toBe(true);
+    useUIStore.getState().removeOverlayClaim("later-dialog");
   });
 
-  it("stops watching once the action has settled", async () => {
-    await run();
-    useUIStore.getState().openNotificationCenter();
+  it.each([
+    ["failed", () => dispatchMock.mockResolvedValueOnce({ ok: false, error: { code: "X" } })],
+    ["threw", () => dispatchMock.mockRejectedValueOnce(new Error("boom"))],
+  ])("stops watching once the action has %s", async (_, arrange) => {
+    arrange();
+    await run().catch(() => undefined);
+    expect(inboxOpen()).toBe(true);
     useUIStore.getState().addOverlayClaim("later-dialog");
     expect(inboxOpen()).toBe(true);
     useUIStore.getState().removeOverlayClaim("later-dialog");
+  });
+
+  describe("the inbox's own dialog", () => {
+    afterEach(() => {
+      setInboxDialogOpen(false);
+      useUIStore.getState().removeOverlayClaim("clear-all");
+      useUIStore.getState().removeOverlayClaim("confirm-pull");
+    });
+
+    it("is never closed under, by a claim or a late result", async () => {
+      const settle = deferDispatch();
+      const pending = run();
+      setInboxDialogOpen(true);
+      useUIStore.getState().addOverlayClaim("clear-all");
+      expect(inboxOpen()).toBe(true);
+      settle({ ok: true });
+      await expect(pending).resolves.toBe(true);
+      expect(inboxOpen()).toBe(true);
+    });
+
+    it("doesn't count as the action's dialog once it has gone", async () => {
+      const settle = deferDispatch();
+      const pending = run();
+      setInboxDialogOpen(true);
+      useUIStore.getState().addOverlayClaim("clear-all");
+      setInboxDialogOpen(false);
+      useUIStore.getState().removeOverlayClaim("clear-all");
+      expect(inboxOpen()).toBe(true);
+      useUIStore.getState().addOverlayClaim("confirm-pull");
+      expect(inboxOpen()).toBe(false);
+      settle({ ok: true });
+      await pending;
+    });
   });
 
   it("dispatches nothing for an action that can't run now", async () => {

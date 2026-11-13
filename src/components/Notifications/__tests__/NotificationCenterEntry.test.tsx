@@ -14,6 +14,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 
 // An unavailable row action explains itself through a real tooltip, which the
 // app mounts under App.tsx's provider.
@@ -1060,21 +1061,41 @@ describe("NotificationCenterEntry — row action closes the inbox (#16937)", () 
       expect(useUIStore.getState().notificationCenterOpen).toBe(false);
     });
 
-    it("says its panel is in the trash instead of running", async () => {
-      seedPanel("pane-42", "trash");
-      render(<NotificationCenterEntry entry={makeEntry({ actions: [goToTerminal] })} />);
-      const button = screen.getByRole("button", { name: "Go to terminal" });
-      expect(button.getAttribute("aria-disabled")).toBe("true");
-      await act(async () => {
-        fireEvent.click(button);
-        button.focus();
-      });
-      await waitFor(() => {
-        expect(screen.getAllByText("Panel in trash").length).toBeGreaterThan(0);
-      });
-      expect(dispatchMock).not.toHaveBeenCalled();
-      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
-    });
+    it.each([
+      ["in the trash", () => seedPanel("pane-42", "trash", "wt-1"), "Panel in trash"],
+      ["gone", () => usePanelStore.setState({ panelsById: {} } as never), "Source unavailable"],
+    ])(
+      "says its panel is %s instead of running, though the row's worktree is live",
+      async (_, arrange, reason) => {
+        arrange();
+        // The row itself still goes to its worktree; the button never does.
+        const liveWorktree = {
+          getState: () => ({ worktrees: new Map([["wt-1", {}]]) }),
+          subscribe: () => () => {},
+        } as never;
+        render(
+          <WorktreeStoreContext value={liveWorktree}>
+            <NotificationCenterEntry
+              entry={makeEntry({
+                context: { worktreeId: "wt-1", panelId: "pane-42" },
+                actions: [goToTerminal],
+              })}
+            />
+          </WorktreeStoreContext>
+        );
+        const button = screen.getByRole("button", { name: "Go to terminal" });
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        await act(async () => {
+          fireEvent.click(button);
+          button.focus();
+        });
+        await waitFor(() => {
+          expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+        });
+        expect(dispatchMock).not.toHaveBeenCalled();
+        expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      }
+    );
 
     it("comes back once its panel is restored", () => {
       seedPanel("pane-42", "trash");

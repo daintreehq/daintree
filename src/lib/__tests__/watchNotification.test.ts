@@ -11,10 +11,14 @@ import { setPanelStoreAccessor, type PanelStoreSnapshot } from "@/store/storeAcc
 import { usePanelStore } from "@/store/panelStore";
 import { fireWatchNotification } from "../watchNotification";
 
+const pingTerminal = vi.fn();
+
 beforeEach(() => {
   notifyMock.mockReset();
   navigateMock.mockReset().mockResolvedValue(true);
-  usePanelStore.setState({ pingedId: null } as never);
+  // The real ping arms a 1.6s timer this file has no way to cancel.
+  pingTerminal.mockReset();
+  usePanelStore.setState({ pingTerminal } as never);
   setPanelStoreAccessor(
     () =>
       ({
@@ -53,13 +57,13 @@ describe("fireWatchNotification", () => {
     it("goes to the panel the way the inbox does, worktree first (#16937)", async () => {
       await goToTerminal();
       expect(navigateMock).toHaveBeenCalledWith({ panelId: "term-1" });
-      expect(usePanelStore.getState().pingedId).toBe("term-1");
+      expect(pingTerminal).toHaveBeenCalledWith("term-1");
     });
 
     it("rejects when the panel is gone, so the toast doesn't say it opened", async () => {
       navigateMock.mockResolvedValueOnce(false);
       await expect(goToTerminal()).rejects.toThrow();
-      expect(usePanelStore.getState().pingedId).toBeNull();
+      expect(pingTerminal).not.toHaveBeenCalled();
     });
   });
 });
