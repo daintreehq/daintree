@@ -44,6 +44,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import {
+  openPopoverContent,
+  useDockFocusLandmark,
+  useDockPillHideHandoff,
+} from "./dockFocusHandoff";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CirclePause } from "@/components/icons";
@@ -350,6 +355,15 @@ export function AgentStatusContainer({
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const popoverId = `${kind}-container-popover`;
+  // The pill hides rather than unmounts, so focus inside it would otherwise be
+  // left on a `display: none` button — and a kill confirmation that closes with
+  // the last entry has nowhere of its own to restore to.
+  const hideHandoff = useDockPillHideHandoff(count);
+  const { resolve: resolveLandmark } = useDockFocusLandmark();
+  const restoreKillFocus = useCallback(
+    () => openPopoverContent(popoverId) ?? resolveLandmark(),
+    [popoverId, resolveLandmark]
+  );
 
   useEffect(() => {
     if (count === 0) {
@@ -359,7 +373,7 @@ export function AgentStatusContainer({
   }, [count]);
 
   return (
-    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"} {...hideHandoff}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -506,6 +520,7 @@ export function AgentStatusContainer({
           description={killTerminalDescription(killTarget?.title || undefined)}
           variant="destructive"
           confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          restoreFocusTo={restoreKillFocus}
           onConfirm={handleKillConfirm}
         />
       </Popover>

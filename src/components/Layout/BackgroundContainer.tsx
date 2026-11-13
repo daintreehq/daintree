@@ -29,6 +29,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import {
+  openPopoverContent,
+  useDockFocusLandmark,
+  useDockPillHideHandoff,
+} from "./dockFocusHandoff";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -334,6 +339,15 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
+  // The pill hides rather than unmounts, so focus inside it would otherwise be
+  // left on a `display: none` button — and a removal confirmation that closes
+  // with the last entry has nowhere of its own to restore to.
+  const hideHandoff = useDockPillHideHandoff(count);
+  const { resolve: resolveLandmark } = useDockFocusLandmark();
+  const restoreRemovalFocus = useCallback(
+    () => openPopoverContent("background-container-popover") ?? resolveLandmark(),
+    [resolveLandmark]
+  );
   const triggerLabel =
     `Background: ${pluralize(displayCount, "panel")} ${dockStatusScopeDescription(displayCount, hereCount)}` +
     (waitingCount > 0 ? `, ${waitingCount} waiting` : "");
@@ -346,7 +360,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   }, [count]);
 
   return (
-    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"} {...hideHandoff}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -480,6 +494,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           description={removalCopy.description}
           variant="destructive"
           confirmLabel={removalCopy.confirmLabel}
+          restoreFocusTo={restoreRemovalFocus}
           onConfirm={handleKillConfirm}
         />
       </Popover>

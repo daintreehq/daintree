@@ -33,6 +33,14 @@ import { ErrorsContainer } from "./ErrorsContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { DockScrollChevron } from "./DockScrollChevron";
+import {
+  DockFocusLandmarkContext,
+  type DockHandoffOptions,
+  focusFirstAccepting,
+  isFocusTargetVisible,
+  releaseFocusOwner,
+  visibleFocusables,
+} from "./dockFocusHandoff";
 import { useLauncherData } from "./useLauncherData";
 import { DockLaunchMenuItems, type DockLaunchMenuComponents } from "./DockLaunchMenuItems";
 import type { DockLaunchAgentOptions } from "./dockLaunchItems";
@@ -180,6 +188,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeDockIndexRef = useRef(0);
+  // Two claims on the last chip that held focus, with different lifetimes. The
+  // tab stop follows a chip that is moved while its panel has focus, so that
+  // identity outlives focus leaving the chip (a keyboard move runs from inside
+  // its terminal). Recovery after a removal is a claim on focus itself, and it
+  // ends the moment focus leaves the rail.
+  const followedDockItemRef = useRef<HTMLElement | null>(null);
   const prevFocusedDockItemRef = useRef<HTMLElement | null>(null);
   const { canScrollLeft, canScrollRight, scrollLeft, scrollRight } = useHorizontalScrollControls(
     scrollContainerRef,
@@ -211,13 +225,20 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   useLayoutEffect(() => {
     const items = getDockItems();
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      // The last chip going takes its history with it; a stale ref would claim
+      // the next chip to arrive on behalf of focus that is long gone.
+      followedDockItemRef.current = null;
+      prevFocusedDockItemRef.current = null;
+      return;
+    }
     // The tab stop follows the chip, not its slot: a chip moved by the keyboard
     // (#14972) keeps it, and the next arrow roves from where the chip now sits.
     // React has already put focus back on a moved chip by now, so one that holds
     // it is scrolled into view the way an arrow-key rove would.
-    const followed = prevFocusedDockItemRef.current;
+    const followed = followedDockItemRef.current;
     const followedIdx = followed ? items.indexOf(followed) : -1;
+    if (followed && followedIdx === -1) followedDockItemRef.current = null;
     if (
       followed &&
       followedIdx !== -1 &&
@@ -256,12 +277,21 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       const idx = items.indexOf(target);
       if (idx !== -1) {
         activeDockIndexRef.current = idx;
+        followedDockItemRef.current = target;
         prevFocusedDockItemRef.current = target;
         syncDockTabStops(items, idx);
       }
     },
     [getDockItems, syncDockTabStops]
   );
+
+  // The ref above is what lets a removed chip hand focus to its neighbour, so it
+  // has to stop naming a chip once focus has left the rail: a removal after the
+  // user moved on would otherwise pull focus back to the dock (and open the
+  // chip's tooltip with it).
+  const handleDockBlurCapture = useCallback((e: React.FocusEvent<HTMLElement>) => {
+    releaseFocusOwner(e, prevFocusedDockItemRef);
+  }, []);
 
   const handleDockKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
@@ -384,20 +414,33 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     [activeWorktreeId, cwd]
   );
 
-  // The trash control unmounts entirely when its last entry expires, so a
-  // keyboard user standing in it has nowhere to land. The action row it lives
-  // in outlives it and is the nearest stable destination.
+  // The trash control unmounts when its last entry expires and a status pill is
+  // hidden when its count reaches zero, so a keyboard user standing in either
+  // has nowhere to land. The nearest visible control does: a status pill that is
+  // still showing, else the rail's tab stop, else the launcher. The inactive
+  // pills are skipped — they stay mounted behind `display: none`, where
+  // `.focus()` does nothing and focus would fall to the document.
   const actionContainerRef = useRef<HTMLDivElement | null>(null);
-  const handleTrashFocusHandoff = useCallback(() => {
-    const row = actionContainerRef.current;
-    if (!row) return;
-    const next = row.querySelector<HTMLElement>(
-      "button:not([disabled]), [tabindex]:not([tabindex='-1'])"
-    );
-    // The row itself as a last resort — landing in the dock beats landing on
-    // the document, which is where focus goes if nobody claims it.
-    (next ?? row).focus({ preventScroll: true });
-  }, []);
+  const launcherRef = useRef<HTMLDivElement | null>(null);
+  const dockLandmarkCandidates = useCallback((): HTMLElement[] => {
+    const items = getDockItems();
+    return [
+      ...visibleFocusables(actionContainerRef.current, "button, [tabindex]:not([tabindex='-1'])"),
+      items[activeDockIndexRef.current] ?? items[0],
+      ...visibleFocusables(launcherRef.current, "button"),
+      // The tray itself as a last resort — landing in the dock beats landing on
+      // the document, which is where focus goes if nobody claims it.
+      actionContainerRef.current,
+    ].filter((el): el is HTMLElement => el != null && isFocusTargetVisible(el));
+  }, [getDockItems]);
+  const dockLandmark = useMemo(
+    () => ({
+      resolve: () => dockLandmarkCandidates()[0] ?? null,
+      handoff: (options?: DockHandoffOptions) =>
+        focusFirstAccepting(dockLandmarkCandidates(), options),
+    }),
+    [dockLandmarkCandidates]
+  );
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
@@ -534,7 +577,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           )}
           data-dock-density={density}
         >
-          <div className="shrink-0 flex items-center">
+          <div ref={launcherRef} className="shrink-0 flex items-center">
             <DockLaunchButton
               agents={launchAgents}
               pinnedCount={pinnedCount}
@@ -567,6 +610,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               aria-busy={isDndActive || undefined}
               onKeyDown={handleDockKeyDown}
               onFocusCapture={handleDockFocusCapture}
+              onBlurCapture={handleDockBlurCapture}
               className={cn(
                 // scroll-px clears the chevron overlay (60px with its waiting
                 // ring), so a chip reached by keyboard is never parked under it.
@@ -667,15 +711,13 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             >
               All
             </span>
-            <BackgroundContainer compact={isTrayCompact} />
-            <WaitingContainer compact={isTrayCompact} />
-            <UnreadContainer compact={isTrayCompact} />
-            <ErrorsContainer compact={isTrayCompact} />
-            <TrashContainer
-              trashedTerminals={trashedItems}
-              compact={isTrayCompact}
-              onFocusHandoff={handleTrashFocusHandoff}
-            />
+            <DockFocusLandmarkContext.Provider value={dockLandmark}>
+              <BackgroundContainer compact={isTrayCompact} />
+              <WaitingContainer compact={isTrayCompact} />
+              <UnreadContainer compact={isTrayCompact} />
+              <ErrorsContainer compact={isTrayCompact} />
+              <TrashContainer trashedTerminals={trashedItems} compact={isTrayCompact} />
+            </DockFocusLandmarkContext.Provider>
           </div>
         </div>
       </ContextMenuTrigger>

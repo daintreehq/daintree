@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { TabGroup, AgentState } from "@/types";
@@ -158,6 +158,10 @@ vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
   markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
 }));
 
+const restoreProbe = vi.hoisted(() => ({
+  current: undefined as undefined | (() => HTMLElement | null),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -165,13 +169,16 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     confirmLabel,
     onConfirm,
     onClose,
+    restoreFocusTo,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
     confirmLabel: string;
     onConfirm: () => void;
     onClose: () => void;
+    restoreFocusTo?: () => HTMLElement | null;
   }) => {
+    restoreProbe.current = restoreFocusTo;
     if (!isOpen) return null;
     return (
       <div role="dialog" data-testid="kill-confirm-dialog">
@@ -199,6 +206,7 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 }));
 
 import { WaitingContainer } from "../WaitingContainer";
+import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -822,5 +830,106 @@ describe("WaitingContainer plugin panel rows (#13821)", () => {
     expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
       "false"
     );
+  });
+});
+
+describe("WaitingContainer — focus when the pill hides (#16921)", () => {
+  const handoff = vi.fn();
+  const landmarkEl = document.createElement("button");
+  const withDock = (ui: React.ReactElement) => (
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => landmarkEl }}>
+      <input data-testid="outside" />
+      {ui}
+    </DockFocusLandmarkContext.Provider>
+  );
+  const trigger = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+  /** A control in the popover that is not the trigger, as a row is. */
+  const insideControl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("button")).find(
+      (button) => button !== trigger(container)
+    )!;
+
+  beforeEach(() => handoff.mockClear());
+
+  it("hands focus to the dock when the pill hides under a focused trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(view.container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks focus on a control inside the popover, not only on the trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => insideControl(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus while the count falls but the pill stays", () => {
+    mockTerminals = [makeTerminal({ id: "t1" }), makeTerminal({ id: "t2" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger(view.container));
+  });
+
+  it("leaves focus where the user put it", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+    act(() => screen.getByTestId("outside").focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("outside"));
+  });
+
+  it("hands focus on when the last plugin panel clears, though no agent was ever listed", () => {
+    mockPluginRows = [makePluginRow()];
+    const view = render(withDock(<WaitingContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockPluginRows = [];
+    view.rerender(withDock(<WaitingContainer />));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the kill confirmation to the open popover, else the dock", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    render(withDock(<WaitingContainer />));
+    const restore = restoreProbe.current;
+    expect(restore).toBeDefined();
+    expect(restore?.()).toBe(landmarkEl);
+
+    const popover = document.createElement("div");
+    popover.id = "waiting-container-popover";
+    popover.setAttribute("data-state", "open");
+    document.body.appendChild(popover);
+    try {
+      expect(restore?.()).toBe(popover);
+      popover.setAttribute("data-state", "closed");
+      expect(restore?.()).toBe(landmarkEl);
+    } finally {
+      popover.remove();
+    }
   });
 });

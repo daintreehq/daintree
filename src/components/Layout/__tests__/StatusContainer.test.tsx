@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import { AlertCircle } from "lucide-react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { StatusContainer, type StatusContainerConfig } from "../StatusContainer";
+import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktreeNames: () =>
@@ -114,5 +115,67 @@ describe("StatusContainer", () => {
       expect(m.getAttribute("data-proxy")).toBe("true");
       expect(m.querySelector("button[data-dock-row]")).not.toBeNull();
     }
+  });
+});
+
+describe("StatusContainer — focus when the pill hides (#16921)", () => {
+  const handoff = vi.fn();
+  const landmarkEl = document.createElement("button");
+  const withDock = (terminals: PtyPanelData[]) => (
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => landmarkEl }}>
+      <input data-testid="outside" />
+      <StatusContainer config={config} terminals={terminals} />
+    </DockFocusLandmarkContext.Provider>
+  );
+  const trigger = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+  const insideControl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("button")).find(
+      (button) => button !== trigger(container)
+    )!;
+  const one = () => [makeTerminal("t1", "Local", "wt-1")];
+
+  beforeEach(() => handoff.mockClear());
+
+  it("hands focus to the dock when the last errored panel clears under a focused trigger", () => {
+    const view = render(withDock(one()));
+    act(() => trigger(view.container).focus());
+
+    view.rerender(withDock([]));
+
+    expect(view.container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks focus on a row of the popover, not only on the trigger", () => {
+    const view = render(withDock(one()));
+    act(() => insideControl(view.container).focus());
+
+    view.rerender(withDock([]));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus while the count falls but the pill stays", () => {
+    const view = render(withDock([...one(), makeTerminal("t2", "Other", "wt-1")]));
+    act(() => trigger(view.container).focus());
+
+    view.rerender(withDock(one()));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger(view.container));
+  });
+
+  it("leaves focus where the user put it", () => {
+    const view = render(withDock(one()));
+    act(() => trigger(view.container).focus());
+    act(() => screen.getByTestId("outside").focus());
+
+    view.rerender(withDock([]));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("outside"));
   });
 });
