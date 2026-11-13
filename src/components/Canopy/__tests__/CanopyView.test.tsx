@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /** The app root provides tooltips; the rows' action buttons need one. */
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
-import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
   CANOPY_SEARCH_MAX_TERMS,
@@ -1906,16 +1906,36 @@ describe("CanopyView", () => {
 
   // Z takes back the newest action; a snooze, wake or unpark is one it can't,
   // so it must not reach past it to an archive done before.
-  it.each([
-    { action: "snooze", aside: {}, path: ["Snooze…", "15 minutes"] },
-    { action: "wake", aside: { snooze: { option: "15m" } }, path: ["Snooze…", "Wake now"] },
-    { action: "unpark", aside: { park: { parkedAt: NOW - 1000 } }, path: ["Unpark"] },
-  ])("leaves Z nothing to take back after a $action", async ({ action, aside, path }) => {
+  it.each<{
+    action: string;
+    aside: Partial<FleetRunRow>;
+    path: string[];
+    sent: () => (typeof fleetApi)["snoozeRun" | "unsnoozeRun" | "unparkRun"];
+  }>([
+    {
+      action: "snooze",
+      aside: {},
+      path: ["Snooze…", "15 minutes"],
+      sent: () => fleetApi.snoozeRun,
+    },
+    {
+      action: "wake",
+      aside: { snooze: { snoozedAt: NOW - 1000 } },
+      path: ["Snooze…", "Wake now"],
+      sent: () => fleetApi.unsnoozeRun,
+    },
+    {
+      action: "unpark",
+      aside: { park: { parkedAt: NOW - 1000 } },
+      path: ["Unpark"],
+      sent: () => fleetApi.unparkRun,
+    },
+  ])("leaves Z nothing to take back after a $action", async ({ aside, path, sent }) => {
     const fleet = useFleetSnapshotStore.getState().snapshot!;
     useFleetSnapshotStore.setState({
       snapshot: {
         ...fleet,
-        runs: fleet.runs.map((r) => (r.runId === "asking" ? ({ ...r, ...aside } as typeof r) : r)),
+        runs: fleet.runs.map((r) => (r.runId === "asking" ? { ...r, ...aside } : r)),
       },
     });
     const canopy = installElectron();
@@ -1934,12 +1954,7 @@ describe("CanopyView", () => {
       if (step < path.length - 1) fireEvent.keyDown(item, { key: "ArrowRight" });
       else fireEvent.click(item);
     }
-    const sent = {
-      snooze: fleetApi.snoozeRun,
-      wake: fleetApi.unsnoozeRun,
-      unpark: fleetApi.unparkRun,
-    };
-    expect(sent[action as keyof typeof sent]).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveBeenCalledTimes(1);
     await frames();
     fireEvent.keyDown(cards(container)[0]!, { key: "z" });
     expect(canopy.unarchive).not.toHaveBeenCalled();
