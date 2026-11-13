@@ -569,6 +569,58 @@ describe("useFindInPage", () => {
     expect(focusWebviewPageMock).toHaveBeenCalledWith(webview);
   });
 
+  it("searches once when the bar reopens as the webview becomes ready", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { ready: true } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    rerender({ ready: false });
+    webview.findInPage.mockClear();
+
+    act(() => {
+      result.current.open();
+      rerender({ ready: true });
+    });
+    expect(webview.findInPage).toHaveBeenCalledTimes(1);
+    expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: false });
+  });
+
+  it("does not step a search the closed bar no longer shows", () => {
+    const webview = createMockWebview();
+    let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFindShortcutMock.mockImplementation((cb: any) => {
+      shortcutCallback = cb;
+      return vi.fn();
+    });
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    webview.findInPage.mockClear();
+
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "next" }));
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "prev" }));
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("clears an IME composition the closing bar can no longer end", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    result.current.isComposingRef.current = true;
+    act(() => result.current.close());
+
+    expect(result.current.isComposingRef.current).toBe(false);
+  });
+
   it("still closes when there is no webview to hand the keyboard to", () => {
     focusWebviewPageMock.mockReturnValueOnce(false);
     const { result } = renderHook(() => useFindInPage("panel-1", null, false, true));

@@ -77,13 +77,21 @@ export function useFindInPage(
   // The query and matchCase outlive the bar, so Cmd+F again picks up where the
   // user left off; only the page's find session and its counts end here.
   const close = useCallback(() => {
+    const pane = inputRef.current?.closest<HTMLElement>("[data-panel-id]") ?? null;
+    const active = document.activeElement;
+    // The bar is about to unmount; its input is gone, so a composition in it
+    // can no longer end on its own.
+    isComposingRef.current = false;
     setIsOpen(false);
     setActiveMatch(0);
     setMatchCount(0);
     latestRequestIdRef.current = null;
     safeStopFind();
-    // Unmounting the bar would leave the keyboard on `document.body`.
-    focusWebviewPage(webviewElement);
+    // Unmounting the bar would leave the keyboard on `document.body`. A close
+    // forwarded from the guest can land after the user has moved to another pane;
+    // that keyboard stays where it went.
+    if (pane && active && active !== document.body && !pane.contains(active)) return;
+    if (!focusWebviewPage(webviewElement)) pane?.focus({ preventScroll: true });
   }, [safeStopFind, webviewElement]);
 
   const setQuery = useCallback(
@@ -103,13 +111,15 @@ export function useFindInPage(
     [safeFind, safeStopFind]
   );
 
+  // A step is only meaningful inside an open session; the kept query would
+  // otherwise let a guest's Cmd+G step a search the bar no longer shows.
   const goNext = useCallback(() => {
-    if (query) safeFind(query, { forward: true, findNext: false });
-  }, [query, safeFind]);
+    if (isOpen && query) safeFind(query, { forward: true, findNext: false });
+  }, [isOpen, query, safeFind]);
 
   const goPrev = useCallback(() => {
-    if (query) safeFind(query, { forward: false, findNext: false });
-  }, [query, safeFind]);
+    if (isOpen && query) safeFind(query, { forward: false, findNext: false });
+  }, [isOpen, query, safeFind]);
 
   const toggleMatchCase = useCallback(() => {
     const next = !matchCase;
@@ -155,29 +165,24 @@ export function useFindInPage(
     };
   }, [webviewElement, isOpen, query, safeFind]);
 
-  // Resume an open search when the webview becomes ready or is replaced. Only a
-  // target change acts here; typing and toggling matchCase already search.
-  const resumeTargetRef = useRef({ webviewElement, isWebviewReady });
+  // Resume an open search when the webview becomes ready or is replaced, or when
+  // the bar reopens: close ended the page's find session, and the kept query would
+  // otherwise read "No matches". Typing and toggling matchCase already search, so
+  // only a target change or a reopen acts here. Declared after the found-in-page
+  // listener so a reopen's results find it attached.
+  const resumeTargetRef = useRef({ webviewElement, isWebviewReady, isOpen });
   useEffect(() => {
     const prev = resumeTargetRef.current;
-    if (prev.webviewElement === webviewElement && prev.isWebviewReady === isWebviewReady) return;
-    resumeTargetRef.current = { webviewElement, isWebviewReady };
-    if (!isOpen) return;
+    const targetChanged =
+      prev.webviewElement !== webviewElement || prev.isWebviewReady !== isWebviewReady;
+    const reopened = isOpen && !prev.isOpen;
+    resumeTargetRef.current = { webviewElement, isWebviewReady, isOpen };
+    if (!isOpen || (!targetChanged && !reopened)) return;
     latestRequestIdRef.current = null;
     setActiveMatch(0);
     setMatchCount(0);
     if (query && !isComposingRef.current) safeFind(query, { findNext: true });
   }, [webviewElement, isWebviewReady, isOpen, query, safeFind]);
-
-  // Close ended the page's find session, so a reopened bar with a kept query
-  // starts one again; otherwise its counter would read "No matches". Declared
-  // after the found-in-page listener so the listener is attached first.
-  const wasOpenRef = useRef(false);
-  useEffect(() => {
-    const reopened = isOpen && !wasOpenRef.current;
-    wasOpenRef.current = isOpen;
-    if (reopened && query && !isComposingRef.current) safeFind(query, { findNext: true });
-  }, [isOpen, query, safeFind]);
 
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
