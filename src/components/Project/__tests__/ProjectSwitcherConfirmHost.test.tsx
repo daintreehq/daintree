@@ -111,9 +111,8 @@ import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import type { ProjectSwitcherConfirmSource } from "../ProjectSwitcherConfirmDialogs";
 
 const { ProjectSwitcherConfirmHost } = await import("../ProjectSwitcherConfirmDialogs");
-const { useProjectSwitcherProjectMutations } = await import(
-  "@/hooks/projectSwitcher/useProjectSwitcherProjectMutations"
-);
+const { useProjectSwitcherProjectMutations } =
+  await import("@/hooks/projectSwitcher/useProjectSwitcherProjectMutations");
 
 function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProject {
   return {
@@ -267,7 +266,10 @@ describe("ProjectSwitcherConfirmHost", () => {
         />
       );
       view.rerender(
-        <ProjectSwitcherConfirmHost projectSwitcher={idleSource()} paletteInputRef={paletteInputRef} />
+        <ProjectSwitcherConfirmHost
+          projectSwitcher={idleSource()}
+          paletteInputRef={paletteInputRef}
+        />
       );
       expect(screen.queryAllByTestId("confirm-dialog")).toHaveLength(0);
     });
@@ -331,8 +333,16 @@ describe("cold requests with no switcher mounted", () => {
     const inputRef = useRef<HTMLInputElement>(null);
     return (
       <>
-        <button type="button" data-testid="request-close" onClick={() => void mutations.removeProject(project.id)} />
-        <button type="button" data-testid="request-sleep" onClick={() => void mutations.sleepProject(project.id)} />
+        <button
+          type="button"
+          data-testid="request-close"
+          onClick={() => void mutations.removeProject(project.id)}
+        />
+        <button
+          type="button"
+          data-testid="request-sleep"
+          onClick={() => void mutations.sleepProject(project.id)}
+        />
         <ProjectSwitcherConfirmHost
           projectSwitcher={{ ...idleSource(), ...mutations }}
           paletteInputRef={inputRef}

@@ -563,9 +563,7 @@ function ProjectPaletteInner({
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
   const hasProjectPresentation =
     (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
-  const hasProjectCommands = Boolean(
-    onOpenProjectSettings || onAddProject || onCloneRepo
-  );
+  const hasProjectCommands = Boolean(onOpenProjectSettings || onAddProject || onCloneRepo);
   const scratchCount = scratchResults?.length ?? 0;
   const scratchesStandAlone = !isRankedSearch && !hasProjectPresentation && scratchCount > 0;
   const showScratchSection = Boolean(onCreateScratch || scratchCount > 0);
