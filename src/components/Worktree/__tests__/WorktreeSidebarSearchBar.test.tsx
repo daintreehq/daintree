@@ -247,7 +247,7 @@ describe("WorktreeSidebarSearchBar", () => {
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
   });
 
-  it("stale debounce: external clearAll cancels the pending query write", () => {
+  it("stale debounce: external clearAll does not resurrect the pending query", () => {
     vi.useFakeTimers();
     try {
       renderBar();
@@ -276,6 +276,78 @@ describe("WorktreeSidebarSearchBar", () => {
     }
   });
 
+  it("popover 'Clear all filters' clears facets without wiping text still awaiting its commit", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      act(() => {
+        useWorktreeFilterStore.getState().toggleStatusFilter("active");
+      });
+      fireEvent.change(getInput(), { target: { value: "foo" } });
+      // The debounce has not fired: facets are the only committed filter.
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      fireEvent.click(getFilterTrigger());
+      fireEvent.click(screen.getByText("Clear all filters"));
+      expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
+      expect(getInput().value).toBe("foo");
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      expect(useWorktreeFilterStore.getState().query).toBe("foo");
+      expect(getInput().value).toBe("foo");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clearing the last facet leaves text awaiting its commit alone", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      act(() => {
+        useWorktreeFilterStore.getState().toggleStatusFilter("active");
+      });
+      fireEvent.change(getInput(), { target: { value: "foo" } });
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      act(() => {
+        useWorktreeFilterStore.getState().clearStatusFilters();
+      });
+      expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
+      expect(getInput().value).toBe("foo");
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      expect(useWorktreeFilterStore.getState().query).toBe("foo");
+      expect(getInput().value).toBe("foo");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clearing the last quick-state filter leaves text awaiting its commit alone", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      act(() => {
+        useWorktreeFilterStore.getState().setQuickStateFilter("working");
+      });
+      fireEvent.change(getInput(), { target: { value: "foo" } });
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      act(() => {
+        useWorktreeFilterStore.getState().setQuickStateFilter("all");
+      });
+      expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+      expect(getInput().value).toBe("foo");
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      expect(useWorktreeFilterStore.getState().query).toBe("foo");
+      expect(getInput().value).toBe("foo");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stale debounce: X click during pending debounce commits an empty query", () => {
     vi.useFakeTimers();
     try {
@@ -299,8 +371,8 @@ describe("WorktreeSidebarSearchBar", () => {
     vi.useFakeTimers();
     try {
       renderBar();
-      // No facets — hasActiveFilters() stays false throughout, so the
-      // hasActiveFilters cancellation guard never fires for this path.
+      // No facets: nothing else is active, so only the cleared `liveQuery`
+      // stands between the pending timer and the stale typed value.
       fireEvent.change(getInput(), { target: { value: "foo" } });
       expect(useWorktreeFilterStore.getState().liveQuery).toBe("foo");
       expect(useWorktreeFilterStore.getState().query).toBe("");

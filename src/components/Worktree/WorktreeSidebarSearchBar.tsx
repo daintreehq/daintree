@@ -89,7 +89,6 @@ export function WorktreeSidebarSearchBar({
   const clearAll = useWorktreeFilterStore((state) => state.clearAll);
   const quickStateFilter = useWorktreeFilterStore((state) => state.quickStateFilter);
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters());
-  const hasActiveFiltersValue = useWorktreeFilterStore((state) => state.hasActiveFilters());
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   // The popover is portalled, so the inert worktree list behind a plugin's
@@ -102,7 +101,6 @@ export function WorktreeSidebarSearchBar({
   }
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const internalRef = useRef<HTMLInputElement | null>(null);
-  const prevHasActiveFiltersRef = useRef(hasActiveFiltersValue);
   const previousQueryRef = useRef(query);
 
   // Sync the instant `liveQuery` and cancel any pending persistence write when
@@ -120,23 +118,6 @@ export function WorktreeSidebarSearchBar({
     }
     setLiveQuery(query);
   }, [query, setLiveQuery]);
-
-  // Cancel any pending debounce when ANY filter is cleared externally
-  // (popover footer "Clear all filters", sidebar empty-state CTA, etc.).
-  // The `[query]` effect above only catches transitions of `query` itself;
-  // when the typed-but-uncommitted query coincides with an external clearAll,
-  // the store's `query` stays "" and the debounce would silently resurrect
-  // the typed value after the persist delay.
-  useEffect(() => {
-    if (prevHasActiveFiltersRef.current && !hasActiveFiltersValue) {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-      setLiveQuery("");
-    }
-    prevHasActiveFiltersRef.current = hasActiveFiltersValue;
-  }, [hasActiveFiltersValue, setLiveQuery]);
 
   useEffect(() => {
     return () => {
@@ -157,10 +138,11 @@ export function WorktreeSidebarSearchBar({
       debounceRef.current = setTimeout(() => {
         debounceRef.current = null;
         // Commit whatever `liveQuery` is when the timer fires, not the value
-        // captured at schedule time. If the query was cleared externally (e.g.
-        // "Show all worktrees" → clearAll with no other active filters, so the
-        // hasActiveFilters guard never trips), this commits "" instead of
-        // resurrecting the stale typed value.
+        // captured at schedule time. A reset that empties `liveQuery` (the
+        // sidebar's "Clear all", "Show all worktrees") therefore leaves this
+        // timer committing "" instead of resurrecting the stale typed value,
+        // and a facet or quick-state clear that does not touch the text leaves
+        // it to commit what the field still shows.
         setQuery(useWorktreeFilterStore.getState().liveQuery);
       }, QUERY_PERSIST_DEBOUNCE_MS);
     },

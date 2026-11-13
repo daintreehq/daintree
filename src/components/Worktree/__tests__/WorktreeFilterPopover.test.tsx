@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import path from "path";
-import { render as rtlRender, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
@@ -69,11 +69,12 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     expect(screen.queryByText("Clear all filters")).not.toBeNull();
   });
 
-  it("offers a bulk clear for a query-only filter, and no count beside it", () => {
-    // The query is a filter — it belongs in the bulk clear. It is NOT one of
-    // the filters the trigger counts, because it is already visible in the
-    // field next to the trigger; counting it lit the control up with no number
-    // beside it, which read as "a filter is on" pointing at nothing.
+  it("offers no bulk clear for a query-only filter beside the external search field", () => {
+    // The query is a filter, but with `hideSearchInput` it belongs to the field
+    // next to the trigger, which has its own X. Gating the footer on it popped
+    // "Clear all filters" into the open popover when the 500ms commit of typed
+    // text landed, with the trigger still showing no count, and the button then
+    // wiped the text from a field the popover does not own.
     useWorktreeFilterStore.getState().setQuery("auth");
     openPopover();
     const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
@@ -81,7 +82,83 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     // Boundary-matched: the resting trigger legitimately carries
     // `hover:bg-overlay-soft`, so a substring check would always pass.
     expect(trigger.className).not.toMatch(/(?:^|\s)bg-overlay-soft(?:\s|$)/);
-    expect(screen.queryByText("Clear all filters")).not.toBeNull();
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+  });
+
+  it("does not pop the bulk clear in when typed text commits under an open popover", () => {
+    openPopover();
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+    act(() => {
+      useWorktreeFilterStore.getState().setQuery("auth");
+    });
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+  });
+
+  it("clears only the facets beside the external search field, leaving its text alone", () => {
+    const store = useWorktreeFilterStore.getState();
+    store.toggleStatusFilter("dirty");
+    store.toggleTypeFilter("feature");
+    store.setQuery("auth");
+    store.setLiveQuery("auth");
+    openPopover();
+    fireEvent.click(screen.getByText("Clear all filters"));
+    const after = useWorktreeFilterStore.getState();
+    expect(after.statusFilters.size).toBe(0);
+    expect(after.typeFilters.size).toBe(0);
+    expect(after.query).toBe("auth");
+    expect(after.liveQuery).toBe("auth");
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+  });
+
+  it("offers a bulk clear for a query-only filter when it owns the search input", () => {
+    useWorktreeFilterStore.getState().setQuery("auth");
+    useWorktreeFilterStore.getState().setLiveQuery("auth");
+    render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByText("Clear all filters"));
+    expect(useWorktreeFilterStore.getState().query).toBe("");
+    expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+  });
+
+  it("hands focus to the open popover before the footer unmounts, in both search ownerships", () => {
+    // Clearing the last filter unmounts the footer button that holds focus;
+    // without the handoff focus drops to <body> inside the open popover (#10315).
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    const hidden = openPopover();
+    const hiddenButton = screen.getByText("Clear all filters");
+    hiddenButton.focus();
+    fireEvent.click(hiddenButton);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("worktree-filter-popover"));
+    hidden.unmount();
+
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+    const ownedButton = screen.getByText("Clear all filters");
+    ownedButton.focus();
+    fireEvent.click(ownedButton);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("worktree-filter-popover"));
+  });
+
+  it("drops text still awaiting its commit when the popover owns the search input", () => {
+    vi.useFakeTimers();
+    try {
+      useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+      render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+      const input = screen.getByRole<HTMLInputElement>("textbox", { name: "Search worktrees" });
+      fireEvent.change(input, { target: { value: "foo" } });
+      // The owned field's own debounce is still pending; nothing is committed.
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      fireEvent.click(screen.getByText("Clear all filters"));
+      expect(input.value).toBe("");
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(input.value).toBe("");
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers no bulk clear when nothing is filtered", () => {
