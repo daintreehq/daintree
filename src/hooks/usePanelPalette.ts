@@ -15,6 +15,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useDevPreviewHidden } from "@/hooks/useResolvedPresentation";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { keybindingService } from "@/services/KeybindingService";
 import { buildResumeSessionItems } from "@/services/resumeSessionItems";
 import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
@@ -266,13 +267,20 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     if (isStale) void refresh().catch(() => {});
   }, [isOpen]);
 
+  // A pick hands the keyboard to the panel it launches or the wizard it opens;
+  // the palette's exit-time restore must not pull it back to the opener.
+  const closeOnPick = useCallback(() => {
+    deferPaletteFocusRestore((restore) => restore());
+    close();
+  }, [close]);
+
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {
       // Stale resume entries (removed worktree) can't be launched — swallow the
       // click rather than routing to the setup wizard or attempting a resume.
       if (option.isStale) return null;
       if (option.id === MORE_AGENTS_PANEL_ID || option.installed === false) {
-        close();
+        closeOnPick();
         window.dispatchEvent(
           new CustomEvent("daintree:open-agent-setup-wizard", {
             detail: { returnToPanelPalette: true },
@@ -280,10 +288,10 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         );
         return null;
       }
-      close();
+      closeOnPick();
       return option;
     },
-    [close]
+    [closeOnPick]
   );
 
   const confirmSelection = useCallback((): PanelKindOption | null => {
@@ -293,7 +301,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     if (selected.isStale) return null;
 
     if (selected.id === MORE_AGENTS_PANEL_ID || selected.installed === false) {
-      close();
+      closeOnPick();
       window.dispatchEvent(
         new CustomEvent("daintree:open-agent-setup-wizard", {
           detail: { returnToPanelPalette: true },
@@ -301,9 +309,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       );
       return null;
     }
-    close();
+    closeOnPick();
     return selected;
-  }, [results, selectedIndex, close]);
+  }, [results, selectedIndex, closeOnPick]);
 
   return {
     results,

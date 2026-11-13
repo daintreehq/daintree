@@ -3,7 +3,12 @@ import { render, act, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
-import { deferPaletteFocusRestore } from "../paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+  deferPaletteFocusRestore,
+  suppressPaletteFocusRestore,
+} from "../paletteFocusRestore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -281,6 +286,8 @@ describe("AppPaletteDialog focus restore", () => {
     _resetForTests();
     usePaletteStore.setState({ activePaletteId: null });
     animatedPresenceState.shouldRender = true;
+    consumeDeferredPaletteFocusRestore();
+    consumePaletteFocusRestoreSuppression();
     vi.useRealTimers();
   });
 
@@ -475,6 +482,136 @@ describe("AppPaletteDialog focus restore", () => {
 
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+
+  it("falls back to the app shell when a handed-off pick removed the opener", async () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    const fallbackButton = document.createElement("button");
+    root.appendChild(fallbackButton);
+    const trigger = document.createElement("button");
+    document.body.append(root, trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    screen.getByPlaceholderText("Palette input").focus();
+    // A command that closed the panel the palette was opened from.
+    deferPaletteFocusRestore((restore) => restore());
+    trigger.remove();
+    rerender(closedPalette());
+
+    expect(document.activeElement).toBe(fallbackButton);
+    root.remove();
+  });
+
+  it("yields a handed-off restore to a palette opening in its place", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    let restore: (() => void) | null = null;
+    deferPaletteFocusRestore((r) => {
+      restore = r;
+    });
+    rerender(closedPalette());
+    (document.activeElement as HTMLElement | null)?.blur();
+    // Unclaimed, so only the incoming palette keeps the opener from it.
+    expect(document.activeElement).toBe(document.body);
+
+    usePaletteStore.setState({ activePaletteId: "action" });
+    act(() => restore?.());
+
+    expect(restore).not.toBeNull();
+    expect(document.activeElement).not.toBe(trigger);
+    trigger.remove();
+  });
+
+  it("drops a late handed-off restore once another palette has opened and closed", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    let restore: (() => void) | null = null;
+    deferPaletteFocusRestore((r) => {
+      restore = r;
+    });
+    rerender(closedPalette());
+
+    const other = (isOpen: boolean) => (
+      <AppPaletteDialog isOpen={isOpen} onClose={() => {}} ariaLabel="Other" tier="command">
+        <input type="text" placeholder="Other input" />
+      </AppPaletteDialog>
+    );
+    const second = render(other(true));
+    second.rerender(other(false));
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
+
+    // A host switch that stayed, settling after the user moved on.
+    act(() => restore?.());
+
+    expect(restore).not.toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    second.unmount();
+    trigger.remove();
+  });
+
+  it("returns focus to the app shell when the opener will not take it", async () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    const fallbackButton = document.createElement("button");
+    root.appendChild(fallbackButton);
+    const trigger = document.createElement("button");
+    document.body.append(root, trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    screen.getByPlaceholderText("Palette input").focus();
+    // Hidden with the worktree a pick switched away from.
+    trigger.focus = () => {};
+    rerender(closedPalette());
+
+    expect(document.activeElement).toBe(fallbackButton);
+    root.remove();
+    trigger.remove();
+  });
+
+  it("drops a pending hand-off when the close is suppressed", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    const receive = vi.fn();
+    deferPaletteFocusRestore(receive);
+    suppressPaletteFocusRestore();
+    rerender(closedPalette());
+
+    expect(receive).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(trigger);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+    expect(consumePaletteFocusRestoreSuppression()).toBe(false);
+    trigger.remove();
+  });
+
+  it("leaves a hand-off for the palette closing now when one with nothing to restore unmounts", () => {
+    const { unmount } = renderPalette({ isOpen: false });
+    const receive = vi.fn();
+    deferPaletteFocusRestore(receive);
+    suppressPaletteFocusRestore();
+    unmount();
+
+    expect(receive).not.toHaveBeenCalled();
+    expect(consumeDeferredPaletteFocusRestore()).toBe(receive);
+    expect(consumePaletteFocusRestoreSuppression()).toBe(true);
   });
 
   it("cancels delayed autofocus when the palette closes before its animation frame", async () => {

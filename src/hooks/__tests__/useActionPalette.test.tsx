@@ -56,6 +56,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
+import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
 import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
 import { publishPluginPaletteGates } from "@/services/plugin/pluginPaletteGating";
@@ -116,6 +117,7 @@ describe("useActionPalette", () => {
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
+    consumeDeferredPaletteFocusRestore();
   });
 
   it("tolerates malformed action manifest entries with missing title", async () => {
@@ -563,6 +565,46 @@ describe("useActionPalette", () => {
     expect(sorted.length).toBe(1);
     expect(sorted[0]!.id).toBe("a.action");
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+  });
+
+  // The palette refocuses its opener ~100ms after closing; a command that
+  // opened a dialog or focused a panel by then must keep the keyboard (#16923).
+  it("hands the palette's focus restore to the command it runs", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    listMock.mockReturnValue([makeEntry("a.action", "Alpha")]);
+    const { result } = renderHook(() => useActionPalette());
+    act(() => result.current.open());
+    act(() => result.current.setQuery("alpha"));
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+
+    act(() => result.current.executeAction(result.current.results[0]!));
+
+    expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+    expect(result.current.isOpen).toBe(false);
+    // The hand-off runs the palette's guarded restore, which only refocuses the
+    // opener while nothing else holds the keyboard.
+    const receive = consumeDeferredPaletteFocusRestore();
+    expect(receive).not.toBeNull();
+    const restore = vi.fn();
+    receive!(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the opener restore for a dismissal and for a disabled row", async () => {
+    listMock.mockReturnValue([makeEntry("a.off", "Alpha off", false)]);
+    const { result } = renderHook(() => useActionPalette());
+    act(() => result.current.open());
+    act(() => result.current.setQuery("alpha"));
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+
+    act(() => result.current.executeAction(result.current.results[0]!));
+    expect(result.current.isOpen).toBe(true);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+    act(() => result.current.close());
+    expect(result.current.isOpen).toBe(false);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   // The palette owns a generic `{ ok: false }` failure toast, but two kinds of
@@ -2001,6 +2043,31 @@ describe("useActionPalette", () => {
         { env: "prod" },
         { source: "user" }
       );
+    });
+
+    it("hands off the focus restore only once the collected arguments dispatch", async () => {
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[0], spec.fields[1]] });
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      // Still open, asking for an answer: nothing has closed the palette yet.
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Environment", step: 1 });
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Force", step: 2 });
+      expect(result.current.isOpen).toBe(true);
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "plugin.acme.deploy",
+        { env: "dev", force: true },
+        { source: "user" }
+      );
+      expect(result.current.isOpen).toBe(false);
+      expect(consumeDeferredPaletteFocusRestore()).not.toBeNull();
     });
 
     it("records MRU only when the command is finally dispatched", async () => {
