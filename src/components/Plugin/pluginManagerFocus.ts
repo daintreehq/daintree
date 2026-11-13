@@ -34,17 +34,33 @@ export function handFocusBack(opener: HTMLElement | null): void {
   // A panel's handler can report success for a focus it defers a frame, so
   // it's offered only a panel that can take focus at all.
   if (panelId !== null && isPanelReachable(panelId) && focusPanelInput(panelId)) return;
-  const root = document.getElementById("root");
-  const fallback =
-    (root ? edgeTabbable(root, "start") : null) ?? edgeTabbable(document.body, "start");
-  fallback?.focus({ preventScroll: true });
+  fallbackTarget()?.focus({ preventScroll: true });
 }
 
+/**
+ * The app shell's first control. While another overlay (the theme browser)
+ * still keeps the shell inert, that overlay's first control instead, ahead of
+ * a toast or anything else portalled earlier in the document.
+ */
+function fallbackTarget(): HTMLElement | null {
+  const root = document.getElementById("root");
+  const shell = root ? edgeTabbable(root, "start") : null;
+  if (shell) return shell;
+  const overlays = document.querySelectorAll<HTMLElement>('[aria-modal="true"]');
+  for (let i = overlays.length - 1; i >= 0; i--) {
+    const target = edgeTabbable(overlays[i]!, "start");
+    if (target) return target;
+  }
+  return edgeTabbable(document.body, "start");
+}
+
+// Not inert, hidden or parked offscreen: a parked dock panel is aria-hidden
+// and content-visibility hidden rather than inert.
 function isPanelReachable(id: string): boolean {
   for (const panel of document.querySelectorAll<HTMLElement>(
     "[data-panel-id][data-panel-location]"
   )) {
-    if (panel.dataset.panelId === id) return panel.closest("[inert]") === null;
+    if (panel.dataset.panelId === id) return isVisibleTabbableElement(panel);
   }
   return false;
 }
@@ -69,13 +85,19 @@ export function containTab(event: KeyboardEvent<HTMLElement>): void {
     root.focus({ preventScroll: true });
     return;
   }
-  // A radio group is one tab stop, so any of its options at an edge is there.
+  // Tab from a radio leaves its whole group, so an option of the edge's group
+  // is at the edge too, unless another stop sits between them.
   const atEdge = event.shiftKey
-    ? active === root || active === first || follows(first, active) || sameRadioGroup(active, first)
-    : active === last || follows(active, last) || sameRadioGroup(active, last);
+    ? active === root ||
+      active === first ||
+      follows(first, active) ||
+      (sameRadioGroup(active, first) && !hasStopBetween(root, first, active))
+    : active === last ||
+      follows(active, last) ||
+      (sameRadioGroup(active, last) && !hasStopBetween(root, active, last));
   if (!atEdge) return;
   event.preventDefault();
-  radioGroupStop(event.shiftKey ? last : first, root).focus({ preventScroll: true });
+  (event.shiftKey ? last : first).focus({ preventScroll: true });
 }
 
 /** Whether `later` comes after `earlier` in the document, a descendant included. */
@@ -96,27 +118,45 @@ function sameRadioGroup(a: Element, b: Element): boolean {
 }
 
 /**
- * The option Tab lands on in `el`'s radio group: the checked one, else the
- * option it entered from, which is `el` since the edges are the group's ends.
+ * Whether sequential navigation stops on `el`. A radio group is one stop: its
+ * checked option, or with none usable checked, whichever end Tab enters from.
  */
-function radioGroupStop(el: HTMLElement, root: ParentNode): HTMLElement {
+function isTabStop(el: HTMLElement, root: ParentNode): boolean {
+  if (!isVisibleTabbableElement(el)) return false;
+  if (!(el instanceof HTMLInputElement) || el.type !== "radio" || el.name === "") return true;
+  if (el.checked) return true;
   for (const option of root.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
-    if (option.checked && sameRadioGroup(option, el)) return option;
+    if (
+      option.checked &&
+      !option.disabled &&
+      sameRadioGroup(option, el) &&
+      isVisibleTabbableElement(option)
+    ) {
+      return false;
+    }
   }
-  return el;
+  return true;
+}
+
+function hasStopBetween(root: ParentNode, start: Element, end: Element): boolean {
+  for (const el of root.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR)) {
+    if (!follows(el, start) || !follows(end, el)) continue;
+    if (!sameRadioGroup(el, start) && isTabStop(el, root)) return true;
+  }
+  return false;
 }
 
 // The shared selector leaves out a details element's summary, which is a
 // native tab stop.
 const TAB_STOP_SELECTOR = `${TABBABLE_SELECTOR}, details > summary:first-of-type:not([tabindex^="-"])`;
 
-// Scans in from one end and stops at the first usable control, so a long
-// plugin list costs a visibility check per Tab only at the edges.
+// Scans in from one end and stops at the first stop, so a long plugin list
+// costs a visibility check per Tab only at the edges.
 function edgeTabbable(root: ParentNode, from: "start" | "end"): HTMLElement | null {
   const all = root.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR);
   for (let i = 0; i < all.length; i++) {
     const el = all[from === "start" ? i : all.length - 1 - i]!;
-    if (isVisibleTabbableElement(el)) return el;
+    if (isTabStop(el, root)) return el;
   }
   return null;
 }

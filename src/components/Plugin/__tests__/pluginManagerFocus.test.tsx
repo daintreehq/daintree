@@ -116,6 +116,71 @@ describe("containTab", () => {
     expect(document.activeElement).toBe(checked);
   });
 
+  it("wraps onto a usable option when the checked one is hidden or disabled", () => {
+    for (const unusable of [{ hidden: true }, { disabled: true }]) {
+      const { unmount } = render(
+        <View>
+          <button type="button">First</button>
+          <input type="radio" name="mode" aria-label="Fast" />
+          <span hidden={unusable.hidden}>
+            <input
+              type="radio"
+              name="mode"
+              aria-label="Slow"
+              defaultChecked
+              disabled={unusable.disabled}
+            />
+          </span>
+        </View>
+      );
+      const first = screen.getByRole("button", { name: "First" });
+      first.focus();
+
+      expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Fast" }));
+      unmount();
+    }
+  });
+
+  it("doesn't wrap past a control between two options of one group", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <input type="radio" name="mode" aria-label="Fast" defaultChecked />
+        <button type="button">Middle</button>
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const checked = screen.getByRole("radio", { name: "Fast" });
+    const middle = screen.getByRole("button", { name: "Middle" });
+    checked.focus();
+
+    expect(fireEvent.keyDown(checked, { key: "Tab" })).toBe(true);
+
+    middle.focus();
+    expect(fireEvent.keyDown(middle, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "First" }));
+  });
+
+  it("wraps from either option of a group with nothing checked", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <input type="radio" name="mode" aria-label="Fast" />
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const entered = screen.getByRole("radio", { name: "Fast" });
+    const first = screen.getByRole("button", { name: "First" });
+    entered.focus();
+
+    expect(fireEvent.keyDown(entered, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Slow" }));
+  });
+
   it("counts a details summary as a stop", () => {
     render(
       <View>
@@ -181,17 +246,53 @@ describe("handFocusBack", () => {
     }
   });
 
-  it("reaches past an app shell that's still inert under the theme browser", () => {
+  it("passes over a focused panel parked offscreen in the dock", () => {
+    const { root, control } = shell();
+    const parking = document.createElement("div");
+    parking.setAttribute("aria-hidden", "true");
+    const panel = document.createElement("div");
+    panel.dataset.panelId = "panel-1";
+    panel.dataset.panelLocation = "dock";
+    parking.appendChild(panel);
+    root.appendChild(parking);
+    const focusPanel = vi.fn(() => true);
+    const unregister = registerPanelFocusHandler("panel-1", focusPanel);
+    usePanelStore.setState({ focusedId: "panel-1" });
+    try {
+      handFocusBack(null);
+
+      expect(focusPanel).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(control);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("lands in the theme browser, not an earlier toast, while it keeps the shell inert", () => {
     const { root } = shell();
     root.setAttribute("inert", "");
+    const toast = document.createElement("div");
+    toast.appendChild(document.createElement("button"));
     const sheet = document.createElement("div");
+    sheet.setAttribute("aria-modal", "true");
     const sheetSearch = document.createElement("input");
     sheet.appendChild(sheetSearch);
-    document.body.appendChild(sheet);
+    document.body.append(toast, sheet);
 
     handFocusBack(null);
 
     expect(document.activeElement).toBe(sheetSearch);
+  });
+
+  it("takes the document's first control when nothing else is left", () => {
+    const { root } = shell();
+    root.setAttribute("inert", "");
+    const loose = document.createElement("button");
+    document.body.appendChild(loose);
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(loose);
   });
 });
 
