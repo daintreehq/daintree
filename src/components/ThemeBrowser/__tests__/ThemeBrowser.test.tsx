@@ -762,14 +762,20 @@ describe("ThemeBrowser navigation contract", () => {
       expect(appThemeClient.setColorScheme).not.toHaveBeenCalled();
     });
 
-    it.each(["PageDown", "PageUp"])("leaves %s to the composition", (key) => {
+    it.each([
+      ["PageDown", { isComposing: true }],
+      ["PageUp", { isComposing: true }],
+      ["PageDown", { keyCode: 229 }],
+      ["PageUp", { keyCode: 229 }],
+    ])("leaves %s to the composition (%o)", (key, composing) => {
       render(<Harness />);
       const input = screen.getByLabelText("Filter themes");
       const target = darkSchemeAt(2)!;
       fireEvent.click(findRowByName(target.name));
 
-      fireEvent.keyDown(input, { key, isComposing: true });
+      const notCancelled = fireEvent.keyDown(input, { key, ...composing });
 
+      expect(notCancelled).toBe(true);
       expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
     });
   });
@@ -1128,7 +1134,12 @@ describe("ThemeBrowser navigation contract", () => {
     expect(useThemeBrowserStore.getState().isOpen).toBe(true);
   });
 
-  it("hands focus back to whatever opened it", () => {
+  const nextFrame = () =>
+    act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+  it("hands focus back to whatever opened it", async () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);
     opener.focus();
@@ -1140,6 +1151,7 @@ describe("ThemeBrowser navigation contract", () => {
     expect(document.activeElement).not.toBe(opener);
 
     view.unmount();
+    await nextFrame();
 
     expect(document.activeElement).toBe(opener);
     opener.remove();
@@ -1148,7 +1160,7 @@ describe("ThemeBrowser navigation contract", () => {
   // Opened from Settings, closing reopens Settings on the theme section, which
   // takes focus before the browser's exit animation ends and it unmounts. The
   // opener it recorded then is no longer where the user is.
-  it("leaves focus where the next surface put it by the time it unmounts", () => {
+  it("leaves focus where the next surface put it by the time it unmounts", async () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);
     opener.focus();
@@ -1159,6 +1171,7 @@ describe("ThemeBrowser navigation contract", () => {
     document.body.appendChild(reopened);
     act(() => reopened.focus());
     view.unmount();
+    await nextFrame();
 
     expect(document.activeElement).toBe(reopened);
     opener.remove();

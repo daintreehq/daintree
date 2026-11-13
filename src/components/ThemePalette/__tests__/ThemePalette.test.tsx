@@ -182,6 +182,44 @@ describe("ThemePalette", () => {
     );
   });
 
+  it("opens on the saved theme after a search was left up at the last close", async () => {
+    const { rerender } = renderOpen();
+    await act(async () => {});
+    fireEvent.change(input(), { target: { value: "hokkaido" } });
+    await act(async () => {});
+    expect(input().getAttribute("aria-activedescendant")).not.toBe(`theme-option-${COMMITTED.id}`);
+
+    rerender(<ThemePalette isOpen={false} onClose={() => {}} />);
+    await act(async () => {});
+    rerender(<ThemePalette isOpen onClose={() => {}} />);
+    await act(async () => {});
+
+    expect(input().getAttribute("aria-activedescendant")).toBe(`theme-option-${COMMITTED.id}`);
+    flushPendingTheme();
+    expect(document.documentElement.dataset.theme).toBe(COMMITTED.id);
+  });
+
+  // Off the field, Escape reaches the dialog's backstop rather than the
+  // field's handler; a query still clears before anything closes.
+  it("clears a search before closing on Escape from the results", async () => {
+    const onClose = vi.fn();
+    render(<ThemePalette isOpen onClose={onClose} />, { wrapper: TooltipProvider });
+    await act(async () => {});
+    fireEvent.change(input(), { target: { value: "bondi" } });
+    await act(async () => {});
+    const results = screen.getByRole("group", { name: "Theme switcher" });
+    act(() => results.focus());
+
+    fireEvent.keyDown(results, { key: "Escape" });
+    await act(async () => {});
+    expect((input() as HTMLInputElement).value).toBe("");
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(results, { key: "Escape" });
+    await act(async () => {});
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   // The palette edits the global theme, as Settings does (#13833), while a
   // project with its own theme keeps showing it. Every hint has to say which.
   describe("in a project that shows its own theme", () => {
@@ -217,6 +255,31 @@ describe("ThemePalette", () => {
       fireEvent.keyDown(input(), { key: "ArrowDown" });
       await act(async () => {});
       expect(shownTheme()).toBe(cursorScheme().id);
+
+      // Once the cursor has moved, the saved global theme previews like any other.
+      fireEvent.keyDown(input(), { key: "ArrowUp" });
+      await act(async () => {});
+      expect(cursorScheme().id).toBe(COMMITTED.id);
+      expect(shownTheme()).toBe(COMMITTED.id);
+    });
+
+    it("leaves the project's theme on screen while a search moves the saved row", async () => {
+      const saved = BUILT_IN_APP_SCHEMES.find((s) => s.name === "Arashiyama")!;
+      useAppThemeStore.setState({ selectedSchemeId: saved.id });
+      const savedRowIndex = () => rows().findIndex((o) => o.id === `theme-option-${saved.id}`);
+      renderOpen();
+      await act(async () => {});
+      const unfilteredIndex = savedRowIndex();
+
+      fireEvent.change(input(), { target: { value: "japan" } });
+      await act(async () => {});
+
+      // The search moves the saved row to another index while keeping a row at
+      // its old one, which is what reads as a move for a render.
+      expect(savedRowIndex()).not.toBe(unfilteredIndex);
+      expect(rows().length).toBeGreaterThan(unfilteredIndex);
+      expect(cursorScheme().id).toBe(saved.id);
+      expect(shownTheme()).toBe(PROJECT.id);
     });
 
     it("says Enter sets the global theme and Escape goes back to the project's", async () => {
@@ -227,12 +290,25 @@ describe("ThemePalette", () => {
       expect(dialog.textContent).toContain(`to keep ${COMMITTED.name} as the global theme`);
       const saved = rows().find((o) => o.getAttribute("aria-current"))!;
       expect(saved.textContent).toContain("Global theme");
+      const note = document.getElementById(input().getAttribute("aria-describedby")!)!;
+      expect(note.textContent).toBe(`This project shows its own theme, ${PROJECT.name}`);
 
       fireEvent.keyDown(input(), { key: "ArrowDown" });
       await act(async () => {});
       expect(dialog.textContent).toContain(`to set ${cursorScheme().name} as the global theme`);
       expect(dialog.textContent).toContain(`to go back to ${PROJECT.name}`);
       expect(dialog.textContent).not.toContain(`to go back to ${COMMITTED.name}`);
+
+      // On the project's own row Escape changes nothing on screen, so it isn't offered.
+      fireEvent.pointerMove(rows().find((o) => o.id === `theme-option-${PROJECT.id}`)!);
+      await act(async () => {});
+      expect(cursorScheme().id).toBe(PROJECT.id);
+      expect(dialog.textContent).not.toContain("to go back to");
+
+      fireEvent.change(input(), { target: { value: "a" } });
+      await act(async () => {});
+      expect(dialog.textContent).toContain("to clear search");
+      expect(dialog.textContent).not.toContain("to go back to");
     });
 
     it("goes back to the project's theme when closed without a pick", async () => {

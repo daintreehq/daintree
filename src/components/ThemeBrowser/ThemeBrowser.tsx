@@ -439,23 +439,21 @@ export function ThemeBrowser() {
   // panel's exit animation ends, so only focus this panel stranded is handed
   // back: an opener recorded once Settings had already closed (the toolbar's
   // Settings button) would otherwise take it from behind the reopened dialog.
+  // The hand-back waits a frame because the app chrome stays inert until the
+  // render that follows this unmount releases the browser's overlay claim, and
+  // an inert opener refuses focus.
   useEffect(() => {
     const opener = document.activeElement;
     const root = rootRef.current;
     const rafId = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => {
       cancelAnimationFrame(rafId);
-      const active = document.activeElement;
-      const stranded = active === null || active === document.body || !!root?.contains(active);
-      if (
-        stranded &&
-        opener instanceof HTMLElement &&
-        opener.isConnected &&
-        opener !== document.body &&
-        typeof opener.focus === "function"
-      ) {
-        opener.focus({ preventScroll: true });
-      }
+      if (!(opener instanceof HTMLElement) || opener === document.body) return;
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        const stranded = active === null || active === document.body || !!root?.contains(active);
+        if (stranded && opener.isConnected) opener.focus({ preventScroll: true });
+      });
     };
   }, []);
 

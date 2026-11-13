@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteFooterHints, type PaletteFooterHint } from "@/components/ui/AppPaletteDialog";
+import {
+  PaletteFooterHints,
+  type PaletteCloseReason,
+  type PaletteFooterHint,
+} from "@/components/ui/AppPaletteDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -171,9 +175,12 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
   // causing a visible "flash" to the wrong theme and, if the user hit Enter
   // without navigating, silently committing the wrong theme.
   const livePreviewReadyRef = useRef(false);
-  // The row the cursor opened on, until it first moves. Opening on the saved
-  // global theme paints nothing: in a project with its own theme that theme is
-  // not the one on screen, and opening a picker must not change the window.
+  // The row the cursor opened on, until the user first moves it. Opening on the
+  // saved global theme paints nothing: in a project with its own theme that
+  // theme is not the one on screen, and opening a picker must not change the
+  // window. Only a key or the pointer counts as a move: a query that reorders
+  // the rows leaves the index stale for a render before the cursor follows its
+  // row, and that render must not read as one.
   const openedOnIdRef = useRef<string | null>(null);
 
   // Capture original theme on open; revert on close if not committed.
@@ -203,6 +210,10 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       wasOpenRef.current = false;
       livePreviewReadyRef.current = false;
       openedOnIdRef.current = null;
+      // The palette stays mounted between openings, and the next one seeds its
+      // cursor from these results: a query left up would hide the saved theme
+      // from them and open on whatever row the last search left selected.
+      setQuery("");
       if (!committedRef.current && originalSchemeIdRef.current) {
         injectSchemeToDOM(committedScheme());
       }
@@ -229,12 +240,14 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       return;
     }
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    const scheme = results[selectedIndex]!;
-    if (openedOnIdRef.current !== null) {
-      if (scheme.id === openedOnIdRef.current) return;
+    const openedOnId = openedOnIdRef.current;
+    if (openedOnId !== null) {
+      // Still on the row it opened on, or about to follow it back there. Only
+      // a query that hides that row moves the cursor for the user.
+      if (results.some((s) => s.id === openedOnId)) return;
       openedOnIdRef.current = null;
     }
-    injectSchemeToDOM(scheme);
+    injectSchemeToDOM(results[selectedIndex]!);
   }, [isOpen, results, selectedIndex]);
 
   const commit = useCallback(
@@ -295,6 +308,36 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     [savedScheme, query, projectScheme]
   );
 
+  const moveTo = useCallback(
+    (index: number) => {
+      openedOnIdRef.current = null;
+      setSelectedIndex(index);
+    },
+    [setSelectedIndex]
+  );
+  const movePrevious = useCallback(() => {
+    openedOnIdRef.current = null;
+    selectPrevious();
+  }, [selectPrevious]);
+  const moveNext = useCallback(() => {
+    openedOnIdRef.current = null;
+    selectNext();
+  }, [selectNext]);
+
+  // Escape from anywhere but the field (the results, the footer) reaches the
+  // dialog's backstop rather than the field's own handler, so it keeps the
+  // field's rule here: a query clears before the palette closes.
+  const handleClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && query !== "") {
+        setQuery("");
+        return;
+      }
+      onClose();
+    },
+    [query, setQuery, onClose]
+  );
+
   const handleConfirm = useCallback(() => {
     if (results.length === 0 || selectedIndex < 0 || selectedIndex >= results.length) {
       onClose();
@@ -311,12 +354,12 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       results={results}
       selectedIndex={selectedIndex}
       onQueryChange={setQuery}
-      onSelectPrevious={selectPrevious}
-      onSelectNext={selectNext}
+      onSelectPrevious={movePrevious}
+      onSelectNext={moveNext}
       onConfirm={handleConfirm}
-      onClose={onClose}
-      onSelectIndex={setSelectedIndex}
-      onHoverIndex={setSelectedIndex}
+      onClose={handleClose}
+      onSelectIndex={moveTo}
+      onHoverIndex={moveTo}
       getItemId={(scheme) => scheme.id}
       getFooter={getThemeFooter}
       getSectionLabel={getThemeSectionLabel}
