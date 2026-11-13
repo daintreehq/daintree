@@ -74,7 +74,9 @@ const RecipeEditorOpenArgsSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Worktree the draft belongs to. Defaults to the one this call came from."),
+    .describe(
+        "Worktree the draft belongs to. Defaults to the one this call came from; with none, the draft is project-wide."
+      ),
   recipeId: z
     .string()
     .min(1)
@@ -269,7 +271,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.editor.open",
       title: "Open recipe editor",
       description:
-        "Put a recipe draft in front of the user in the editor, either blank for a worktree or loaded from an existing recipe. This is a handoff, not a write: nothing is saved or deleted until the person reviews the draft and saves it, so a success here means the editor is open, never that the recipe exists. An unknown recipe opens a blank draft rather than failing.",
+        "Put a recipe draft in front of the user in the editor, either blank or loaded from an existing recipe. This is a handoff, not a write: nothing is saved or deleted until the person reviews the draft and saves it, so a success here means the editor is open, never that the recipe exists. An unknown recipe opens a blank draft rather than failing.",
       paletteDescription: "Open a recipe draft in the editor to review and save",
       category: "recipes",
       kind: "command",
@@ -295,19 +297,12 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       ],
       run: async (args, ctx: ActionContext) => {
         const { worktreeId, recipeId, initialTerminals } = args;
-        // The editor's event listener hard-requires a string worktreeId and
-        // silently returns without one (unless an existing recipe matched, which
-        // carries its own). Resolving and checking here is what keeps the
-        // returned `opened` honest: without it this action reports a handoff
-        // that never reached the screen.
+        // No worktree at all is a project-wide draft, as in a folder without
+        // git (#16906): the editor saves it to the project, like the manager's
+        // New project recipe.
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         const existing = recipeId ? useRecipeStore.getState().getRecipeById(recipeId) : undefined;
-        if (!existing) {
-          if (!resolvedWorktreeId) {
-            throw new Error(
-              "No worktree to scope the recipe draft to — name one, or open the editor from a worktree."
-            );
-          }
+        if (!existing && resolvedWorktreeId) {
           // A blank draft carries no scope of its own, so an unknown worktree id
           // would open an editor pinned to a worktree that isn't there — and the
           // person would only find out when they tried to save. An existing

@@ -546,9 +546,10 @@ export function useRecipeRunner({
   }, []);
 
   const handleCreate = useCallback(() => {
+    // A folder without git has no worktree; the draft is then project-wide.
     void actionService.dispatch(
       "recipe.editor.open",
-      { worktreeId: activeWorktreeId },
+      activeWorktreeId ? { worktreeId: activeWorktreeId } : {},
       { source: "user" }
     );
   }, [activeWorktreeId]);

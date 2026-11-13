@@ -1575,3 +1575,34 @@ describe("useRecipeRunner — a live query never hides recipes behind a vanished
     expect(result.current.focusedIndex).toBeLessThan(result.current.totalItems);
   });
 });
+
+describe("useRecipeRunner — create (#16906)", () => {
+  it("asks for a project draft without a worktree when the folder has none", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: null, defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleCreate();
+    });
+
+    // A null id fails the action's optional-string argument, so nothing opens.
+    expect(dispatchMock).toHaveBeenCalledWith("recipe.editor.open", {}, { source: "user" });
+  });
+
+  it("scopes the draft to the active worktree when there is one", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleCreate();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "recipe.editor.open",
+      { worktreeId: "wt-1" },
+      { source: "user" }
+    );
+  });
+});

@@ -750,13 +750,32 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.scope).toBe("global");
     });
 
-    it("leaves a request it cannot act on unacknowledged", () => {
+    it("opens a blank project draft for a request with no worktree (#16906)", async () => {
       render(<ProjectDialogHost />);
       const acknowledge = vi.fn();
 
       act(() => {
         window.dispatchEvent(
           new CustomEvent("daintree:open-recipe-editor", { detail: { acknowledge } })
+        );
+      });
+
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.recipe).toBe("");
+      expect(editor.dataset.worktree).toBe("");
+    });
+
+    it("leaves a request with a malformed worktree unacknowledged", () => {
+      render(<ProjectDialogHost />);
+      const acknowledge = vi.fn();
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: { worktreeId: 42, acknowledge },
+          })
         );
       });
 

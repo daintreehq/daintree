@@ -126,7 +126,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
         }
       }
 
-      if (typeof d.worktreeId !== "string") return;
+      // Absent is a project-wide draft (a folder without git has no worktree);
+      // anything other than a string is a malformed request.
+      if (d.worktreeId !== undefined && typeof d.worktreeId !== "string") return;
       const worktreeId = d.worktreeId;
       const initialTerminals = Array.isArray(d.initialTerminals)
         ? (d.initialTerminals as RecipeTerminal[])

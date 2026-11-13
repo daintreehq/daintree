@@ -583,6 +583,11 @@ describe("activateDockLaunchCue", () => {
       dispatched: [["recipe.editor.open", { worktreeId: "wt-1" }, { source: "menu" }]],
       events: [],
     });
+    // A folder without git has no worktree: a project draft, not a null id the
+    // action's optional-string argument would refuse (#16906).
+    actionDispatchMock.mockClear();
+    activateDockLaunchCue("create-recipe", null, "menu");
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
     expect(effectsOf("setup-agents")).toEqual({
       dispatched: [],
       events: ["daintree:open-agent-setup-wizard"],
