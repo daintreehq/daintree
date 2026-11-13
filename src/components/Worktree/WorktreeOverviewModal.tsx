@@ -449,12 +449,11 @@ export function WorktreeOverviewModal({
   // The panels the action would remove, counted the way `bulkCloseByWorktree`
   // picks them: a selection that owns none has nothing for the button to do.
   const selectedPanelCount = usePanelStore((state) => {
+    if (selectedIds.size === 0) return 0;
     let count = 0;
-    for (const id of selectedIds) {
-      for (const panelId of state.panelIdsByWorktreeId[id] ?? []) {
-        const panel = state.panelsById[panelId];
-        if (panel && panel.location !== "dialog") count++;
-      }
+    for (const panelId of state.panelIds) {
+      const panel = state.panelsById[panelId];
+      if (panel && panel.location !== "dialog" && selectedIds.has(panel.worktreeId ?? "")) count++;
     }
     return count;
   });

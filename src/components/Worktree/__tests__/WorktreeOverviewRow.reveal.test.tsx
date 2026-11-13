@@ -104,6 +104,6 @@ describe("WorktreeOverviewRow reveal on a remote host (#16890)", () => {
     openMenu();
     fireEvent.click(await screen.findByText("Show in file manager"));
     expect(copyWithToast).not.toHaveBeenCalled();
-    expect(dispatch).toHaveBeenCalledWith("worktree.reveal", expect.anything(), expect.anything());
+    expect(dispatch).toHaveBeenCalledWith("worktree.reveal", { worktreeId: WT }, expect.anything());
   });
 });

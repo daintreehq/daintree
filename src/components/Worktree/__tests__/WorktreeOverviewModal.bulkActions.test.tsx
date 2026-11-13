@@ -121,13 +121,45 @@ describe("WorktreeOverviewModal bulk actions (#16890)", () => {
     expect(isDisabled(removePanelsButton())).toBe(false);
   });
 
-  it("keeps the quick-state bar reachable when a filter outlives the last non-main worktree", () => {
+  it("ignores panels and eligibility outside the selection", () => {
+    renderModal([main, feature]);
+    seedPanel(FEATURE);
+    fireEvent.click(document.querySelector(`[data-worktree-overview-cell="${ROOT}"]`)!, {
+      metaKey: true,
+    });
+    expect(isDisabled(removePanelsButton())).toBe(true);
+    expect(isDisabled(deleteButton())).toBe(true);
+  });
+
+  it("confirms Remove panels as a destructive action", () => {
+    renderModal([main, feature]);
+    seedPanel(FEATURE);
+    selectAll();
+    fireEvent.click(removePanelsButton());
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByText("Remove panels for 2 worktrees?")).toBeTruthy();
+  });
+
+  it("lets the stranded quick filter be cleared from the bar or the empty state", () => {
     const { rerender } = renderModal([main, feature]);
     act(() => useWorktreeFilterStore.getState().setQuickStateFilter("working"));
-    expect(screen.queryByRole("radiogroup")).not.toBeNull();
+    expect(screen.queryByText("No worktrees match these filters")).not.toBeNull();
     rerender([main]);
     expect(screen.queryByRole("radiogroup")).not.toBeNull();
     expect(screen.queryByText("No other worktrees to match these filters")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+    expect(document.querySelector(`[data-worktree-overview-cell="${ROOT}"]`)).not.toBeNull();
+  });
+
+  it("clears the stranded quick filter from the empty state's recovery button", () => {
+    const { rerender } = renderModal([main, feature]);
+    act(() => useWorktreeFilterStore.getState().setQuickStateFilter("working"));
+    rerender([main]);
+    fireEvent.click(screen.getByRole("button", { name: "Clear all filters" }));
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+    expect(document.querySelector(`[data-worktree-overview-cell="${ROOT}"]`)).not.toBeNull();
   });
 
   it("hides the quick-state bar with no non-main worktree and no quick filter", () => {
