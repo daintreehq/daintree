@@ -19,6 +19,8 @@ import {
 } from "@/components/Panel/gridGroupTabReorder";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
+import type { DiffFontSize } from "@/store/preferencesStore";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -135,7 +137,7 @@ const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock 
   })
 );
 // Mutable so a test can seed an explicit wrap override; `null` is auto (#12170).
-const preferences = { diffWrapLines: null as boolean | null };
+const preferences = { diffWrapLines: null as boolean | null, diffFontSize: "m" as DiffFontSize };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -146,6 +148,7 @@ vi.mock("@/store/preferencesStore", () => ({
       diffViewType: "unified",
       diffWrapLines: preferences.diffWrapLines,
       setDiffWrapLines: setDiffWrapLinesMock,
+      diffFontSize: preferences.diffFontSize,
       diffIgnoreWhitespace: false,
     }),
 }));
@@ -456,6 +459,7 @@ afterEach(() => {
   setDiffWrapLinesMock.mockReset();
   setMarkdownWrapLinesMock.mockReset();
   preferences.diffWrapLines = null;
+  preferences.diffFontSize = "m";
   markdownViewerProps.current = null;
   lifecycleListeners.clear();
   dockState.activeDockTerminalId = null;
@@ -1409,8 +1413,8 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     expect(markdownViewerProps.current?.cacheBust).toBeDefined();
   });
 
-  // The toolbar's open button follows the view: rendered HTML opens in the
-  // browser, everything else in the editor.
+  // The toolbar's open button follows the file's type, as in the file
+  // browser's viewer: HTML opens in the browser whichever view is showing.
   async function clickOpen(label: string) {
     const button = await screen.findByLabelText(label);
     await act(async () => {
@@ -1428,17 +1432,18 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     );
   });
 
-  it("opens source HTML in the editor", async () => {
+  it("opens source HTML in the browser too, as the file browser does (#16917)", async () => {
     renderPane("/repo/dist/report.html", "source");
-    await clickOpen("Open in editor");
+    await clickOpen("Open in browser");
     expect(dispatchMock).toHaveBeenCalledWith(
-      "file.openInEditor",
+      "file.openInBrowser",
       { path: "/repo/dist/report.html" },
       { source: "user" }
     );
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
   });
 
-  it("retries a failed browser open as a browser open even after the view switches to source", async () => {
+  it("keeps a failed browser open, and its retry, on the browser after the view switches to source", async () => {
     dispatchMock.mockResolvedValue({
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "Launch failed" },
@@ -1446,9 +1451,8 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     const { container, rerender } = renderPane("/repo/dist/report.html", "rendered");
     await clickOpen("Open in browser");
 
-    // Flip the live view to source so the toolbar's own open button now targets
-    // the editor — the banner's Retry must still fire the browser open it owns,
-    // not follow the live target. Same file, so the failure banner survives.
+    // Flip the live view to source. Same file, so the failure banner survives,
+    // and its Retry still fires the browser open it owns.
     panelsById["file-1"] = {
       id: "file-1",
       kind: "file",
@@ -1469,8 +1473,9 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
         </TooltipProvider>
       );
     });
-    // The live open button really did change target away from browser.
-    expect(await screen.findByLabelText("Open in editor")).toBeTruthy();
+    // The open target follows the file, not the view.
+    expect(await screen.findByLabelText("Open in browser")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
 
     // Cleared so the assertion can't be satisfied by the original failed open.
     dispatchMock.mockClear();
@@ -1486,6 +1491,89 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
       "file.openInBrowser",
       { path: "/repo/dist/report.html" },
       { source: "user" }
+    );
+  });
+});
+
+// #16917: the file panel and the file browser's viewer answer the same file the
+// same way — which app it opens in, and which mode it opens in when picked.
+describe("FilePane parity with the file browser's viewer (#16917)", () => {
+  function renderFile(filePath: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("opens a raster image in the default app rather than the editor", async () => {
+    renderFile("/repo/assets/logo.png");
+    const toolbar = await screen.findByRole("toolbar", { name: "File viewer controls" });
+    expect(within(toolbar).queryByRole("button", { name: "Open in editor" })).toBeNull();
+
+    await act(async () => {
+      within(toolbar)
+        .getByRole("button", { name: "Open in default app" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/assets/logo.png" },
+      { source: "user" }
+    );
+  });
+
+  it("keeps code on the editor", async () => {
+    renderFile("/repo/src/index.ts");
+    const toolbar = await screen.findByRole("toolbar", { name: "File viewer controls" });
+    expect(within(toolbar).getByRole("button", { name: "Open in editor" })).toBeTruthy();
+  });
+
+  describe("picking a file", () => {
+    function renderEmpty() {
+      worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo", worktreeChanges: null });
+      panelsById["file-1"] = { id: "file-1", kind: "file", worktreeId: "wt-1" };
+      render(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="File"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+    }
+
+    it.each([
+      ["docs/spec.md", "rendered"],
+      ["dist/report.html", "source"],
+      ["src/index.ts", "source"],
+    ])(
+      "opens %s in its type's own mode (%s), in the same write as the path",
+      async (path, mode) => {
+        searchMock.mockResolvedValue({ files: [path] });
+        renderEmpty();
+        const row = await screen.findByRole("option", { name: path });
+
+        await act(async () => {
+          row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(setFilePanelPathMock).toHaveBeenCalledWith("file-1", `/repo/${path}`, mode);
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+      }
     );
   });
 });
@@ -1692,13 +1780,13 @@ describe("FilePane diff mode (#11274)", () => {
     worktreeState.worktrees.set(WORKTREE_ID, worktree);
   }
 
-  function paneElement() {
+  function paneElement(isFocused = false) {
     return (
       <TooltipProvider>
         <FilePane
           id="file-1"
           title="index.ts"
-          isFocused={false}
+          isFocused={isFocused}
           location="grid"
           onFocus={() => {}}
           onClose={() => {}}
@@ -1711,6 +1799,7 @@ describe("FilePane diff mode (#11274)", () => {
     filePath?: string;
     worktreeId?: string | undefined;
     fileViewMode?: string;
+    isFocused?: boolean;
   }) {
     const filePath = options.filePath ?? "/repo/src/index.ts";
     panelsById["file-1"] = {
@@ -1720,7 +1809,7 @@ describe("FilePane diff mode (#11274)", () => {
       worktreeId: "worktreeId" in options ? options.worktreeId : WORKTREE_ID,
       fileViewMode: options.fileViewMode,
     };
-    const view = render(paneElement());
+    const view = render(paneElement(options.isFocused));
     // Flush the file read and the lazy diff chunk so no state update lands
     // outside act(). Can't wait on readMock — an image short-circuits before it.
     await act(async () => {});
@@ -2414,6 +2503,97 @@ describe("FilePane diff mode (#11274)", () => {
 
       expect(viewerWrap()).toBe("true");
       expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+    });
+  });
+
+  // The diff panel's size preference reaches this surface's diff too (#16917).
+  describe("diff font size", () => {
+    function bodyFontSize(): string {
+      return screen.getByTestId("file-pane-body").style.getPropertyValue("--diff-font-size");
+    }
+
+    it("sizes the diff by the shared diffFontSize preference", async () => {
+      preferences.diffFontSize = "l";
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+
+      expect(bodyFontSize()).toBe(diffFontStyle("l")["--diff-font-size"]);
+      expect(bodyFontSize()).not.toBe(diffFontStyle("m")["--diff-font-size"]);
+    });
+
+    it("leaves Source untouched by the diff's size", async () => {
+      preferences.diffFontSize = "l";
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "source" });
+      expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+
+      expect(bodyFontSize()).toBe("");
+    });
+  });
+
+  // A commit or revert leaves the file clean and takes Diff, and its segment,
+  // out from under whoever was holding it; focus must not fall to <body> (#16917).
+  describe("focus when Diff vanishes", () => {
+    async function renderFocusedDiff(filePath: string, isFocused: boolean) {
+      seedWorktree([{ path: filePath, status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      const view = await renderPane({ filePath, fileViewMode: "diff", isFocused });
+      const diffSegment = screen.getByRole("radio", { name: "Diff" });
+      act(() => diffSegment.focus());
+      expect(document.activeElement).toBe(diffSegment);
+      return view;
+    }
+
+    async function goClean(rerender: (ui: ReactNode) => void, isFocused: boolean) {
+      seedWorktree([]);
+      await act(async () => {
+        rerender(paneElement(isFocused));
+      });
+    }
+
+    it("lands on the selected segment when the toggle survives", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", true);
+
+      await goClean(rerender, true);
+
+      expect(screen.queryByRole("radio", { name: "Diff" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Source" }));
+      // The clamp is still derived: the persisted Diff choice is not rewritten.
+      expect(setFileViewModeMock).not.toHaveBeenCalled();
+    });
+
+    it("lands on the path pill when the whole toggle goes with Diff", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/src/index.ts", true);
+
+      await goClean(rerender, true);
+
+      expect(screen.queryAllByRole("radio")).toEqual([]);
+      expect(document.activeElement?.hasAttribute("data-toolbar-path")).toBe(true);
+    });
+
+    it("leaves focus alone in a pane that isn't the focused one", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", false);
+
+      await goClean(rerender, false);
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves focus alone when it already sits elsewhere", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", true);
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      try {
+        act(() => outside.focus());
+
+        await goClean(rerender, true);
+
+        expect(document.activeElement).toBe(outside);
+      } finally {
+        outside.remove();
+      }
     });
   });
 
@@ -4961,7 +5141,11 @@ describe("FilePane in a remote window (#13925)", () => {
   it("offers a copy saved here instead of the default app for a file it can't play", async () => {
     const { container } = renderRemote("/srv/app/media/demo.mov");
     await act(async () => {});
-    expect(screen.getByRole("button", { name: /^Save to this/ })).toBeTruthy();
+    const body = screen.getByTestId("file-pane-unavailable");
+    expect(within(body).getByRole("button", { name: /^Save to this/ })).toBeTruthy();
+    // The toolbar's own open action makes the same substitution (#16917).
+    const toolbar = screen.getByRole("toolbar", { name: "File viewer controls" });
+    expect(within(toolbar).getByRole("button", { name: /^Save to this/ })).toBeTruthy();
     expect(container.textContent).not.toMatch(/default app/);
   });
 });

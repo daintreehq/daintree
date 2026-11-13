@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
+import type { DiffFontSize } from "@/store/preferencesStore";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 added a
 // Source/Rendered toggle for markdown and #12205 extended it to HTML, mirroring
@@ -50,9 +52,17 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 }));
 // The reading size is one app-level preference shared with the file panel; this
 // suite owns the toolbar gate and the forwarding, not the store's persistence.
-const { setMarkdownFontSizeMock, setDiffWrapLinesMock } = vi.hoisted(() => ({
-  setMarkdownFontSizeMock: vi.fn(),
-  setDiffWrapLinesMock: vi.fn(),
+const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
+  () => ({
+    setMarkdownFontSizeMock: vi.fn(),
+    setDiffWrapLinesMock: vi.fn(),
+    setMarkdownWrapLinesMock: vi.fn(),
+  })
+);
+// Mutable so a test can seed the values it asserts are forwarded.
+const viewerPreferences = vi.hoisted(() => ({
+  markdownWrapLines: false,
+  diffFontSize: "m" as DiffFontSize,
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
@@ -62,6 +72,9 @@ vi.mock("@/store/preferencesStore", () => ({
       diffViewType: "unified",
       diffWrapLines: null,
       setDiffWrapLines: setDiffWrapLinesMock,
+      diffFontSize: viewerPreferences.diffFontSize,
+      markdownWrapLines: viewerPreferences.markdownWrapLines,
+      setMarkdownWrapLines: setMarkdownWrapLinesMock,
     }),
 }));
 // Diff mode (#13195). The hook is the seam: what this suite owns is the subject
@@ -439,6 +452,9 @@ beforeEach(() => {
   readMock.mockResolvedValue({ content: "# hello" });
   setMarkdownFontSizeMock.mockReset();
   setDiffWrapLinesMock.mockReset();
+  setMarkdownWrapLinesMock.mockReset();
+  viewerPreferences.markdownWrapLines = false;
+  viewerPreferences.diffFontSize = "m";
   useDiffContentMock.mockReset();
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   dispatchMock.mockReset();
@@ -1550,6 +1566,23 @@ describe("FileBrowserViewer Diff mode (#13195)", () => {
 
     expect(setDiffWrapLinesMock).toHaveBeenCalledWith(true);
   });
+
+  it("sizes the diff by the shared diffFontSize preference, as the diff panel does (#16917)", async () => {
+    viewerPreferences.diffFontSize = "s";
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
+
+    await clickMode("Diff");
+
+    const host = screen.getByTestId("file-browser-diff");
+    expect(host.style.getPropertyValue("--diff-font-size")).toBe(
+      diffFontStyle("s")["--diff-font-size"]
+    );
+    expect(host.style.getPropertyValue("--diff-font-size")).not.toBe(
+      diffFontStyle("m")["--diff-font-size"]
+    );
+  });
 });
 
 describe("folder-selected state (#11620)", () => {
@@ -1970,6 +2003,23 @@ describe("plugin-contributed editing in the file browser", () => {
     const rendered = screen.getByRole("radio", { name: "Rendered" });
     expect(rendered.getAttribute("aria-checked")).toBe("true");
     expect(document.activeElement).toBe(rendered);
+  });
+
+  // The editor is handed the Source view's wrap preference, so Edit carries the
+  // same toggle FilePane's Edit does (#16917).
+  it("offers the wrap toggle in Edit, on the preference the editor is handed", async () => {
+    enabled = true;
+    viewerPreferences.markdownWrapLines = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    expect(editorProps.at(-1)).toMatchObject({ wrapLines: true });
+
+    const wrap = screen.getByRole("button", { name: "Wrap long lines" });
+    expect(wrap.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(wrap);
+
+    expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(false);
   });
 
   it("offers Edit without a hint when the plugin is already enabled", async () => {
