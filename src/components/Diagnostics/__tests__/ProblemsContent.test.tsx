@@ -20,6 +20,7 @@ function seed(messages: string[]) {
       type: "unknown",
       message,
       isTransient: false,
+      retryability: "none",
       dismissed: false,
     })) as ErrorRecord[],
     isPanelOpen: false,
