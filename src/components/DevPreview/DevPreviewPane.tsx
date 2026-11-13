@@ -844,11 +844,13 @@ export function DevPreviewPane({
   // Consolidated emulation effect above handles all preset/rotation/DPR changes.
   // Cross-origin navigation re-apply is handled in useDevPreviewLoadLifecycle's
   // did-finish-load handler so emulation survives renderer process swaps.
+  const paneRef = useRef<HTMLDivElement>(null);
   const findInPage = useFindInPage(
     id,
     isEvicted ? null : webviewElement,
     isWebviewReady && !isEvicted,
-    isFocused
+    isFocused,
+    paneRef
   );
 
   // Activate the dev-preview keybinding scope while focused so Cmd/Ctrl+R maps
@@ -936,6 +938,7 @@ export function DevPreviewPane({
 
   return (
     <ContentPanel
+      ref={paneRef}
       id={id}
       title={title}
       isFocused={isFocused}

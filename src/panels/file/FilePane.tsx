@@ -551,7 +551,7 @@ export function FilePane({
     };
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
-  }, [isFocused]);
+  }, [isFocused, heightHoldBodyRef]);
 
   // Rendered HTML opens in the browser; every other view opens in the editor.
   // Reveal is a third, always-present target that sits alongside this one.

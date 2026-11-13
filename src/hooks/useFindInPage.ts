@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, type RefObject } from "react";
 import { canPanelTakeFind } from "@/lib/findInPanel";
 
 export interface FindInPageState {
@@ -21,7 +21,10 @@ export function useFindInPage(
   panelId: string,
   webviewElement: Electron.WebviewTag | null,
   isWebviewReady: boolean,
-  isFocused: boolean | undefined
+  isFocused: boolean | undefined,
+  // The pane's root, mounted even while the webview isn't (evicted, or a
+  // remote forward still pending): where a modal over the pane is read from.
+  paneRef?: RefObject<Element | null>
 ): FindInPageState {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQueryState] = useState("");
@@ -167,13 +170,13 @@ export function useFindInPage(
   useEffect(() => {
     if (!isFocused) return;
 
-    // The webview anchors the pane in the DOM: a modal over it keeps it out.
+    // A modal over the pane keeps it out.
     const handler = () => {
-      if (canPanelTakeFind(webviewElement)) open();
+      if (canPanelTakeFind(paneRef?.current ?? webviewElement)) open();
     };
     window.addEventListener("daintree:find-in-panel", handler);
     return () => window.removeEventListener("daintree:find-in-panel", handler);
-  }, [isFocused, open, webviewElement]);
+  }, [isFocused, open, paneRef, webviewElement]);
 
   // Listen for find shortcuts forwarded from webview guest via main process IPC
   useEffect(() => {
@@ -181,7 +184,8 @@ export function useFindInPage(
       if (payload.panelId !== panelId) return;
       switch (payload.shortcut) {
         case "find":
-          open();
+          // The guest's keystroke can arrive after a modal took the keys.
+          if (canPanelTakeFind(paneRef?.current ?? webviewElement)) open();
           break;
         case "next":
           goNext();
@@ -195,7 +199,7 @@ export function useFindInPage(
       }
     });
     return cleanup;
-  }, [panelId, open, close, goNext, goPrev, isOpen]);
+  }, [panelId, open, close, goNext, goPrev, isOpen, paneRef, webviewElement]);
 
   // Clean up on unmount or webview detach
   useEffect(() => {

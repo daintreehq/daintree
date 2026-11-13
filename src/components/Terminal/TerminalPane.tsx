@@ -997,7 +997,10 @@ function TerminalPaneComponent({
         searchReturnRef.current = { paneId: id, surface: paneSurfaceHoldingFocus(id) };
       }
       setIsSearchOpen(true);
-      requestAnimationFrame(() => focusPaneSearchInput(containerRef.current));
+      requestAnimationFrame(() => {
+        // A modal that opened within the frame keeps the keys.
+        if (canPanelTakeFind(containerRef.current)) focusPaneSearchInput(containerRef.current);
+      });
     };
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);

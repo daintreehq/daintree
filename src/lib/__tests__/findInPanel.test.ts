@@ -71,6 +71,15 @@ describe("canPanelTakeFind", () => {
     expect(canPanelTakeFind(dialogPanel)).toBe(false);
   });
 
+  it("keeps a panel in a nested modal out of find while the outer modal holds focus", () => {
+    const dialog = modal();
+    const nested = modal("dialog", dialog);
+    const nestedPanel = panel(nested);
+    focusIn(dialog);
+
+    expect(canPanelTakeFind(nestedPanel)).toBe(false);
+  });
+
   it("lets no panel answer while a modal is open but nothing in one holds focus", () => {
     const grid = panel();
     const dialog = modal();

@@ -194,6 +194,43 @@ describe("useFindInPage", () => {
 
       expect(result.current.isOpen).toBe(true);
     });
+
+    // An evicted webview, or one waiting on a remote forward, is not mounted;
+    // the pane root still places the pane.
+    it("reads the modal from the pane root while the webview isn't mounted", () => {
+      const modal = focusedModal();
+      const pane = document.createElement("div");
+      modal.appendChild(pane);
+      const paneRef = { current: pane };
+      const { result } = renderHook(() => useFindInPage("panel-1", null, false, true, paneRef));
+
+      act(() => {
+        window.dispatchEvent(new Event("daintree:find-in-panel"));
+      });
+
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it("ignores the guest's forwarded Cmd+F once a modal over the pane has the keys", () => {
+      let shortcutCallback: ((payload: { panelId: string; shortcut: string }) => void) | undefined;
+      onFindShortcutMock.mockImplementation(
+        (cb: (payload: { panelId: string; shortcut: string }) => void) => {
+          shortcutCallback = cb;
+          return vi.fn();
+        }
+      );
+      const grid = document.createElement("div");
+      document.body.appendChild(grid);
+      mounted.push(grid);
+      const webview = webviewIn(grid);
+      const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+      focusedModal();
+
+      act(() => shortcutCallback?.({ panelId: "panel-1", shortcut: "find" }));
+
+      expect(shortcutCallback).toBeDefined();
+      expect(result.current.isOpen).toBe(false);
+    });
   });
 
   it("handles find shortcut for open/close", () => {
