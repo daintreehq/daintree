@@ -30,6 +30,12 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
+const { writeMainClipboardMock } = vi.hoisted(() => ({ writeMainClipboardMock: vi.fn() }));
+
+vi.mock("@/lib/mainClipboard", () => ({
+  writeMainClipboard: (text: string) => writeMainClipboardMock(text),
+}));
+
 vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: (date: number | string) => `time:${date}`,
 }));
@@ -106,8 +112,10 @@ beforeEach(() => {
   // "does not open the forge" assertion holds depends on the tests above it.
   vi.mocked(actionService.dispatch).mockClear();
   vi.useFakeTimers();
+  writeMainClipboardMock.mockReset().mockResolvedValue(undefined);
+  // A renderer write would be the wrong path; anything reaching it fails loudly.
   Object.defineProperty(navigator, "clipboard", {
-    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    value: { writeText: vi.fn().mockRejectedValue(new Error("renderer clipboard used")) },
     writable: true,
     configurable: true,
   });
@@ -253,7 +261,43 @@ describe("GitHubListItem", () => {
       fireEvent.click(copyButton);
     });
 
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("#42");
+    // Through the main process: the renderer clipboard refuses whenever the
+    // document lacks focus.
+    expect(writeMainClipboardMock).toHaveBeenCalledWith("#42");
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(copyButton.querySelector("svg.lucide-check")).not.toBeNull();
+  });
+
+  it("shows no tick when the clipboard refuses the write", async () => {
+    writeMainClipboardMock.mockRejectedValueOnce(new Error("denied"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(<GitHubListItem item={baseIssue} type="issue" />);
+    const copyButton = screen.getByLabelText("Copy number 42");
+
+    await act(async () => {
+      fireEvent.click(copyButton);
+    });
+
+    expect(copyButton.querySelector("svg.lucide-check")).toBeNull();
+    expect(copyButton.textContent).toBe("#42");
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("does not carry a copy tick onto a different item handed to the same row", async () => {
+    const { rerender } = render(<GitHubListItem item={baseIssue} type="issue" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Copy number 42"));
+    });
+    expect(
+      screen.getByLabelText("Copy number 42").querySelector("svg.lucide-check")
+    ).not.toBeNull();
+
+    // Same component instance, new item, still inside the dwell window.
+    rerender(<GitHubListItem item={{ ...baseIssue, number: 43 }} type="issue" />);
+    const reused = screen.getByLabelText("Copy number 43");
+    expect(reused.querySelector("svg.lucide-check")).toBeNull();
+    expect(reused.textContent).toBe("#43");
   });
 
   it("shows check icon after copy then reverts after timeout", async () => {

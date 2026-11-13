@@ -17,6 +17,7 @@ import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import { getPRStatusVisual, getPRStatusTooltip } from "../utils/prCIStatus";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   RAIL_SLOT,
@@ -123,11 +124,14 @@ export function GitHubListItem({
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
   const stateLabel = getStateLabel(item.state, type, isItemPR && item.isDraft);
 
-  const [copied, setCopied] = useState(false);
+  // The number the tick belongs to rather than a bare flag, so a row handed a
+  // different item mid-dwell can never show the last item's copy as its own.
+  const [copiedNumber, setCopiedNumber] = useState<number | null>(null);
+  const copied = copiedNumber === item.number;
   const copyTimeoutRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    setCopied(false);
+    setCopiedNumber(null);
     return () => {
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
@@ -162,22 +166,26 @@ export function GitHubListItem({
   };
 
   const handleCopyNumber = async () => {
+    const number = item.number;
     if (copyTimeoutRef.current) {
       clearTimeout(copyTimeoutRef.current);
     }
     try {
-      await navigator.clipboard.writeText(`#${item.number}`);
+      // The main-process clipboard, not `navigator.clipboard`, which refuses
+      // whenever the renderer document lacks focus (a guest webview holding
+      // it, say) — something this row has no say over.
+      await writeMainClipboard(`#${number}`);
       useAnnouncerStore.getState().announce("Copied", "polite");
-      setCopied(true);
+      setCopiedNumber(number);
       copyTimeoutRef.current = window.setTimeout(
-        () => setCopied(false),
+        () => setCopiedNumber(null),
         UI_ACTION_SUCCESS_DWELL_MS
       );
     } catch {
-      // The clipboard can refuse (permissions, a headless context). Say so
-      // rather than flashing a success tick for a copy that did not happen.
-      setCopied(false);
-      console.warn(`Could not copy #${item.number} to the clipboard`);
+      // The clipboard can refuse. Say so rather than flashing a success tick
+      // for a copy that did not happen.
+      setCopiedNumber(null);
+      console.warn(`Could not copy #${number} to the clipboard`);
     }
   };
 
