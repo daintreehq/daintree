@@ -221,6 +221,26 @@ describe("AgentAccountsSection (#16040)", () => {
     expect(removeAccount).toHaveBeenCalledWith("codex", "company");
   });
 
+  it("hands focus to Add account once a removal is confirmed, and back to the row on cancel", async () => {
+    // Still saving: the row, and the button that opened the confirm, stay put.
+    const removeAccount = vi.fn(() => new Promise<void>(() => {}));
+    useAgentSettingsStore.setState({ removeAccount });
+    renderSection({ accounts: [COMPANY] });
+    const remove = screen.getByRole("button", { name: "Remove Company" });
+
+    remove.focus();
+    fireEvent.click(remove);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement).toBe(remove));
+
+    fireEvent.click(remove);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove account" }));
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add account" }))
+    );
+  });
+
   describe("offering the panes stopped on a usage limit (#16136)", () => {
     const limitedPane: PtyPanelData = {
       id: "p1",

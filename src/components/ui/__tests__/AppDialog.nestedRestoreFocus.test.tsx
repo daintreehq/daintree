@@ -247,17 +247,36 @@ describe("AppDialog opened by a palette command", () => {
     _resetBackstopForTests();
   });
 
-  function Commands({ paletteOpen, dialogOpen }: { paletteOpen: boolean; dialogOpen: boolean }) {
-    return (
+  function Commands({
+    paletteOpen,
+    dialogOpen,
+    dialogFirst = false,
+  }: {
+    paletteOpen: boolean;
+    dialogOpen: boolean;
+    dialogFirst?: boolean;
+  }) {
+    const palette = (
+      <AppPaletteDialog isOpen={paletteOpen} onClose={() => {}} ariaLabel="Commands" tier="command">
+        <input aria-label="Search commands" />
+      </AppPaletteDialog>
+    );
+    const dialog = (
+      <AppDialog isOpen={dialogOpen} onClose={() => {}} data-testid="command-dialog">
+        <AppDialog.Body>
+          <button type="button">Save</button>
+        </AppDialog.Body>
+      </AppDialog>
+    );
+    return dialogFirst ? (
       <>
-        <AppPaletteDialog isOpen={paletteOpen} onClose={() => {}} ariaLabel="Commands" tier="command">
-          <input aria-label="Search commands" />
-        </AppPaletteDialog>
-        <AppDialog isOpen={dialogOpen} onClose={() => {}} data-testid="command-dialog">
-          <AppDialog.Body>
-            <button type="button">Save</button>
-          </AppDialog.Body>
-        </AppDialog>
+        {dialog}
+        {palette}
+      </>
+    ) : (
+      <>
+        {palette}
+        {dialog}
       </>
     );
   }
@@ -279,6 +298,20 @@ describe("AppDialog opened by a palette command", () => {
     expect(screen.getByTestId("command-dialog").contains(document.activeElement)).toBe(true);
 
     view.rerender(<Commands paletteOpen={false} dialogOpen={false} />);
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  // Rendered ahead of the palette, the dialog reads its opener before the
+  // palette's closing attributes are committed.
+  it("does the same when the dialog sits before the palette in the tree", async () => {
+    const view = render(<Commands paletteOpen dialogOpen={false} dialogFirst />);
+    await act(() => vi.runAllTimersAsync());
+
+    view.rerender(<Commands paletteOpen={false} dialogOpen dialogFirst />);
+    await act(() => vi.runAllTimersAsync());
+    view.rerender(<Commands paletteOpen={false} dialogOpen={false} dialogFirst />);
     await act(() => vi.runAllTimersAsync());
 
     expect(document.activeElement).toBe(opener);

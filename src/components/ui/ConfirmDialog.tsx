@@ -94,8 +94,8 @@ type ConfirmDialogBaseProps = {
   /**
    * Forwarded to {@link AppDialog.restoreFocusTo}: a logical successor to
    * receive focus when the trigger has unmounted before close (e.g. the row a
-   * destructive confirm just deleted). Falls back to the app shell when absent
-   * or disconnected.
+   * destructive confirm just deleted). Falls back to the dialog still open
+   * underneath, or the app shell, when absent or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
   /** Forwarded to {@link AppDialog.preferRestoreFocusTo}. */
