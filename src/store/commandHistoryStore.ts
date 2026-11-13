@@ -11,6 +11,12 @@ import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 100;
 
+/**
+ * The bucket the global assistant's prompts are kept in: it belongs to no
+ * project, so there is no "This project" list to offer it.
+ */
+export const GLOBAL_ASSISTANT_HISTORY_ID = "global-assistant";
+
 export interface PromptHistoryEntry {
   id: string;
   prompt: string;
@@ -44,13 +50,50 @@ function historyOf(
   return history !== null && typeof history === "object" ? history : {};
 }
 
+function armedKey(entry: PromptHistoryEntry): string {
+  return entry.armedIds?.join(",") ?? "";
+}
+
+/**
+ * Whether `newer` replaces `older` as `recordPrompt` would have: the same
+ * text, sent plainly or to the same armed set (a fleet send to another set is
+ * another intent).
+ */
+function supersedes(newer: PromptHistoryEntry, older: PromptHistoryEntry): boolean {
+  if (newer.prompt !== older.prompt) return false;
+  const key = armedKey(newer);
+  return key === "" || key === armedKey(older);
+}
+
+/**
+ * A bucket this writer recorded into, with the entries a sibling recorded into
+ * it meanwhile: Canopy's window and the project's own view both keep a run's
+ * prompts. Recording only ever adds, so an entry neither the writer's baseline
+ * nor its snapshot knew is a sibling's, and stays; one the writer knew and
+ * dropped (an older repeat, the cap) stays dropped.
+ */
+function withSiblingEntries(
+  baseline: readonly PromptHistoryEntry[] | undefined,
+  incoming: readonly PromptHistoryEntry[],
+  onDisk: readonly PromptHistoryEntry[] | undefined
+): PromptHistoryEntry[] {
+  const known = new Set([...(baseline ?? []), ...incoming].map((entry) => entry.id));
+  const added = (onDisk ?? []).filter((entry) => !known.has(entry.id));
+  if (added.length === 0) return [...incoming];
+  const merged: PromptHistoryEntry[] = [];
+  for (const entry of [...incoming, ...added].sort((a, b) => b.addedAt - a.addedAt)) {
+    if (merged.some((kept) => supersedes(kept, entry))) continue;
+    merged.push(entry);
+  }
+  return merged.slice(0, MAX_HISTORY_SIZE);
+}
+
 /**
  * Baseline-aware three-way merge for command-history writes across project views
  * (issue #11351). Each project's history array is one record value: a stale view
  * writing its own project's bucket no longer drops another project's history a
- * sibling view recorded, and a `removeProjectHistory` isn't resurrected.
- * Concurrent writes to the *same* project bucket remain last-writer-wins (the
- * separate same-project multi-window case).
+ * sibling view recorded, and a `removeProjectHistory` isn't resurrected. A
+ * bucket both recorded into keeps both's entries.
  */
 function mergeCommandHistoryPersistedWrite({
   baseline,
@@ -59,16 +102,13 @@ function mergeCommandHistoryPersistedWrite({
 }: PersistWriteMergeContext<CommandHistoryPersistedState>): StorageValue<CommandHistoryPersistedState> {
   // No shared value on disk yet → nothing to reconcile against.
   if (!onDisk) return incoming;
-  return {
-    version: incoming.version,
-    state: {
-      history: mergeRecordByWriterDelta(
-        historyOf(baseline),
-        historyOf(incoming),
-        historyOf(onDisk)
-      ),
-    },
-  };
+  const known = historyOf(baseline);
+  const disk = historyOf(onDisk);
+  const merged = mergeRecordByWriterDelta(known, historyOf(incoming), disk);
+  for (const [key, entries] of Object.entries(merged)) {
+    if (entries !== disk[key]) merged[key] = withSiblingEntries(known[key], entries, disk[key]);
+  }
+  return { version: incoming.version, state: { history: merged } };
 }
 
 export const useCommandHistoryStore = create<CommandHistoryState>()(

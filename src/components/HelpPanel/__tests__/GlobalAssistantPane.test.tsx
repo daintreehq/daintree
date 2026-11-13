@@ -10,6 +10,8 @@ const canopy = vi.hoisted(() => ({ isOpen: false }));
 /** The props the pane last gave the composer, so a test can press Enter or a key as the composer would. */
 const composer = vi.hoisted(() => ({
   props: null as {
+    isolated?: boolean;
+    historyProjectId?: string;
     submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
     onSendKey: (key: string) => void;
   } | null,
@@ -81,6 +83,8 @@ vi.mock("@/components/Canopy/CanopyTerminal", async () => {
 vi.mock("@/components/Terminal/HybridInputBar", () => ({
   HybridInputBar: (props: {
     disabled?: boolean;
+    isolated?: boolean;
+    historyProjectId?: string;
     submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
     onSendKey: (key: string) => void;
   }) => {
@@ -345,6 +349,16 @@ describe("GlobalAssistantPane (#14454)", () => {
     await flush();
     expect(help.claimGlobalAssistantInput).toHaveBeenCalledWith("a1");
     expect(apis.at(-1)?.stamp).toEqual({ attachmentId: "a1", inputEpoch: 5 });
+  });
+
+  it("keeps its composer's draft apart and its prompts in the global assistant's own history", async () => {
+    const { GLOBAL_ASSISTANT_HISTORY_ID } = await import("@/store/commandHistoryStore");
+    installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+    renderPane();
+    await flush();
+
+    expect(composer.props?.isolated).toBe(true);
+    expect(composer.props?.historyProjectId).toBe(GLOBAL_ASSISTANT_HISTORY_ID);
   });
 
   it("types under input main hands it when the holder goes, without asking (#16098)", async () => {

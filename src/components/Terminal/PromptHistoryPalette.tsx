@@ -21,6 +21,7 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
+import { GLOBAL_ASSISTANT_HISTORY_ID } from "@/store/commandHistoryStore";
 import { isMac } from "@/lib/platform";
 import { FactRun, FactSeparator } from "@/components/ui/FactSeparator";
 
@@ -142,6 +143,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     close,
     open,
     scope,
+    projectless,
     setScope,
     toggleScope,
     selectEntry,
@@ -157,7 +159,13 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
 
   const projects = useProjectStore((s) => s.projects);
   const projectNames = useMemo(
-    () => (scope === "global" ? new Map(projects.map((p) => [p.id, p.name])) : null),
+    () =>
+      scope === "global"
+        ? new Map([
+            ...projects.map((p) => [p.id, p.name] as const),
+            [GLOBAL_ASSISTANT_HISTORY_ID, "Global assistant"] as const,
+          ])
+        : null,
     [scope, projects]
   );
 
@@ -206,29 +214,32 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         {hasSelection && <PaletteFooterHints primaryHint={{ keys: "Enter", label: "to recall" }} />}
       </div>
       {/* Pointer-down is held so a click switches scope without taking focus
-          out of the search field — the list keys live there. */}
-      <div
-        className="flex shrink-0 items-center gap-2"
-        onPointerDownCapture={(e) => e.preventDefault()}
-      >
-        {/* The chord that opened the palette, named here as the key for this
+          out of the search field — the list keys live there. A composer with
+          no project's history of its own has no scope to switch to. */}
+      {!projectless && (
+        <div
+          className="flex shrink-0 items-center gap-2"
+          onPointerDownCapture={(e) => e.preventDefault()}
+        >
+          {/* The chord that opened the palette, named here as the key for this
             control — Tab moves the list selection, so this is the keyboard
             route to it. */}
-        <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
-        <span id={SCOPE_HINT_ID} className="sr-only">
-          {scope === "project"
-            ? "Showing this project's prompts."
-            : "Showing every project's prompts."}{" "}
-          {SCOPE_TITLE}.
-        </span>
-        <SegmentedRadioGroup
-          options={SCOPE_OPTIONS}
-          value={scope}
-          onChange={setScope}
-          density="compact"
-          aria-label="History scope"
-        />
-      </div>
+          <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
+          <span id={SCOPE_HINT_ID} className="sr-only">
+            {scope === "project"
+              ? "Showing this project's prompts."
+              : "Showing every project's prompts."}{" "}
+            {SCOPE_TITLE}.
+          </span>
+          <SegmentedRadioGroup
+            options={SCOPE_OPTIONS}
+            value={scope}
+            onChange={setScope}
+            density="compact"
+            aria-label="History scope"
+          />
+        </div>
+      )}
     </div>
   );
 
@@ -256,7 +267,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       ariaLabel="Prompt history search"
       searchPlaceholder="Search sent prompts…"
       searchAriaLabel="Search prompt history"
-      searchAriaDescribedBy={SCOPE_HINT_ID}
+      searchAriaDescribedBy={projectless ? undefined : SCOPE_HINT_ID}
       listId="prompt-history-list"
       itemIdPrefix="prompt-history-option"
       emptyMessage={

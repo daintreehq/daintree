@@ -50,6 +50,12 @@ import { PromptTemplateForm } from "@/components/Commands/PromptTemplateForm";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import {
+  claimPromptHistory,
+  followPromptHistoryHost,
+  returnPromptHistoryToGrid,
+  usePromptHistoryOwnerStore,
+} from "@/store/promptHistoryOwnerStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { actionService } from "@/services/ActionService";
@@ -309,9 +315,24 @@ export interface HybridInputBarProps {
    * that host's id. Nothing of this machine's — a file, an image, a path from
    * completion, a diff or a screen expanded at send — is offered or sent,
    * since it would name something that isn't there; text is typed as text.
-   * Its draft and history are that host's, apart from this one's.
+   * Its draft is that host's, apart from this one's, and no prompt history
+   * is offered or kept for it.
    */
   otherHostId?: string;
+  /**
+   * The project whose prompt history this composer records into and offers
+   * first. A grid pane's, and the Assistant's, is the window's project; an
+   * isolated composer keeps none unless given one (Canopy's reply: the run's
+   * project), since its draft scope is no project's.
+   */
+  historyProjectId?: string;
+  /**
+   * A composer outside the grid that isn't `isolated` (the Project
+   * Assistant's), while it is on screen: prompt history serves it once focus
+   * lands in its host (`PROMPT_HISTORY_HOST_ATTR`), not by the grid's focused
+   * pane. An isolated composer always works this way.
+   */
+  ownsHistoryByFocus?: boolean;
   /**
    * Sends the composer's text and says whether the terminal took it, in place
    * of the fire-and-forget `onSend`: the draft is cleared and kept in history
@@ -568,6 +589,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       className,
       isolated = false,
       otherHostId,
+      historyProjectId: historyProjectIdProp,
+      ownsHistoryByFocus = false,
       submitText,
       selected,
       voiceTarget,
@@ -588,9 +611,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const resetHistoryIndex = useTerminalInputStore((s) => s.resetHistoryIndex);
     const currentProjectId = useProjectStore((s) => s.currentProject?.id);
     // An isolated composer types to a terminal that may live in another
-    // project, beside that terminal's own composer: its draft and history are
+    // project, beside that terminal's own composer: its draft and recall are
     // its own, so neither leaks into the pane's (or, through it, the fleet's).
+    // The prompts it sends still belong to a project's history.
     const projectId = isolated ? isolatedComposerScope(otherHostId) : currentProjectId;
+    const historyProjectId = thisMachineOff
+      ? undefined
+      : (historyProjectIdProp ?? (isolated ? undefined : currentProjectId));
     const draftKey = makeDraftKey(terminalId, projectId);
     // Where dictation into this composer is kept: the pane's own by terminal,
     // a reply's by its own id, which names the same draft with no project.
@@ -618,6 +645,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // down (`shellVars`).
     const showSelectedChrome = !disabled && (selected ?? (isFocusedTerminal && !isAssistantActive));
     const canopyOpen = useCanopyStore((s) => s.isOpen);
+    // Outside the grid, prompt history serves whichever composer's host focus
+    // last landed in; in it, the focused pane's, while none outside has it.
+    const historyByFocus = isolated || ownsHistoryByFocus;
+    const historyToken = useId();
+    const holdsHistory = usePromptHistoryOwnerStore((s) =>
+      historyByFocus ? s.owner === historyToken : s.owner === null && isFocusedTerminal
+    );
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -1338,6 +1372,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
       terminalId,
       voice: voiceTarget,
+      historyProjectId,
       cwd,
       agentId,
       expandContext: !thisMachineOff,
@@ -2049,15 +2084,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (readComposerSelection(draftKeyRef.current, currentDraft()) === null) caretToEnd(view);
     };
 
-    // One palette per id: while Canopy is open its own composer's is the one,
-    // not the grid pane's behind it. History spans this machine's projects,
-    // whose prompts name its files: none is offered for a terminal on another
-    // host. A grid pane mounts its palette only while focused, but its `❯`
-    // offers history either way, since the press that clicks it selects it.
-    const historyAvailable = isolated ? !thisMachineOff : !canopyOpen;
-    const historyPaletteMounted = historyAvailable && (isolated || isFocusedTerminal);
+    // One palette per id, so one composer holds it (`promptHistoryOwnerStore`):
+    // while Canopy is open, never the grid pane's behind it. History spans this
+    // machine's projects, whose prompts name its files: none is offered for a
+    // terminal on another host. A composer mounts its palette only while it
+    // holds history, but its `❯` offers history either way, since the press
+    // that clicks it hands history to it.
+    const historyAvailable = historyByFocus ? !thisMachineOff : !canopyOpen;
+    const historyPaletteMounted = historyAvailable && holdsHistory;
     const historyOffered = historyAvailable && !disabled;
     const pendingHistoryOpenRef = useRef(false);
+
+    useEffect(() => {
+      const composer = rootRef.current;
+      if (!historyByFocus || composer === null) return;
+      return followPromptHistoryHost(historyToken, composer);
+    }, [historyByFocus, historyToken]);
 
     const openHistoryPalette = (open: () => void) => {
       const view = editorViewRef.current;
@@ -2069,18 +2111,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       open();
     };
 
-    const openHistoryFromMarker = () => {
+    const requestHistoryPalette = () => {
       const open = historyPaletteOpenRef.current;
       if (open) {
         openHistoryPalette(open);
         return;
       }
-      // A click with no press before it (assistive technology) reaches an
-      // unselected pane, whose palette is not mounted yet. Select it, and open
-      // once that commit registers the palette; a request that commit did not
-      // answer is dropped rather than left to open on some later focus.
+      // A click with no press before it (assistive technology) reaches a
+      // composer that doesn't hold history, whose palette is not mounted yet.
+      // Hand history to it, and open once that commit registers the palette; a
+      // request that commit did not answer is dropped rather than left to open
+      // on some later focus.
       pendingHistoryOpenRef.current = true;
-      onActivate?.();
+      if (historyByFocus) {
+        claimPromptHistory(historyToken);
+      } else {
+        // The pane may already be the selected one, with an Assistant holding
+        // history since: selecting it again would change nothing.
+        returnPromptHistoryToGrid();
+        onActivate?.();
+      }
       requestAnimationFrame(() => {
         pendingHistoryOpenRef.current = false;
       });
@@ -2430,7 +2480,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isComposingRef,
       handledEnterRef,
       editableCompartmentRef,
-      historyPaletteOpenRef,
+      requestHistorySearch: requestHistoryPalette,
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor: (route) => sendFromEditor(undefined, undefined, route),
@@ -2912,7 +2962,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       // The root's click would focus the editor again under
                       // the palette that is opening.
                       e.stopPropagation();
-                      openHistoryFromMarker();
+                      requestHistoryPalette();
                     }}
                     className={cn(COMPOSER_MARKER_CLASS, COMPOSER_MARKER_HOVER_CLASS)}
                   >
@@ -3283,7 +3333,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         {historyPaletteMounted && (
           <PromptHistoryPalette
             terminalId={terminalId}
-            projectId={projectId}
+            projectId={historyProjectId}
+            draftProjectId={projectId}
             onOpenRef={historyPaletteOpenRef}
           />
         )}
