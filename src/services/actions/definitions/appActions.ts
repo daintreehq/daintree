@@ -5,6 +5,7 @@ import { z } from "zod";
 import { appClient } from "@/clients";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -53,7 +54,15 @@ async function refreshRendererConfig(): Promise<void> {
     keybindingService.loadOverrides(),
     refreshTerminalMonitoring(),
   ]);
-  actionService.dispatch("cliAvailability.refresh", undefined, { source: "agent" });
+  // Through the store, not only the host's probe: every reader of availability
+  // (the assistant's agent choices among them) re-reads the registry when it
+  // changes, which is how the reloaded config's agents reach them.
+  useCliAvailabilityStore
+    .getState()
+    .refresh(true)
+    .catch((error: unknown) => {
+      logError("[app.reloadConfig] Failed to refresh CLI availability", error);
+    });
 }
 
 interface AppConfigReloadListenerState {

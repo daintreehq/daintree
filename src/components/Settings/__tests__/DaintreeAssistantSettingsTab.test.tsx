@@ -23,6 +23,21 @@ vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
   useRemoteHostName: () => remoteWindow.hostName,
 }));
+// Pins what the version probe last returned, so a render can pair a warning read
+// for one agent with another agent: the gap before the probe's effect clears it.
+const heldVersionWarning = vi.hoisted(() => ({
+  value: undefined as
+    undefined | { agentId: string; agentName: string; installed: string; required: string },
+}));
+vi.mock("../Assistant/useAssistantVersionWarning", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../Assistant/useAssistantVersionWarning")>();
+  return {
+    useAssistantVersionWarning: (agentId: string | null) => {
+      const probed = actual.useAssistantVersionWarning(agentId);
+      return heldVersionWarning.value ?? probed;
+    },
+  };
+});
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -78,6 +93,7 @@ interface SettingsSelectStubOption {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 }
 
 vi.mock("../SettingsSelect", () => ({
@@ -106,7 +122,12 @@ vi.mock("../SettingsSelect", () => ({
       <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
         {placeholder != null && <option value="">{placeholder}</option>}
         {options.map((o) => (
-          <option key={o.value} value={o.value} data-description={o.description}>
+          <option
+            key={o.value}
+            value={o.value}
+            data-description={o.description}
+            disabled={o.disabled}
+          >
             {o.label}
           </option>
         ))}
@@ -197,7 +218,11 @@ vi.mock("@/config/agents", () => ({
     if (id === "codex")
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
     if (id === "antigravity")
-      return { name: "Antigravity", supports: { permissionBypass: true, tier: "stable" } };
+      return {
+        name: "Antigravity",
+        assistantMinVersion: "1.0.0",
+        supports: { permissionBypass: true, tier: "stable" },
+      };
     // Assistant-wired but with no bypass mechanism of any kind — the shape a
     // user-defined agent takes.
     if (id === "byoa")
@@ -365,6 +390,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
     remoteWindow.hostName = null;
+    heldVersionWarning.value = undefined;
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
@@ -1137,6 +1163,34 @@ describe("DaintreeAssistantSettingsTab", () => {
         expect(agentOptionMarks(container)).toEqual({ claude: null, codex: null });
       });
 
+      it("marks and warns once this view's own probe confirms the cached answer", async () => {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        helpPanelState.hostAssistantAgentId = "codex";
+        helpPanelState.preferredAgentId = "codex";
+        setCliAvailability({ claude: "ready", codex: "missing" }, true, false);
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+        expect(agentOptionMarks(container)).toEqual({ claude: null, codex: null });
+        expect(screen.queryByTestId("assistant-agent-not-installed-banner")).toBeNull();
+
+        // The probe agrees with the cache, so only its timestamp lands; the store
+        // then resolves the missing built-in away from the launch target.
+        act(() => {
+          helpPanelState.preferredAgentId = null;
+          helpPanelState.droppedPreferredAgentId = "codex";
+          useCliAvailabilityStore.setState({ lastCheckedAt: 1 });
+        });
+
+        await waitFor(() =>
+          expect(agentOptionMarks(container)).toEqual({ claude: null, codex: "Not installed" })
+        );
+        expect(
+          (await screen.findByTestId("assistant-agent-not-installed-banner")).textContent
+        ).toContain("Codex isn't installed");
+        expect(screen.queryByTestId("assistant-dropped-agent-banner")).toBeNull();
+      });
+
       it("re-reads the supported agents and their marks when availability reloads", async () => {
         setCliAvailability({ claude: "missing" });
 
@@ -1159,6 +1213,9 @@ describe("DaintreeAssistantSettingsTab", () => {
 
         const { container } = renderTab();
         await waitForContent(container, "Search documentation");
+        const codex = Array.from(agentSelect(container).options).find((o) => o.value === "codex");
+        expect(codex?.getAttribute("data-description")).toBe("Not installed");
+        expect(codex?.disabled).toBe(false);
         fireEvent.change(agentSelect(container), { target: { value: "codex" } });
 
         expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex");
@@ -2427,6 +2484,7 @@ describe("DaintreeAssistantSettingsTab", () => {
   });
 
   it("opens the outdated agent's own settings from the version warning (#16929)", async () => {
+    helpPanelState.hostAssistantAgentId = "claude";
     helpPanelState.preferredAgentId = "claude";
     installApi(
       {},
@@ -2457,6 +2515,76 @@ describe("DaintreeAssistantSettingsTab", () => {
       { tab: "agents", subtab: "claude" },
       { source: "user" }
     );
+  });
+
+  it("opens the settings of the only installed agent its version warning names (#16929)", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "antigravity"]);
+    useCliAvailabilityStore.setState({
+      availability: { claude: "missing", antigravity: "ready" } as never,
+      hasRealData: true,
+      lastCheckedAt: 1,
+    });
+    installApi(
+      {},
+      {},
+      {
+        getAgentVersion: vi.fn().mockResolvedValue({
+          agentId: "antigravity",
+          installedVersion: "0.9.0",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        }),
+      }
+    );
+    const dispatch = vi.spyOn(actionService, "dispatch");
+
+    render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    const banner = await screen.findByTestId("assistant-version-warning-banner");
+    expect(banner.textContent).toContain("Antigravity needs an update");
+    fireEvent.click(within(banner).getByRole("button", { name: "Open agent settings" }));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "antigravity" },
+      { source: "user" }
+    );
+  });
+
+  it("holds back a version warning read for the agent the assistant moved off (#16929)", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    helpPanelState.hostAssistantAgentId = "claude";
+    helpPanelState.preferredAgentId = "claude";
+    heldVersionWarning.value = {
+      agentId: "claude",
+      agentName: "Claude Code",
+      installed: "1.0.0",
+      required: "2.0.0",
+    };
+
+    const { rerender } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await screen.findByTestId("assistant-version-warning-banner");
+
+    helpPanelState.hostAssistantAgentId = "codex";
+    helpPanelState.preferredAgentId = "codex";
+    rerender(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
+    });
   });
 
   it("does not warn when the installed CLI meets the assistant minimum", async () => {
@@ -2981,6 +3109,7 @@ describe("DaintreeAssistantSettingsTab letting other machines' assistants work h
     helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
     remoteWindow.hostName = null;
+    heldVersionWarning.value = undefined;
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
