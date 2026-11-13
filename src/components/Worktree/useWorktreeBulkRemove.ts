@@ -23,6 +23,12 @@ import type { WorktreeState } from "@/types";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { pluralize } from "@/lib/pluralize";
 import {
+  captureWorktreeTerminalSnapshot,
+  closeTerminalsForWorktree,
+  restoreClosedTerminals,
+  type WorktreeTerminalRestoreSnapshot,
+} from "./worktreeDeleteHelper";
+import {
   describeBulkRemoveFailureCount,
   summarizeBulkRemoveFailures,
   type BulkRemoveFailure,
@@ -215,10 +221,11 @@ export function bulkRemoveDiscardedFileCount(target: BulkRemoveTarget): number {
 }
 
 /**
- * Everything a target's row states, as one comparable value: whether it is in
- * the batch, why not, the files and nested files it would discard, the
- * commits it holds, and the teardown it runs. Two reads with the same key
- * show the user the same thing.
+ * Everything the host's read says about a target, as one comparable value:
+ * whether it is in the batch, why not, the files and nested files it would
+ * discard, the commits it holds, and the teardown it runs. Two reads with the
+ * same key show the user the same thing. The panels a row says it closes are
+ * live renderer state, drawn as they change, so they are not part of it.
  */
 export function bulkRemoveEvidenceKey(target: BulkRemoveTarget): string {
   const status = target.status;
@@ -292,6 +299,12 @@ export interface UseWorktreeBulkRemoveReturn {
    * (part of {@link isExecuting}). A change found there holds the run.
    */
   isRechecking: boolean;
+  /**
+   * True when the last confirm found the evidence changed since the check and
+   * held the run, clearing the typed count. Until the next attempt, retry or
+   * close, the dialog has to say why, not only the announcer.
+   */
+  hasRecheckChanges: boolean;
   handleRemoveClick: () => void;
   handleRetryPreviews: () => void;
   handleConfirm: () => Promise<void>;
@@ -306,6 +319,12 @@ export interface UseWorktreeBulkRemoveReturn {
  * refresh queue behind a dialog the user is waiting in front of.
  */
 const PREVIEW_CONCURRENCY = 3;
+
+/** Why a confirm the submit-time re-read held did nothing, spoken and shown. */
+export const RECHECK_HELD_MESSAGE =
+  "Something changed since the check. Review the list and confirm again.";
+export const RECHECK_HELD_NOTHING_LEFT_MESSAGE =
+  "Something changed since the check. Nothing was deleted.";
 
 /** Concurrency for the delete fan-out. Unchanged. */
 const DELETE_CONCURRENCY = 4;
@@ -328,6 +347,13 @@ const DELETE_CONCURRENCY = 4;
  * we could not confirm released is what #9084 added the stop for.
  */
 const DEV_PREVIEW_STEP_TIMEOUT_MS = 30_000;
+
+/**
+ * Deadline for asking the host whether a failed target's worktree still
+ * exists, so its closed terminals can be relaunched into it. Unanswered reads
+ * as "still there", as the `worktree.delete` action treats a failed lookup.
+ */
+const RESTORE_LOOKUP_TIMEOUT_MS = 30_000;
 
 /**
  * `fn` over `items`, at most `limit` at a time, settled per item — so one
@@ -405,6 +431,35 @@ function deriveTargets(
   return { targets, excludedMainCount: excludedMainNames.length, excludedMainNames };
 }
 
+/**
+ * Relaunch the terminals a failed target's run closed, unless its worktree is
+ * gone: the host removes the directory before anything after it can fail, and
+ * relaunching then would strand terminals on a deleted worktree. A lookup that
+ * fails, never answers, or comes from a host that isn't up (`gitBacked: null`,
+ * whose empty list says nothing) reads as still there. Never throws: the
+ * target's own failure is what the summary reports.
+ */
+async function restoreIfKept(
+  worktreeId: string,
+  snapshot: readonly WorktreeTerminalRestoreSnapshot[]
+): Promise<void> {
+  try {
+    const stillExists = await withDeadline(
+      worktreeClient.getAllWithStatus(),
+      RESTORE_LOOKUP_TIMEOUT_MS,
+      "Timed out checking whether the worktree still exists"
+    )
+      .then(
+        ({ worktrees, gitBacked }) =>
+          gitBacked === null || worktrees.some((worktree) => worktree.id === worktreeId)
+      )
+      .catch(() => true);
+    if (stillExists) await restoreClosedTerminals(snapshot);
+  } catch (err) {
+    logError(`Bulk remove couldn't restore terminals for ${worktreeId}`, err);
+  }
+}
+
 /** One target's delete attempt, folded rather than mutated into counters. */
 interface BulkRemoveResult {
   ok: boolean;
@@ -438,6 +493,7 @@ export function useWorktreeBulkRemove({
   const [isPreviewPending, setIsPreviewPending] = useState(false);
   const [isRetryingPreviews, setIsRetryingPreviews] = useState(false);
   const [isRechecking, setIsRechecking] = useState(false);
+  const [hasRecheckChanges, setHasRecheckChanges] = useState(false);
 
   // Snapshot the live derivation when the user clicks Remove. Reading
   // back through `useMemo(() => derive(...), [worktreeMap, selectedIds])`
@@ -518,6 +574,7 @@ export function useWorktreeBulkRemove({
       setDisplayTargets(targets);
       setDisplayExcludedMain(excludedMainNames);
       setIsPreviewPending(true);
+      setHasRecheckChanges(false);
       setIsConfirmOpen(true);
       runPreviews(session, targets);
     },
@@ -578,6 +635,7 @@ export function useWorktreeBulkRemove({
     setDisplayExcludedMain([]);
     setIsPreviewPending(false);
     setIsRetryingPreviews(false);
+    setHasRecheckChanges(false);
   }, []);
 
   const handleCancel = useCallback(() => {
@@ -599,6 +657,7 @@ export function useWorktreeBulkRemove({
     }
     isExecutingRef.current = true;
     setIsExecuting(true);
+    setHasRecheckChanges(false);
 
     // Re-read every target about to run before anything is dispatched
     // (#11343's rule for the single delete): an agent can write into a
@@ -646,10 +705,15 @@ export function useWorktreeBulkRemove({
       setDisplayTargets(next);
       isExecutingRef.current = false;
       setIsExecuting(false);
+      setHasRecheckChanges(true);
+      // A re-read can also leave nothing to run, where "confirm again" would
+      // point at a button that is no longer there.
       useAnnouncerStore
         .getState()
         .announce(
-          "Something changed since the check. Review the list and confirm again.",
+          next.some(isBulkRemoveEligible)
+            ? RECHECK_HELD_MESSAGE
+            : RECHECK_HELD_NOTHING_LEFT_MESSAGE,
           "assertive"
         );
       return;
@@ -669,7 +733,24 @@ export function useWorktreeBulkRemove({
     try {
       const removeOne = (target: BulkRemoveTarget) =>
         queue.add<BulkRemoveResult>(async () => {
+          // Captured before the close, so a close that times out still leaves
+          // something to relaunch from (#11344).
+          let closed: WorktreeTerminalRestoreSnapshot[] | null = null;
           try {
+            // Read before the close: closing a dev-preview panel stops its
+            // server, so asking afterwards would lose the stop the summary names.
+            const existing = await withDeadline(
+              window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
+              DEV_PREVIEW_STEP_TIMEOUT_MS,
+              "Timed out checking for a running dev server"
+            );
+            const hadDevPreview = existing !== null;
+            // Close the worktree's panels BEFORE `git worktree remove`, as the
+            // single delete does: a shell or agent rooted in the directory
+            // locks it on Windows, and elsewhere its session would outlive the
+            // worktree it runs in. The close bounds its own wait.
+            closed = captureWorktreeTerminalSnapshot(target.id);
+            await closeTerminalsForWorktree(target.id);
             // Stop dev preview BEFORE `git worktree remove` (#9084). On
             // Windows the dev server's directory lock would otherwise block
             // the removal outright. A stop failure is folded into the
@@ -678,12 +759,6 @@ export function useWorktreeBulkRemove({
             // every session itself and no-ops cleanly when none match, so
             // it survives the case where `getByWorktree` only reports one
             // panel's session of several sharing the worktreeId.
-            const existing = await withDeadline(
-              window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
-              DEV_PREVIEW_STEP_TIMEOUT_MS,
-              "Timed out checking for a running dev server"
-            );
-            const hadDevPreview = existing !== null;
             await withDeadline(
               window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
               DEV_PREVIEW_STEP_TIMEOUT_MS,
@@ -699,6 +774,9 @@ export function useWorktreeBulkRemove({
           } catch (err) {
             const reason = formatErrorMessage(err, "Delete failed");
             logError(`Bulk remove failed for ${target.id}`, err);
+            // Awaited inside the task, so the run (and the retry it leaves
+            // selected) can't start closing these again mid-relaunch.
+            if (closed && closed.length > 0) await restoreIfKept(target.id, closed);
             return {
               ok: false,
               name: target.branch ?? target.name,
@@ -884,6 +962,7 @@ export function useWorktreeBulkRemove({
     canConfirm: !isPreviewPending && eligibleCount > 0,
     isExecuting,
     isRechecking,
+    hasRecheckChanges,
     handleRemoveClick,
     handleRetryPreviews,
     handleConfirm,

@@ -23,6 +23,8 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 };
 
 import { WorktreeBulkRemoveDialog } from "../WorktreeBulkRemoveDialog";
+import { usePanelStore } from "@/store/panelStore";
+import type { PanelInstance } from "@shared/types/panel";
 import { useWorktreeBulkRemove } from "../useWorktreeBulkRemove";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
@@ -97,6 +99,7 @@ function hookValue(over: Partial<UseWorktreeBulkRemoveReturn> = {}): UseWorktree
         i === 0 ? "main" : `main-${i}`
       ),
     isRechecking: false,
+    hasRecheckChanges: false,
     eligibleCount,
     isPreviewPending,
     hasRetryablePreviews: targets.some(isBulkRemoveRetryable),
@@ -195,6 +198,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   rerenderDialogFn = null;
+  usePanelStore.setState({ panelsById: {}, panelIds: [], panelIdsByWorktreeId: {} });
 });
 
 describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () => {
@@ -820,6 +824,195 @@ describe("WorktreeBulkRemoveDialog — copy", () => {
   it("names the dev server the run stops first", () => {
     renderDialog();
     expect(document.body.textContent).toContain("a running dev server is stopped first");
+  });
+
+  it("names the panels the run closes first (#16892)", () => {
+    renderDialog();
+    expect(document.body.textContent).toContain(
+      "Open panels are closed and a running dev server is stopped first"
+    );
+  });
+});
+
+describe("WorktreeBulkRemoveDialog — each row names the panels it closes (#16892)", () => {
+  function seedPanels(panels: Array<Partial<PanelInstance> & { id: string }>) {
+    const full = panels.map((p) => ({ kind: "terminal", location: "grid", ...p }) as PanelInstance);
+    const byWorktree: Record<string, string[]> = {};
+    for (const panel of full) {
+      if (panel.worktreeId) (byWorktree[panel.worktreeId] ??= []).push(panel.id);
+    }
+    act(() => {
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(full.map((p) => [p.id, p])),
+        panelIds: full.map((p) => p.id),
+        panelIdsByWorktreeId: byWorktree,
+      });
+    });
+  }
+
+  const panelLine = (row = 0) =>
+    document
+      .querySelectorAll('[data-testid="bulk-remove-target"]')
+      [row]?.querySelector('[data-testid="bulk-remove-panels"]')?.textContent ?? null;
+
+  it("names a clean row's terminals and other panels, and the agents among them", () => {
+    seedPanels([
+      { id: "t1", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
+      { id: "t2", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
+      { id: "t3", worktreeId: "a", launchAgentId: "claude", agentState: "waiting" },
+      { id: "shell", worktreeId: "a", agentState: "working" },
+      { id: "web", worktreeId: "a", kind: "browser" },
+    ] as Array<Partial<PanelInstance> & { id: string }>);
+    renderDialog({ targets: [target("a")] });
+
+    // A clean row has no loss line, and still has panels the run will close.
+    // Only an agent mid-work counts as running: a waiting one, or a plain
+    // shell, is cheap to close.
+    expect(document.querySelector('[data-testid="bulk-remove-risks"]')).toBeNull();
+    expect(panelLine()).toBe("4 terminals and 1 other panel will be closed · 2 running agents");
+
+    seedPanels([
+      { id: "t1", worktreeId: "a", launchAgentId: "claude", agentState: "working" },
+      { id: "t2", worktreeId: "a", launchAgentId: "claude", agentState: "waiting" },
+    ] as Array<Partial<PanelInstance> & { id: string }>);
+    expect(panelLine()).toBe("2 terminals will be closed · 1 running agent");
+  });
+
+  it("counts only what the run closes: not trash, ephemeral terminals or other worktrees", () => {
+    seedPanels([
+      { id: "t1", worktreeId: "a" },
+      { id: "gone", worktreeId: "a", location: "trash" },
+      { id: "temp", worktreeId: "a", excludeFromPersistence: true },
+      { id: "elsewhere", worktreeId: "b" },
+    ] as Array<Partial<PanelInstance> & { id: string }>);
+    renderDialog({ targets: [target("a")] });
+
+    expect(panelLine()).toBe("1 terminal will be closed");
+  });
+
+  it("names a row holding only non-terminal panels as panels", () => {
+    seedPanels([{ id: "web", worktreeId: "a", kind: "browser" }] as Array<
+      Partial<PanelInstance> & { id: string }
+    >);
+    renderDialog({ targets: [target("a")] });
+
+    expect(panelLine()).toBe("1 panel will be closed");
+  });
+
+  it("follows panels opened while the dialog is up", () => {
+    renderDialog({ targets: [target("a")] });
+    expect(panelLine()).toBeNull();
+
+    seedPanels([{ id: "t1", worktreeId: "a" }]);
+    expect(panelLine()).toBe("1 terminal will be closed");
+  });
+
+  it("says nothing about panels on a row the run leaves out", () => {
+    seedPanels([{ id: "t1", worktreeId: "a" }]);
+    renderDialog({
+      targets: [target("a", { status: { state: "failed", submodules: null } }), target("b")],
+    });
+
+    expect(document.querySelectorAll('[data-testid="bulk-remove-panels"]')).toHaveLength(0);
+  });
+});
+
+describe("WorktreeBulkRemoveDialog — a held confirm says why (#16892)", () => {
+  const notice = () => document.querySelector('[data-testid="bulk-remove-recheck-notice"]');
+
+  it("shows the hold beside the primary, outside any live region", () => {
+    renderDialog({ targets: [target("a"), target("b")], hasRecheckChanges: true });
+
+    expect(notice()?.textContent).toBe(
+      "Something changed since the check. Review the list and confirm again."
+    );
+    // The hook already announced it assertively; a live region here would say
+    // it twice, and these roles are live regions without saying so.
+    const live = '[aria-live], [role="status"], [role="alert"], [role="log"]';
+    expect(notice()!.closest(live)).toBeNull();
+    expect(notice()!.querySelector(live)).toBeNull();
+    // The disabled primary points at it, so the reason travels with the button.
+    const hintId = document.querySelector('[data-testid="app-dialog-hint"]')!.id;
+    expect(confirmButton()!.getAttribute("aria-describedby") ?? "").toContain(hintId);
+  });
+
+  it("doesn't ask for a confirm that can no longer happen", () => {
+    renderDialog({
+      targets: [target("a", { status: { state: "failed", submodules: null } })],
+      hasRecheckChanges: true,
+    });
+
+    expect(notice()?.textContent).toBe("Something changed since the check. Nothing was deleted.");
+  });
+
+  it("gives way to the run's own progress", () => {
+    renderDialog({ targets: [target("a")], hasRecheckChanges: true, isExecuting: true });
+    expect(notice()).toBeNull();
+  });
+
+  it("is absent when nothing held the run", () => {
+    renderDialog({ targets: [target("a"), target("b")] });
+    expect(notice()).toBeNull();
+  });
+
+  it("explains a cleared count after a real re-read finds new work", async () => {
+    function wt(id: string): WorktreeState {
+      return {
+        id,
+        name: id,
+        path: `/repo/${id}`,
+        branch: `feature/${id}`,
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+      } as WorktreeState;
+    }
+    let dirtyB = false;
+    worktreeClientMock.getFreshChanges.mockImplementation((id: string) =>
+      Promise.resolve({
+        worktreeId: id,
+        rootPath: `/repo/${id}`,
+        changes: id === "b" && dirtyB ? [change("/repo/b/new.ts", "modified")] : [],
+        changedFileCount: id === "b" && dirtyB ? 1 : 0,
+      })
+    );
+    worktreeClientMock.getSubmoduleDeleteRisk.mockResolvedValue(risk());
+    const hook = renderHook(() =>
+      useWorktreeBulkRemove({
+        selectedIds: new Set(["a", "b"]),
+        worktreeMap: new Map([
+          ["a", wt("a")],
+          ["b", wt("b")],
+        ]),
+        clearSelection: vi.fn(),
+        selectOnly: vi.fn(),
+      })
+    );
+    const { rerender } = render(<WorktreeBulkRemoveDialog bulkRemove={hook.result.current} />);
+    const settle = async () => {
+      await act(async () => {
+        for (let i = 0; i < 12; i++) await Promise.resolve();
+      });
+      rerender(<WorktreeBulkRemoveDialog bulkRemove={hook.result.current} />);
+    };
+
+    act(() => hook.result.current.handleRemoveClick());
+    await settle();
+    typeTheCount("2 worktrees");
+    expect(notice()).toBeNull();
+
+    // An agent writes into "b" between the preview and the click.
+    dirtyB = true;
+    await act(async () => {
+      confirmButton()!.click();
+    });
+    await settle();
+
+    expect(worktreeClientMock.delete).not.toHaveBeenCalled();
+    // Same count, so the gate clears only because the consent was reset.
+    expect((document.querySelector("input") as HTMLInputElement).value).toBe("");
+    expect(confirmIsDisabled()).toBe(true);
+    expect(notice()?.textContent).toContain("Something changed since the check");
+    hook.unmount();
   });
 });
 
