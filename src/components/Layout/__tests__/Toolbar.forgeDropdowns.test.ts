@@ -109,7 +109,7 @@ describe("Forge stats token error UX — issue #5024", () => {
     for (const [ref, tokenError] of [
       ["buttonRef={issuesButtonRef}", "issuesTokenError"],
       ["buttonRef={prsButtonRef}", "isTokenError"],
-    ]) {
+    ] as const) {
       const button = source.slice(source.indexOf(ref), source.indexOf(ref) + 2500);
       expect(button).toMatch(
         new RegExp(`tone=\\{segmentTone\\(\\w+DisplayCount, ${tokenError}\\)\\}`)
