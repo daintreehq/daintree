@@ -23,6 +23,12 @@ class ResizeObserverStub implements ResizeObserver {
 }
 globalThis.ResizeObserver ??= ResizeObserverStub;
 
+const platform = vi.hoisted(() => ({ mac: false }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => platform.mac,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
@@ -216,15 +222,22 @@ describe("KeyboardShortcutsTab search on another keyboard layout", () => {
 });
 
 describe("KeyboardShortcutsTab search field", () => {
-  it("finds the double-tap gesture by the keys the rail would show for it", async () => {
-    await renderTab();
-    await search(
-      parseChord("Shift Shift", isMac())
-        .map((step) => step.join(""))
-        .join("")
-    );
+  afterEach(() => {
+    platform.mac = false;
+  });
 
+  it.each([
+    [true, "⇧⇧"],
+    [false, "Shift Shift"],
+  ])("finds the double-tap gesture by the keys it shows (macOS: %s)", async (mac, keys) => {
+    platform.mac = mac;
+    await renderTab();
+
+    await search(keys);
     expect(screen.getByText("Double-tap Shift opens Canopy")).toBeTruthy();
+
+    await search("⌥⌥");
+    expect(screen.queryByText("Double-tap Shift opens Canopy")).toBeNull();
   });
 
   it("clears a search on the first Escape and keeps the key from the dialog around it", async () => {

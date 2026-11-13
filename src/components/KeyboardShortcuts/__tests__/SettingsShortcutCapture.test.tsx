@@ -1109,10 +1109,29 @@ describe("SettingsShortcutCapture", () => {
       vi.mocked(normalizeKeyForBinding).mockImplementation((e: KeyboardEvent) => e.key);
     });
 
-    const press = (init: KeyboardEventInit) =>
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
       act(() => {
-        window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+        window.dispatchEvent(event);
       });
+      return event;
+    };
+
+    const renderArmed = (
+      props: Partial<React.ComponentProps<typeof SettingsShortcutCapture>> = {}
+    ) =>
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+          {...props}
+        />
+      );
+
+    const recording = () =>
+      screen.getByTestId("shortcut-capture-field").getAttribute("data-recording") === "true";
 
     it("owns the app's shortcut handling only while it is recording", async () => {
       const { keybindingService } = await import("@/services/KeybindingService");
@@ -1201,37 +1220,27 @@ describe("SettingsShortcutCapture", () => {
       ["Tab", false],
       ["Shift+Tab", true],
     ])("hands the keyboard back on %s instead of recording it", (_name, shiftKey) => {
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-          autoStart
-        />
-      );
+      renderArmed();
 
-      press({ key: "Tab", code: "Tab", shiftKey });
+      const tab = press({ key: "Tab", code: "Tab", shiftKey });
+
+      // At once, not when some timeout lets go.
+      const field = screen.getByTestId("shortcut-capture-field");
+      expect(tab.defaultPrevented).toBe(true);
+      expect(field.getAttribute("data-recording")).toBeNull();
+      expect(document.activeElement).toBe(field);
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
       act(() => {
         vi.advanceTimersByTime(1100);
       });
-
-      const field = screen.getByTestId("shortcut-capture-field");
-      expect(field.getAttribute("data-recording")).toBeNull();
-      expect(document.activeElement).toBe(field);
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       expect(mockOnCancel).not.toHaveBeenCalled();
       expect(mockOnCapture).not.toHaveBeenCalled();
     });
 
     it("puts the earlier combo back when Tab leaves a re-record", () => {
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-          autoStart
-        />
-      );
+      renderArmed();
       press({ key: "k", code: "KeyK", ctrlKey: true });
       act(() => {
         vi.advanceTimersByTime(1100);
@@ -1242,27 +1251,25 @@ describe("SettingsShortcutCapture", () => {
 
       const save = screen.getByRole("button", { name: "Save" });
       expect(document.activeElement).toBe(save);
+      expect(mockOnCancel).not.toHaveBeenCalled();
       fireEvent.click(save);
       expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
     });
 
-    it("still records Tab when it carries Control", () => {
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-          autoStart
-        />
-      );
+    it.each([
+      ["Ctrl+Tab", { key: "Tab", ctrlKey: true }, "Cmd+Tab"],
+      ["Alt+Tab", { key: "Tab", altKey: true }, "Alt+Tab"],
+      ["bare Enter", { key: "Enter" }, "Enter"],
+    ])("still records %s as a first key", (_name, init, combo) => {
+      renderArmed();
 
-      press({ key: "Tab", code: "Tab", ctrlKey: true });
+      press({ code: init.key, ...init });
       act(() => {
         vi.advanceTimersByTime(1100);
       });
 
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+Tab");
+      expect(mockOnCapture).toHaveBeenCalledWith(combo);
     });
 
     it.each([
@@ -1272,22 +1279,14 @@ describe("SettingsShortcutCapture", () => {
     ])(
       "ends the second-key window on %s, keeping the first key and landing on Save",
       (_name, key, shiftKey) => {
-        render(
-          <SettingsShortcutCapture
-            onCapture={mockOnCapture}
-            onCancel={mockOnCancel}
-            excludeActionId="test.action"
-            autoStart
-          />
-        );
+        renderArmed();
 
         press({ key: "k", code: "KeyK", ctrlKey: true });
-        press({ key, code: key, shiftKey });
+        const ending = press({ key, code: key, shiftKey });
 
         const save = screen.getByRole("button", { name: "Save" });
-        expect(screen.getByTestId("shortcut-capture-field").getAttribute("data-recording")).toBe(
-          null
-        );
+        expect(ending.defaultPrevented).toBe(true);
+        expect(recording()).toBe(false);
         expect(document.activeElement).toBe(save);
 
         // The cancelled window must not fire later and replace the draft.
@@ -1299,21 +1298,135 @@ describe("SettingsShortcutCapture", () => {
       }
     );
 
-    it("still records a modified Enter as the second key of a chord", () => {
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-          autoStart
-        />
-      );
+    it.each([
+      ["Ctrl+Enter", { key: "Enter", ctrlKey: true }, "Cmd+k Cmd+Enter"],
+      ["Shift+Enter", { key: "Enter", shiftKey: true }, "Cmd+k Shift+Enter"],
+      ["Alt+Enter", { key: "Enter", altKey: true }, "Cmd+k Alt+Enter"],
+      ["Ctrl+Tab", { key: "Tab", ctrlKey: true }, "Cmd+k Cmd+Tab"],
+      ["Alt+Tab", { key: "Tab", altKey: true }, "Cmd+k Alt+Tab"],
+    ])("still records %s as the second key of a chord", (_name, init, combo) => {
+      renderArmed();
 
       press({ key: "k", code: "KeyK", ctrlKey: true });
-      press({ key: "Enter", code: "Enter", ctrlKey: true });
+      press({ code: init.key, ...init });
 
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k Cmd+Enter");
+      expect(mockOnCapture).toHaveBeenCalledWith(combo);
+    });
+
+    it.each(["Enter", "Tab"])(
+      "stays armed when %s ends the window on a refused first key, and the retry is fresh",
+      (key) => {
+        renderArmed({
+          validateCombo: (combo) => (combo === "Cmd+k" ? "Not this one" : null),
+        });
+
+        press({ key: "k", code: "KeyK", ctrlKey: true });
+        press({ key, code: key });
+
+        expect(recording()).toBe(true);
+        expect(screen.getByTestId("shortcut-capture-field").textContent).toContain("Try again");
+        expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+
+        // A retry that straddles the refused key's old deadline is not cut short by it.
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        press({ key: "j", code: "KeyJ", ctrlKey: true });
+        act(() => {
+          vi.advanceTimersByTime(600);
+        });
+        expect(recording()).toBe(true);
+        expect(screen.getByText(/Press second key or wait to finish/)).toBeTruthy();
+
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        expect(mockOnCapture).toHaveBeenCalledWith("Cmd+j");
+      }
+    );
+
+    it("drops a waiting first key on Escape, and its window never fires afterwards", () => {
+      renderArmed();
+
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      press({ key: "Escape", code: "Escape" });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(mockOnCancel).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      expect(mockOnCapture).not.toHaveBeenCalled();
+    });
+
+    it("keeps the earlier combo when Escape abandons a re-record mid-window", () => {
+      renderArmed();
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Record again" }));
+      press({ key: "j", code: "KeyJ", ctrlKey: true });
+      press({ key: "Escape", code: "Escape" });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(mockOnCancel).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
+    });
+
+    it("starts clean after a mid-window blur, without the old window cutting it short", () => {
+      renderArmed();
+
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(mockOnCancel).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Click to record shortcut" }));
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      press({ key: "j", code: "KeyJ", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(recording()).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+j");
+    });
+
+    it("finishes the second-key window even when its host hands it new callbacks mid-window", () => {
+      const { rerender } = renderArmed({ validateCombo: () => null });
+
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      // The settings list rebuilds its validator when an Unbind lands in the window.
+      rerender(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={() => mockOnCancel()}
+          excludeActionId="test.action"
+          autoStart
+          validateCombo={() => null}
+        />
+      );
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(recording()).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
     });
 
     it("keeps Control as its own modifier on macOS instead of dropping it", async () => {

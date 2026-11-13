@@ -304,6 +304,20 @@ describe("KeyboardShortcutsTab — failed reset all", () => {
     expect(loadOverrides).toHaveBeenCalledTimes(2); // mount + successful reset
   });
 
+  it("hands focus back to Reset all when the dialog is cancelled", async () => {
+    await renderTab();
+    const resetAll = screen.getByRole("button", { name: "Reset all" }) as HTMLButtonElement;
+    act(() => resetAll.focus());
+    await act(async () => resetAll.click());
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    await act(async () => cancel.click());
+
+    await waitFor(() => expect(document.activeElement).toBe(resetAll));
+    expect(resetAll.disabled).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("puts focus on search once a landed reset leaves Reset all with nothing to reset", async () => {
     dispatch.mockImplementation(async () => {
       overrides.clear();

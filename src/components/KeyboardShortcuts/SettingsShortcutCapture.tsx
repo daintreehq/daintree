@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
+import { useState, useEffect, useEffectEvent, useCallback, useId, useMemo, useRef } from "react";
 import { InlineError } from "@/components/ui/field";
 import { AlertTriangle } from "lucide-react";
 import { isMac } from "@/lib/platform";
@@ -198,26 +198,27 @@ export function SettingsShortcutCapture({
     }
   }, []);
 
-  const finishRecording = useCallback(
-    (combos: string[]) => {
-      clearChordTimeout();
-      chordTokenRef.current += 1;
-      pendingStepsRef.current = [];
-      setHeld([]);
-      const combo = combos.join(" ");
-      if (validateCombo?.(combo)) {
-        setRejected(combo);
-        setCapturedCombos([]);
-        setChordStep("first");
-        return;
-      }
-      setRejected(null);
-      setCapturedCombos(combos);
-      setRecording(false);
-      setChordStep("complete");
-    },
-    [clearChordTimeout, validateCombo]
-  );
+  // Effect events, so a new validator or onCancel (the settings list rebuilds both
+  // when an Unbind lands mid-window) never restarts the listener and kills the
+  // chord timer it armed.
+  const finishRecording = useEffectEvent((combos: string[]) => {
+    clearChordTimeout();
+    chordTokenRef.current += 1;
+    pendingStepsRef.current = [];
+    setHeld([]);
+    const combo = combos.join(" ");
+    if (validateCombo?.(combo)) {
+      setRejected(combo);
+      setCapturedCombos([]);
+      setChordStep("first");
+      return;
+    }
+    setRejected(null);
+    setCapturedCombos(combos);
+    setRecording(false);
+    setChordStep("complete");
+  });
+  const cancelRecording = useEffectEvent(() => onCancel());
 
   useEffect(() => {
     if (!recording) return;
@@ -254,7 +255,7 @@ export function SettingsShortcutCapture({
           setFocusRequest((n) => n + 1);
         } else {
           setCapturedCombos([]);
-          onCancel();
+          cancelRecording();
         }
         return;
       }
@@ -347,7 +348,7 @@ export function SettingsShortcutCapture({
       setChordStep("first");
       setHeld([]);
       setRejected(null);
-      onCancel();
+      cancelRecording();
     };
 
     window.addEventListener("keydown", handler, { capture: true });
@@ -360,7 +361,7 @@ export function SettingsShortcutCapture({
       clearChordTimeout();
       releaseCapture();
     };
-  }, [recording, singleStroke, clearChordTimeout, finishRecording, onCancel]);
+  }, [recording, singleStroke, clearChordTimeout]);
 
   // Land on Save once a combo is in, so Enter commits it; a combo that fails
   // validation has no Save to land on and keeps focus where it was.
