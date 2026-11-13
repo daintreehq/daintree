@@ -99,8 +99,22 @@ describe("resendLastComposerSend (#16746)", () => {
     }
   });
 
-  it.each(["claude", "antigravity"])("goes at once to a working %s pane", async (agentId) => {
-    pane({ agentState: "working", detectedAgentId: agentId });
+  it.each(["claude", "antigravity"])(
+    "goes at once to a working %s pane once main sees no dialog",
+    async (agentId) => {
+      pane({ agentState: "working", detectedAgentId: agentId });
+      noteLastComposerSend("t1", "and then", [], claimComposerSendSeq());
+      holdClient.hold.mockResolvedValue({ held: false, reason: "not-busy" });
+
+      await expect(resendLastComposerSend("t1")).resolves.toBe(true);
+
+      expect(holdClient.hold).toHaveBeenCalledWith("t1", "and then", undefined);
+      expect(client.submit).toHaveBeenCalledWith("t1", "and then");
+    }
+  );
+
+  it("goes at once to a pane at its prompt without asking main", async () => {
+    pane({ agentState: "waiting", waitingReason: "prompt", detectedAgentId: "claude" });
     noteLastComposerSend("t1", "and then", [], claimComposerSendSeq());
 
     await expect(resendLastComposerSend("t1")).resolves.toBe(true);

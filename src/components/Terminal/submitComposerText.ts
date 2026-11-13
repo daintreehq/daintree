@@ -47,7 +47,7 @@ export function submitComposerText(
 export interface PaneComposerHold {
   /** The pane already holds a send: another is refused, never sent ahead of it. */
   isHolding: () => boolean;
-  /** The pane was last seen at a choice dialog, or mid-turn in a CLI with no input line then. */
+  /** Main is asked: the pane was last seen at a choice dialog, or with its agent working. */
   mayHold: () => boolean;
   onHeld: (send: HeldComposerSend) => void;
   onRefused: () => void;

@@ -31,11 +31,13 @@ describe("paneComposerHold.mayHold (#16872)", () => {
     expect(paneComposerHold("t1").mayHold()).toBe(true);
   });
 
-  it("sends at once to a working agent whose CLI keeps its input line up", () => {
+  it("asks main about a working agent, whose turn may have opened a dialog since", () => {
     for (const agentId of ["claude", "codex", "antigravity", "gemini"]) {
       setPanel({ detectedAgentId: agentId, agentState: "working" });
-      expect(paneComposerHold("t1").mayHold()).toBe(false);
+      expect(paneComposerHold("t1").mayHold()).toBe(true);
     }
+    setPanel({ detectedAgentId: undefined, agentState: "working" });
+    expect(paneComposerHold("t1").mayHold()).toBe(false);
   });
 
   it("sends at once at a prose question, a prompt, idle, in a shell, and with no panel", () => {

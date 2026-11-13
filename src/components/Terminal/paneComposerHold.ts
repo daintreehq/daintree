@@ -8,7 +8,8 @@ import type { PaneComposerHold } from "./submitComposerText";
  * A pane's hold, read from the stores as the text goes: a choice dialog on
  * screen, or a turn in a CLI known to take down its input line, keeps it for
  * the pane's next prompt rather than lose it (#16379, #16872); main has the
- * last word.
+ * last word. A working agent asks main too, since a dialog opened by its turn
+ * may not have reached this view yet; main sends it at once if none did.
  */
 export function paneComposerHold(id: string): PaneComposerHold {
   return {
@@ -16,6 +17,7 @@ export function paneComposerHold(id: string): PaneComposerHold {
     mayHold: () => {
       const panel = usePanelStore.getState().panelsById[id];
       if (!panel || !isPtyPanel(panel)) return false;
+      if (panel.detectedAgentId !== undefined && panel.agentState === "working") return true;
       return (
         composerSendHoldCause({
           detectedAgentId: panel.detectedAgentId,
