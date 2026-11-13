@@ -81,6 +81,8 @@ function visibleInventoryHeight(el: HTMLElement | null): number | null {
 interface RecipeManagerProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Forwarded to {@link AppDialog.onCloseComplete}: the manager has closed and handed focus back. */
+  onCloseComplete?: () => void;
   onEditRecipe: (recipe: TerminalRecipe) => void;
   onCreateRecipe: (scope: "global" | "project") => void;
 }
@@ -88,6 +90,7 @@ interface RecipeManagerProps {
 export function RecipeManager({
   isOpen,
   onClose,
+  onCloseComplete,
   onEditRecipe,
   onCreateRecipe,
 }: RecipeManagerProps) {
@@ -665,7 +668,7 @@ export function RecipeManager({
 
   return (
     <>
-      <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+      <AppDialog isOpen={isOpen} onClose={onClose} onCloseComplete={onCloseComplete} size="lg">
         <AppDialog.Header>
           <AppDialog.Title icon={<Workflow />}>Recipe manager</AppDialog.Title>
           <AppDialog.CloseButton />

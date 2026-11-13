@@ -137,6 +137,7 @@ function ProjectDialogHost() {
     isRecipeManagerOpen,
     handleCloseRecipeEditor,
     handleCloseRecipeManager,
+    handleRecipeManagerCloseComplete,
     handleRecipeManagerEdit,
     handleRecipeManagerCreate,
   } = useRecipeDialogState();
@@ -188,6 +189,7 @@ function ProjectDialogHost() {
             <LazyRecipeManager
               isOpen={isRecipeManagerOpen}
               onClose={handleCloseRecipeManager}
+              onCloseComplete={handleRecipeManagerCloseComplete}
               onEditRecipe={handleRecipeManagerEdit}
               onCreateRecipe={handleRecipeManagerCreate}
             />
