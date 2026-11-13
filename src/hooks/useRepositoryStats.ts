@@ -413,6 +413,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
       const shouldPreserve =
         repoStats.stale === true || repoStats.error !== undefined || providerLessWhileResolved;
+      // A split result says whether the issues provider's half was read cleanly
+      // (#16944): its count is an observation even when the code forge's half
+      // failed, so it neither falls back to an older count nor is skipped as
+      // the baseline a later failure falls back to.
+      const issueObserved = repoStats.issueStale === false;
 
       if (!shouldPreserve) {
         // Fresh successful data — record the confirmed counts so a later
@@ -440,6 +445,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         if (repoStats.prCount !== null) {
           markCountStale(opts.projectPath, "pr", repoStats.prCount);
         }
+      } else if (issueObserved && repoStats.issueCount !== null) {
+        lastKnownCountsRef.current.issueCount = repoStats.issueCount;
+        markCountStale(opts.projectPath, "issue", repoStats.issueCount);
       }
 
       // Apply preservation: use preserved counts only when data is stale/errored
@@ -452,6 +460,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         ...repoStats,
         issueCount:
           shouldPreserve &&
+          !issueObserved &&
           (repoStats.issueCount === null || repoStats.issueCount === 0) &&
           lastKnownCountsRef.current.issueCount !== null
             ? lastKnownCountsRef.current.issueCount
@@ -860,6 +869,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           setError(errorMessage);
           lastErrorRef.current = errorMessage;
           recordPollFailure();
+          // A thrown fetch read neither half, so a split result's word that the
+          // issues provider answered cleanly no longer dates its count (#16944).
+          const host = hostStatsRef.current;
+          if (host?.issueStale === false) hostStatsRef.current = { ...host, issueStale: undefined };
+          setStats((prev) =>
+            prev?.issueStale === false ? { ...prev, issueStale: undefined } : prev
+          );
         }
       } finally {
         if (mountedRef.current) {

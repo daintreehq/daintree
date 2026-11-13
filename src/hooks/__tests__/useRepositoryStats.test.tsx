@@ -239,6 +239,59 @@ describe("useRepositoryStats", () => {
     }
   });
 
+  describe("issues bound to another tracker (#16944)", () => {
+    const fresh: ForgeRepositoryStats = {
+      commitCount: 5,
+      issueCount: 3,
+      prCount: 1,
+      loading: false,
+      stale: false,
+      lastUpdated: 1000,
+      issueStale: false,
+    };
+
+    beforeEach(() => {
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+    });
+
+    it("takes the tracker's clean count even when the code forge's half failed", async () => {
+      getRepoStatsMock.mockResolvedValueOnce(fresh).mockResolvedValueOnce({
+        ...fresh,
+        issueCount: 0,
+        stale: true,
+        error: "Cannot reach GitHub. Check your internet connection.",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.issueCount).toBe(3));
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(0);
+      expect(result.current.stats?.issueStale).toBe(false);
+    });
+
+    it("stops calling the tracker's count fresh once a fetch throws", async () => {
+      getRepoStatsMock
+        .mockResolvedValueOnce(fresh)
+        .mockRejectedValueOnce(new Error("IPC channel closed"));
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.issueStale).toBe(false));
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.error).toBe("IPC channel closed");
+      expect(result.current.stats?.issueCount).toBe(3);
+      expect(result.current.stats?.issueStale).toBeUndefined();
+    });
+  });
+
   it("force-fetches when daintree:refresh-sidebar event is dispatched", async () => {
     const project = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockResolvedValue(project);
