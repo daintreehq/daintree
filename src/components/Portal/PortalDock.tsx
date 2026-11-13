@@ -256,7 +256,6 @@ export function PortalDock() {
     }
   }, []);
 
-
   const handleDuplicateTab = useCallback(
     async (tabId: string) => {
       if (isSwitching) return;

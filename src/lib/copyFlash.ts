@@ -102,7 +102,13 @@ export function captureCopyFlashAt(element: Element | null): CopyFlashTicket {
   const rect = element?.getBoundingClientRect();
   if (!rect || (rect.width === 0 && rect.height === 0)) return captureCopyFlash();
   return {
-    origin: { kind: "rect", left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+    origin: {
+      kind: "rect",
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    },
     generation,
   };
 }
