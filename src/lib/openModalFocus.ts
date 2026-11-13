@@ -54,7 +54,7 @@ function isOpenModal(surface: HTMLElement, closing: Element | null): boolean {
  */
 function layerOf(surface: HTMLElement): number {
   let z = 0;
-  for (let node: HTMLElement | null = surface; node && node !== document.body; ) {
+  for (let node: HTMLElement | null = surface; node && node !== document.body;) {
     const value = Number.parseInt(getComputedStyle(node).zIndex, 10);
     if (!Number.isNaN(value)) z = value;
     node = node.parentElement;

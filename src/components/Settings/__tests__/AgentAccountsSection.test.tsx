@@ -271,7 +271,9 @@ describe("AgentAccountsSection (#16040)", () => {
       await waitFor(() => expect(document.activeElement).toBe(headingAdd));
 
       await act(async () => finishSave());
-      view.rerender(<AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [] }} />);
+      view.rerender(
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [] }} />
+      );
 
       const emptyRowAdd = screen.getByRole("button", { name: "Add account" });
       expect(emptyRowAdd).not.toBe(headingAdd);
