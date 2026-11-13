@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { createPortal } from "react-dom";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, screen, act, waitFor, within } from "@testing-library/react";
 
@@ -44,9 +45,18 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
   ),
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="fleet-selection-menu">{children}</div>
-  ),
+  // Portalled like the real one, keeping its data attributes, so focus in the
+  // menu is outside the ribbon's own DOM.
+  DropdownMenuContent: ({ children, ...props }: { children: React.ReactNode }) =>
+    createPortal(
+      <div
+        data-testid="fleet-selection-menu"
+        {...Object.fromEntries(Object.entries(props).filter(([key]) => key.startsWith("data-")))}
+      >
+        {children}
+      </div>,
+      document.body
+    ),
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -60,6 +70,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   }) => (
     <div
       role="menuitem"
+      tabIndex={-1}
       data-disabled={disabled ? "true" : undefined}
       data-destructive={destructive ? "true" : undefined}
       onClick={(e) => {
@@ -2462,15 +2473,25 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
     for (const dispose of disposers.splice(0)) dispose();
   });
 
+  function outsideButton(): HTMLButtonElement {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    disposers.push(() => button.remove());
+    return button;
+  }
+
   it("hands the keyboard to the pane Exit selects, even one already selected", async () => {
     seed([makeAgent("a"), makeAgent("b")]);
     useFleetArmingStore.getState().armIds(["a", "b"]);
     const target = useFleetArmingStore.getState().lastArmedId!;
     usePanelStore.setState({ focusedId: target });
     const input = paneInput(target);
+    // Where focus came from loses to the pane for a fleet with panes here.
+    const opener = outsideButton();
     render(<FleetArmingRibbon />);
 
     const exit = screen.getByTestId("fleet-exit");
+    opener.focus();
     exit.focus();
     fireEvent.click(exit);
     await flushMicrotasks();
@@ -2486,8 +2507,10 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
     const input = paneInput("a");
     render(<FleetArmingRibbon />);
 
-    screen.getByTestId("fleet-selection-menu-trigger").focus();
-    fireEvent.click(screen.getByText("Clear selection"));
+    const item = screen.getByText("Clear selection").closest<HTMLElement>('[role="menuitem"]')!;
+    expect(screen.getByTestId("fleet-arming-ribbon").contains(item)).toBe(false);
+    item.focus();
+    fireEvent.click(item);
     await flushMicrotasks();
 
     expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
@@ -2499,16 +2522,14 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
     useFleetArmingStore.getState().armIds(["a", "b"]);
     usePanelStore.setState({ focusedId: "a" });
     paneInput("a");
-    const elsewhere = document.createElement("button");
-    document.body.appendChild(elsewhere);
-    disposers.push(() => elsewhere.remove());
+    const elsewhere = outsideButton();
     render(<FleetArmingRibbon />);
 
     screen.getByTestId("fleet-exit").focus();
-    act(() => {
-      useFleetArmingStore.getState().clear();
-      elsewhere.focus();
-    });
+    act(() => useFleetArmingStore.getState().clear());
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    // Taken before the hand-off runs.
+    elsewhere.focus();
     await flushMicrotasks();
 
     expect(document.activeElement).toBe(elsewhere);
@@ -2559,11 +2580,27 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
 
     const row = screen.getByLabelText("Focus a (primary)");
     row.focus();
-    fireEvent.click(row);
+    fireEvent.click(row, { detail: 1 });
 
     await waitFor(() => expect(document.activeElement).toBe(input));
     expect(screen.queryByTestId("fleet-armed-list")).toBeNull();
-    expect(usePanelStore.getState().focusedId).toBe("a");
+  });
+
+  it("puts the keyboard in another pane when its row is clicked", async () => {
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    usePanelStore.setState({ focusedId: "a" });
+    paneInput("a");
+    const input = paneInput("b");
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const row = screen.getByLabelText("Focus b");
+    row.focus();
+    fireEvent.click(row, { detail: 1 });
+
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(usePanelStore.getState().focusedId).toBe("b");
   });
 
   it("hands a fleet of other hosts' agents back to where focus came from, not a pane", async () => {
@@ -2579,9 +2616,7 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
         title: `Claude ${terminalId}`,
       });
     }
-    const opener = document.createElement("button");
-    document.body.appendChild(opener);
-    disposers.push(() => opener.remove());
+    const opener = outsideButton();
     render(<FleetArmingRibbon />);
 
     const exit = screen.getByTestId("fleet-exit");
@@ -2591,5 +2626,63 @@ describe("FleetArmingRibbon — focus when fleet controls go away (#16904)", () 
     await flushMicrotasks();
 
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("walks the Disarm buttons of other hosts' agents and still returns where focus came from", async () => {
+    usePanelStore.setState({ focusedId: "a" });
+    seed([makeAgent("a")]);
+    paneInput("a");
+    for (const terminalId of ["t1", "t2"]) {
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: `host-fleet:studio-01:${terminalId}`,
+        hostId: "studio-01",
+        hostName: "studio-01",
+        terminalId,
+        title: `Claude ${terminalId}`,
+      });
+    }
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    const chip = screen.getByTestId("fleet-armed-count-chip");
+    opener.focus();
+    chip.focus();
+    fireEvent.click(chip);
+    const first = screen.getByLabelText("Disarm Claude t1 on studio-01");
+    first.focus();
+    fireEvent.click(first);
+    // Moving within the list is not where focus came from.
+    const second = screen.getByLabelText("Disarm Claude t2 on studio-01");
+    expect(document.activeElement).toBe(second);
+    fireEvent.click(second);
+    await flushMicrotasks();
+
+    expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves focus alone when the fleet gains its first pane here", async () => {
+    seed([makeAgent("a")]);
+    usePanelStore.setState({ focusedId: "a" });
+    paneInput("a");
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: "host-fleet:studio-01:t1",
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude t1",
+    });
+    const opener = outsideButton();
+    render(<FleetArmingRibbon />);
+
+    opener.focus();
+    screen.getByTestId("fleet-exit").focus();
+    act(() => useFleetArmingStore.getState().armId("a"));
+    expect(screen.getByTestId("fleet-arming-ribbon")).toBeTruthy();
+    (document.activeElement as HTMLElement).blur();
+    await flushMicrotasks();
+
+    // The ribbon stayed: nothing hands focus anywhere.
+    expect(document.activeElement).toBe(document.body);
   });
 });

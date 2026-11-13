@@ -257,18 +257,15 @@ export function FleetCountChip({
   );
 
   // A row's Disarm button leaves with its row, so the keyboard moves on to the
-  // next row's, the previous one's, or "Add terminals…" once none is left. When
-  // the ribbon goes with it, the ribbon hands focus on from there.
+  // next row's, or the previous one's. The last one empties the fleet, and the
+  // ribbon hands focus on as it goes.
   const disarmFromRow = (event: React.MouseEvent<HTMLButtonElement>, key: string) => {
     const button = event.currentTarget;
     const list = button.closest<HTMLElement>("[data-fleet-armed-list]");
     if (list && button.contains(document.activeElement)) {
       const buttons = [...list.querySelectorAll<HTMLElement>("[data-fleet-disarm]")];
       const index = buttons.indexOf(button);
-      const next =
-        buttons[index + 1] ??
-        buttons[index - 1] ??
-        list.querySelector<HTMLElement>("[data-fleet-add-terminals]");
+      const next = buttons[index + 1] ?? buttons[index - 1];
       // A click moves on without a ring; the keyboard keeps its own.
       next?.focus({ preventScroll: true, ...(event.detail > 0 && { focusVisible: false }) });
     }
@@ -572,7 +569,6 @@ export function FleetCountChip({
                 size="sm"
                 onClick={() => setPopoverMode("picker")}
                 data-testid="fleet-armed-list-add-panes"
-                data-fleet-add-terminals=""
                 className="w-full justify-start gap-2 px-2 focus-visible:-outline-offset-2"
               >
                 <Plus aria-hidden="true" />

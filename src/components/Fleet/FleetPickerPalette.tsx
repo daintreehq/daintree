@@ -63,11 +63,15 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const manageDialog = useRetainedDialog();
   // What opened the palette, for the dialog it hands over to: the palette's
   // own restore is skipped for that hand-off, and the control that opened the
-  // dialog leaves with the palette. Read before the palette takes focus.
+  // dialog leaves with the palette. Read before the palette takes focus; a
+  // reopen before the last close finished still has focus in the palette, and
+  // keeps the opener it had.
   const paletteOpenerRef = useRef<HTMLElement | null>(null);
+  const paletteBodyRef = useRef<HTMLDivElement>(null);
   useInsertionEffect(() => {
     if (!isOpen) return;
     const el = document.activeElement;
+    if (el && paletteBodyRef.current?.contains(el)) return;
     paletteOpenerRef.current = el instanceof HTMLElement ? el : null;
   }, [isOpen]);
 
@@ -272,7 +276,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
         ariaLabel="Select terminals to arm"
         tier="command"
       >
-        <div className="flex flex-col">
+        <div ref={paletteBodyRef} className="flex flex-col">
           <div
             className={cn(
               "flex items-center gap-2 px-4 py-3 border-b border-border-default",

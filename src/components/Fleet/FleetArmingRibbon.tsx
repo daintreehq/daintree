@@ -279,10 +279,17 @@ const RIBBON_LAYER_SELECTOR = "[data-fleet-ribbon-layer]";
  * layers are still in the document, so it can tell whether they owned it.
  */
 function ReturnFocusOnRemoval({ paneFirst }: { paneFirst: boolean }): null {
+  // Read at removal, not baked into the effect: a fleet gaining or losing its
+  // panes here is not the ribbon going away.
+  const paneFirstRef = useRef(paneFirst);
+  useLayoutEffect(() => {
+    paneFirstRef.current = paneFirst;
+  }, [paneFirst]);
   useLayoutEffect(() => {
     return () => {
       if (!document.activeElement?.closest(RIBBON_LAYER_SELECTOR)) return;
       const back = focusBeforeRibbon;
+      const paneFirst = paneFirstRef.current;
       queueMicrotask(() => {
         // Focus that already landed somewhere is left where it is.
         if (document.activeElement !== document.body && document.activeElement !== null) return;
@@ -302,7 +309,7 @@ function ReturnFocusOnRemoval({ paneFirst }: { paneFirst: boolean }): null {
         }
       });
     };
-  }, [paneFirst]);
+  }, []);
   return null;
 }
 
@@ -859,8 +866,10 @@ export function FleetArmingRibbon(): ReactElement | null {
             tabIndex={-1}
             onKeyDown={handleRibbonKeyDown}
             onFocus={(e) => {
+              // Focus moving within the member list or menu reaches here through
+              // their portals too; only focus arriving from outside them counts.
               const from = e.relatedTarget;
-              if (from instanceof HTMLElement && !e.currentTarget.contains(from)) {
+              if (from instanceof HTMLElement && !from.closest(RIBBON_LAYER_SELECTOR)) {
                 focusBeforeRibbon = from;
               }
             }}
