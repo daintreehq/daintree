@@ -401,7 +401,10 @@ export function useWorktreeSidebarKeyboard({
     const onDocumentKeyDown = (e: KeyboardEvent) => {
       if (!e.repeat) pointerPressed = false;
     };
-    const onKeyDownCapture = () => {
+    const onKeyDownCapture = (e: KeyboardEvent) => {
+      // A key held through the click repeats on the grid the click focused,
+      // and says nothing of the keyboard.
+      if (e.repeat) return;
       pointerPressed = false;
       if (document.activeElement === grid) setGridHasFocus(true);
     };

@@ -174,6 +174,17 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor after a pointer press",
     expect(grid.dataset.cursorId).toBe("");
   });
 
+  it("keeps the press when a key held through the click repeats on the grid it focused", () => {
+    const { getByTestId } = render(<Harness />);
+    const grid = getByTestId("grid");
+
+    fireEvent.pointerDown(grid);
+    focus(grid);
+    fireEvent.keyDown(grid, { key: "Shift", repeat: true });
+
+    expect(grid.dataset.cursorId).toBe("");
+  });
+
   it("keeps focus in the search field when only headers are listed", () => {
     const { getByTestId } = render(<Harness items={[{ kind: "header" }, { kind: "header" }]} />);
     const grid = getByTestId("grid");
