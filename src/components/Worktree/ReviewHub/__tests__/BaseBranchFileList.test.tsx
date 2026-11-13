@@ -220,9 +220,7 @@ describe("BaseBranchFileList keyboard rows (#16895)", () => {
       expect(scrollToIndexMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ index: last - 1 })
       );
-      expect(document.activeElement).toBe(
-        row(`file-${String(last - 1).padStart(3, "0")}.ts`)
-      );
+      expect(document.activeElement).toBe(row(`file-${String(last - 1).padStart(3, "0")}.ts`));
     });
 
     it("never takes focus back once the user has left the list", () => {
