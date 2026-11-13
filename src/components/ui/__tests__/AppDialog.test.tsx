@@ -189,6 +189,22 @@ describe("AppDialog focus trapping", () => {
     expect(document.activeElement).toBe(firstButton);
   });
 
+  it("leaves focus on the last element when what has focus already took the Tab", async () => {
+    renderDialog();
+    await act(() => vi.runAllTimersAsync());
+
+    const buttons = screen.getAllByRole("button");
+    const lastButton = buttons[buttons.length - 1]!;
+    lastButton.focus();
+    lastButton.addEventListener("keydown", (e) => e.preventDefault());
+
+    lastButton.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+    );
+
+    expect(document.activeElement).toBe(lastButton);
+  });
+
   it("wraps focus from the last visible element when hidden tabbables follow it", async () => {
     renderDialog({
       children: (

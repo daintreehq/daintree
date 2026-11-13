@@ -249,6 +249,12 @@ export interface AutocompleteMenuProps {
    * pointer cannot steal the cursor from the keys.
    */
   onHoverIndex?: (index: number) => void;
+  /**
+   * `above` rises from the bottom of what it sits in (a composer's shell);
+   * `below` drops from wherever the caller's `style.top` puts it. The caller
+   * may also pin an `above` menu's bottom through `style.bottom`.
+   */
+  side?: "above" | "below";
   style?: React.CSSProperties;
   /**
    * The listbox's DOM id. The composer's editor is the combobox and names this
@@ -276,6 +282,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       staleKeys,
       onSelect,
       onHoverIndex,
+      side = "above",
       style,
       listboxId,
       title,
@@ -360,15 +367,20 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         className={cn(
           // A column, so a height the caller caps (`maxHeight`) is taken from
           // the list, which scrolls, never from the header.
-          "absolute bottom-full mb-0 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
-          "z-50 origin-bottom",
+          "absolute mb-0 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
+          "z-50",
+          side === "above" ? "bottom-full origin-bottom" : "origin-top",
           // Reduced motion keeps the fade and drops the rise. The hook, not a
           // `motion-reduce:` class: it also answers the app's own "Reduce UI
           // animations" setting and performance mode, which the class can't.
           skipMotion ? "transition-opacity" : "transition-[opacity,translate,scale]",
           isVisible
             ? "opacity-100 translate-y-0 scale-100"
-            : cn("opacity-0", !skipMotion && "translate-y-0.5 scale-[0.99]")
+            : cn(
+                "opacity-0",
+                !skipMotion && "scale-[0.99]",
+                !skipMotion && (side === "above" ? "translate-y-0.5" : "-translate-y-0.5")
+              )
         )}
         style={{
           ...style,

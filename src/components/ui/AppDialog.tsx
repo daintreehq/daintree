@@ -662,6 +662,9 @@ export function AppDialog({
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {
+      // Taken by what has focus (the composer accepting a completion): the
+      // browser won't move focus, so there is nothing to wrap.
+      if (e.defaultPrevented) return;
       // Don't interfere if another modal (e.g., a nested dialog portal) has focus
       const activeEl = document.activeElement;
       if (activeEl) {

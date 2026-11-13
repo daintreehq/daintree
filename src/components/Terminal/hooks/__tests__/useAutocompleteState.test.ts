@@ -20,12 +20,16 @@ describe("useAutocompleteState", () => {
   let setActiveCompletionContext: ReturnType<typeof vi.fn<Props["setActiveCompletionContext"]>>;
   let lastQueryRef: { current: string };
   let rootRef: { current: HTMLDivElement | null };
+  let menuRef: { current: HTMLElement | null };
+  let modalEditorHostRef: { current: HTMLElement | null };
 
   beforeEach(() => {
     setSelectedIndex = vi.fn<Props["setSelectedIndex"]>();
     setActiveCompletionContext = vi.fn<Props["setActiveCompletionContext"]>();
     lastQueryRef = { current: "" };
     rootRef = { current: document.createElement("div") };
+    menuRef = { current: null };
+    modalEditorHostRef = { current: null };
   });
 
   function base(overrides: Partial<Props> = {}): Props {
@@ -34,6 +38,8 @@ describe("useAutocompleteState", () => {
       activeCompletionContext: null,
       autocompleteItems: [],
       rootRef: rootRef as Props["rootRef"],
+      menuRef: menuRef as Props["menuRef"],
+      modalEditorHostRef: modalEditorHostRef as Props["modalEditorHostRef"],
       selectedIndex: 0,
       setSelectedIndex,
       lastQueryRef: lastQueryRef as Props["lastQueryRef"],
@@ -306,6 +312,33 @@ describe("useAutocompleteState", () => {
       });
 
       expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    });
+
+    // The Expanded Editor's dialog is portalled out of the composer's root,
+    // with the editor and the menu in it.
+    it("keeps the context for a press in the portalled menu or editor host", () => {
+      const dialog = document.createElement("div");
+      menuRef.current = document.createElement("div");
+      modalEditorHostRef.current = document.createElement("div");
+      const row = document.createElement("button");
+      menuRef.current.appendChild(row);
+      dialog.append(menuRef.current, modalEditorHostRef.current);
+      document.body.appendChild(dialog);
+      render(base({ isAutocompleteOpen: true }));
+
+      act(() => {
+        row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        modalEditorHostRef.current!.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true })
+        );
+      });
+      expect(setActiveCompletionContext).not.toHaveBeenCalled();
+
+      act(() => {
+        dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      });
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      dialog.remove();
     });
   });
 });

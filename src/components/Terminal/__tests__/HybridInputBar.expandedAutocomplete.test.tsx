@@ -178,6 +178,20 @@ describe("HybridInputBar completions in the Expanded Editor", () => {
     expect(dialog().contains(view.dom)).toBe(true);
   });
 
+  // The editor is the dialog's last tab stop, where its focus trap wraps Tab
+  // round to the first: a Tab the menu took is not one to wrap.
+  it("completes on Tab and keeps the caret in the editor", async () => {
+    const { view, type, openExpandedEditor, press } = await mount();
+    await openExpandedEditor();
+    await type("@dif");
+    view.contentDOM.focus();
+
+    await press("Tab");
+
+    expect(view.state.doc.toString()).toMatch(/^@diff/);
+    expect(document.activeElement).toBe(view.contentDOM);
+  });
+
   it("keeps the menu open when the editor itself is pressed", async () => {
     const { view, type, openExpandedEditor } = await mount();
     await openExpandedEditor();
