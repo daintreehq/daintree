@@ -56,6 +56,7 @@ import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNe
 import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
 import { progressReducer, getStageLabel } from "./bulkCreateReducer";
 import {
+  collectGitHubIssueNumbers,
   planIssueWorktrees,
   planPRWorktrees,
   isTransientError,
@@ -411,11 +412,7 @@ export function BulkCreateWorktreeDialog({
       }
       return planPRWorktrees(selectedPRs, existingPRNumbers);
     }
-    const existingIssueNumbers = new Set<number>();
-    for (const wt of worktreeMap.values()) {
-      if (wt.issueNumber) existingIssueNumbers.add(wt.issueNumber);
-    }
-    return planIssueWorktrees(selectedIssues, existingIssueNumbers);
+    return planIssueWorktrees(selectedIssues, collectGitHubIssueNumbers(worktreeMap.values()));
   }, [mode, selectedIssues, selectedPRs, worktreeMap]);
   // Frozen at Create. Each worktree the run lands makes the live plan read its
   // item as "Has worktree" with no branch, which would shift the counts mid-run
