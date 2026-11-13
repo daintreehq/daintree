@@ -67,6 +67,7 @@ import {
   admitRestoredPluginLaunches,
   attachPluginLaunchPersistence,
   forgetPluginLaunches,
+  recordRemotePluginLaunch,
   type PluginLaunchPersistence,
   type StoredPluginLaunch,
 } from "../pluginLaunchedAgents.js";
@@ -726,5 +727,147 @@ describe("host.agents input after Daintree restarts (#16240)", () => {
     admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
     const other = createHost(h.deps, OTHER_PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
     await expect(other.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+});
+
+describe("host.agents.list says which panes the plugin launched (#16845)", () => {
+  const pane = (terminalId: string, extra: Record<string, unknown> = {}) => ({
+    terminalId,
+    title: terminalId,
+    agentId: "claude",
+    worktree: null,
+    isFocused: false,
+    canDraft: true,
+    ...extra,
+  });
+
+  /** A view listing `panes`, the terminals of `hostId`'s machine. */
+  function listingHarness(panes: ReturnType<typeof pane>[], hostId = "local"): Harness {
+    const h = makeHarness();
+    for (const id of [PLUGIN_ID, OTHER_PLUGIN_ID]) {
+      h.capabilities.set(id, new Set(["agent:input", "agent:read", "project:dispatch"]));
+    }
+    (h.deps.dispatcher as unknown as Record<string, unknown>).sendAgentsListWithHost = vi.fn(
+      async () => ({ hostId, agents: panes })
+    );
+    return h;
+  }
+
+  const launchedIds = async (h: Harness, pluginId = PLUGIN_ID, binding?: PluginHostBinding) =>
+    (await createHost(h.deps, pluginId, binding ?? UNBOUND_PLUGIN_HOST_BINDING).host.agents.list())
+      .filter((p) => p.launchedByThisPlugin)
+      .map((p) => p.terminalId);
+
+  afterEach(() => {
+    _resetPluginLaunchesForTests();
+  });
+
+  it("marks only the agents this plugin's own launch started", async () => {
+    const h = listingHarness([pane("t-1"), pane("t-2"), pane("t-user")]);
+    await launch(h, { result: launchResult("t-1") });
+    await launch(h, { pluginId: OTHER_PLUGIN_ID, result: launchResult("t-2") });
+    terminals.set("t-user", agent());
+
+    const listed = await hostFor(h).agents.list();
+    expect(listed.map((p) => [p.terminalId, p.launchedByThisPlugin])).toEqual([
+      ["t-1", true],
+      ["t-2", false],
+      ["t-user", false],
+    ]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual(["t-2"]);
+  });
+
+  it("answers from main's record, whatever the view's answer claims", async () => {
+    const h = listingHarness([
+      pane("t-1", { launchedByThisPlugin: false }),
+      pane("t-user", { launchedByThisPlugin: true }),
+    ]);
+    await launch(h);
+    terminals.set("t-user", agent());
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+  });
+
+  it("drops a launch whose pane turned up outside the project the launch was sent to", async () => {
+    const h = listingHarness([pane("t-1")]);
+    grantMock.hasGrant.mockReturnValue(true);
+    await launch(h, {
+      options: { projectId: OTHER_PROJECT_ID },
+      terminal: agent({ projectId: OTHER_PROJECT_ID }),
+    });
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+
+    terminals.set("t-1", agent());
+    await expect(launchedIds(h)).resolves.toEqual([]);
+    await expect(hostFor(h).agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("keeps a bound plugin to its own project, whatever its launch recorded", async () => {
+    const h = listingHarness([pane("t-1")]);
+    // An ambient launch records no project, so only the binding can refuse.
+    await launch(h);
+    h.plugins.set(PLUGIN_ID, loaded(PLUGIN_ID, BOUND));
+    await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual(["t-1"]);
+
+    terminals.set("t-1", agent({ projectId: OTHER_PROJECT_ID }));
+    await expect(launchedIds(h, PLUGIN_ID, BOUND)).resolves.toEqual([]);
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+  });
+
+  describe("a view of a Remote Host's project", () => {
+    const HOST_ID = "studio-1";
+
+    it("marks what this plugin launched on that host, as interrupt with its hostId reaches", async () => {
+      const h = listingHarness([pane("t-1"), pane("t-2"), pane("t-3")], HOST_ID);
+      recordRemotePluginLaunch(PLUGIN_ID, HOST_ID, "agent.launch", {}, launchResult("t-1"));
+      recordRemotePluginLaunch(OTHER_PLUGIN_ID, HOST_ID, "agent.launch", {}, launchResult("t-2"));
+      recordRemotePluginLaunch(PLUGIN_ID, "studio-2", "agent.launch", {}, launchResult("t-3"));
+      await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+    });
+
+    it("never reads this machine's record for that host's terminal ids", async () => {
+      const h = listingHarness([pane("t-1")], HOST_ID);
+      await launch(h);
+      await expect(launchedIds(h)).resolves.toEqual([]);
+    });
+  });
+
+  it("marks a pane restored under its launch id once main's hydrate hands it back", async () => {
+    let disk: Record<string, StoredPluginLaunch> | undefined;
+    const persistence: PluginLaunchPersistence = {
+      load: () => disk,
+      save: (records) => {
+        disk = structuredClone(records);
+      },
+    };
+    attachPluginLaunchPersistence(persistence);
+    const h = listingHarness([pane("t-1")]);
+    await launch(h);
+
+    _resetPluginLaunchesForTests();
+    attachPluginLaunchPersistence(persistence);
+    await expect(launchedIds(h)).resolves.toEqual([]);
+
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual([]);
+  });
+
+  it("marks nothing once the plugin's launches are forgotten", async () => {
+    const h = listingHarness([pane("t-1"), pane("t-2")]);
+    await launch(h);
+    await launch(h, { pluginId: OTHER_PLUGIN_ID, result: launchResult("t-2") });
+    await expect(launchedIds(h)).resolves.toEqual(["t-1"]);
+    forgetPluginLaunches(PLUGIN_ID);
+    await expect(launchedIds(h)).resolves.toEqual([]);
+    await expect(launchedIds(h, OTHER_PLUGIN_ID)).resolves.toEqual(["t-2"]);
+  });
+
+  it("marks nothing with no terminal host", async () => {
+    const h = listingHarness([pane("t-1")]);
+    await launch(h);
+    ptyMock.client = null;
+    await expect(hostFor(h).agents.list()).resolves.toEqual([
+      expect.objectContaining({ terminalId: "t-1", launchedByThisPlugin: false }),
+    ]);
   });
 });

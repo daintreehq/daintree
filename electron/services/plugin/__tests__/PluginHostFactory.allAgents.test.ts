@@ -62,7 +62,7 @@ import {
   UNBOUND_PLUGIN_HOST_BINDING,
   makeProjectPluginInstanceKey,
   type BuiltInPluginCapability,
-  type PluginAgentPane,
+  type PluginAgentPaneObservation,
   type PluginAllAgentsSnapshot,
   type PluginDatabaseContribution,
   type PluginFocusedPanel,
@@ -133,7 +133,7 @@ describe("app-wide agent list", () => {
     plugins: Map<string, LoadedPlugin>;
     capabilities: Set<string>;
     fleet: FakeFleet | null;
-    sendAgentsListToRenderer: ReturnType<typeof vi.fn>;
+    sendAgentsListWithHost: ReturnType<typeof vi.fn>;
   }
 
   function makeHarness(fleet: FakeFleet | null = makeFleet()): Harness {
@@ -147,12 +147,12 @@ describe("app-wide agent list", () => {
       ],
     ]);
     const capabilities = new Set<string>(["agent:read"]);
-    const sendAgentsListToRenderer = vi.fn(async () => []);
+    const sendAgentsListWithHost = vi.fn(async () => ({ hostId: "local", agents: [] }));
     const harness: Harness = {
       plugins,
       capabilities,
       fleet,
-      sendAgentsListToRenderer,
+      sendAgentsListWithHost,
       deps: {} as PluginHostFactoryDeps,
     };
     harness.deps = {
@@ -179,7 +179,7 @@ describe("app-wide agent list", () => {
       pluginFsWatchers: new Map(),
       broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
       panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
-      dispatcher: { sendAgentsListToRenderer },
+      dispatcher: { sendAgentsListWithHost },
       promptDispatcher: { requestPrompt: vi.fn() },
       settings: {},
       storage: {},
@@ -251,7 +251,7 @@ describe("app-wide agent list", () => {
       expect(Object.isFrozen(result.agents)).toBe(true);
       expect(Object.isFrozen(result.agents[0])).toBe(true);
       // Answered by main, never a project view.
-      expect(h.sendAgentsListToRenderer).not.toHaveBeenCalled();
+      expect(h.sendAgentsListWithHost).not.toHaveBeenCalled();
     });
 
     it("keeps a degraded snapshot's retained runs marked as stale", async () => {
@@ -737,7 +737,7 @@ describe("send to agent", () => {
     projectRoot: path.join(path.sep, "repos", "alpha"),
   };
 
-  const PANE: PluginAgentPane = {
+  const PANE: PluginAgentPaneObservation = {
     terminalId: "t-1",
     title: "Claude: auth",
     agentId: "claude",
@@ -761,8 +761,13 @@ describe("send to agent", () => {
       status: "drafted",
       terminalId: "t-1",
     }));
-    const sendAgentsListToRenderer = vi.fn(
-      async (..._args: unknown[]): Promise<PluginAgentPane[]> => [PANE]
+    const sendAgentsListWithHost = vi.fn(
+      async (
+        ..._args: unknown[]
+      ): Promise<{ hostId: string; agents: PluginAgentPaneObservation[] }> => ({
+        hostId: "local",
+        agents: [PANE],
+      })
     );
     const deps = {
       plugins,
@@ -788,7 +793,7 @@ describe("send to agent", () => {
       pluginFsWatchers: new Map(),
       broadcaster: { schedulePluginActionsBroadcast: vi.fn() },
       panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
-      dispatcher: { sendAgentsListToRenderer },
+      dispatcher: { sendAgentsListWithHost },
       promptDispatcher: { requestPrompt },
       settings: {},
       storage: {},
@@ -812,7 +817,7 @@ describe("send to agent", () => {
       safeAppendAudit: vi.fn(),
       safeArgsHash: () => "",
     } as unknown as PluginHostFactoryDeps;
-    return { deps, plugins, requestPrompt, sendAgentsListToRenderer };
+    return { deps, plugins, requestPrompt, sendAgentsListWithHost };
   }
 
   beforeEach(() => {
@@ -960,27 +965,27 @@ describe("send to agent", () => {
     it("reads the bound project's renderer and nothing else", async () => {
       const h = makeHarness();
       const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
-      await expect(host.agents.list()).resolves.toEqual([PANE]);
-      expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
+      await expect(host.agents.list()).resolves.toEqual([{ ...PANE, launchedByThisPlugin: false }]);
+      expect(h.sendAgentsListWithHost).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
     });
 
     it("stays ambient for an unbound plugin", async () => {
       const h = makeHarness();
       const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
       await host.agents.list();
-      expect(h.sendAgentsListToRenderer).toHaveBeenCalledWith(null, PLUGIN_ID);
+      expect(h.sendAgentsListWithHost).toHaveBeenCalledWith(null, PLUGIN_ID);
     });
 
     it("requires agent:read", async () => {
       const h = makeHarness(["agent:input"]);
       const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
       await expect(host.agents.list()).rejects.toThrow(/PERMISSION_REQUIRED/);
-      expect(h.sendAgentsListToRenderer).not.toHaveBeenCalled();
+      expect(h.sendAgentsListWithHost).not.toHaveBeenCalled();
     });
 
     it("answers [] when the project has no view", async () => {
       const h = makeHarness();
-      h.sendAgentsListToRenderer.mockRejectedValue(
+      h.sendAgentsListWithHost.mockRejectedValue(
         new AppError({ code: "PROJECT_VIEW_UNAVAILABLE", message: "no view" })
       );
       const { host } = createHost(h.deps, PLUGIN_ID, BOUND);

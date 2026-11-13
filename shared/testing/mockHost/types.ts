@@ -57,7 +57,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginTerminalLifecycleEvent,
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginAllAgentsSnapshot,
   PluginRemoteHost,
   PluginFocusedPanel,
@@ -637,7 +637,7 @@ export interface MockHostState {
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
   /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
-  simulateAgentsChange(agents: PluginAgentPane[]): void;
+  simulateAgentsChange(agents: PluginAgentPaneObservation[]): void;
   /**
    * Count `terminalId` as an agent this plugin launched, so the `host.agents`
    * input methods reach it. A `dispatch("agent.launch")` whose result reports
@@ -834,9 +834,11 @@ export interface CreateMockHostOptions {
   /**
    * The agent panes `agents.list()` reports and `sendToAgent` resolves a
    * `terminalId` against. A pane with `canDraft: false` refuses with its
-   * `draftRefusal`. Defaults to none.
+   * `draftRefusal`. Defaults to none. Each pane's `launchedByThisPlugin` is the
+   * mock's own: whether `simulateAgentLaunched` or a dispatched `agent.launch`
+   * counted it.
    */
-  agents?: PluginAgentPane[];
+  agents?: PluginAgentPaneObservation[];
   /**
    * What `agents.listAll()` reports. Defaults to a healthy, empty app
    * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).

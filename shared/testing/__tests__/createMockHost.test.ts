@@ -2066,9 +2066,24 @@ describe("createMockHost production-parity validation (#10617)", () => {
         /PERMISSION_REQUIRED/
       );
       const host = createMockHost({ agents: panes });
-      await expect(host.agents.list()).resolves.toEqual(panes);
+      await expect(host.agents.list()).resolves.toEqual(
+        panes.map((pane) => ({ ...pane, launchedByThisPlugin: false }))
+      );
       host.simulateAgentsChange([]);
       await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    it("agents.list marks the panes this plugin launched, as production (#16845)", async () => {
+      const host = createMockHost({
+        agents: panes,
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-2" } }),
+      });
+      host.simulateAgentLaunched("t-1");
+      const launched = async () =>
+        (await host.agents.list()).filter((p) => p.launchedByThisPlugin).map((p) => p.terminalId);
+      await expect(launched()).resolves.toEqual(["t-1"]);
+      await host.dispatch("agent.launch", { agentId: "codex" });
+      await expect(launched()).resolves.toEqual(["t-1", "t-2"]);
     });
 
     it("agents.listAll and onDidChangeAllAgents mirror production's gates and shape", async () => {

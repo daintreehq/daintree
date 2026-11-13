@@ -3662,7 +3662,26 @@ interface PluginAgentPane {
     readonly canDraft: boolean;
     /** Why it would not, when `canDraft` is `false`. */
     readonly draftRefusal?: PluginSendToAgentRefusalReason;
+    /**
+     * Whether this plugin launched the agent with its own `agent.launch`, by the
+     * record the host keeps of its launches: the one the {@link PluginAgentsApi}
+     * input methods reach. A pane restored after a restart under the id it was
+     * launched with keeps it while the host still holds the record: one whose
+     * pane hasn't come back in 30 days lapses, and only the 200 most recent are
+     * kept. `false` for an agent the user, an
+     * assistant or another plugin started, for a launch that named its own
+     * `requestedId`, and for one launched before this plugin was last disabled
+     * or uninstalled. In a view of a Remote Host's project, `true` means a launch
+     * sent there with `{ hostId }` since this machine last started.
+     */
+    readonly launchedByThisPlugin: boolean;
 }
+/**
+ * An agent pane without `launchedByThisPlugin`: what the project's view
+ * reports, and what a `createMockHost` fixture supplies. Who launched a pane is
+ * answered only from the host's own launch record, never from the pane itself.
+ */
+type PluginAgentPaneObservation = Omit<PluginAgentPane, "launchedByThisPlugin">;
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
  * reports it — any open project or scratch, including ones whose view is not
@@ -7159,7 +7178,7 @@ interface MockHostState {
     /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
     simulateConfirmResponse(result: boolean): void;
     /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
-    simulateAgentsChange(agents: PluginAgentPane[]): void;
+    simulateAgentsChange(agents: PluginAgentPaneObservation[]): void;
     /**
      * Count `terminalId` as an agent this plugin launched, so the `host.agents`
      * input methods reach it. A `dispatch("agent.launch")` whose result reports
@@ -7351,9 +7370,11 @@ interface CreateMockHostOptions {
     /**
      * The agent panes `agents.list()` reports and `sendToAgent` resolves a
      * `terminalId` against. A pane with `canDraft: false` refuses with its
-     * `draftRefusal`. Defaults to none.
+     * `draftRefusal`. Defaults to none. Each pane's `launchedByThisPlugin` is the
+     * mock's own: whether `simulateAgentLaunched` or a dispatched `agent.launch`
+     * counted it.
      */
-    agents?: PluginAgentPane[];
+    agents?: PluginAgentPaneObservation[];
     /**
      * What `agents.listAll()` reports. Defaults to a healthy, empty app
      * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).

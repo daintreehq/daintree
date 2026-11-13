@@ -37,7 +37,7 @@ import type {
   PluginNotifyResult,
   PluginTaskHandle,
   PluginWorktreesResult,
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginPanelLifecycleEvent,
   WorkerRestartResult,
   PluginPanelBadge,
@@ -476,7 +476,7 @@ export function createPresentationFacet(
   options: CreateMockHostOptions,
   collaborators: {
     resolveWorktreesResult(): PluginWorktreesResult;
-    agentPanes(): readonly PluginAgentPane[];
+    agentPanes(): readonly PluginAgentPaneObservation[];
     panelPhases: ReadonlyMap<string, PluginPanelLifecycleEvent>;
     /** The composed host's `notify`, so a task's notification goes through it. */
     notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;

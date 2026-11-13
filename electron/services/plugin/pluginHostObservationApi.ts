@@ -28,6 +28,7 @@ import {
 
 import { events } from "../events.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import {
   PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES,
   PLUGIN_TERMINAL_SCREEN_MAX_LINES,
@@ -578,8 +579,26 @@ export function buildObservationHostApi(
           );
         }
         try {
-          const agents = await dispatcher.sendAgentsListToRenderer(boundProjectId, pluginId);
-          return isBound() ? agents : [];
+          const { hostId, agents } = await dispatcher.sendAgentsListWithHost(
+            boundProjectId,
+            pluginId
+          );
+          if (!isBound()) return [];
+          // Who launched a pane is main's to say, from the record the input
+          // methods check, never the view's: a Shell answering for a Host
+          // plugin, or a view's stale panel state, could otherwise claim it.
+          // A view of a Remote Host's project lists that host's terminals,
+          // which only a launch sent there with `{ hostId }` can have started.
+          const pty = getPtyClient();
+          const launched = (terminalId: string): boolean =>
+            isLocalHostId(hostId)
+              ? pty !== null &&
+                launchedAgentProject(pty, pluginId, terminalId, boundProjectId) !== null
+              : boundProjectId === null && isRemotePluginLaunch(pluginId, hostId, terminalId);
+          return agents.map((pane) => ({
+            ...pane,
+            launchedByThisPlugin: launched(pane.terminalId),
+          }));
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
           throw err;
