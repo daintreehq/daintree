@@ -737,6 +737,54 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.removeConfirmProject).toBeNull();
     });
 
+    // The confirm renders in the view's modal layer above where the switcher
+    // opens, so a switcher opened under it would take focus and Escape from the
+    // dialog on screen (#16919).
+    it("won't open under a Close confirm it raised, and opens once it is answered", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        result.current.removeProject("project-1");
+      });
+      expect(result.current.removeConfirmProject?.id).toBe("project-1");
+
+      act(() => {
+        result.current.toggle();
+      });
+      act(() => {
+        result.current.open("dropdown");
+      });
+      expect(result.current.isOpen).toBe(false);
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+
+      act(() => {
+        result.current.setRemoveConfirmProject(null);
+      });
+      act(() => {
+        result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(true);
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+    });
+
+    it("won't open under a Sleep confirm raised from the palette, which closed to ask", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+      await act(async () => {
+        await result.current.sleepProject("project-1");
+      });
+      expect(result.current.isOpen).toBe(false);
+      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
+
+      act(() => {
+        result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(false);
+    });
+
     it("stop confirmation closes the active project so the renderer leaves project view", async () => {
       const { result } = renderHook(() => useProjectSwitcherPalette());
 

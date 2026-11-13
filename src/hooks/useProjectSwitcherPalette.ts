@@ -611,6 +611,30 @@ export function useProjectSwitcherPalette({
     openProject,
   });
 
+  // Every confirm the switcher raises sits in the modal layer above where the
+  // switcher opens, so opening it under one would hand the palette focus and
+  // Escape while the dialog on screen waits (#16919). The confirm is answered
+  // first.
+  const isConfirming =
+    projectMutations.stopConfirmProjectId !== null ||
+    projectMutations.removeConfirmProject !== null ||
+    projectMutations.sleepConfirmProject !== null ||
+    scratchMutations.deleteScratchConfirm !== null ||
+    scratchMutations.deleteAllScratchesConfirm !== null ||
+    scratchMutations.saveAsProjectConfirm !== null;
+  const openUnlessConfirming = useCallback<typeof open>(
+    (nextMode, options) => {
+      if (!isConfirming) open(nextMode, options);
+    },
+    [isConfirming, open]
+  );
+  const toggleUnlessConfirming = useCallback<typeof toggle>(
+    (nextMode) => {
+      if (!isConfirming) toggle(nextMode);
+    },
+    [isConfirming, toggle]
+  );
+
   return {
     isOpen,
     mode,
@@ -622,9 +646,9 @@ export function useProjectSwitcherPalette({
     activeProject,
     selectedIndex,
     cycleRequest,
-    open,
+    open: openUnlessConfirming,
     close,
-    toggle,
+    toggle: toggleUnlessConfirming,
     setQuery,
     selectPrevious,
     selectNext,

@@ -1291,8 +1291,8 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // mounted globally in ModalHostLayer, resolves the Promise.
   "git.discardFileChanges",
   "file.trash",
-  // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
-  // action ID not co-located with the ConfirmDialog in that file.
+  // Confirm in ProjectSwitcherConfirmDialogs.tsx via removeConfirmProject state,
+  // mounted once in ModalHostLayer; action ID not co-located with the dialog.
   "project.remove",
   // MCP-only (#11909), and it never reaches a dialog under its own id: the main
   // process checks session ownership and then delegates to `worktree.delete`,

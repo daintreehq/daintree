@@ -85,10 +85,6 @@ export function useToolbarProjectPill({
     [projectSwitcher]
   );
 
-  const handleRemoveConfirmClose = useCallback(() => {
-    projectSwitcher.setRemoveConfirmProject(null);
-  }, [projectSwitcher]);
-
   const handleSelectNewWindow = useCallback(
     (project: SearchableProject) => {
       if (project.isMissing) return;
@@ -268,7 +264,6 @@ export function useToolbarProjectPill({
     handleRestartProject,
     handleLocateProject,
     handleMoveOrRenameProject,
-    handleRemoveConfirmClose,
     handleSelectNewWindow,
     isDropdownOpen,
     shouldMountProjectSwitcherDropdown,

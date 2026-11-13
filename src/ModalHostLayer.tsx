@@ -23,6 +23,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
+import { ProjectSwitcherModalLayer } from "./components/Project/ProjectSwitcherModalLayer";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
@@ -43,14 +44,12 @@ import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
 import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { MaximizeFlights, PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
-import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
   LazySendToAgentPalette,
   LazyWorktreePalette,
   LazyQuickCreatePalette,
   LazyPanelPalette,
-  LazyProjectSwitcherPalette,
   LazyThemePalette,
   LazyResumeSessionsPalette,
   LazyRecentDictationsPalette,
@@ -486,88 +485,10 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="ProjectSwitcherPalette"
-        resetKeys={[Number(isProjectSwitcherModalOpen)]}
-      >
-        {isProjectSwitcherModalOpen && (
-          <Suspense fallback={null}>
-            <LazyProjectSwitcherPalette
-              isOpen={isProjectSwitcherModalOpen}
-              query={projectSwitcherPalette.query}
-              results={projectSwitcherPalette.results}
-              browseBands={projectSwitcherPalette.browseBands}
-              selectedIndex={projectSwitcherPalette.selectedIndex}
-              cycleRequest={projectSwitcherPalette.cycleRequest}
-              onQueryChange={projectSwitcherPalette.setQuery}
-              onSelectPrevious={projectSwitcherPalette.selectPrevious}
-              onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectRow}
-              onHoverProject={projectSwitcherPalette.onHoverProject}
-              onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
-              onHoverRow={projectSwitcherPalette.hoverRow}
-              fleetLiveness={projectSwitcherPalette.fleetLiveness}
-              onClose={projectSwitcherPalette.close}
-              onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
-              onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-              onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
-              onRestartProject={(projectId) => projectSwitcherPalette.restartProject(projectId)}
-              onLocateProject={(projectId) => {
-                projectSwitcherPalette.locateProject(projectId);
-              }}
-              onMoveOrRenameProject={(projectId) => {
-                projectSwitcherPalette.moveOrRenameProject(projectId);
-              }}
-              onTogglePinProject={(projectId) =>
-                void projectSwitcherPalette.togglePinProject(projectId)
-              }
-              onCopyPath={projectSwitcherPalette.copyPath}
-              removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-              onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
-              onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-              isRemovingProject={projectSwitcherPalette.isRemovingProject}
-              sleepConfirmProject={projectSwitcherPalette.sleepConfirmProject}
-              onSleepConfirmClose={() => projectSwitcherPalette.setSleepConfirmProject(null)}
-              onConfirmSleep={projectSwitcherPalette.confirmSleep}
-              isSleepingProject={projectSwitcherPalette.isSleepingProject}
-              onSelectNewWindow={(project) => {
-                projectSwitcherPalette.close();
-                void actionService.dispatch(
-                  "app.newWindow",
-                  { projectPath: project.path },
-                  { source: "user" }
-                );
-              }}
-              rankedSearch={projectSwitcherPalette.isRankedSearch}
-              scratchResults={projectSwitcherPalette.scratchResults}
-              onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
-              onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
-              onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
-              deleteScratchConfirm={projectSwitcherPalette.deleteScratchConfirm}
-              onDismissDeleteScratchConfirm={projectSwitcherPalette.dismissDeleteScratchConfirm}
-              onConfirmDeleteScratch={() => void projectSwitcherPalette.confirmDeleteScratch()}
-              isDeletingScratch={projectSwitcherPalette.isDeletingScratch}
-              onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
-              deleteAllScratchesConfirm={projectSwitcherPalette.deleteAllScratchesConfirm}
-              onDismissDeleteAllScratchesConfirm={
-                projectSwitcherPalette.dismissDeleteAllScratchesConfirm
-              }
-              onConfirmDeleteAllScratches={() =>
-                void projectSwitcherPalette.confirmDeleteAllScratches()
-              }
-              isDeletingAllScratches={projectSwitcherPalette.isDeletingAllScratches}
-              onRenameScratch={(scratchId, name) =>
-                void projectSwitcherPalette.renameScratch(scratchId, name)
-              }
-              onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
-              saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
-              onDismissSaveAsProjectConfirm={projectSwitcherPalette.dismissSaveAsProjectConfirm}
-              onOpenSavedProject={projectSwitcherPalette.openSavedProject}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <ProjectSwitcherModalLayer
+        isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
+        projectSwitcherPalette={projectSwitcherPalette}
+      />
       {/*
         Mounted here, once per view, rather than inside the switcher: the
         switcher renders in more than one place, and its menus open these from

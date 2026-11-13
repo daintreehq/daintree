@@ -1,6 +1,6 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
-import { FolderOpen, FolderPlus, Settings } from "lucide-react";
+import { FolderOpen, Settings } from "lucide-react";
 import { FolderDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
@@ -70,10 +70,6 @@ import {
   scratchLiftPlace,
   type ScratchLiftPlace,
 } from "@/hooks/projectSwitcher/scratchLift";
-import {
-  ProjectSwitcherConfirmDialogs,
-  type ProjectSwitcherConfirmState,
-} from "./ProjectSwitcherConfirmDialogs";
 
 export {
   canSleepProject,
@@ -83,7 +79,7 @@ export {
 } from "./ProjectSwitcherRows";
 export { formatScratchCleanupCountdown } from "./ProjectSwitcherScratchSection";
 
-export interface ProjectSwitcherPaletteProps extends ProjectSwitcherConfirmState {
+export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
   query: string;
   /**
@@ -108,7 +104,6 @@ export interface ProjectSwitcherPaletteProps extends ProjectSwitcherConfirmState
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
   onCloneRepo?: () => void;
-  onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -169,6 +164,12 @@ export interface ProjectSwitcherPaletteProps extends ProjectSwitcherConfirmState
   onRenameScratch?: (scratchId: string, name: string) => void;
   /** Callback to save a scratch as a regular project (copy + register). */
   onSaveAsProject?: (scratchId: string) => void;
+  /**
+   * The search box's ref, for a caller that names it as a focus successor
+   * outside the palette (the view's confirm host). Omitted, the palette keeps
+   * its own.
+   */
+  paletteInputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
@@ -360,11 +361,11 @@ function ProjectSwitcherFooter({
 }
 
 /**
- * The palette-level commands — Open project, Clone, Create folder, Project
- * settings — as one compact bar under the list rather than a stack of 48px
- * rows. They act on the project list, not on a workspace in it, so they never
- * take the roving cursor; they are reached by Tab, and the bar gives the list
- * back the ~100px the stack used to hold in every window.
+ * The palette-level commands — Open project, Clone, Project settings — as one
+ * compact bar under the list rather than a stack of 48px rows. They act on the
+ * project list, not on a workspace in it, so they never take the roving cursor;
+ * they are reached by Tab, and the bar gives the list back the ~100px the stack
+ * used to hold in every window.
  *
  * Ghost buttons on the shared Button primitive, so their hover, focus ring and
  * press are the app's own. Settings is the gear alone: it is the house glyph
@@ -374,12 +375,10 @@ function ProjectCommandBar({
   onOpenProjectSettings,
   onAddProject,
   onCloneRepo,
-  onCreateFolder,
 }: {
   onOpenProjectSettings?: () => void;
   onAddProject?: () => void;
   onCloneRepo?: () => void;
-  onCreateFolder?: () => void;
 }) {
   return (
     <div className="flex items-center gap-1 px-2 py-1.5" data-testid="project-command-bar">
@@ -405,12 +404,6 @@ function ProjectCommandBar({
         >
           <FolderDown aria-hidden="true" />
           Clone repository…
-        </Button>
-      )}
-      {onCreateFolder && (
-        <Button variant="ghost" size="sm" className="px-2" onClick={onCreateFolder}>
-          <FolderPlus aria-hidden="true" />
-          New folder…
         </Button>
       )}
       {onOpenProjectSettings && (
@@ -482,7 +475,6 @@ interface ProjectPaletteInnerProps {
   onSelectNext: () => void;
   onAddProject?: () => void;
   onCloneRepo?: () => void;
-  onCreateFolder?: () => void;
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -533,7 +525,6 @@ function ProjectPaletteInner({
   onSelectNext,
   onAddProject,
   onCloneRepo,
-  onCreateFolder,
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
@@ -572,9 +563,7 @@ function ProjectPaletteInner({
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
   const hasProjectPresentation =
     (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
-  const hasProjectCommands = Boolean(
-    onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder
-  );
+  const hasProjectCommands = Boolean(onOpenProjectSettings || onAddProject || onCloneRepo);
   const scratchCount = scratchResults?.length ?? 0;
   const scratchesStandAlone = !isRankedSearch && !hasProjectPresentation && scratchCount > 0;
   const showScratchSection = Boolean(onCreateScratch || scratchCount > 0);
@@ -1456,7 +1445,6 @@ function ProjectPaletteInner({
             onOpenProjectSettings={onOpenProjectSettings}
             onAddProject={onAddProject}
             onCloneRepo={onCloneRepo}
-            onCreateFolder={onCreateFolder}
           />
         </>
       )}
@@ -1486,8 +1474,8 @@ function ProjectPaletteInner({
 }
 
 /**
- * The palette's search box, lifted out of the two content hosts so the dialogs
- * rendered beside them can name it as a focus successor. Only the mounted host
+ * The palette's search box, lifted out of the two content hosts so the view's
+ * confirm host can name it as a focus successor. Only the mounted host
  * attaches, so one ref serves both.
  */
 interface PaletteInputRefProp {
@@ -1540,7 +1528,6 @@ function ModalContent({
         onSelectNext={innerProps.onSelectNext}
         onAddProject={innerProps.onAddProject}
         onCloneRepo={innerProps.onCloneRepo}
-        onCreateFolder={innerProps.onCreateFolder}
         onOpenProjectSettings={innerProps.onOpenProjectSettings}
         onStopProject={innerProps.onStopProject}
         onCloseProject={innerProps.onCloseProject}
@@ -1665,7 +1652,6 @@ function DropdownContent({
           onSelectNext={innerProps.onSelectNext}
           onAddProject={innerProps.onAddProject}
           onCloneRepo={innerProps.onCloneRepo}
-          onCreateFolder={innerProps.onCreateFolder}
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
@@ -1709,7 +1695,6 @@ export function ProjectSwitcherPalette({
   mode = "modal",
   onAddProject,
   onCloneRepo,
-  onCreateFolder,
   onStopProject,
   onCloseProject,
   onSleepProject,
@@ -1736,9 +1721,10 @@ export function ProjectSwitcherPalette({
   onRenameScratch,
   onSaveAsProject,
   fleetLiveness,
-  ...confirmState
+  paletteInputRef: externalInputRef,
 }: ProjectSwitcherPaletteProps) {
-  const paletteInputRef = useRef<HTMLInputElement>(null);
+  const ownInputRef = useRef<HTMLInputElement>(null);
+  const paletteInputRef = externalInputRef ?? ownInputRef;
   const content =
     mode === "dropdown" ? (
       <DropdownContent
@@ -1757,7 +1743,6 @@ export function ProjectSwitcherPalette({
         mode={mode}
         onAddProject={onAddProject}
         onCloneRepo={onCloneRepo}
-        onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onSleepProject={onSleepProject}
@@ -1772,8 +1757,6 @@ export function ProjectSwitcherPalette({
         onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
-        // Taken out of the rest spread on purpose: left in it, it rode into the
-        // confirm dialogs and never reached the dropdown that consumes it.
         consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
         dropdownAlign={dropdownAlign}
         rankedSearch={rankedSearch}
@@ -1805,7 +1788,6 @@ export function ProjectSwitcherPalette({
         mode={mode}
         onAddProject={onAddProject}
         onCloneRepo={onCloneRepo}
-        onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onSleepProject={onSleepProject}
@@ -1831,10 +1813,5 @@ export function ProjectSwitcherPalette({
       />
     );
 
-  return (
-    <>
-      {content}
-      <ProjectSwitcherConfirmDialogs {...confirmState} paletteInputRef={paletteInputRef} />
-    </>
-  );
+  return content;
 }
