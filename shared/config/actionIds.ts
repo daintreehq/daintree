@@ -498,6 +498,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendKeysOwned",
   "terminal.stashInput",
   "terminal.popStash",
+  "terminal.resendLastMessage",
 
   // -- terminalArmingActions --
   "terminal.arm",
@@ -588,6 +589,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- assistantControlActions --
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
 
@@ -672,6 +674,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.placeOwned",
   "terminal.setClientMetadata",
   "terminal.paste",
+  // Replays a person's own message from their pane (#16746).
+  "terminal.resendLastMessage",
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
@@ -721,6 +725,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "worktree.retireOwned",
   // Main-process only, for an assistant caller: a plugin is no assistant (#13496).
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
   // Main-process only, for one of this machine's own assistants (#13493).

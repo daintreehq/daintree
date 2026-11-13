@@ -1413,9 +1413,9 @@ export function getAgentModelConfig(
 
 /**
  * The MCP injection mode Daintree has actually written host-side wiring for,
- * per agent id. `claude` and `copilot` each get a config writer in
- * `HelpSessionService` plus a launch-arg getter that `lifecycle.ts` appends;
- * `codex` gets `-c` args built at provision time. Any other id can only be
+ * per agent id. `claude`, `copilot` and `antigravity` each get a config writer
+ * in `AssistantSessionFiles` plus a launch-arg getter that `lifecycle.ts`
+ * appends; `codex` gets `-c` args built at provision time. Any other id can only be
  * wired through the env contract described in `supportsImplementedMcpInjection`.
  *
  * An id listed here must declare the mode its branch implements — a `claude`
@@ -1428,6 +1428,7 @@ const NATIVE_MCP_IMPLEMENTATIONS: Readonly<Record<string, AssistantSupports["mcp
   claude: "project-config",
   copilot: "project-config",
   codex: "cli-flags",
+  antigravity: "project-config",
 };
 
 function supportsImplementedMcpInjection(
@@ -1618,12 +1619,24 @@ export function isRetiredAgentModel(
   return retired !== undefined && Object.hasOwn(retired, modelId);
 }
 
-export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
+/**
+ * The agent's name, with the model's short label when `modelId` is one it
+ * knows: its bundled list first, then `resolvedModels`, the runtime catalog
+ * that is the only list some agents have (Codex) (#16783). An id neither
+ * names stays the bare agent name.
+ */
+export function getAgentDisplayTitle(
+  agentId: string,
+  modelId?: string,
+  resolvedModels?: ReadonlyArray<Pick<AgentModelConfig, "id" | "name"> & { shortLabel?: string }>
+): string {
   const config = getEffectiveAgentConfig(agentId);
   const baseName = config?.name ?? agentId;
   if (!modelId) return baseName;
-  const model = config?.models?.find((m) => m.id === modelId);
-  return model ? `${baseName} (${model.shortLabel})` : baseName;
+  const model =
+    config?.models?.find((m) => m.id === modelId) ?? resolvedModels?.find((m) => m.id === modelId);
+  const label = model ? model.shortLabel?.trim() || model.name.trim() : "";
+  return label ? `${baseName} (${label})` : baseName;
 }
 
 export function getAgentPreset(agentId: string, presetId?: string): AgentPreset | undefined {

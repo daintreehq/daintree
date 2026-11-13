@@ -18,6 +18,7 @@ import type { PluginSettingsHome } from "@/store/pluginManagerStore";
 import { declaredPluginConnections } from "@shared/utils/pluginConnections";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { logError } from "@/utils/logger";
+import { pluginSettingSearchText } from "./pluginSettingFieldSearch";
 import { SETTINGS_SEARCH_INDEX, type SettingsSearchEntry } from "./settingsSearchIndex";
 
 export interface SearchablePlugin {
@@ -50,7 +51,7 @@ const PLUGIN_SETTINGS: readonly SettingRef[] = ["plugins"];
  * what the manifest calls those parts.
  *
  * Only manifest display text is indexed — names, labels, titles and
- * descriptions. Defaults, stored values, options, account endpoints and
+ * descriptions — plus each declared setting's key. Defaults, stored values, options, account endpoints and
  * identities, and what a setup step observed stay out, which is what keeps a
  * secret field's contents unsearchable.
  */
@@ -119,7 +120,8 @@ export function buildPluginSettingsSearchEntries(
         );
       }
       for (const def of settingsForHome(plugin, home)) {
-        entries.push(row(def.id, def.label ?? def.id, def.description, { settingId: def.id }));
+        const { title, description, keywords } = pluginSettingSearchText(def);
+        entries.push(row(def.id, title, description, { settingId: def.id }, keywords));
       }
       if (view !== undefined && viewHomes.includes(home)) {
         entries.push(

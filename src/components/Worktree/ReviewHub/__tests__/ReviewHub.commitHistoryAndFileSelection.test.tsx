@@ -1669,6 +1669,208 @@ describe("ReviewHub", () => {
       expect(dialogStore.get()).toBe(HUB_PANEL_ID);
     });
   });
+
+  // A grid review pane moved to another worktree keeps this component mounted
+  // and only swaps `worktreePath`; paths are relative, so anything the user
+  // picked in the old worktree would name the same-named files in the new one.
+  describe("moving to another worktree", () => {
+    const OTHER_PATH = "/home/user/other";
+
+    it("drops a row selection so a batch action can't reach the new worktree's files", async () => {
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      fireEvent.click(screen.getByTestId("file-stage-row-src/app.ts"), { metaKey: true });
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(1\)/i
+        )
+      );
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith(OTHER_PATH));
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+
+      expect(
+        screen.getByTestId("file-stage-row-src/app.ts").getAttribute("aria-selected")
+      ).not.toBe("true");
+      const stageButton = screen.getByTestId("review-hub-stage-section-button");
+      expect(stageButton.textContent).not.toMatch(/selection/i);
+      fireEvent.click(stageButton);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(OTHER_PATH));
+      expect(stageFilesMock).not.toHaveBeenCalled();
+    });
+
+    it("closes the previous worktree's diff and doesn't reopen it against the new one", async () => {
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
+      openPanelDialogMock.mockClear();
+      await act(async () => {
+        fireEvent.click(screen.getByText("index.ts").closest("button")!);
+      });
+      await act(async () => {});
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await act(async () => {});
+
+      expect(closePanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBeNull();
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the base-branch comparison and refetches it for the new worktree", async () => {
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [{ status: "M", path: "src/only-in-first.ts" }],
+      });
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByTestId("review-hub-diff-mode-base-branch"));
+      fireEvent.click(screen.getByTestId("review-hub-diff-mode-base-branch"));
+      await waitFor(() => screen.getByText("only-in-first.ts"));
+
+      compareWorktreesMock.mockClear();
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [{ status: "M", path: "src/only-in-second.ts" }],
+      });
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      expect(screen.queryByText("only-in-first.ts")).toBeNull();
+      expect(
+        screen.getByTestId("review-hub-diff-mode-working-tree").getAttribute("aria-checked")
+      ).toBe("true");
+
+      fireEvent.click(screen.getByTestId("review-hub-diff-mode-base-branch"));
+      await waitFor(() => screen.getByText("only-in-second.ts"));
+      expect(compareWorktreesMock).toHaveBeenCalledWith(
+        OTHER_PATH,
+        "main",
+        "feature/test",
+        undefined,
+        true
+      );
+      expect(screen.queryByText("only-in-first.ts")).toBeNull();
+    });
+
+    it("lets Escape close the hub instead of clearing a selection the move left behind", async () => {
+      const onClose = vi.fn();
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />
+      );
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      fireEvent.click(screen.getByTestId("file-stage-row-src/app.ts"), { metaKey: true });
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(1\)/i
+        )
+      );
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it("closes a base-branch diff opened in the previous worktree", async () => {
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [{ status: "M", path: "src/only-in-first.ts" }],
+      });
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByTestId("review-hub-diff-mode-base-branch"));
+      fireEvent.click(screen.getByTestId("review-hub-diff-mode-base-branch"));
+      await waitFor(() => screen.getByText("only-in-first.ts"));
+      openPanelDialogMock.mockClear();
+      await act(async () => {
+        fireEvent.click(screen.getByText("only-in-first.ts").closest("button")!);
+      });
+      await act(async () => {});
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(openPanelDialogMock.mock.calls[0]?.[0]).toMatchObject({ diffSource: "base-branch" });
+      expect(dialogStore.get()).toBe(HUB_PANEL_ID);
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await act(async () => {});
+
+      expect(closePanelDialogMock).toHaveBeenCalledTimes(1);
+      expect(dialogStore.get()).toBeNull();
+      expect(openPanelDialogMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a comparison the previous worktree answers after the move", async () => {
+      let answerFirst: (value: unknown) => void = () => {};
+      compareWorktreesMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerFirst = resolve;
+          })
+      );
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByTestId("review-hub-diff-mode-base-branch"));
+      fireEvent.click(screen.getByTestId("review-hub-diff-mode-base-branch"));
+      await waitFor(() => expect(compareWorktreesMock).toHaveBeenCalledTimes(1));
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      await act(async () => {
+        answerFirst({
+          branch1: "main",
+          branch2: "feature/test",
+          files: [{ status: "M", path: "src/only-in-first.ts" }],
+        });
+      });
+
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [{ status: "M", path: "src/only-in-second.ts" }],
+      });
+      fireEvent.click(screen.getByTestId("review-hub-diff-mode-base-branch"));
+      await waitFor(() => screen.getByText("only-in-second.ts"));
+      expect(compareWorktreesMock).toHaveBeenLastCalledWith(
+        OTHER_PATH,
+        "main",
+        "feature/test",
+        undefined,
+        true
+      );
+      expect(screen.queryByText("only-in-first.ts")).toBeNull();
+    });
+
+    it("keeps each worktree's commit draft with its own worktree", async () => {
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      const input = await screen.findByPlaceholderText(/Summary on the first line/i);
+      fireEvent.change(input, { target: { value: "first worktree draft" } });
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/app.ts"));
+      expect(
+        (screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value
+      ).toBe("");
+
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() =>
+        expect(
+          (screen.getByPlaceholderText(/Summary on the first line/i) as HTMLTextAreaElement).value
+        ).toBe("first worktree draft")
+      );
+    });
+  });
 });
 
 afterEach(() => {

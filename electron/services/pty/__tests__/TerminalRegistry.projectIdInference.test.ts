@@ -290,6 +290,18 @@ describe("TerminalRegistry.evictPreservedSnapshots", () => {
     expect(registry.size()).toBe(3);
   });
 
+  it("reports each evicted entry through onDelete, and only those (#16811)", () => {
+    const onDelete = vi.fn();
+    const registry = new TerminalRegistry(undefined, onDelete);
+    registry.add("old", createPreservedTerminal({ id: "old", preservedAt: NOW - 100 }));
+    registry.add("mid", createPreservedTerminal({ id: "mid", preservedAt: NOW - 50 }));
+    registry.add("new", createPreservedTerminal({ id: "new", preservedAt: NOW }));
+
+    registry.evictPreservedSnapshots(2, undefined, NOW + 1_000_000);
+
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("old");
+  });
+
   it("evicts the oldest snapshot when one over the cap", () => {
     const registry = new TerminalRegistry();
     registry.add("old", createPreservedTerminal({ id: "old", preservedAt: NOW - 100 }));

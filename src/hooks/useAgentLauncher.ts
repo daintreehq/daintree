@@ -14,6 +14,7 @@ import { useWorktreeStoreApi } from "./useWorktreeStore";
 import { isElectronAvailable } from "./useElectron";
 
 import { systemClient } from "@/clients";
+import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
@@ -631,6 +632,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               await resolveHostTmpDir(() => systemClient.getTmpDir()),
               isRemoteWindow()
             ),
+          getModelCatalog: (id) => agentCapabilitiesClient.getResolvedModelList(id),
           onStalePreset: (scope) => {
             if (scope === "worktree" && effectiveWorktreeId) {
               void useAgentSettingsStore
@@ -641,6 +643,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           },
         });
+        if (!isMounted.current) return decline("unavailable");
         if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
         // Checked after every await the plan makes, against the preset it will
         // launch on: the person approved that content, and a preset that

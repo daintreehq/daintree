@@ -11,12 +11,15 @@
  * `ELECTRON_RUN_AS_NODE`, ...) are excluded by virtue of not being on the
  * allowlist; no explicit strip step is required.
  *
- * Two variants:
+ * Three variants:
  *   - `buildProbeEnv()`  — minimum needed to resolve and run a CLI binary
  *                          for `--help` / `--version`. No network keys.
  *   - `buildInstallEnv()` — adds proxy, CA, version-manager, and OS config
  *                          dirs needed by `npm install -g`, `pipx install`,
  *                          `brew install`, etc.
+ *   - `buildNetworkProbeEnv()` — the install set plus the agent's own declared
+ *                          credential vars, for a probe that asks the agent's
+ *                          service something as the user (`agy models`).
  *
  * The install variant must include `HOME` on macOS/Linux and `APPDATA`/
  * `USERPROFILE` on Windows — `npm` and `pipx` resolve user-level config
@@ -142,5 +145,23 @@ export function buildProbeEnv(): Record<string, string> {
  */
 export function buildInstallEnv(): Record<string, string> {
   const allowed = new Set([...probeKeys(), ...INSTALL_EXTRA_KEYS]);
+  return buildAllowlistEnv(allowed);
+}
+
+/**
+ * For a probe whose answer comes from the agent's service rather than its
+ * binary, such as a CLI listing the models the user's account can reach. It
+ * needs the install set's proxy, CA and config-dir keys to get out, and the
+ * credential vars the agent declares (`AgentConfig.account.keyVars`) to sign
+ * in; anything credential-shaped beyond those stays out.
+ */
+export function buildNetworkProbeEnv(
+  credentialKeys: readonly string[] = []
+): Record<string, string> {
+  const allowed = new Set([
+    ...probeKeys(),
+    ...INSTALL_EXTRA_KEYS,
+    ...credentialKeys.map((key) => key.toUpperCase()),
+  ]);
   return buildAllowlistEnv(allowed);
 }

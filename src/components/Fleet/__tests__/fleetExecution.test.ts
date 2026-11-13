@@ -14,6 +14,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { getLastComposerSend, useLastComposerSendStore } from "@/store/lastComposerSendStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -152,6 +153,7 @@ function reset() {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useTerminalInputStore.setState({ sentPrompts: new Map() });
+  useLastComposerSendStore.setState({ sends: {} });
   screens.output.clear();
   screens.selection.clear();
 }
@@ -898,6 +900,46 @@ describe("executeFleetBroadcast — image chips (#15600)", () => {
       ["c", "no pictures"],
       ["d", ""],
     ]);
+  });
+
+  it("leaves each pane what it was sent as its last message, and nothing where it failed (#16746)", async () => {
+    submitWithImagesMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("EPIPE");
+    });
+    buildFleetBroadcastRecipeContextMock.mockImplementation((id: string) => ({
+      worktreePath: `/wt/${id}`,
+    }));
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+
+    await executeFleetBroadcast(
+      `compare {{worktree_path}} ${ONE} relative.png`,
+      ["a", "b", "c"],
+      { b: `only ${TWO}` },
+      undefined,
+      { imagePaths: [ONE, TWO, "relative.png"] }
+    );
+
+    // Its own text as it went, variables filled; only what went as an attachment.
+    expect(getLastComposerSend("a")).toMatchObject({
+      text: `compare /wt/a ${ONE} relative.png`,
+      imagePaths: [ONE],
+    });
+    expect(getLastComposerSend("b")).toMatchObject({ text: `only ${TWO}`, imagePaths: [TWO] });
+    expect(getLastComposerSend("c")).toBeUndefined();
+  });
+
+  it("keeps a pane's newer broadcast when an older one lands after it (#16746)", async () => {
+    seedPanels([makeAgent("a")]);
+    let landFirst!: () => void;
+    submitMock.mockImplementationOnce(() => new Promise<void>((resolve) => (landFirst = resolve)));
+
+    const first = executeFleetBroadcast("first", ["a"]);
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+    await executeFleetBroadcast("second", ["a"]);
+    landFirst();
+    await first;
+
+    expect(getLastComposerSend("a")?.text).toBe("second");
   });
 
   it("gives a pane sent the draft the chips in the editor's order, as one pane's send would", async () => {

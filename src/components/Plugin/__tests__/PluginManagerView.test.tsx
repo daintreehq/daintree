@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
@@ -14,9 +14,13 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   LoadedPluginInfo,
+  PluginArchiveManifestPreview,
   PluginInstallProgressEvent,
   PluginInstallResult,
+  PluginUrlInstallPreviewResult,
+  PluginInstallError,
   SettingDefinition,
+  PluginDeepLinkIntent,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -125,6 +129,58 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
   };
 }
 
+/** The digest main reports for a previewed URL archive (#16776). */
+const PREVIEW_HASH = "c".repeat(64);
+
+function previewManifest(
+  overrides: Partial<PluginArchiveManifestPreview> = {}
+): PluginArchiveManifestPreview {
+  return {
+    name: "acme.demo",
+    displayName: "Acme Demo",
+    version: "1.0.0",
+    category: "other",
+    authors: [{ name: "Jordan Reyes" }],
+    capabilities: ["shell:exec"],
+    recipes: { count: 0, names: [] },
+    projectTemplates: [],
+    permissionBypassAgents: [],
+    ...overrides,
+  };
+}
+
+function previewed(
+  url: string,
+  manifest: PluginArchiveManifestPreview = previewManifest()
+): PluginUrlInstallPreviewResult {
+  return {
+    status: "preview",
+    preview: { url, archiveHash: PREVIEW_HASH, installedOnDisk: false, manifest },
+  };
+}
+
+/** Long enough for a URL dialog an install link wrongly opened to mount. */
+const URL_DIALOG_OPEN_GRACE_MS = 50;
+
+/** A URL install's review, once its download has been read (#16776). */
+function urlReviewDialog(label = "Acme Demo"): Promise<HTMLElement> {
+  return screen.findByRole("dialog", { name: `Install '${label}'?` });
+}
+
+/**
+ * Approve the review on screen. Its confirm sits behind the dialog's read-time
+ * cooldown and the installed-version read, so this waits for it to arm.
+ */
+async function approveUrlReview(label = "Acme Demo") {
+  const confirm = within(await urlReviewDialog(label)).getByRole("button", {
+    name: "Install plugin",
+  });
+  await waitFor(() => expect(confirm.getAttribute("aria-disabled")).not.toBe("true"), {
+    timeout: 3000,
+  });
+  fireEvent.click(confirm);
+}
+
 /** The native path the OS would report for a dropped test file; absent means none. */
 const droppedPaths = new WeakMap<File, string>();
 
@@ -137,6 +193,7 @@ beforeEach(() => {
       setEnabled: vi.fn().mockResolvedValue(undefined),
       installFromFile: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       installFromUrl: vi.fn().mockResolvedValue({ status: "not-implemented" }),
+      previewFromUrl: vi.fn(async (url: string) => previewed(url)),
       installFromPath: vi.fn().mockResolvedValue({ status: "not-implemented" }),
       uninstall: vi.fn().mockResolvedValue(undefined),
       checkForUpdate: vi.fn().mockResolvedValue({ status: "up-to-date" }),
@@ -332,6 +389,7 @@ describe("PluginManagerView — after an install (#16654)", () => {
       target: { value: "https://example.com/demo.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await approveUrlReview();
 
     await installStatus("Acme Demo installed");
     expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
@@ -603,10 +661,10 @@ describe("PluginManagerView — after an install (#16654)", () => {
     expect(screen.getByText("1 plugin couldn't be checked for updates.")).toBeTruthy();
   });
 
-  it("cancels a running URL install from the dialog's own Cancel", async () => {
-    let settleInstall!: (result: PluginInstallResult) => void;
-    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-      () => new Promise((resolve) => (settleInstall = resolve))
+  it("cancels a running URL download from the dialog's own Cancel", async () => {
+    let settlePreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
     );
     renderDialog();
     await screen.findByText("No plugins installed");
@@ -615,15 +673,16 @@ describe("PluginManagerView — after an install (#16654)", () => {
       target: { value: "https://example.com/slow.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
-    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
 
     // The progress banner's Cancel is behind this dialog's scrim.
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
 
-    await act(async () => settleInstall({ status: "cancelled" }));
+    await act(async () => settlePreview({ status: "cancelled" }));
     await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
   it("says nothing and selects nothing when an install fails or is cancelled", async () => {
@@ -1208,8 +1267,280 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
 
+    // An update's way back is another check, not a URL install's re-review.
     await waitFor(() =>
-      expect(screen.getByText(/no longer matches what you reviewed/)).toBeTruthy()
+      expect(
+        screen.getByText(/no longer matches what you reviewed.*Check for updates again/)
+      ).toBeTruthy()
+    );
+    expect(screen.queryByText(/Install it from the URL again/)).toBeNull();
+  });
+
+  describe("a catalog install's update (#16781)", () => {
+    const REPO = "https://github.com/acme/demo";
+    const MOVED_REPO = "https://github.com/someone-else/demo";
+    const catalogPlugin = (overrides: Partial<LoadedPluginInfo> = {}) =>
+      urlPlugin({
+        source: "catalog",
+        originalUrl: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+        ...overrides,
+      });
+    const offer = (repo = REPO) => ({
+      status: "available" as const,
+      name: "acme.demo",
+      version: "1.0.1",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+      catalog: { id: "acme.demo", version: "1.0.1", repo },
+      ...(repo === REPO ? {} : { previousRepo: REPO }),
+    });
+
+    beforeEach(() => {
+      window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+        status: "installed" as const,
+        pluginId: "acme.demo",
+      }));
+    });
+
+    async function checkSelected() {
+      renderDialog();
+      await selectPlugin();
+      fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    }
+
+    /** The severity of the callout a message sits in, or null when it isn't in one. */
+    function calloutOf(text: string): string | null {
+      return screen.getByText(text).closest("[data-callout]")?.getAttribute("data-callout") ?? null;
+    }
+
+    it("shows where the release is listed and installs it by name, held to its digest", async () => {
+      // A stored http:// URL would send a URL update through the HTTP warning;
+      // a catalog update never fetches that URL, so it never asks.
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        catalogPlugin({ originalUrl: "http://example.com/acme.demo.dntr" }),
+      ]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer());
+      await checkSelected();
+
+      const dialog = await screen.findByRole("dialog", { name: "Update 'Acme Demo'?" });
+      expect(within(dialog).getByText("v1.0.1")).toBeTruthy();
+      expect(within(dialog).getByText("Listed from").nextElementSibling?.textContent).toBe(
+        "github.com/acme/demo"
+      );
+      expect(screen.queryByTestId("plugin-update-source-changed")).toBeNull();
+      expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Update plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          {
+            pluginId: "acme.demo",
+            version: "1.0.1",
+            repo: REPO,
+            expected: { kind: "update", pluginId: "acme.demo", archiveHash: REVIEWED_HASH },
+          },
+          expect.any(String)
+        )
+      );
+      expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledTimes(1);
+      expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Install over HTTP/)).toBeNull();
+    });
+
+    it("warns that an update from another repository is a different source, naming both", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer(MOVED_REPO));
+      await checkSelected();
+
+      const warning = await screen.findByTestId("plugin-update-source-changed");
+      expect(warning.getAttribute("data-callout")).toBe("warning");
+      expect(warning.textContent).toBe(
+        "This update comes from a different repository: github.com/someone-else/demo. The installed version came from github.com/acme/demo."
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+      // The confirm names the repository the user saw, so main refuses it if
+      // the listing has moved again since.
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ repo: MOVED_REPO }),
+          expect.any(String)
+        )
+      );
+    });
+
+    it("reports a delisted plugin as a warning, not as up to date or failed, until the next check", async () => {
+      const DELISTED =
+        "The plugin catalog no longer lists Acme Demo, so it won't get updates from it. The installed copy keeps running.";
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValueOnce({
+        status: "delisted",
+        scope: "plugin",
+        version: "1.0.0",
+      });
+      await checkSelected();
+
+      await waitFor(() => expect(calloutOf(DELISTED)).toBe("warning"));
+      expect(document.querySelector('[data-callout="error"]')).toBeNull();
+      expect(screen.queryByText("Already up to date")).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Update 'Acme Demo'?" })).toBeNull();
+
+      // Relisted since: the next check's answer replaces it.
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValueOnce({
+        status: "up-to-date",
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Check Acme Demo for updates" }));
+      await waitFor(() => expect(screen.getByText("Already up to date")).toBeTruthy());
+      expect(screen.queryByText(DELISTED)).toBeNull();
+    });
+
+    describe("the delisted warning", () => {
+      const DELISTED =
+        "The plugin catalog no longer lists Acme Demo, so it won't get updates from it. The installed copy keeps running.";
+      const delisted = {
+        status: "delisted" as const,
+        scope: "plugin" as const,
+        version: "1.0.0",
+      };
+
+      async function showDelisted() {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValueOnce(delisted);
+        await checkSelected();
+        await waitFor(() => expect(screen.getByText(DELISTED)).toBeTruthy());
+      }
+
+      it("gives way to an Update all run's own summary", async () => {
+        await showDelisted();
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+          status: "up-to-date",
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+
+        await waitFor(() => expect(screen.getByText("All plugins are up to date.")).toBeTruthy());
+        expect(screen.queryByText(DELISTED)).toBeNull();
+      });
+
+      it("isn't put back by a single check that answers after Update all started", async () => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        let answer!: (value: typeof delisted) => void;
+        vi.mocked(window.electron.plugin.checkForUpdate)
+          .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+          .mockResolvedValue({ status: "up-to-date" });
+        await checkSelected();
+
+        fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+        await waitFor(() => expect(screen.getByText("All plugins are up to date.")).toBeTruthy());
+        await act(async () => answer(delisted));
+
+        expect(screen.queryByText(DELISTED)).toBeNull();
+      });
+
+      it("goes once an archive dropped over the plugin installs", async () => {
+        await showDelisted();
+        vi.mocked(window.electron.plugin.installFromPath).mockResolvedValue({
+          status: "installed",
+          pluginId: "acme.demo",
+        });
+
+        fireEvent.drop(pluginList(), {
+          dataTransfer: {
+            types: ["Files"],
+            files: [droppedFile("acme.demo.dntr", "/Users/test/acme.demo.dntr")],
+          },
+        });
+
+        await waitFor(() => expect(window.electron.plugin.installFromPath).toHaveBeenCalled());
+        await waitFor(() => expect(screen.queryByText(DELISTED)).toBeNull());
+      });
+    });
+
+    it("names the installed release, as main reports it, when only it was delisted", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+        status: "delisted",
+        scope: "release",
+        version: "0.9.3",
+      });
+      await checkSelected();
+
+      await waitFor(() =>
+        expect(
+          calloutOf(
+            "The plugin catalog no longer lists Acme Demo 0.9.3, and lists no newer release. The installed copy keeps running."
+          )
+        ).toBe("warning")
+      );
+    });
+
+    it.each([
+      [
+        { catalog: "stale", failure: "unreachable" },
+        "Couldn't refresh the plugin catalog, and an older copy isn't used for updates. Check your connection and try again.",
+      ],
+      [
+        { catalog: "unavailable", failure: "unreachable" },
+        "Couldn't reach the plugin catalog to check for updates. Check your connection and try again.",
+      ],
+      [
+        { catalog: "unavailable", failure: "not-published" },
+        "The plugin catalog isn't published yet, so this plugin can't be checked for updates.",
+      ],
+      [
+        { catalog: "unavailable", failure: "invalid" },
+        "The plugin catalog couldn't be read, so this plugin wasn't checked for updates. Try again later.",
+      ],
+    ] as const)(
+      "reports a catalog it couldn't read and offers nothing: %o",
+      async (state, copy) => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+          status: "catalog-unavailable",
+          ...state,
+        });
+        await checkSelected();
+
+        await waitFor(() => expect(calloutOf(copy)).toBe("error"));
+        expect(screen.queryByRole("dialog", { name: "Update 'Acme Demo'?" })).toBeNull();
+        expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+        expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      [
+        "catalog_mismatch",
+        "The catalog's listing of this update changed since you reviewed it, so nothing was installed. Check for updates again.",
+      ],
+      [
+        "catalog_not_listed",
+        "The plugin catalog no longer lists this update, so nothing was installed. Check for updates again.",
+      ],
+      [
+        "catalog_stale",
+        "Couldn't refresh the plugin catalog, so nothing was installed. Check your connection and try again.",
+      ],
+      [
+        "catalog_unavailable",
+        "Couldn't refresh the plugin catalog, so nothing was installed. Check your connection and try again.",
+      ],
+    ] as const)(
+      "sends a refused catalog update (%s) back to another check, not to an install link",
+      async (code, copy) => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([catalogPlugin()]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue(offer());
+        vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+          status: "failed",
+          errors: [{ code, message: "Open the link again to review it." }],
+        });
+        await checkSelected();
+
+        fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+        await waitFor(() => expect(screen.getByText(copy)).toBeTruthy());
+        expect(screen.queryByText(/Open the link again/)).toBeNull();
+      }
     );
   });
 
@@ -1259,7 +1590,7 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText(/HTTP 500/)).toBeNull();
   });
 
-  it("opens the URL dialog and routes the URL through installFromUrl", async () => {
+  it("shows a URL's archive for review before installing anything (#16776)", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1267,16 +1598,202 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
 
     fireEvent.change(screen.getByLabelText("Plugin URL"), {
-      target: { value: "https://example.com/p.dntr" },
+      target: { value: "https://example.com/p.dntr?token=secret" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
     await waitFor(() =>
-      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
-        "https://example.com/p.dntr",
+      expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr?token=secret",
         expect.any(String)
       )
     );
+    const review = within(await urlReviewDialog());
+    // The downloaded archive's own identity and permissions, and the warning.
+    expect(review.getByText("acme.demo")).toBeTruthy();
+    expect(review.getByText(CAPABILITY_META["shell:exec"].label)).toBeTruthy();
+    expect(review.getByText(/full Node\.js privileges/)).toBeTruthy();
+    // Named by host and path: a signed link's token stays off the screen.
+    expect(review.getByTestId("archive-install-source").textContent).toBe("example.com/p.dntr");
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("installs exactly the reviewed archive, bound to its digest as a fresh install", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "  https://example.com/p.dntr  " },
+    });
+    // Main hands back the URL as it fetched it; the confirm installs that.
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValueOnce(
+      previewed("https://example.com/p.dntr")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+    const previewJob = vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1];
+    const installJob = vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1];
+    expect(installJob).not.toBe(previewJob);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull());
+  });
+
+  it("binds a review that replaces an installed plugin as a replacement", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) =>
+      previewed(url, previewManifest({ version: "2.0.0" }))
+    );
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    const review = within(await urlReviewDialog());
+    await waitFor(() => expect(review.getByTestId("archive-installed-version")).toBeTruthy());
+    expect(
+      review.getByText(/replaces the installed v1\.0\.0 with this newer v2\.0\.0/)
+    ).toBeTruthy();
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "update", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+  });
+
+  it("replaces an install the list can't show, bound as a replacement", async () => {
+    // Its folder is there, but it never loaded, so the list has no row for it.
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) => ({
+      status: "preview",
+      preview: {
+        url,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: true,
+        manifest: previewManifest(),
+      },
+    }));
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    const review = within(await urlReviewDialog());
+    await waitFor(() =>
+      expect(review.getByTestId("archive-installed-version").textContent).toMatch(
+        /couldn.t be loaded/
+      )
+    );
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "https://example.com/p.dntr",
+        expect.any(String),
+        { kind: "update", pluginId: "acme.demo", archiveHash: PREVIEW_HASH }
+      )
+    );
+  });
+
+  it("installs nothing when the review is cancelled", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    fireEvent.click(within(await urlReviewDialog()).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+  });
+
+  it("explains a refused URL install as a change since the review, not an update", async () => {
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: "raw" }],
+    });
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Install it from the URL again to review it/)).toBeTruthy()
+    );
+    expect(screen.queryByText(/Check for updates again/)).toBeNull();
+  });
+
+  it("starts one download when Install is pressed twice before it renders", async () => {
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise<PluginUrlInstallPreviewResult>(() => {})
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    const input = await screen.findByLabelText("Plugin URL");
+    fireEvent.change(input, { target: { value: "https://example.com/p.dntr" } });
+
+    // One act, so the second press runs before the first one's state renders.
+    act(() => {
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a download for review when the manager closes, and drops what it returns", async () => {
+    let settlePreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
+    );
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+      target: { value: "https://example.com/p.dntr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
+
+    act(() => usePluginManagerStore.setState({ isOpen: false }));
+    await waitFor(() => expect(window.electron.plugin.cancelInstall).toHaveBeenCalledWith(jobId));
+    act(() => usePluginManagerStore.setState({ isOpen: true }));
+    await screen.findByRole("button", { name: "Install from URL" });
+
+    // The old download answers into the reopened manager, which never asked.
+    await act(async () => settlePreview(previewed("https://example.com/p.dntr")));
+
+    expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
   it("surfaces the no-sandbox security disclosure in the URL dialog", async () => {
@@ -1298,9 +1815,7 @@ describe("PluginManagerView", () => {
   });
 
   it("keeps the URL dialog open and shows an error on an invalid URL", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "invalid-url",
-    });
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue({ status: "invalid-url" });
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1357,11 +1872,11 @@ describe("PluginManagerView", () => {
       emit = cb;
       return () => {};
     });
-    let settleInstall: ((result: PluginInstallResult) => void) | undefined;
-    vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-      () => new Promise((resolve) => (settleInstall = resolve))
+    let settlePreview: ((result: PluginUrlInstallPreviewResult) => void) | undefined;
+    vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+      () => new Promise((resolve) => (settlePreview = resolve))
     );
-    // The install raced past its commit point before the request landed.
+    // The job raced past its commit point before the request landed.
     vi.mocked(window.electron.plugin.cancelInstall).mockResolvedValue(false);
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
@@ -1372,8 +1887,8 @@ describe("PluginManagerView", () => {
       target: { value: "https://example.com/p.dntr" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
-    const jobId = String(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![1]);
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
+    const jobId = String(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]![1]);
     act(() => emit!({ jobId, phase: "validating", cancellable: true }));
 
     const cancel = await screen.findByRole(
@@ -1388,7 +1903,7 @@ describe("PluginManagerView", () => {
     expect(screen.getAllByText("Checking the plugin").length).toBeGreaterThan(0);
     expect(cancel.getAttribute("aria-disabled")).toBe("true");
 
-    await act(async () => settleInstall!({ status: "cancelled" }));
+    await act(async () => settlePreview!({ status: "cancelled" }));
   });
 
   it("cancelling the http confirm does not call installFromUrl", async () => {
@@ -1409,6 +1924,7 @@ describe("PluginManagerView", () => {
     fireEvent.click(confirm.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    expect(window.electron.plugin.previewFromUrl).not.toHaveBeenCalled();
     // Cancelling reopens the URL dialog with the typed URL intact so the user
     // can switch to https.
     await waitFor(() =>
@@ -1418,11 +1934,7 @@ describe("PluginManagerView", () => {
     );
   });
 
-  it("confirming the http warning routes the URL through installFromUrl", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "installed",
-      pluginId: "acme.demo",
-    });
+  it("confirming the http warning downloads the URL for review", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
 
@@ -1436,15 +1948,19 @@ describe("PluginManagerView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
     await waitFor(() =>
-      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+      expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledWith(
         "http://example.com/p.dntr",
         expect.any(String)
       )
     );
+    await urlReviewDialog();
+    // The warning was answered once; the review's confirm doesn't ask again.
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
   });
 
-  it("shows a tailored error when a URL install fails with size_exceeded", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it("shows a tailored error when a URL download fails with size_exceeded", async () => {
+    vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue({
       status: "failed",
       errors: [{ code: "size_exceeded", message: "too big" }],
     });
@@ -1560,12 +2076,20 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
 
-    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1));
-    // A stale binding here would refuse an unrelated plugin as a "mismatch".
-    expect(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]).toEqual([
+    // The manual URL goes to its own review; the cancelled reinstall's
+    // binding would refuse an unrelated plugin as a "mismatch".
+    await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(window.electron.plugin.previewFromUrl).mock.calls[0]).toEqual([
       "http://example.com/other.dntr",
       expect.any(String),
     ]);
+    await approveUrlReview();
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(window.electron.plugin.installFromUrl).mock.calls[0]![2]).toEqual({
+      kind: "update",
+      pluginId: "acme.demo",
+      archiveHash: PREVIEW_HASH,
+    });
   });
 
   it("hides the empty state when the initial list load fails", async () => {
@@ -1601,7 +2125,34 @@ describe("PluginManagerView", () => {
       );
       // Never auto-installs — the user must press install (gates stay intact).
       expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      expect(window.electron.plugin.previewFromUrl).not.toHaveBeenCalled();
       expect(onConsumed).toHaveBeenCalledOnce();
+    });
+
+    it("leaves an open review alone when an install link arrives (#16776)", async () => {
+      const onConsumed = vi.fn();
+      const view = (intent: { action: "install"; url: string } | null) => (
+        <TooltipProvider>
+          <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={onConsumed} />
+        </TooltipProvider>
+      );
+      const { rerender } = render(view(null));
+      await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+      fireEvent.change(await screen.findByLabelText("Plugin URL"), {
+        target: { value: "https://example.com/p.dntr" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      await urlReviewDialog();
+      await waitFor(() => expect(screen.queryByLabelText("Plugin URL")).toBeNull());
+
+      rerender(view({ action: "install", url: "https://evil.example/swap.dntr" }));
+
+      await waitFor(() => expect(onConsumed).toHaveBeenCalledOnce());
+      // Give a URL dialog the chance to open, so its absence means something.
+      await new Promise((resolve) => setTimeout(resolve, URL_DIALOG_OPEN_GRACE_MS));
+      expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+      expect(await urlReviewDialog()).toBeTruthy();
     });
 
     it("scrolls to and highlights the target row for an open intent", async () => {
@@ -1715,6 +2266,288 @@ describe("PluginManagerView", () => {
       );
     });
 
+    describe("pinned and catalog install links (#16779)", () => {
+      const REPO = "https://github.com/acme/demo";
+      const CATALOG_URL = `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`;
+
+      function renderIntent(intent: PluginDeepLinkIntent, onConsumed = vi.fn()) {
+        return render(
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={onConsumed} />
+          </TooltipProvider>
+        );
+      }
+
+      beforeEach(() => {
+        window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+          status: "preview" as const,
+          preview: {
+            url: CATALOG_URL,
+            archiveHash: PREVIEW_HASH,
+            installedOnDisk: false,
+            manifest: previewManifest(),
+            catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+          },
+        }));
+        window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+          status: "installed" as const,
+          pluginId: "acme.demo",
+        }));
+      });
+
+      it("previews a catalog release straight away and installs it by name", async () => {
+        const onConsumed = vi.fn();
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo" }, onConsumed);
+
+        const dialog = await urlReviewDialog();
+        expect(onConsumed).toHaveBeenCalledOnce();
+        expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+          { pluginId: "acme.demo" },
+          expect.any(String)
+        );
+        expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+        expect(within(dialog).getByTestId("archive-install-source").textContent).toContain(
+          "Community listing from github.com/acme/demo"
+        );
+        expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+        await approveUrlReview();
+
+        await waitFor(() =>
+          expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+            {
+              pluginId: "acme.demo",
+              version: "1.0.0",
+              repo: REPO,
+              expected: { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH },
+            },
+            expect.any(String)
+          )
+        );
+        expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+      });
+
+      it("asks for the version a catalog link names", async () => {
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo", version: "2.3.4" });
+        await urlReviewDialog();
+        expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+          { pluginId: "acme.demo", version: "2.3.4" },
+          expect.any(String)
+        );
+      });
+
+      it("previews a pinned URL held to its digest, and installs only that digest", async () => {
+        const sha256 = "d".repeat(64);
+        vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(async (url) => ({
+          status: "preview",
+          preview: {
+            url,
+            archiveHash: sha256,
+            installedOnDisk: false,
+            manifest: previewManifest(),
+          },
+        }));
+        renderIntent({ action: "install", url: "https://example.com/p.dntr", sha256 });
+
+        await urlReviewDialog();
+        expect(window.electron.plugin.previewFromUrl).toHaveBeenCalledWith(
+          "https://example.com/p.dntr",
+          expect.any(String),
+          sha256
+        );
+        expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+        expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+
+        await approveUrlReview();
+
+        await waitFor(() =>
+          expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+            "https://example.com/p.dntr",
+            expect.any(String),
+            { kind: "install", pluginId: "acme.demo", archiveHash: sha256 }
+          )
+        );
+        expect(window.electron.plugin.installFromUrl).toHaveBeenCalledOnce();
+        expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+      });
+
+      const LINKED_FAILURES: Array<[string, PluginDeepLinkIntent, PluginInstallError]> = [
+        [
+          "a stale catalog",
+          { action: "install-catalog", pluginId: "acme.demo" },
+          { code: "catalog_stale", message: "The plugin catalog couldn't be refreshed." },
+        ],
+        [
+          "a pinned digest mismatch",
+          { action: "install", url: "https://example.com/p.dntr", sha256: "d".repeat(64) },
+          { code: "digest_mismatch", message: "The archive's SHA-256 doesn't match the link." },
+        ],
+        [
+          "a pinned download that failed",
+          { action: "install", url: "https://example.com/p.dntr", sha256: "d".repeat(64) },
+          { code: "fetch_failed", message: "Couldn't download the plugin." },
+        ],
+      ];
+
+      it.each(LINKED_FAILURES)(
+        "says why %s stopped the preview, and leaves no URL to install unbound",
+        async (_name, intent, error) => {
+          const failed = { status: "failed" as const, errors: [error] };
+          vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue(failed);
+          vi.mocked(window.electron.plugin.previewFromUrl).mockResolvedValue(failed);
+          renderIntent(intent);
+
+          // A failed download reads in the URL dialog's own words; anything
+          // else carries main's message.
+          expect(
+            await screen.findByText(
+              error.code === "fetch_failed"
+                ? "Couldn't download the plugin. Check the URL and try again."
+                : error.message
+            )
+          ).toBeTruthy();
+          expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+          expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+          expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+          expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+        }
+      );
+
+      it("sends a catalog install that no longer matches back to its link", async () => {
+        vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+          status: "failed",
+          errors: [{ code: "archive_mismatch", message: "digest" }],
+        });
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo" });
+        await approveUrlReview();
+
+        expect(await screen.findByText(/Open the install link again to review it/)).toBeTruthy();
+        expect(screen.queryByText(/Install it from the URL again/)).toBeNull();
+      });
+
+      it("says why a malformed install link was refused, fetching nothing", async () => {
+        renderIntent({ action: "install-refused", reason: "malformed-sha256" });
+
+        expect(await screen.findByText(/install link's SHA-256 isn't 64 hex digits/)).toBeTruthy();
+        expect(window.electron.plugin.previewFromUrl).not.toHaveBeenCalled();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+        expect(screen.queryByLabelText("Plugin URL")).toBeNull();
+      });
+
+      it("won't start over an install the user has open, and says so", async () => {
+        const { rerender } = renderIntent({
+          action: "install",
+          url: "https://first.example/p.dntr",
+        });
+        await screen.findByLabelText("Plugin URL");
+
+        rerender(
+          <TooltipProvider>
+            <PluginManagerView
+              deepLinkIntent={{ action: "install-catalog", pluginId: "acme.demo" }}
+              onDeepLinkConsumed={() => {}}
+            />
+          </TooltipProvider>
+        );
+
+        expect(await screen.findByText(/Finish or cancel the current install/)).toBeTruthy();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+        expect((screen.getByLabelText("Plugin URL") as HTMLInputElement).value).toBe(
+          "https://first.example/p.dntr"
+        );
+      });
+
+      it("leaves an open uninstall confirm alone, for a link and for a refusal", async () => {
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+        const view = (intent: PluginDeepLinkIntent | null) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(view(null));
+        await selectPlugin();
+        fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+        await screen.findByText("Uninstall 'Acme Demo'?");
+
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+        expect(await screen.findByText(/Finish or cancel the current install/)).toBeTruthy();
+        rerender(view({ action: "install-refused", reason: "malformed-id" }));
+        expect(await screen.findByText(/plugin id isn't a community plugin id/)).toBeTruthy();
+
+        expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+      });
+
+      it("waits out Update all's checks rather than review beside them", async () => {
+        const updatable = makePlugin({
+          source: "url",
+          originalUrl: "https://example.com/acme.demo.dntr",
+          archiveHash: "h",
+        });
+        vi.mocked(window.electron.plugin.list).mockResolvedValue([updatable]);
+        vi.mocked(window.electron.plugin.checkForUpdate).mockImplementation(
+          () => new Promise(() => {})
+        );
+        const view = (intent: PluginDeepLinkIntent | null) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(view(null));
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+        await waitFor(() => expect(window.electron.plugin.checkForUpdate).toHaveBeenCalled());
+
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+
+        expect(await screen.findByText(/Finish or cancel the current install/)).toBeTruthy();
+        expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+      });
+
+      it("previews a link that opens the manager under StrictMode, consuming it once", async () => {
+        let settle!: (result: PluginUrlInstallPreviewResult) => void;
+        const preview = vi.mocked(window.electron.plugin.previewFromCatalog);
+        const resolved = await preview({ pluginId: "acme.demo" });
+        preview.mockClear();
+        preview.mockImplementation(() => new Promise((resolve) => (settle = resolve)));
+        const onConsumed = vi.fn();
+        render(
+          <StrictMode>
+            <TooltipProvider>
+              <PluginManagerView
+                deepLinkIntent={{ action: "install-catalog", pluginId: "acme.demo" }}
+                onDeepLinkConsumed={onConsumed}
+              />
+            </TooltipProvider>
+          </StrictMode>
+        );
+        await waitFor(() => expect(preview).toHaveBeenCalled());
+        await act(async () => settle(resolved));
+
+        expect(await urlReviewDialog()).toBeTruthy();
+        expect(preview).toHaveBeenCalledOnce();
+        expect(onConsumed).toHaveBeenCalledOnce();
+        expect(screen.queryByText(/Finish or cancel the current install/)).toBeNull();
+      });
+
+      it("previews a link that reopens a manager closed with its URL dialog up", async () => {
+        const view = (intent: PluginDeepLinkIntent) => (
+          <TooltipProvider>
+            <PluginManagerView deepLinkIntent={intent} onDeepLinkConsumed={() => {}} />
+          </TooltipProvider>
+        );
+        const { rerender } = render(
+          view({ action: "install", url: "https://first.example/p.dntr" })
+        );
+        await screen.findByLabelText("Plugin URL");
+        act(() => usePluginManagerStore.setState({ isOpen: false }));
+        rerender(view({ action: "install-catalog", pluginId: "acme.demo" }));
+        act(() => usePluginManagerStore.setState({ isOpen: true }));
+
+        expect(await urlReviewDialog()).toBeTruthy();
+        expect(screen.queryByText(/Finish or cancel the current install/)).toBeNull();
+      });
+    });
+
     it("shows a notice when an open intent targets an uninstalled plugin", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
       render(
@@ -1737,9 +2570,9 @@ describe("PluginManagerView", () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         makePlugin({ disabled: true, pendingRestart: true }),
       ]);
-      let settleInstall: ((result: PluginInstallResult) => void) | undefined;
-      vi.mocked(window.electron.plugin.installFromUrl).mockImplementation(
-        () => new Promise((resolve) => (settleInstall = resolve))
+      let settlePreview: ((result: PluginUrlInstallPreviewResult) => void) | undefined;
+      vi.mocked(window.electron.plugin.previewFromUrl).mockImplementation(
+        () => new Promise((resolve) => (settlePreview = resolve))
       );
       renderDialog();
       await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
@@ -1750,13 +2583,13 @@ describe("PluginManagerView", () => {
         target: { value: "https://example.com/p.dntr" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Install" }));
-      await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalled());
+      await waitFor(() => expect(window.electron.plugin.previewFromUrl).toHaveBeenCalled());
 
       // Relaunching now would take the install down with it.
       await waitFor(() => expect(screen.queryByRole("button", { name: "Restart" })).toBeNull());
       expect(screen.getByText(/Restart once the install finishes/)).toBeTruthy();
 
-      await act(async () => settleInstall!({ status: "cancelled" }));
+      await act(async () => settlePreview!({ status: "cancelled" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy());
     });
 
@@ -2322,6 +3155,80 @@ describe("PluginManagerView", () => {
           { pluginId: "acme.a", archiveHash: "a".repeat(64) }
         )
       );
+    });
+
+    describe("with catalog installs (#16781)", () => {
+      const makeCatalog = (name: string, displayName: string) =>
+        makeUrl(name, displayName, `https://github.com/acme/${name}/releases/download/v1/a.dntr`);
+      const catalogFixtures = () =>
+        ["a", "b", "c", "d"].map((x) => ({
+          ...makeCatalog(`acme.${x}`, `Plugin ${x.toUpperCase()}`),
+          source: "catalog" as const,
+          catalog: { id: `acme.${x}`, version: "1.0.0", repo: `https://github.com/acme/acme.${x}` },
+        }));
+
+      it("names delisted plugins and releases in the summary, apart from failed checks", async () => {
+        listMock().mockResolvedValue(catalogFixtures());
+        checkMock().mockImplementation(async (id: string) =>
+          id === "acme.a"
+            ? { status: "delisted", scope: "plugin", version: "1.0.0" }
+            : id === "acme.b"
+              ? { status: "delisted", scope: "release", version: "1.0.0" }
+              : id === "acme.c"
+                ? { status: "catalog-unavailable", catalog: "unavailable", failure: "unreachable" }
+                : { status: "up-to-date" }
+        );
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        await waitFor(() =>
+          expect(
+            screen.getByText(
+              "No updates found. 1 plugin couldn't be checked. The plugin catalog no longer lists Plugin A, Plugin B 1.0.0."
+            )
+          ).toBeTruthy()
+        );
+      });
+
+      it("keeps the delisted line up beside the updates it found, after they install", async () => {
+        window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+          status: "installed" as const,
+          pluginId: "acme.d",
+        }));
+        listMock().mockResolvedValue(catalogFixtures());
+        checkMock().mockImplementation(async (id: string) =>
+          id === "acme.a"
+            ? { status: "delisted", scope: "plugin", version: "1.0.0" }
+            : id === "acme.c"
+              ? { status: "fetch-failed", message: "net" }
+              : id === "acme.d"
+                ? {
+                    status: "available",
+                    name: "acme.d",
+                    version: "1.0.1",
+                    capabilities: [],
+                    archiveHash: "d".repeat(64),
+                    catalog: {
+                      id: "acme.d",
+                      version: "1.0.1",
+                      repo: "https://github.com/acme/acme.d",
+                    },
+                  }
+                : { status: "up-to-date" }
+        );
+        renderDialog();
+        fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+        const SUMMARY =
+          "1 plugin couldn't be checked for updates. The plugin catalog no longer lists Plugin A.";
+        await waitFor(() => expect(screen.getByText("Update 'Plugin D'?")).toBeTruthy());
+        fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+        await waitFor(() =>
+          expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledTimes(1)
+        );
+        await waitFor(() => expect(screen.queryByText("Update 'Plugin D'?")).toBeNull());
+        expect(screen.getByText(SUMMARY)).toBeTruthy();
+      });
     });
 
     it("drains multiple available updates one confirm at a time", async () => {
@@ -3283,5 +4190,361 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     );
     expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy();
     expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("holds a Browse install while an HTTP update reads its panels, then allows it (#16782)", async () => {
+    updatablePlugin("http://example.com/p.dntr");
+    const read = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(read.promise)
+      .mockResolvedValue([]);
+    window.electron.plugin.browseCatalog = vi.fn(async () => ({
+      status: "available" as const,
+      listings: [
+        {
+          id: "acme.other",
+          version: "1.0.0",
+          repo: "https://github.com/acme/other",
+          capabilities: [],
+        },
+      ],
+      fetchedAt: Date.now(),
+      stale: false as const,
+    }));
+    window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+      status: "cancelled" as const,
+    }));
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Update plugin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+
+    // The update's confirms have closed, but its read hasn't settled.
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install acme.other" }));
+    expect(
+      await screen.findByText("Finish or cancel the current install, then install from Browse.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+
+    await act(async () => {
+      read.resolve([]);
+      await read.promise;
+    });
+    await waitFor(() => expect(window.electron.plugin.installFromUrl).toHaveBeenCalledOnce());
+    const install = screen.getByRole("button", { name: "Install acme.other" });
+    await waitFor(() => expect(install.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(install);
+    await waitFor(() =>
+      expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+        { pluginId: "acme.other", version: "1.0.0" },
+        expect.any(String)
+      )
+    );
+  });
+});
+
+describe("PluginManagerView — Browse (#16782)", () => {
+  const REPO = "https://github.com/acme/demo";
+  const LISTING = {
+    id: "acme.demo",
+    version: "1.0.0",
+    repo: REPO,
+    capabilities: ["shell:exec"],
+  };
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    window.electron.plugin.browseCatalog = vi.fn(async () => ({
+      status: "available" as const,
+      listings: [LISTING],
+      fetchedAt: Date.now(),
+      stale: false as const,
+    }));
+    window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
+      status: "preview" as const,
+      preview: {
+        url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: false,
+        manifest: previewManifest(),
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+      },
+    }));
+    window.electron.plugin.installFromCatalog = vi.fn(async () => ({
+      status: "installed" as const,
+      pluginId: "acme.demo",
+    }));
+  });
+
+  function browseButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Browse" });
+  }
+
+  async function openBrowse() {
+    fireEvent.click(browseButton());
+    return screen.findByRole("list", { name: "Community plugins" });
+  }
+
+  it("reads no catalog until Browse is opened, then lists it in the wide pane", async () => {
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    expect(window.electron.plugin.browseCatalog).not.toHaveBeenCalled();
+
+    await openBrowse();
+
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
+    expect(browseButton().getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("region", { name: "Community plugins" })).toBeTruthy();
+  });
+
+  it("installs a listing through the catalog route, previewing the version on screen first", async () => {
+    // The list only holds the plugin once main has installed it.
+    vi.mocked(window.electron.plugin.list).mockImplementation(async () =>
+      vi.mocked(window.electron.plugin.installFromCatalog).mock.calls.length > 0
+        ? [makePlugin()]
+        : []
+    );
+    renderDialog();
+    await screen.findByText("No plugins installed");
+    await openBrowse();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+
+    const dialog = await urlReviewDialog();
+    expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+      { pluginId: "acme.demo", version: "1.0.0" },
+      expect.any(String)
+    );
+    expect(within(dialog).getByTestId("archive-install-source").textContent).toContain(
+      "Community listing from github.com/acme/demo"
+    );
+    expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+    await approveUrlReview();
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+        {
+          pluginId: "acme.demo",
+          version: "1.0.0",
+          repo: REPO,
+          expected: { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH },
+        },
+        expect.any(String)
+      )
+    );
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    // The installed plugin takes the pane, the way any install's does.
+    expect(await screen.findByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+  });
+
+  it("marks an installed plugin and shows its details on request", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    const list = await openBrowse();
+
+    expect(within(list).getByText("Installed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install acme.demo" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "View installed acme.demo" }));
+
+    expect(await screen.findByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+    expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("returns to Browse when the selection is cleared, and to the installed home when toggled off", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await openBrowse();
+
+    await selectPlugin();
+    expect(screen.getByRole("region", { name: "Details for Acme Demo" })).toBeTruthy();
+    expect(browseButton().getAttribute("aria-pressed")).toBe("false");
+
+    await selectPlugin();
+    expect(await screen.findByRole("region", { name: "Community plugins" })).toBeTruthy();
+
+    fireEvent.click(browseButton());
+    expect(screen.getByRole("region", { name: "Installed plugins" })).toBeTruthy();
+  });
+
+  it("words a catalog refusal for Browse, not for an install link", async () => {
+    vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+      status: "failed",
+      errors: [
+        {
+          code: "catalog_not_listed",
+          message:
+            'The plugin catalog doesn\'t list version 1.0.0 of "acme.demo", so nothing was installed. It may have been removed, or the link may be wrong.',
+        },
+      ],
+    });
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await approveUrlReview();
+
+    expect(await screen.findByText(/Refresh Browse to see what it lists now/)).toBeTruthy();
+    expect(screen.queryByText(/the link may be wrong/)).toBeNull();
+  });
+
+  const LINK_WORDED_FAILURES: Array<[PluginInstallError["code"], string]> = [
+    [
+      "catalog_not_listed",
+      'The plugin catalog doesn\'t list version 1.0.0 of "acme.demo", so nothing was installed. It may have been removed, or the link may be wrong.',
+    ],
+    [
+      "catalog_stale",
+      "The plugin catalog couldn't be refreshed, and an older copy isn't used for installs, so nothing was installed. Check your connection and open the link again.",
+    ],
+    [
+      "catalog_unavailable",
+      "Couldn't reach the plugin catalog, so nothing was installed. Check your connection and open the link again.",
+    ],
+    [
+      "catalog_mismatch",
+      "The catalog's listing of this release changed since you reviewed it, so nothing was installed. Open the link again to review it.",
+    ],
+    ["fetch_failed", "Couldn't download the plugin. Check the URL and try again."],
+    ["content_type_rejected", "That URL didn't return a plugin archive (.dntr)."],
+  ];
+
+  it.each(LINK_WORDED_FAILURES)(
+    "words a %s refusal of a Browse preview for Browse, with no review left open",
+    async (code, message) => {
+      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+        status: "available",
+        listings: [LISTING],
+        fetchedAt: Date.now() - 60 * 60 * 1000,
+        stale: true,
+        failure: "unreachable",
+      });
+      vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+        status: "failed",
+        errors: [{ code, message }],
+      });
+      renderDialog();
+      await openBrowse();
+      fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+
+      await waitFor(() => expect(document.querySelector('[data-callout="error"]')).not.toBeNull());
+      const shown = document.querySelector('[data-callout="error"]')?.textContent ?? "";
+      expect(shown).not.toContain(message);
+      expect(shown).not.toMatch(/\blink\b|\bURL\b/);
+      expect(screen.queryByRole("dialog", { name: /^Install '/ })).toBeNull();
+      expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+      expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends a Browse install whose bytes changed back to Browse to review again", async () => {
+    vi.mocked(window.electron.plugin.installFromCatalog).mockResolvedValue({
+      status: "failed",
+      errors: [{ code: "archive_mismatch", message: "digest" }],
+    });
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await approveUrlReview();
+
+    expect(await screen.findByText(/Install it from Browse again to review it/)).toBeTruthy();
+    expect(screen.queryByText(/install link|from the URL/)).toBeNull();
+  });
+
+  it("won't start a Browse install over an uninstall that is waiting on its confirm", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "available",
+      listings: [LISTING, { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" }],
+      fetchedAt: Date.now(),
+      stale: false,
+    });
+    renderDialog();
+    await selectPlugin();
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.other" }));
+
+    expect(
+      await screen.findByText("Finish or cancel the current install, then install from Browse.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.previewFromCatalog).not.toHaveBeenCalled();
+    expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy();
+  });
+
+  it("won't let a dropped archive take over a Browse preview still downloading", async () => {
+    let finishPreview!: (result: PluginUrlInstallPreviewResult) => void;
+    vi.mocked(window.electron.plugin.previewFromCatalog).mockReturnValue(
+      new Promise((resolve) => {
+        finishPreview = resolve;
+      })
+    );
+    renderDialog();
+    await openBrowse();
+    fireEvent.click(screen.getByRole("button", { name: "Install acme.demo" }));
+    await waitFor(() => expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalled());
+
+    await dropOnView([droppedFile("acme.dntr", "/Users/test/Downloads/acme.dntr")]);
+
+    expect(
+      await screen.findByText("Finish or cancel the current install, then drop the file again.")
+    ).toBeTruthy();
+    expect(window.electron.plugin.installFromPath).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishPreview({
+        status: "preview",
+        preview: {
+          url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+          archiveHash: PREVIEW_HASH,
+          installedOnDisk: false,
+          manifest: previewManifest(),
+          catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+        },
+      });
+    });
+    expect(await urlReviewDialog()).toBeTruthy();
+  });
+
+  it("leaves the installed list alone when the catalog can't be read", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "unavailable",
+      failure: "unreachable",
+    });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    fireEvent.click(browseButton());
+
+    expect(await screen.findByText("Connect to browse community plugins")).toBeTruthy();
+    expect(pluginRowButton("Acme Demo")).toBeTruthy();
+    expect(screen.queryByText(/couldn't load plugins/i)).toBeNull();
+  });
+
+  it("leaves Browse when the manager closes, so reopening reads no catalog", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    renderDialog();
+    await openBrowse();
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
+
+    act(() => usePluginManagerStore.setState({ isOpen: false }));
+    act(() => usePluginManagerStore.setState({ isOpen: true }));
+
+    expect(await screen.findByRole("region", { name: "Installed plugins" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Community plugins" })).toBeNull();
+    expect(window.electron.plugin.browseCatalog).toHaveBeenCalledOnce();
   });
 });

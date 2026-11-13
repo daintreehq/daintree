@@ -261,6 +261,9 @@ export interface GeneratedElectronAPI {
     open(
       ...args: IpcInvokeMap["canopy-window:open"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:open"]["result"]>;
+    openAssistant(
+      ...args: IpcInvokeMap["canopy-window:open-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy-window:open-assistant"]["result"]>;
   };
   claude: {
     findReplySpan(
@@ -343,6 +346,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["composer-hold:list"]["args"]
     ): Promise<IpcInvokeMap["composer-hold:list"]["result"]>;
+    sendNow(
+      ...args: IpcInvokeMap["composer-hold:send-now"]["args"]
+    ): Promise<IpcInvokeMap["composer-hold:send-now"]["result"]>;
     withdraw(
       ...args: IpcInvokeMap["composer-hold:withdraw"]["args"]
     ): Promise<IpcInvokeMap["composer-hold:withdraw"]["result"]>;
@@ -1169,6 +1175,9 @@ export interface GeneratedElectronAPI {
     backupDatabases(
       ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
     ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
+    browseCatalog(
+      ...args: IpcInvokeMap["plugin:browse-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:browse-catalog"]["result"]>;
     cancelAccountConnect(
       ...args: IpcInvokeMap["plugin:account-cancel-connect"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-cancel-connect"]["result"]>;
@@ -1331,6 +1340,9 @@ export interface GeneratedElectronAPI {
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
+    installFromCatalog(
+      ...args: IpcInvokeMap["plugin:install-from-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:install-from-catalog"]["result"]>;
     installFromFile(
       ...args: IpcInvokeMap["plugin:install-from-file"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-file"]["result"]>;
@@ -1340,6 +1352,9 @@ export interface GeneratedElectronAPI {
     installFromUrl(
       ...args: IpcInvokeMap["plugin:install-from-url"]["args"]
     ): Promise<IpcInvokeMap["plugin:install-from-url"]["result"]>;
+    invokeAction(
+      ...args: IpcInvokeMap["plugin:actions-invoke"]["args"]
+    ): Promise<IpcInvokeMap["plugin:actions-invoke"]["result"]>;
     keybindings(
       ...args: IpcInvokeMap["plugin:keybindings"]["args"]
     ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;
@@ -1361,6 +1376,12 @@ export interface GeneratedElectronAPI {
     pickPath(
       ...args: IpcInvokeMap["plugin:pick-path"]["args"]
     ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
+    previewFromCatalog(
+      ...args: IpcInvokeMap["plugin:preview-from-catalog"]["args"]
+    ): Promise<IpcInvokeMap["plugin:preview-from-catalog"]["result"]>;
+    previewFromUrl(
+      ...args: IpcInvokeMap["plugin:preview-from-url"]["args"]
+    ): Promise<IpcInvokeMap["plugin:preview-from-url"]["result"]>;
     previewProjectTemplate(
       ...args: IpcInvokeMap["plugin:project-template-preview"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-template-preview"]["result"]>;
@@ -1497,6 +1518,9 @@ export interface GeneratedElectronAPI {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
+    getHostTargeting(
+      ...args: IpcInvokeMap["plugin-capability:get-host-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-host-targeting"]["result"]>;
     getOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:get-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-os-notifications"]["result"]>;
@@ -1521,6 +1545,9 @@ export interface GeneratedElectronAPI {
     revokePresetGrant(
       ...args: IpcInvokeMap["plugin-capability:revoke-preset-grant"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:revoke-preset-grant"]["result"]>;
+    setHostTargeting(
+      ...args: IpcInvokeMap["plugin-capability:set-host-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-host-targeting"]["result"]>;
     setOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:set-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-os-notifications"]["result"]>;

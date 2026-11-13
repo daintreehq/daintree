@@ -2188,7 +2188,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       const { store, server, dispatchAction } = harness(
         "s-skip",
         { "worktree.delete": { result: { ok: true, result: null } } },
-        { readAssistantConfirmationsSkipped: () => true }
+        { readAssistantConfirmationPolicy: () => ({ skipsAll: true, delegated: new Set() }) }
       );
       store.sessionOriginMap.set("s-skip", "help");
       store.resourceOwnership.record("s-skip", [{ kind: "worktree", id: "/tmp/wt" }]);
@@ -2207,11 +2207,44 @@ describe("session-scoped resource ownership (#11909)", () => {
       );
     });
 
+    // Handed over one by one (#16752), the owned delete is settled on the id
+    // the assistant called, never the plain delete it is sent on as.
+    it.each([
+      { delegated: ["worktree.deleteOwned"], confirmed: true, authorization: "skip-preference" },
+      { delegated: ["worktree.delete"], confirmed: false, authorization: undefined },
+    ])(
+      "settles a handed-over owned delete on the id called ($delegated)",
+      async ({ delegated, confirmed, authorization }) => {
+        const { store, server, dispatchAction } = harness(
+          "s-delegated",
+          { "worktree.delete": { result: { ok: true, result: null } } },
+          {
+            readAssistantConfirmationPolicy: () => ({
+              skipsAll: false,
+              delegated: new Set(delegated),
+            }),
+          }
+        );
+        store.sessionOriginMap.set("s-delegated", "help");
+        store.resourceOwnership.record("s-delegated", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        const call = dispatchAction.mock.calls.at(-1)!;
+        expect(call[0]).toBe("worktree.delete");
+        expect(call[2]).toBe(confirmed);
+        expect(call[3]).toBe(authorization);
+      }
+    );
+
     it("still refuses a worktree the session does not own under the skip preference (#12874)", async () => {
       const { store, server, dispatchAction } = harness(
         "s-skip-unowned",
         { "worktree.delete": { result: { ok: true, result: null } } },
-        { readAssistantConfirmationsSkipped: () => true }
+        { readAssistantConfirmationPolicy: () => ({ skipsAll: true, delegated: new Set() }) }
       );
       store.sessionOriginMap.set("s-skip-unowned", "help");
 

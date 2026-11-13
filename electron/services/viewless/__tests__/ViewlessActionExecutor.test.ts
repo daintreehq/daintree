@@ -228,6 +228,114 @@ describe("viewless actions", () => {
     });
   });
 
+  describe("a Shell plugin's call (#16767)", () => {
+    it("refuses a confirm-gated action outright: no approval stands in and nobody is asked", async () => {
+      const hosts = makeHosts();
+      const { deps, invoke } = makeDeps({ getWorkspaceHosts: () => hosts });
+      const requestApproval = vi.fn(async () => ({
+        decision: "approved" as const,
+        deadline: Date.now() + 60_000,
+      }));
+
+      const result = await executeViewlessAction(
+        {
+          ...request("worktree.delete", { worktreeId: "/repo-wt/feature" }, { confirmed: true }),
+          source: "plugin",
+          requestApproval,
+        },
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(hosts.getDeletePreview).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.WORKTREE_DELETE,
+        expect.anything()
+      );
+    });
+
+    it("holds it to a plugin's tiers: a shell with a command is refused, a plain one opens", async () => {
+      const { deps, invoke } = makeDeps();
+
+      const withCommand = await executeViewlessAction(
+        { ...request("terminal.new", { command: "make deploy" }), source: "plugin" },
+        deps
+      );
+      expect(withCommand).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+
+      const plain = await executeViewlessAction(
+        { ...request("terminal.new", {}), source: "plugin" },
+        deps
+      );
+      expect(plain).toMatchObject({ ok: true });
+    });
+
+    it("refuses a launch a plugin configures, which an agent's call may make", async () => {
+      const { deps, invoke } = makeDeps();
+      const configured = request("agent.launch", { agentId: "claude", env: { DEBUG: "1" } });
+
+      const result = await executeViewlessAction({ ...configured, source: "plugin" }, deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+      expect(invoke).not.toHaveBeenCalledWith(
+        PROJECT.id,
+        CHANNELS.TERMINAL_SPAWN,
+        expect.anything()
+      );
+    });
+
+    it("reads status for it but never terminal text", async () => {
+      const readTerminalStatus = vi.fn(async () => ({
+        terminals: [
+          {
+            terminalId: "t-1",
+            submission: { token: "s-1", phase: "submitted", output: "secret text" },
+          },
+        ],
+        source: "pty",
+        unavailableFields: [],
+      }));
+      const { deps } = makeDeps({ readTerminalStatus } as never);
+
+      const withOutput = await executeViewlessAction(
+        {
+          ...request("terminal.getStatus", { terminalIds: ["t-1"], includeOutput: true }),
+          source: "plugin",
+        },
+        deps
+      );
+      expect(withOutput).toMatchObject({ ok: false, error: { code: "RESTRICTED" } });
+      expect(readTerminalStatus).not.toHaveBeenCalled();
+
+      const status = await executeViewlessAction(
+        {
+          ...request("terminal.getStatus", { terminalIds: ["t-1"], submissionToken: "s-1" }),
+          source: "plugin",
+        },
+        deps
+      );
+      expect(status).toMatchObject({
+        ok: true,
+        result: { terminals: [{ terminalId: "t-1", submission: { token: "s-1" } }] },
+      });
+      expect(JSON.stringify(status)).not.toContain("secret text");
+
+      // An agent's read keeps the captured output.
+      const agentRead = await executeViewlessAction(
+        request("terminal.getStatus", { terminalIds: ["t-1"], submissionToken: "s-1" }),
+        deps
+      );
+      expect(JSON.stringify(agentRead)).toContain("secret text");
+    });
+  });
+
   describe("a confirm-gated call put to someone else (#13501)", () => {
     const deleteArgs = { worktreeId: "/repo-wt/feature" };
 

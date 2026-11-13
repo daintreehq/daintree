@@ -24,12 +24,24 @@ type SaveFleetKind = "snapshot" | "predicate";
 type RuleState = PredicateFleetSavedScope["stateFilter"];
 type RuleScope = PredicateFleetSavedScope["scope"];
 
+export interface SaveFleetRule {
+  state: RuleState;
+  scope: RuleScope;
+}
+
 interface SaveFleetDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  onCloseComplete?: () => void;
   /** This view's armed panes: all a snapshot can hold. */
   armedCount: number;
   restoreFocusTo?: RestoreFocusTarget;
+  /**
+   * The rule last chosen here. The dialog unmounts between uses, so its host
+   * keeps the choice for the next opening.
+   */
+  initialRule?: SaveFleetRule;
+  onRuleChange?: (rule: SaveFleetRule) => void;
 }
 
 // Pinned to English, like the sentence around it.
@@ -66,13 +78,16 @@ function savedIds(): Set<string> {
 export function SaveFleetDialog({
   isOpen,
   onClose,
+  onCloseComplete,
   armedCount,
   restoreFocusTo,
+  initialRule,
+  onRuleChange,
 }: SaveFleetDialogProps): ReactElement {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<SaveFleetKind>("snapshot");
-  const [ruleState, setRuleState] = useState<RuleState>("waiting");
-  const [ruleScope, setRuleScope] = useState<RuleScope>("current");
+  const [ruleState, setRuleState] = useState<RuleState>(initialRule?.state ?? "waiting");
+  const [ruleScope, setRuleScope] = useState<RuleScope>(initialRule?.scope ?? "current");
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -151,6 +166,7 @@ export function SaveFleetDialog({
       dismissible={!saving}
       initialFocus="none"
       restoreFocusTo={restoreFocusTo}
+      onCloseComplete={onCloseComplete}
       data-testid="fleet-save-dialog"
     >
       <AppDialog.Header>
@@ -222,6 +238,7 @@ export function SaveFleetDialog({
                   onValueChange={(v) => {
                     if (v === "all" || v === "waiting" || v === "working" || v === "finished") {
                       setRuleState(v);
+                      onRuleChange?.({ state: v, scope: ruleScope });
                     }
                   }}
                 >
@@ -244,7 +261,10 @@ export function SaveFleetDialog({
                 <Select
                   value={ruleScope}
                   onValueChange={(v) => {
-                    if (v === "current" || v === "all") setRuleScope(v);
+                    if (v === "current" || v === "all") {
+                      setRuleScope(v);
+                      onRuleChange?.({ state: ruleState, scope: v });
+                    }
                   }}
                 >
                   <SelectTrigger

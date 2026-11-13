@@ -177,6 +177,41 @@ export async function openInAssistant(
 }
 
 /**
+ * "Open in Assistant" from the Canopy window (#16758), which holds no project
+ * and moves to none: the assistant opens in a window of the machine it runs
+ * on, and the Canopy window stays where it is. One of this machine's is placed
+ * by main, which refuses before anything moves when it has ended or no view
+ * holds its lane. Another host's lane opens in a window on that host, the one
+ * showing its project or a new one, and is checked again once it arrives; one
+ * its host lists as held by no view opens nothing, as main refuses here.
+ * Another host's global session takes its input only from that machine's own
+ * windows. A window that didn't come forward rejects with why.
+ */
+export async function openAssistantFromCanopyWindow(
+  subject: AgentDirectorySubject,
+  /** Whether its host's directory lists a view holding it. */
+  attached: boolean
+): Promise<OpenInAssistantResult> {
+  if (watchedHere(subject)) {
+    const refused = await window.electron.canopyWindow.openAssistant(subject);
+    return refused === null ? { ok: true } : { ok: false, reason: refused };
+  }
+  const destination = await resolveDestination(subject);
+  if (!destination) return { ok: false, reason: "ended" };
+  if (destination.scope === "global") return { ok: false, reason: "unsupported" };
+  if (!attached) return { ok: false, reason: "not-attached" };
+  const result = await window.electron.remoteHosts.switchWindowHost({
+    hostId: destination.hostId,
+    newWindow: true,
+    projectId: destination.projectId,
+    focusIntent: { intent: "open-assistant", subject },
+  });
+  return result.outcome === "switched" || result.outcome === "focused-elsewhere"
+    ? { ok: true }
+    : { ok: false, reason: "not-switched" };
+}
+
+/**
  * Show the global session in this view's Assistant panel, pinned to the exact
  * run main just confirmed: no project moves, nothing starts, and if that run is
  * replaced before the pane reads it, the pane says it ended rather than showing

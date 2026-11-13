@@ -1,6 +1,5 @@
 import { EventEmitter } from "events";
-import { execFileSync } from "child_process";
-import fs from "fs";
+import type { IPty } from "node-pty";
 import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
@@ -40,7 +39,10 @@ import {
 import { GRACEFUL_KILL_TERMINAL_BUDGET_MS, type GracefulCaptureHost } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
-import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
+import {
+  deleteSessionFile,
+  flushPendingSessionWritesSync,
+} from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
@@ -172,6 +174,8 @@ export class PtyManager extends EventEmitter {
   constructor() {
     super();
     this.registry = new TerminalRegistry(undefined, (id) => {
+      // Main keeps a preserved entry's shard routing until it hears this.
+      this.emit("terminal-removed", id);
       const streamEnd = this.streamOffsets.get(id);
       if (streamEnd === undefined) return;
       this.streamOffsets.delete(id);
@@ -610,6 +614,7 @@ export class PtyManager extends EventEmitter {
               );
               return;
             }
+            const preserved = terminalProcess.shouldPreserveOnExit(exitCode);
             this.emit(
               "exit",
               termId,
@@ -617,9 +622,10 @@ export class PtyManager extends EventEmitter {
               signal,
               options.launchGeneration,
               this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
-              terminalProcess.getInfo().spawnedAt
+              terminalProcess.getInfo().spawnedAt,
+              preserved
             );
-            if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
+            if (!preserved) {
               this.registry.delete(termId);
             }
             this.syncTreeKillHelperWarmth();
@@ -1218,21 +1224,12 @@ export class PtyManager extends EventEmitter {
     return terminal.getSerializedStateAsync(options);
   }
 
-  private resolveTtyPath(pid: number): string | undefined {
-    try {
-      if (process.platform === "win32") return undefined;
-      if (process.platform === "linux") {
-        return fs.readlinkSync(`/proc/${pid}/fd/0`);
-      }
-      // macOS
-      const tty = execFileSync("ps", ["-p", String(pid), "-o", "tty="], { timeout: 500 })
-        .toString()
-        .trim();
-      if (!tty || tty === "??" || tty === "?") return undefined;
-      return `/dev/${tty}`;
-    } catch {
-      return undefined;
-    }
+  // node-pty records the slave device path at spawn, so this is a property read; probing
+  // `ps` or /proc here would block the pty-host loop on every getTerminalInfo poll.
+  private resolveTtyPath(ptyProcess: IPty): string | undefined {
+    if (process.platform === "win32") return undefined;
+    const ptsName = (ptyProcess as unknown as { ptsName?: unknown }).ptsName;
+    return typeof ptsName === "string" && ptsName.length > 0 ? ptsName : undefined;
   }
 
   /**
@@ -1277,7 +1274,7 @@ export class PtyManager extends EventEmitter {
       ptyCols: ptyProcess?.cols,
       ptyRows: ptyProcess?.rows,
       ptyForegroundProcess: ptyProcess?.process,
-      ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess.pid) : undefined,
+      ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess) : undefined,
       spawnArgs: terminalInfo.spawnArgs,
       agentLaunchFlags: terminalInfo.agentLaunchFlags,
       agentModelId: terminalInfo.agentModelId,
@@ -1478,6 +1475,15 @@ export class PtyManager extends EventEmitter {
     // without killing. Fall back to immediate kill in that case.
     if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
       this.kill(id, "graceful-kill-fallback", options);
+    } else if (
+      terminal.getInfo().isExited &&
+      !options?.preserveSession &&
+      this.registry.get(id) === terminal
+    ) {
+      // An exited entry still registered was kept for its final output. Closing
+      // its pane removes it, as a plain kill does, or it would outlive the pane
+      // and hold its shard (#16811). A session-preserving teardown keeps it.
+      this.kill(id, "graceful-kill-exited");
     }
 
     return { sessionId };
@@ -1650,12 +1656,21 @@ export class PtyManager extends EventEmitter {
    * Clean up all terminals.
    */
   dispose(): void {
-    for (const [_id, terminal] of this.registry.entries()) {
-      const terminalInfo = terminal.getInfo();
-      if (terminalInfo.launchAgentId) {
-        this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
+    try {
+      for (const [_id, terminal] of this.registry.entries()) {
+        const terminalInfo = terminal.getInfo();
+        if (terminalInfo.launchAgentId) {
+          this.agentStateService.emitAgentKilled(terminalInfo, "cleanup");
+        }
+        terminal.dispose();
       }
-      terminal.dispose();
+    } finally {
+      // After the terminals' own dispose flushes, which supersede what they
+      // cover. pty-host exits without draining promises, so a session write
+      // still in flight (a terminal that exited just before shutdown) lands
+      // here or not at all — including one whose terminal already left the
+      // registry.
+      flushPendingSessionWritesSync();
     }
 
     this.registry.dispose();

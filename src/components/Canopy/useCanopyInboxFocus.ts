@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { HostId } from "@shared/types/remoteHosts";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
@@ -56,6 +56,7 @@ export function useCanopyInboxFocus({
   roleFilter,
   seeAssistantHandback,
   pluginViewIds,
+  assistantsBarRef,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -82,6 +83,8 @@ export function useCanopyInboxFocus({
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /** The plugin views the window offers, by hosted id; none in the dialog. */
   pluginViewIds: readonly string[];
+  /** The Assistants bar, when it folds: a row that stops asking under a shut one folds into it. */
+  assistantsBarRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -137,6 +140,8 @@ export function useCanopyInboxFocus({
   // An answer or a reply settles after the panel may have closed, and a new
   // one opened over the same ids: only this one's own may move the keyboard.
   const mountedRef = useRef(false);
+  /** The newest Open in Assistant: an older one settling later says nothing over it. */
+  const assistantOpenRef = useRef(0);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -545,9 +550,11 @@ export function useCanopyInboxFocus({
       setAssistantId(item.id);
     }
     setAssistantRefusal(null);
+    const request = ++assistantOpenRef.current;
     const mounted = () => mountedRef.current;
     void frame.openAssistant(item, mounted).then((refused) => {
-      if (refused !== null && mounted()) setAssistantRefusal({ id: item.id, text: refused });
+      if (refused === null || !mounted() || assistantOpenRef.current !== request) return;
+      setAssistantRefusal({ id: item.id, text: refused });
     });
   };
   const selectAssistant = useCallback((id: string) => {
@@ -580,14 +587,16 @@ export function useCanopyInboxFocus({
       const wasFocused = document.activeElement?.id === domId;
       seeAssistantHandback(chosenAssistantId, chosenHandbackAt);
       // Seen, the handback stops asking and the row moves out of the band: the
-      // keyboard follows it rather than dropping to the page.
+      // keyboard follows it rather than dropping to the page. Under a shut
+      // Assistants bar it folds away, and the keyboard goes to the bar.
       if (wasFocused) {
         requestAnimationFrame(() => {
-          if (document.activeElement === document.body) document.getElementById(domId)?.focus();
+          if (document.activeElement !== document.body) return;
+          (document.getElementById(domId) ?? assistantsBarRef?.current)?.focus();
         });
       }
     }
-  }, [chosenAssistantId, chosenHandbackAt, seeAssistantHandback]);
+  }, [chosenAssistantId, chosenHandbackAt, seeAssistantHandback, assistantsBarRef]);
   // Each opening, and each change of role, starts from the list's own default,
   // as the worker selection does.
   useEffect(() => {

@@ -100,7 +100,11 @@ describe("CommitPanel shortcut handler", () => {
   it("pushes straight away when the confirm is opted out", async () => {
     const { props, press } = renderPanel({ skipPushConfirm: true });
     await press();
-    expect(props.onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(props.onCommitAndPush).toHaveBeenCalledWith("fix: bug", {
+      branch: "feature/x",
+      destination: { remote: "origin", branch: "feature/x" },
+      reviewedHeadOid: null,
+    });
   });
 
   it("commits without a remote", async () => {

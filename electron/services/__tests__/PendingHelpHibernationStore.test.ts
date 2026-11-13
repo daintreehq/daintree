@@ -3,6 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const writes = vi.hoisted(() => ({ fail: false }));
+vi.mock("../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFile: (...args: Parameters<typeof actual.resilientAtomicWriteFile>) =>
+      writes.fail
+        ? Promise.reject(new Error("disk full"))
+        : actual.resilientAtomicWriteFile(...args),
+  };
+});
+
 import { PendingHelpHibernationStore } from "../PendingHelpHibernationStore.js";
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
 
@@ -17,6 +29,7 @@ describe("PendingHelpHibernationStore", () => {
   });
 
   afterEach(async () => {
+    writes.fail = false;
     vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -374,6 +387,123 @@ describe("PendingHelpHibernationStore", () => {
     const entry = store.get(slotKey("proj-tainted", 0));
     expect(entry).not.toBeNull();
     expect(entry?.panelWasOpen).toBeUndefined();
+  });
+
+  describe("resume at launch (#16753)", () => {
+    const entry = (agentSessionId: string) => ({
+      agentId: "claude",
+      agentSessionId,
+      cwd: "/sessions/p",
+      capturedAt: Date.now(),
+    });
+
+    it("hands the next launch the lanes an update left running, once", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("proj-1", 0), entry("id-0"));
+      await store.set(slotKey("proj-1", 2), entry("id-2"));
+      await store.recordResumeAtLaunch({ [slotKey("proj-1", 2)]: "id-2" }, 1_000);
+      // A write after the record (a late capture, the shutdown flush) keeps it.
+      await store.set(slotKey("proj-1", 0), entry("id-0b"));
+
+      const next = new PendingHelpHibernationStore(filePath);
+      await next.load();
+      expect(next.takeResumeAtLaunch()).toEqual({
+        recordedAt: 1_000,
+        lanes: { [slotKey("proj-1", 2)]: "id-2" },
+      });
+      expect(next.takeResumeAtLaunch()).toBeNull();
+      expect(next.get(slotKey("proj-1", 2))?.agentSessionId).toBe("id-2");
+    });
+
+    it("takes the record off disk as it loads, so a crash during that launch resumes nothing", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("proj-1", 1), entry("id-1"));
+      await store.recordResumeAtLaunch({ [slotKey("proj-1", 1)]: "id-1" }, 1_000);
+
+      const next = new PendingHelpHibernationStore(filePath);
+      await next.load();
+      expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).not.toHaveProperty("resumeAtLaunch");
+
+      const afterCrash = new PendingHelpHibernationStore(filePath);
+      await afterCrash.load();
+      expect(afterCrash.takeResumeAtLaunch()).toBeNull();
+      expect(afterCrash.get(slotKey("proj-1", 1))?.agentSessionId).toBe("id-1");
+    });
+
+    it("resumes nothing when the launch can't take the record off disk", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("proj-1", 1), entry("id-1"));
+      await store.recordResumeAtLaunch({ [slotKey("proj-1", 1)]: "id-1" }, 1_000);
+
+      writes.fail = true;
+      const next = new PendingHelpHibernationStore(filePath);
+      await next.load();
+
+      expect(next.takeResumeAtLaunch()).toBeNull();
+      expect(next.get(slotKey("proj-1", 1))?.agentSessionId).toBe("id-1");
+    });
+
+    it("gives a caller arriving mid-load the loaded entries and record", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("proj-1", 1), entry("id-1"));
+      await store.recordResumeAtLaunch({ [slotKey("proj-1", 1)]: "id-1" }, 1_000);
+
+      const next = new PendingHelpHibernationStore(filePath);
+      const first = next.load();
+      await next.load();
+
+      expect(next.get(slotKey("proj-1", 1))?.agentSessionId).toBe("id-1");
+      expect(next.takeResumeAtLaunch()?.lanes).toEqual({ [slotKey("proj-1", 1)]: "id-1" });
+      await first;
+    });
+
+    it("an ordinary write never records one", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(slotKey("proj-1", 0), entry("id-0"));
+      await store.recordResumeAtLaunch({});
+      expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).not.toHaveProperty("resumeAtLaunch");
+
+      const next = new PendingHelpHibernationStore(filePath);
+      await next.load();
+      expect(next.takeResumeAtLaunch()).toBeNull();
+    });
+
+    it("drops lanes with no conversation id and a record stamped in the future", async () => {
+      const write = (resumeAtLaunch: unknown) =>
+        fs.writeFile(
+          filePath,
+          JSON.stringify({
+            version: 2,
+            entries: { [slotKey("proj-1", 0)]: entry("id-0") },
+            resumeAtLaunch,
+          }),
+          "utf-8"
+        );
+
+      await write({
+        recordedAt: 1_000,
+        lanes: {
+          [slotKey("proj-1", 0)]: "id-0",
+          [slotKey("proj-1", 1)]: "",
+          // Not a lane: no slot, or one past the last.
+          "proj-1": "id-x",
+          [slotKey("proj-1", 99)]: "id-y",
+        },
+      });
+      const partial = new PendingHelpHibernationStore(filePath);
+      await partial.load();
+      expect(partial.takeResumeAtLaunch()?.lanes).toEqual({ [slotKey("proj-1", 0)]: "id-0" });
+
+      await write({ recordedAt: Date.now() + 60_000, lanes: { [slotKey("proj-1", 0)]: "id-0" } });
+      const future = new PendingHelpHibernationStore(filePath);
+      await future.load();
+      expect(future.takeResumeAtLaunch()).toBeNull();
+    });
   });
 
   describe("rewriteProjectPath", () => {

@@ -32,10 +32,12 @@ export const DECISIONS_STORE_MAX_BATCH = 256;
  * `disk-pressure`: refused while disk space was critical. `disk-full`: the
  * database itself ran out of room (`SQLITE_FULL`), which a dip between two
  * disk-space checks can cause with the monitor never seeing it.
+ * `storage-busy`: another connection held the database past the busy
+ * timeout, or changed it under a read (`SQLITE_BUSY` and its extended codes).
  * `storage-fault`: any other failure of the database.
  */
 export type DecisionsStoreUnavailableReason =
-  "disk-pressure" | "disk-full" | "storage-fault" | "closed";
+  "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | "closed";
 
 /** A call the store refused. Nothing it carried was stored. */
 export class DecisionsStoreUnavailableError extends Error {
@@ -48,9 +50,11 @@ export class DecisionsStoreUnavailableError extends Error {
         ? "Decisions can't save while disk space is critical"
         : reason === "disk-full"
           ? "Decisions stopped saving because the disk was full"
-          : reason === "closed"
-            ? "The Decisions store is closed"
-            : "Decisions stopped saving after a storage error",
+          : reason === "storage-busy"
+            ? "Decisions stopped saving because the database was busy"
+            : reason === "closed"
+              ? "The Decisions store is closed"
+              : "Decisions stopped saving after a storage error",
       options
     );
     this.name = "DecisionsStoreUnavailableError";
@@ -69,6 +73,25 @@ interface Op {
 type Outcome = { ok: true; value: unknown } | { ok: false; error: unknown };
 
 /**
+ * Where a batch was when the database failed it, for the line saying the
+ * store stopped (#16840): a busy at once and one after the whole busy
+ * timeout read the same otherwise. `setup` is setting the commit level, and
+ * `elapsedMs` how long that step had run, waiting included.
+ */
+interface FaultSite {
+  step: "setup" | "begin" | "call" | "commit";
+  writes: boolean;
+  calls: number;
+  elapsedMs: number;
+}
+
+/** The step a batch is in, and when it began; updated as the batch runs. */
+interface BatchProgress {
+  step: FaultSite["step"];
+  since: number;
+}
+
+/**
  * A failure of the database rather than of the call: disk full, I/O,
  * corruption, a closed connection. A constraint (a duplicate question) is the
  * call's own failure and leaves the store usable.
@@ -79,6 +102,14 @@ function isStorageFault(error: unknown): boolean {
     return code.startsWith("SQLITE_") && !code.startsWith("SQLITE_CONSTRAINT");
   }
   return error instanceof TypeError && /database connection is not open/i.test(error.message);
+}
+
+function isBusyCode(code: unknown): boolean {
+  return typeof code === "string" && (code === "SQLITE_BUSY" || code.startsWith("SQLITE_BUSY_"));
+}
+
+function elapsedSince(since: number): number {
+  return Math.round(performance.now() - since);
 }
 
 interface QuestionRecord {
@@ -433,7 +464,8 @@ export function hasDecisionsData(sqlite: Database.Database): boolean {
  * a library step that failed can't be followed by one that records it as
  * done (an event marked processed after its answer wasn't saved). Reads keep
  * working; the next enabled lifetime opens a fresh store, and so does the
- * service once a disk-space fault has room again (#16605).
+ * service once a disk-space fault has room again (#16605) or a while after
+ * the database was busy (#16840).
  */
 export class DaintreeLocalStore implements LocalStore {
   readonly durable = true;
@@ -865,10 +897,18 @@ export class DaintreeLocalStore implements LocalStore {
   private enqueue<T>(kind: OpKind, run: () => T): Promise<T> {
     if (this.closed) return Promise.reject(new DecisionsStoreUnavailableError("closed"));
     if (kind === "read" && this.queue.length === 0) {
+      const since = performance.now();
       try {
         return Promise.resolve(run());
       } catch (error) {
-        return Promise.reject(isStorageFault(error) ? this.latch(error) : error);
+        if (!isStorageFault(error)) return Promise.reject(error);
+        const site: FaultSite = {
+          step: "call",
+          writes: false,
+          calls: 1,
+          elapsedMs: elapsedSince(since),
+        };
+        return Promise.reject(this.latch(error, site));
       }
     }
     return new Promise<T>((resolve, reject) => {
@@ -948,32 +988,53 @@ export class DaintreeLocalStore implements LocalStore {
     if (runnable.length === 0) return outcomes;
 
     const writes = runnable.some((i) => ops[i].kind === "write");
+    const batch = runnable.map((i) => ops[i]);
+    const progress: BatchProgress = { step: "setup", since: performance.now() };
+    const siteOf = (step: FaultSite["step"], elapsedMs: number): FaultSite => ({
+      step,
+      writes,
+      calls: batch.length,
+      elapsedMs,
+    });
     try {
       const { results, fault } = this.withCommitLevel(writes, () =>
-        withDiskRecovery(this.sqlite, () => this.runTransaction(runnable.map((i) => ops[i])))
+        withDiskRecovery(this.sqlite, () => this.runTransaction(batch, writes, progress))
       );
       runnable.forEach((opIndex, j) => {
         outcomes[opIndex] = results[j];
       });
-      if (fault) this.latch(fault);
+      if (fault) this.latch(fault.error, siteOf("call", fault.elapsedMs));
     } catch (error) {
       // The batch rolled back whole, so nothing in it was stored; only the
       // database itself (begin, commit, an I/O error) fails a whole batch.
-      const refused = this.latch(error);
+      const refused = this.latch(error, siteOf(progress.step, elapsedSince(progress.since)));
       for (const i of runnable) outcomes[i] = { ok: false, error: refused };
     }
     return outcomes;
   }
 
-  private runTransaction(ops: Op[]): { results: Outcome[]; fault: unknown } {
-    return this.sqlite.transaction(() => {
-      let fault: unknown = null;
+  /**
+   * A batch with writes in it takes the write lock as it begins (`BEGIN
+   * IMMEDIATE`), so another connection holding it is waited out for the
+   * connection's busy timeout. Begun deferred, a call that reads before it
+   * writes would hold a read snapshot by then, and SQLite refuses that upgrade
+   * at once with `SQLITE_BUSY` rather than wait (#16840).
+   */
+  private runTransaction(
+    ops: Op[],
+    writes: boolean,
+    progress: BatchProgress
+  ): { results: Outcome[]; fault: { error: unknown; elapsedMs: number } | null } {
+    const batch = this.sqlite.transaction(() => {
+      let fault: { error: unknown; elapsedMs: number } | null = null;
       const results = ops.map((op): Outcome => {
         // A write after a storage error in the same batch must not commit
         // without the one that failed.
         if (op.kind === "write" && fault !== null) {
-          return { ok: false, error: this.storageFault(fault) };
+          return { ok: false, error: this.storageFault(fault.error) };
         }
+        progress.step = "call";
+        progress.since = performance.now();
         try {
           return { ok: true, value: this.sqlite.transaction(op.run)() };
         } catch (error) {
@@ -981,12 +1042,18 @@ export class DaintreeLocalStore implements LocalStore {
           // carrying on would run the rest outside any transaction.
           if (!this.sqlite.inTransaction) throw error;
           if (!isStorageFault(error)) return { ok: false, error };
-          fault = error;
+          // Timed now: the calls after it and the commit aren't its wait.
+          fault = { error, elapsedMs: elapsedSince(progress.since) };
           return { ok: false, error: this.storageFault(error) };
         }
       });
+      progress.step = "commit";
+      progress.since = performance.now();
       return { results, fault };
-    })();
+    });
+    progress.step = "begin";
+    progress.since = performance.now();
+    return writes ? batch.immediate() : batch();
   }
 
   private withCommitLevel<T>(writes: boolean, fn: () => T): T {
@@ -998,7 +1065,7 @@ export class DaintreeLocalStore implements LocalStore {
    * question it couldn't read as an event it couldn't apply, and would mark
    * that event processed with its next write.
    */
-  private latch(cause: unknown): DecisionsStoreUnavailableError {
+  private latch(cause: unknown, site?: FaultSite): DecisionsStoreUnavailableError {
     const fault = this.storageFault(cause);
     if (this.fault !== null) return fault;
     this.fault = fault;
@@ -1007,6 +1074,7 @@ export class DaintreeLocalStore implements LocalStore {
     logWarn("[Decisions] The local store stopped taking writes", {
       reason: fault.reason,
       ...(typeof code === "string" ? { code } : {}),
+      ...site,
     });
     for (const listener of [...this.faultListeners]) {
       try {
@@ -1022,7 +1090,7 @@ export class DaintreeLocalStore implements LocalStore {
     if (cause instanceof DecisionsStoreUnavailableError) return cause;
     const code = (cause as { code?: unknown } | null)?.code;
     return new DecisionsStoreUnavailableError(
-      code === "SQLITE_FULL" ? "disk-full" : "storage-fault",
+      code === "SQLITE_FULL" ? "disk-full" : isBusyCode(code) ? "storage-busy" : "storage-fault",
       { cause }
     );
   }

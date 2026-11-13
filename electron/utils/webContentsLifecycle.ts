@@ -62,28 +62,90 @@ export function ensureAttached(wc: Electron.WebContents): void {
   }
 }
 
+/**
+ * What main knows about each renderer's CDP lifecycle state, for
+ * {@link isWebContentsFrozen}. Commands on one debugger session are applied in
+ * the order they are sent, whatever order their answers come back in, so a
+ * page is frozen when the latest freeze sent outranks the latest thaw that
+ * succeeded. A freeze counts from the moment it is asked for, since a push sent
+ * before its command lands in the freeze anyway, and one that fails after its
+ * command went out still counts, since it may have landed (Chromium also keeps
+ * a page's frozen state on its host across a reload). Erring toward frozen
+ * costs a skipped periodic push, and every activation thaws.
+ */
+interface LifecycleTrack {
+  /** Freezes asked for that haven't yet sent their command, nor failed to. */
+  freezesInFlight: number;
+  /** Send order of the latest freeze command that went out; 0 for none. */
+  lastFreezeSent: number;
+  /** Send order of the latest thaw command that succeeded; 0 for none. */
+  lastThawApplied: number;
+}
+
+const lifecycleTracks = new WeakMap<Electron.WebContents, LifecycleTrack>();
+let lifecycleSendOrder = 0;
+
+type LifecycleResult = { sent: false } | { sent: true; order: number; applied: boolean };
+
 async function setLifecycleState(
   wc: Electron.WebContents,
-  state: "frozen" | "active"
-): Promise<void> {
-  if (wc.isDestroyed()) return;
+  state: "frozen" | "active",
+  onSend?: (order: number) => void
+): Promise<LifecycleResult> {
+  if (wc.isDestroyed()) return { sent: false };
+  let order = 0;
   try {
     ensureAttached(wc);
     await wc.debugger.sendCommand("Page.enable");
+    order = ++lifecycleSendOrder;
+    onSend?.(order);
     await wc.debugger.sendCommand("Page.setWebLifecycleState", { state });
+    return { sent: true, order, applied: true };
   } catch (err) {
     const message = formatErrorMessage(err, "CDP lifecycle state failed");
-    if (EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) return;
-    console.warn(`[webContentsLifecycle] setWebLifecycleState(${state}) failed:`, message);
+    if (!EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) {
+      console.warn(`[webContentsLifecycle] setWebLifecycleState(${state}) failed:`, message);
+    }
+    return order === 0 ? { sent: false } : { sent: true, order, applied: false };
   }
 }
 
-export function freezeWebContents(wc: Electron.WebContents): Promise<void> {
-  return setLifecycleState(wc, "frozen");
+export async function freezeWebContents(wc: Electron.WebContents): Promise<void> {
+  if (wc.isDestroyed()) return;
+  const track = lifecycleTracks.get(wc) ?? {
+    freezesInFlight: 0,
+    lastFreezeSent: 0,
+    lastThawApplied: 0,
+  };
+  lifecycleTracks.set(wc, track);
+  track.freezesInFlight++;
+  // Settled the moment the command goes out, not when it is answered, so a
+  // later thaw that succeeds still outranks a freeze whose answer never comes.
+  const result = await setLifecycleState(wc, "frozen", (order) => {
+    track.freezesInFlight--;
+    track.lastFreezeSent = Math.max(track.lastFreezeSent, order);
+  });
+  if (!result.sent) track.freezesInFlight--;
 }
 
-export function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
-  return setLifecycleState(wc, "active");
+export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
+  const result = await setLifecycleState(wc, "active");
+  const track = lifecycleTracks.get(wc);
+  if (!track || !result.sent || !result.applied) return;
+  track.lastThawApplied = Math.max(track.lastThawApplied, result.order);
+}
+
+/**
+ * Whether this renderer may be frozen: a freeze is in flight, or the latest
+ * one sent has no successful thaw sent after it. A push to a frozen renderer
+ * either wakes JS in a page frozen to stay idle or schedules work that all
+ * fires at once on thaw, inside the warm paint gate, so periodic work that can
+ * simply skip a frozen view should (#16810).
+ */
+export function isWebContentsFrozen(wc: Electron.WebContents): boolean {
+  const track = lifecycleTracks.get(wc);
+  if (!track) return false;
+  return track.freezesInFlight > 0 || track.lastFreezeSent > track.lastThawApplied;
 }
 
 /**

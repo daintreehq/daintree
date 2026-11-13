@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Eye, EyeOff, FolderOpen } from "lucide-react";
 import {
+  SettingsEmptyRow,
   SettingsGroup,
   SettingsRow,
   type SettingsRowControlIds,
@@ -16,6 +17,11 @@ import {
   settingRowLayout,
 } from "@/components/Settings/pluginSettingFields";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsSearchField } from "@/components/Settings/SettingsSearchField";
+import {
+  matchPluginSettingFields,
+  pluginSettingFilterIndex,
+} from "@/components/Settings/pluginSettingFieldSearch";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
 import {
@@ -40,6 +46,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { pluralize } from "@/lib/pluralize";
 import { useHostConnection } from "@/hooks/useHostConnection";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
@@ -194,6 +201,11 @@ interface SettingFieldProps {
   loaded: boolean;
   /** Whether this field's scope failed to load, so it has nothing safe to edit. */
   failed: boolean;
+  /**
+   * Filtered out of the form. The row stays mounted, so a draft, a write in
+   * flight or a revealed secret survives the filter changing.
+   */
+  hidden?: boolean;
 }
 
 /**
@@ -254,6 +266,7 @@ function SettingField({
   secretIsPlaintext,
   loaded,
   failed,
+  hidden = false,
 }: SettingFieldProps) {
   const type = effectiveType(def);
   const scope = settingScope(def);
@@ -423,11 +436,11 @@ function SettingField({
   // disables just the control, so the label doesn't flicker on every save.
   const rowDisabled = !loaded || !scopeReady;
   // The list is only open while there is an enabled enum control to hold it.
-  // A save or reset disabling the field mid-open, or a reload turning the
-  // setting into another type, would otherwise leave the Select forced open on
-  // a disabled control, or leave an invisible escape entry swallowing the next
-  // Escape.
-  const enumListOpen = enumOpen && type === "enum" && !rowDisabled && !saving;
+  // A save or reset disabling the field mid-open, a filter hiding its row, or a
+  // reload turning the setting into another type, would otherwise leave the
+  // Select forced open on a disabled or hidden control, or leave an invisible
+  // escape entry swallowing the next Escape.
+  const enumListOpen = enumOpen && type === "enum" && !rowDisabled && !saving && !hidden;
   useEscapeStack(enumListOpen, () => setEnumOpen(false));
   useEffect(() => {
     if (enumOpen && !enumListOpen) setEnumOpen(false);
@@ -634,6 +647,7 @@ function SettingField({
     (shownError !== null && !(error === null && pathCheck === "unknown")) || requiredUnset;
   const rowProps = {
     id: fieldId,
+    rootAttributes: hidden ? HIDDEN_ROW : undefined,
     label,
     description: def.description,
     accessory: scopeBadge,
@@ -1029,6 +1043,9 @@ export function PluginSettingsForm({
   // answers or the host stops waiting.
   const [viewFocus, setViewFocus] = useState<{ key: string; nonce: number } | null>(null);
   const viewAckRef = useRef<{ nonce: number; settle: (landed: boolean) => void } | null>(null);
+  // The last deep link reported handled, landed or not. Until then the link
+  // owns the filter (below).
+  const focusHandledRef = useRef<number | undefined>(undefined);
   const acknowledgeViewFocus = useCallback((nonce: number, landed: boolean) => {
     const pending = viewAckRef.current;
     if (pending !== null && pending.nonce === nonce) pending.settle(landed);
@@ -1073,6 +1090,7 @@ export function PluginSettingsForm({
     let settled = false;
     const finish = () => {
       settled = true;
+      focusHandledRef.current = focusNonce;
       onFocusHandled?.(focusNonce);
     };
     const attempt = () => {
@@ -1147,6 +1165,26 @@ export function PluginSettingsForm({
     onFocusHandled,
   ]);
 
+  // A value the plugin's own section edits is shown there, not twice.
+  const fields = hasView ? settings.filter((def) => def.editor !== "view") : settings;
+  // A long form gets a filter over the fields this home shows; setup, account
+  // and the plugin's own section stay as they are.
+  const showFilter = fields.length > FIELD_FILTER_THRESHOLD;
+  const [filterQuery, setFilterQuery] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
+  const filterIndex = pluginSettingFilterIndex(fields);
+  const matched = showFilter ? matchPluginSettingFields(filterIndex, filterQuery) : null;
+  // Until a deep link is handled, a filter hiding its field is cleared, so the
+  // landing finds the row on a retry: a filter already set when the link
+  // arrives, or typed while its values load or reload. A field the filter still
+  // shows leaves it be, and once the link is handled typing filters freely.
+  const focusHiddenByFilter =
+    focusDef !== undefined && !focusInView && matched !== null && !matched.has(focusDef.id);
+  useEffect(() => {
+    if (focusNonce === undefined || !focusReady || !focusHiddenByFilter) return;
+    if (focusHandledRef.current !== focusNonce) setFilterQuery("");
+  }, [focusNonce, focusReady, focusHiddenByFilter]);
+
   if (
     settings.length === 0 &&
     elsewhere.length === 0 &&
@@ -1157,8 +1195,6 @@ export function PluginSettingsForm({
   ) {
     return null;
   }
-  // A value the plugin's own section edits is shown there, not twice.
-  const fields = hasView ? settings.filter((def) => def.editor !== "view") : settings;
 
   const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
   const elsewhereRow =
@@ -1207,8 +1243,24 @@ export function PluginSettingsForm({
             ))}
         </div>
       )}
+      {showFilter && (
+        <div className="flex items-center">
+          <SettingsSearchField
+            ref={filterRef}
+            value={filterQuery}
+            onChange={setFilterQuery}
+            label="Filter settings"
+            placeholder="Filter by name, description or key…"
+          />
+          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {matched === null
+              ? `${pluralize(fields.length, "setting")} in total`
+              : pluralize(matched.size, "setting")}
+          </p>
+        </div>
+      )}
       {(fields.length > 0 || elsewhereRow) && (
-        <SettingsGroup>
+        <SettingsGroup className={FILTERED_GROUP_DIVIDERS}>
           {fields.map((def) => {
             const scope = settingScope(def);
             const state = byScope[scope];
@@ -1232,9 +1284,29 @@ export function PluginSettingsForm({
                 secretIsPlaintext={secretInfo.plaintext.has(def.id)}
                 loaded={loaded}
                 failed={state.failed === true}
+                hidden={matched !== null && !matched.has(def.id)}
               />
             );
           })}
+          {matched !== null && matched.size === 0 && (
+            <SettingsEmptyRow
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFilterQuery("");
+                    filterRef.current?.focus();
+                  }}
+                >
+                  Clear filter
+                </Button>
+              }
+            >
+              {`No settings match "${filterQuery.trim()}"`}
+            </SettingsEmptyRow>
+          )}
           {elsewhereRow}
         </SettingsGroup>
       )}
@@ -1267,6 +1339,19 @@ function landOnSection(el: HTMLElement): void {
   if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
   el.focus({ preventScroll: true });
 }
+
+/** Above this many fields in one home, the form offers a filter over them. */
+export const FIELD_FILTER_THRESHOLD = 15;
+
+/** A filtered-out row: kept mounted, not shown. */
+const HIDDEN_ROW = { hidden: true } as const;
+
+/**
+ * `divide-y` draws its line under every child but the last, and a filtered-out
+ * row after the last one shown is still a child: drop the line under whichever
+ * row has nothing shown after it.
+ */
+const FILTERED_GROUP_DIVIDERS = "[&>:not(:has(~:not([hidden])))]:border-b-0";
 
 /** How many times a deep link retries a row that is in the DOM but not yet shown. */
 const LANDING_ATTEMPTS = 20;

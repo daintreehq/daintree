@@ -14,6 +14,7 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { actionService } from "@/services/ActionService";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
@@ -70,16 +71,22 @@ export function RecipesTab({
   // "Clear default" removes the warning it sits in, so focus goes to the next
   // thing a user would do: add or pin another recipe.
   const addRecipeRef = useRef<HTMLButtonElement>(null);
-  const hasLoadedRecipes = useRef(false);
+  // One request per open project, keyed by identity rather than by the store's
+  // loading flag: a flag that other loaders also raise either skipped a switch
+  // made while one was running or fired a second request when it dropped.
+  const requestedProjectId = useRef<string | null>(null);
 
   useEffect(() => {
-    if (isOpen && !hasLoadedRecipes.current && !recipesLoading && projectId) {
-      hasLoadedRecipes.current = true;
-      loadRecipes(projectId).catch((err) => {
-        logError("Failed to load recipes", err);
-      });
+    if (!isOpen) {
+      requestedProjectId.current = null;
+      return;
     }
-  }, [isOpen, recipesLoading, loadRecipes, projectId]);
+    if (!projectId || requestedProjectId.current === projectId) return;
+    requestedProjectId.current = projectId;
+    loadRecipes(projectId).catch((err) => {
+      logError("Failed to load recipes", err);
+    });
+  }, [isOpen, loadRecipes, projectId]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -89,15 +96,19 @@ export function RecipesTab({
       setDeleteError(null);
       setShowImportDialog(false);
       setExportError(null);
-      hasLoadedRecipes.current = false;
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    if (isOpen) {
-      hasLoadedRecipes.current = false;
-    }
-  }, [projectId, isOpen]);
+  // Rows already in the store stay on screen while a reload runs. Only an
+  // empty list has nothing to show, and it must not read as "no recipes" until
+  // the load has settled. Plugin recipes survive a project switch, so they
+  // count as rows too.
+  const hasRecipes = recipes.length > 0;
+  const isLoadingEmptyList = isOpen && recipesLoading && !hasRecipes;
+  // The hook's state lags a render behind its input, so the input is checked
+  // again here: rows that arrive must replace the skeleton in the same commit.
+  const gateElapsed = useDohertyGate(isLoadingEmptyList);
+  const showSkeleton = isLoadingEmptyList && gateElapsed;
 
   const handleEditRecipe = (recipe: TerminalRecipe) => {
     setEditingRecipe(recipe);
@@ -174,7 +185,7 @@ export function RecipesTab({
               <FileDown />
               Import recipe
             </Button>
-            {!recipesLoading && recipes.length > 0 && (
+            {hasRecipes && (
               <Button variant="outline" size="sm" onClick={handleAddRecipe} ref={addRecipeRef}>
                 <Plus />
                 Add recipe
@@ -209,15 +220,15 @@ export function RecipesTab({
                 </div>
               </Callout>
             )}
-          {recipesLoading ? (
+          {showSkeleton ? (
             <SettingsGroup>
               <Skeleton label="Loading recipes" className="space-y-2 p-3">
-                <SkeletonBone className="h-12 w-full" />
-                <SkeletonBone className="h-12 w-full" />
-                <SkeletonBone className="h-12 w-full" />
+                <SkeletonBone immediate className="h-12 w-full" />
+                <SkeletonBone immediate className="h-12 w-full" />
+                <SkeletonBone immediate className="h-12 w-full" />
               </Skeleton>
             </SettingsGroup>
-          ) : recipes.length === 0 ? (
+          ) : isLoadingEmptyList ? null : !hasRecipes ? (
             <SettingsGroup>
               <SettingsEmptyRow
                 action={

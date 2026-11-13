@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render as rtlRender, screen, cleanup } from "@testing-library/react";
+import { render as rtlRender, screen, cleanup, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { PushErrorBanner } from "../PushErrorBanner";
@@ -36,6 +36,7 @@ function renderBanner(
       pullRebasing={false}
       onOpenForgeSettings={vi.fn()}
       onRetryPush={vi.fn()}
+      onReviewPush={vi.fn()}
       onPullRebase={vi.fn()}
       onForcePush={vi.fn()}
       onDismiss={vi.fn()}
@@ -89,6 +90,31 @@ describe("PushErrorBanner", () => {
     }
   });
 
+  it("answers a stale review with a fresh one, never a Retry under the approval that went stale", () => {
+    const onRetryPush = vi.fn();
+    const onReviewPush = vi.fn();
+    render(
+      <PushErrorBanner
+        pushError={{ reason: "push-review-stale", rawMessage: "stale" }}
+        forgeProviderId={null}
+        showPushDetails={false}
+        onToggleDetails={vi.fn()}
+        pullRebasing={false}
+        onOpenForgeSettings={vi.fn()}
+        onRetryPush={onRetryPush}
+        onReviewPush={onReviewPush}
+        onPullRebase={vi.fn()}
+        onForcePush={vi.fn()}
+        onDismiss={vi.fn()}
+      />
+    );
+    const cta = screen.getByTestId("review-hub-push-error-cta");
+    expect(cta.getAttribute("data-cta-kind")).toBe("review-push");
+    fireEvent.click(cta);
+    expect(onReviewPush).toHaveBeenCalledTimes(1);
+    expect(onRetryPush).not.toHaveBeenCalled();
+  });
+
   it("says a confirm follows before force pushing", () => {
     renderBanner("push-rejected-outdated", { lease: true });
     const force = screen.getByTestId("review-hub-push-error-secondary-cta");
@@ -127,6 +153,7 @@ describe("PushErrorBanner", () => {
           pullRebasing={false}
           onOpenForgeSettings={vi.fn()}
           onRetryPush={vi.fn()}
+          onReviewPush={vi.fn()}
           onPullRebase={vi.fn()}
           onForcePush={vi.fn()}
           onDismiss={vi.fn()}

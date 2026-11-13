@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import { render, fireEvent, screen, act, waitFor, within } from "@testing-library/react";
 
 vi.mock("framer-motion", () => {
   const MotionDiv = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
@@ -76,6 +76,42 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
 }));
+
+// Live instances of each fleet dialog. A mounted dialog holds its panel-store
+// subscriptions whether it is showing or not, so mounting is what to count.
+const liveFleetDialogs = vi.hoisted(() => ({ save: 0, manage: 0 }));
+// Set to make a dialog throw while it renders, the way a broken chunk would.
+const failingFleetDialogs = vi.hoisted(() => ({ save: false, manage: false }));
+
+vi.mock("../SaveFleetDialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../SaveFleetDialog")>();
+  function SaveFleetDialog(props: React.ComponentProps<typeof actual.SaveFleetDialog>) {
+    if (failingFleetDialogs.save) throw new Error("SaveFleetDialog failed to render");
+    React.useEffect(() => {
+      liveFleetDialogs.save++;
+      return () => {
+        liveFleetDialogs.save--;
+      };
+    }, []);
+    return <actual.SaveFleetDialog {...props} />;
+  }
+  return { ...actual, SaveFleetDialog };
+});
+
+vi.mock("../SavedFleetsDialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../SavedFleetsDialog")>();
+  function SavedFleetsDialog(props: React.ComponentProps<typeof actual.SavedFleetsDialog>) {
+    if (failingFleetDialogs.manage) throw new Error("SavedFleetsDialog failed to render");
+    React.useEffect(() => {
+      liveFleetDialogs.manage++;
+      return () => {
+        liveFleetDialogs.manage--;
+      };
+    }, []);
+    return <actual.SavedFleetsDialog {...props} />;
+  }
+  return { ...actual, SavedFleetsDialog };
+});
 
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
 import { runManagedFleetBroadcast } from "../fleetEnterBroadcast";
@@ -1784,6 +1820,8 @@ describe("FleetArmingRibbon — fleet dialogs absorb bare Escape", () => {
       await act(async () => {
         open();
       });
+      // The dialog loads lazily; Escape has to land on it, not before it.
+      await screen.findByTestId("fleet-save-form-name");
       fireEvent.keyDown(window, { key: "Escape" });
       fireEvent.keyDown(window, { key: "Escape" });
       expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
@@ -1806,7 +1844,7 @@ describe("FleetArmingRibbon — save dialog outlives the ribbon", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("Save as fleet…"));
     });
-    fireEvent.change(screen.getByTestId("fleet-save-form-name"), {
+    fireEvent.change(await screen.findByTestId("fleet-save-form-name"), {
       target: { value: "Morning triage" },
     });
     await act(async () => {
@@ -1816,6 +1854,164 @@ describe("FleetArmingRibbon — save dialog outlives the ribbon", () => {
     expect(screen.getByDisplayValue("Morning triage")).toBe(
       screen.getByTestId("fleet-save-form-name")
     );
+  });
+});
+
+describe("FleetArmingRibbon — fleet dialogs mount only while in use (#16799)", () => {
+  beforeEach(() => {
+    resetStores();
+    useProjectSettingsStore.setState({
+      settings: {
+        runCommands: [],
+        fleetSavedScopes: [
+          { kind: "snapshot", id: "fs-1", name: "My fleet", terminalIds: ["a"], createdAt: 1 },
+        ],
+      } as ProjectSettings,
+    });
+    seed([makeAgent("a"), makeAgent("b")]);
+  });
+
+  it("mounts neither dialog for an idle or armed ribbon, and only the one asked for", async () => {
+    const { rerender } = render(<FleetArmingRibbon />);
+    expect(liveFleetDialogs).toEqual({ save: 0, manage: 0 });
+
+    act(() => useFleetArmingStore.getState().armIds(["a", "b"]));
+    rerender(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
+    expect(liveFleetDialogs).toEqual({ save: 0, manage: 0 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Manage saved fleets…"));
+    });
+    await screen.findByTestId("fleet-saved-manage-dialog");
+    expect(liveFleetDialogs).toEqual({ save: 0, manage: 1 });
+  });
+
+  it("unmounts the save dialog once its close has finished, and remembers the rule", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    await screen.findByTestId("fleet-save-form-name");
+    expect(liveFleetDialogs.save).toBe(1);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Live rule" }));
+    fireEvent.keyDown(screen.getByTestId("fleet-save-rule-state"), { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "Working" }), { key: "Enter" });
+    await waitFor(() =>
+      expect(screen.getByTestId("fleet-save-rule-state").textContent).toContain("Working")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(liveFleetDialogs.save).toBe(0));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    await screen.findByTestId("fleet-save-form-name");
+    fireEvent.click(screen.getByRole("radio", { name: "Live rule" }));
+    expect(screen.getByTestId("fleet-save-rule-state").textContent).toContain("Working");
+  });
+
+  for (const kind of ["save", "manage"] as const) {
+    const menuItem = kind === "save" ? "Save as fleet…" : "Manage saved fleets…";
+    const dialogId = kind === "save" ? "fleet-save-dialog" : "fleet-saved-manage-dialog";
+
+    it(`keeps the ${kind} dialog mounted through its exit, then unmounts it`, async () => {
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      await act(async () => {
+        fireEvent.click(screen.getByText(menuItem));
+      });
+      const dialog = await screen.findByTestId(dialogId);
+      expect(liveFleetDialogs[kind]).toBe(1);
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+      // Unmounting on close would cut the exit and the focus hand-back short.
+      expect(liveFleetDialogs[kind]).toBe(1);
+      await waitFor(() => expect(liveFleetDialogs[kind]).toBe(0));
+    });
+
+    it(`closes a ${kind} dialog that fails to render and hands Escape back to the ribbon`, async () => {
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      failingFleetDialogs[kind] = true;
+      try {
+        await act(async () => {
+          fireEvent.click(screen.getByText(menuItem));
+        });
+        const trigger = screen.getByTestId("fleet-selection-menu-trigger");
+        await waitFor(() => expect(document.activeElement).toBe(trigger));
+      } finally {
+        failingFleetDialogs[kind] = false;
+      }
+      expect(screen.queryByTestId(dialogId)).toBeNull();
+
+      // Once it renders again, the next request opens it in the same ribbon.
+      await act(async () => {
+        fireEvent.click(screen.getByText(menuItem));
+      });
+      expect(await screen.findByTestId(dialogId)).toBeTruthy();
+    });
+
+    it(`releases bare Escape on the ribbon after a ${kind} dialog fails to render`, async () => {
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      render(<FleetArmingRibbon />);
+      failingFleetDialogs[kind] = true;
+      try {
+        await act(async () => {
+          fireEvent.click(screen.getByText(menuItem));
+        });
+        const trigger = screen.getByTestId("fleet-selection-menu-trigger");
+        await waitFor(() => expect(document.activeElement).toBe(trigger));
+      } finally {
+        failingFleetDialogs[kind] = false;
+      }
+      const exit = screen.getByTestId("fleet-exit");
+      exit.focus();
+      fireEvent.keyDown(exit, { key: "Escape" });
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    });
+  }
+
+  it("keeps the save dialog and its typed name through a pending confirmation", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    const input = await screen.findByTestId("fleet-save-form-name");
+    fireEvent.change(input, { target: { value: "Night shift" } });
+
+    act(() => {
+      useFleetPendingActionStore.setState({
+        pending: { kind: "kill", targetCount: 2, sessionLossCount: 0 },
+      });
+    });
+    expect(screen.getByTestId("fleet-confirm-action")).toBeTruthy();
+    expect(screen.getByDisplayValue("Night shift")).toBe(input);
+
+    act(() => {
+      useFleetPendingActionStore.setState({ pending: null });
+    });
+    expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
+    expect(screen.getByDisplayValue("Night shift")).toBe(input);
+  });
+
+  it("keeps the manage dialog open when the armed set drains below two", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Manage saved fleets…"));
+    });
+    const dialog = await screen.findByTestId("fleet-saved-manage-dialog");
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["a"]);
+    });
+    expect(screen.queryByTestId("fleet-selection-menu-trigger")).toBeNull();
+    expect(screen.getByTestId("fleet-saved-manage-dialog")).toBe(dialog);
+    expect(screen.getByText("My fleet")).toBeTruthy();
   });
 });
 
@@ -2085,7 +2281,7 @@ describe("fleets with agents on other hosts", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("Save as fleet…"));
     });
-    fireEvent.change(screen.getByTestId("fleet-save-form-name"), {
+    fireEvent.change(await screen.findByTestId("fleet-save-form-name"), {
       target: { value: "Mixed" },
     });
     const typeHint = () => {

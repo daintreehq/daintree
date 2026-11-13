@@ -481,6 +481,7 @@ describe("useMcpBridge", () => {
         source: "agent",
         confirmed: undefined,
         contextOverride: snapshot,
+        hostCallerOrigin: "assistant",
         dispatchDeadlineAt: expect.any(Number),
       }
     );
@@ -559,10 +560,16 @@ describe("useMcpBridge", () => {
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
 
+    // The person answered the dialog for this dispatch (#16751).
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-1" },
-      { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
+      {
+        source: "agent",
+        confirmed: true,
+        hostPersonApproved: true,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-confirm",
@@ -646,6 +653,7 @@ describe("useMcpBridge", () => {
         source: "agent",
         confirmed: true,
         contextOverride: boundContext,
+        hostPersonApproved: true,
         dispatchDeadlineAt: expect.any(Number),
       }
     );
@@ -1053,6 +1061,34 @@ describe("useMcpBridge", () => {
     });
   });
 
+  it("names the Assistant but no person's approval for a call Never ask let through (#16751)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-never-ask",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-4" },
+      confirmed: true,
+      authorization: "skip-preference",
+      sessionOrigin: "help",
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "worktree.delete",
+      { worktreeId: "wt-4" },
+      {
+        source: "agent",
+        confirmed: true,
+        hostCallerOrigin: "assistant",
+        dispatchDeadlineAt: expect.any(Number),
+      }
+    );
+  });
+
   it("wraps bridge dispatch failures as execution errors", async () => {
     mocks.get.mockReturnValue(safeManifestEntry());
     mocks.dispatch.mockRejectedValueOnce(new Error("dispatch exploded"));
@@ -1109,7 +1145,12 @@ describe("useMcpBridge", () => {
         expect(mocks.dispatch).toHaveBeenCalledWith(
           "agent.launch",
           { agentId: "claude", spawnedBy: expectedSource, focusPolicy: "preserve" },
-          { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
+          {
+            source: "agent",
+            confirmed: undefined,
+            ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" } : {}),
+            dispatchDeadlineAt: expect.any(Number),
+          }
         );
       }
     );
@@ -1163,7 +1204,13 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "recipe.run",
         { recipeId: "recipe-1", spawnedBy: "assistant", focusPolicy: "preserve" },
-        { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
+        {
+          source: "agent",
+          confirmed: true,
+          hostCallerOrigin: "assistant",
+          hostPersonApproved: true,
+          dispatchDeadlineAt: expect.any(Number),
+        }
       );
     });
 
@@ -1197,7 +1244,12 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "actions.list",
         { query: "worktree" },
-        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
+        {
+          source: "agent",
+          confirmed: undefined,
+          hostCallerOrigin: "assistant",
+          dispatchDeadlineAt: expect.any(Number),
+        }
       );
     });
   });

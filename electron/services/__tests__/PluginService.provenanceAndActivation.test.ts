@@ -407,6 +407,45 @@ describe("Plugin provenance persistence", () => {
     expect((globalThis as Record<string, unknown>).__disabledActivated).toBeUndefined();
   });
 
+  it("lists a catalog install's listing, and no listing for any other source (#16779)", async () => {
+    for (const name of ["catalog-listed", "url-claimed"]) {
+      const dir = path.join(tmpDir, name);
+      await fs.mkdir(dir);
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: `acme.${name}`, version: "1.0.0" })
+      );
+    }
+    const listing = {
+      id: "acme.catalog-listed",
+      version: "1.0.0",
+      repo: "https://github.com/acme/x",
+    };
+    const base = {
+      installedAt: Date.now(),
+      archiveHash: null,
+      originalUrl: null,
+      disabled: false,
+      updateAvailable: null,
+      devMode: false,
+      loadError: null,
+    };
+    storeMock._state.set("plugins", {
+      installed: {
+        "acme.catalog-listed": { ...base, source: "catalog", catalog: listing },
+        // A stray listing on a URL record is never presented as one.
+        "acme.url-claimed": { ...base, source: "url", catalog: listing },
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const byName = new Map(service.listPlugins().map((p) => [p.manifest.name, p]));
+
+    expect(byName.get("acme.catalog-listed")?.catalog).toEqual(listing);
+    expect(byName.get("acme.url-claimed")?.catalog).toBeNull();
+  });
+
   it("writes activation error to the persisted record", async () => {
     const pluginDir = path.join(tmpDir, "err-persist");
     await fs.mkdir(pluginDir);

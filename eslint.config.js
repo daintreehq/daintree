@@ -1188,9 +1188,9 @@ export default tseslint.config(
   // Component contract — the enforced half of docs/themes/component-contract.md:
   // the current colour vocabulary, solid text tokens, the type and radius
   // scales, theme-sourced shadows, and a replacement wherever a focus outline
-  // is suppressed. Five are `warn` because each has thousands of pre-existing
-  // uses; lint-ratchet.mjs grandfathers today's counts per rule and fails any
-  // increase. Builtin plugin
+  // is suppressed. Only the focus-suppression rule is still `warn`, for its
+  // pre-existing uses; lint-ratchet.mjs grandfathers its count and fails any
+  // increase. The rest have none left, so they are errors. Builtin plugin
   // renderers are in scope: they paint real product UI out of the same tokens.
   // Test files are excluded — the class strings in
   // src/config/__tests__/*.contract.test.ts are deliberate violations used as
@@ -1204,11 +1204,11 @@ export default tseslint.config(
     ignores: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
     plugins: { "component-contract": componentContract },
     rules: {
-      "component-contract/no-legacy-daintree-utilities": "warn",
-      "component-contract/no-text-color-slash-alpha": "warn",
-      "component-contract/no-arbitrary-text-size": "warn",
-      "component-contract/no-raw-radius": "warn",
-      // Zero uses, so an error: nothing to grandfather.
+      // Zero uses, so errors: nothing to grandfather.
+      "component-contract/no-legacy-daintree-utilities": "error",
+      "component-contract/no-text-color-slash-alpha": "error",
+      "component-contract/no-arbitrary-text-size": "error",
+      "component-contract/no-raw-radius": "error",
       "component-contract/no-raw-shadow": "error",
       "component-contract/no-unpaired-outline-suppression": "warn",
     },

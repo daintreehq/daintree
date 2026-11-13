@@ -1,5 +1,6 @@
 import { beforeAll, describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
@@ -49,6 +50,11 @@ vi.mock("@/clients", () => ({
   systemClient: {
     getTmpDir: vi.fn().mockResolvedValue("/tmp"),
   },
+}));
+
+const getResolvedModelListMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock("@/clients/agentCapabilitiesClient", () => ({
+  agentCapabilitiesClient: { getResolvedModelList: getResolvedModelListMock },
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => {
@@ -2366,6 +2372,203 @@ describe("restartTerminalOnPreset", () => {
     await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
 
     expect(pane().title).toBe("Review API");
+  });
+
+  describe("on a model only the runtime catalog lists (#16783)", () => {
+    const codexPane = (overrides: Partial<PtyPanelData> = {}) =>
+      seed({
+        launchAgentId: "codex",
+        agentModelId: "gpt-5.5",
+        title: "Codex (GPT-5.5) [Personal]",
+        ...overrides,
+      });
+    const catalog = (models: Array<{ id: string; name: string; shortLabel: string }>) => ({
+      agentId: "codex",
+      models,
+      contextWindow: null,
+      source: "remote",
+    });
+
+    beforeEach(() => {
+      getResolvedModelListMock.mockResolvedValue(
+        catalog([{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }])
+      );
+    });
+
+    it("moves the model-named stamp to the new preset", async () => {
+      codexPane();
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(getResolvedModelListMock).toHaveBeenCalledWith("codex");
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+      expect(mockSpawn.mock.calls[0]![0].title).toBe("Codex (GPT-5.5) [Work]");
+    });
+
+    it("reads the catalog before tearing the pane down", async () => {
+      codexPane();
+      let answer: (value: unknown) => void = () => {};
+      let started: () => void = () => {};
+      const readStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      getResolvedModelListMock.mockImplementation(() => {
+        started();
+        return new Promise((resolve) => {
+          answer = resolve;
+        });
+      });
+
+      const switching = usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      await readStarted;
+      // Every other await the switch makes is already settled, so a teardown
+      // that didn't wait for the catalog would run in these turns.
+      for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      answer(catalog([{ id: "gpt-5.5", name: "GPT-5.5", shortLabel: "GPT-5.5" }]));
+      await switching;
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+    });
+
+    it("recognises the bare-name stamp a launch that couldn't name the model carried", async () => {
+      codexPane({ title: "Codex [Personal]" });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+    });
+
+    it.each([
+      ["the bare name detection reset it to", "Codex"],
+      ["the model-named launch title", "Codex (GPT-5.5)"],
+    ])("stamps a preset-free pane titled %s", async (_label, title) => {
+      codexPane({
+        title,
+        titleMode: undefined,
+        agentPresetId: undefined,
+        originalPresetId: undefined,
+      });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+      expect(pane().titleMode).toBe("custom");
+    });
+
+    it.each([
+      ["a model-named stamp", "Codex (GPT-5.5) [Personal]"],
+      ["a bare-name stamp", "Codex [Personal]"],
+    ])(
+      "falls back to the bare agent name from %s when the catalog no longer lists the model",
+      async (_label, title) => {
+        codexPane({ title });
+        getResolvedModelListMock.mockResolvedValue(
+          catalog([{ id: "gpt-6", name: "GPT-6", shortLabel: "GPT-6" }])
+        );
+
+        await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+        expect(pane().title).toBe("Codex [Work]");
+        expect(pane().agentPresetId).toBe("work");
+      }
+    );
+
+    it("keeps a caller-supplied name, and a duplicate's decorated title", async () => {
+      codexPane({ title: "Review API", titleMode: "custom" });
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(pane().title).toBe("Review API");
+
+      codexPane({
+        title: "Codex (GPT-5.5) (copy)",
+        titleMode: undefined,
+        agentPresetId: undefined,
+        originalPresetId: undefined,
+      });
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(pane().title).toBe("Codex (GPT-5.5) (copy)");
+    });
+
+    it("keeps a caller's name shaped like a bare stamp on a bundled model's pane", async () => {
+      seed({ agentModelId: "opus", title: "Claude [Personal]", titleMode: "custom" });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Claude [Personal]");
+    });
+
+    it("keeps a user's rename", async () => {
+      codexPane({ title: "Codex (GPT-5.5) [Personal]", titleMode: "user" });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Codex (GPT-5.5) [Personal]");
+      expect(pane().titleMode).toBe("user");
+    });
+
+    it("names the model when the rename is cleared before the spawn", async () => {
+      codexPane({ title: "My Codex", titleMode: "user" });
+      let finishKill: () => void = () => {};
+      let killStarted: () => void = () => {};
+      const killing = new Promise<void>((resolve) => {
+        killStarted = resolve;
+      });
+      mockKill.mockImplementationOnce(() => {
+        killStarted();
+        return new Promise<void>((resolve) => {
+          finishKill = resolve;
+        });
+      });
+
+      const switching = usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      await killing;
+      // What clearing a rename leaves: the identity default, unlocked.
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...pane(), title: getAgentDisplayTitle("codex"), titleMode: "default" },
+        },
+      }));
+      finishKill();
+      await switching;
+
+      expect(pane().title).toBe("Codex (GPT-5.5) [Work]");
+      expect(mockSpawn.mock.calls[0]![0].title).toBe("Codex (GPT-5.5) [Work]");
+    });
+
+    it("keeps a caller's name shaped like a stamp with another label while the catalog names the model", async () => {
+      codexPane({ title: "Codex (Audit) [Personal]", titleMode: "custom" });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe("Codex (Audit) [Personal]");
+    });
+
+    it("stamps a bundled model's preset-free pane that detection reset to the bare name", async () => {
+      seed({
+        agentModelId: "opus",
+        title: getAgentDisplayTitle("claude"),
+        titleMode: undefined,
+        agentPresetId: undefined,
+        originalPresetId: undefined,
+      });
+
+      await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+
+      expect(pane().title).toBe(`${getAgentDisplayTitle("claude", "opus")} [Work]`);
+      expect(getResolvedModelListMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't read the catalog for a fallback hop, which keeps the title", async () => {
+      codexPane();
+
+      await usePanelStore.getState().activateFallbackPreset("test-1", "work", "personal");
+
+      expect(pane().isUsingFallback).toBe(true);
+      expect(pane().title).toBe("Codex (GPT-5.5) [Personal]");
+      expect(getResolvedModelListMock).not.toHaveBeenCalled();
+    });
   });
 
   it("puts the old preset back, persisted, when the respawn fails", async () => {

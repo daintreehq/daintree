@@ -114,6 +114,8 @@ export class PluginDevWorkerHost extends EventEmitter {
   private readonly permissionExecArgv: readonly string[];
 
   private disposeTimer: NodeJS.Timeout | null = null;
+  /** A SIGKILL asked for before the worker spawned, held until it has a pid to signal. */
+  private spawnKill: { child: UtilityProcess; onSpawn: () => void } | null = null;
 
   /**
    * Sliding window of recent UNINTENTIONAL crash timestamps. Lazy-pruned to
@@ -250,29 +252,22 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     if (this.child) {
       this.expectingExit = true;
+      // Armed before the request goes out so an immediate exit finds it in place
+      // to clear. `this.child` stays set after the kill: the `exit` event is the
+      // authority on process death, and clearing it here would make that
+      // handler drop the exit as a superseded child's.
+      this.disposeTimer = setTimeout(() => {
+        this.disposeTimer = null;
+        if (this.child) this.forceKill(this.child, "dispose backstop");
+      }, DISPOSE_TIMEOUT_MS);
+      this.disposeTimer.unref?.();
       // Post directly — `send()` bails once `isDisposed` is set (which we just
       // did), so route around it for the cooperative shutdown message.
       try {
         this.child.postMessage({ type: "dispose" });
       } catch {
-        // worker may already be gone; the kill backstop below still fires
+        // worker may already be gone; the kill backstop above still fires
       }
-      this.disposeTimer = setTimeout(() => {
-        this.disposeTimer = null;
-        if (this.child) {
-          noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
-          try {
-            this.child.kill();
-          } catch (error) {
-            logger.warn(`[${this.serviceName}] Failed to kill worker during dispose`, {
-              error: formatErrorMessage(error, "kill failed"),
-            });
-          } finally {
-            this.child = null;
-          }
-        }
-      }, DISPOSE_TIMEOUT_MS);
-      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
@@ -333,7 +328,7 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     this.installLogForwarding();
 
-    // Bind both listeners to THIS child so a superseded or retiring worker can
+    // Bind every listener to THIS child so a superseded or retiring worker can
     // never speak for the host (#12279).
     const child = this.child;
 
@@ -362,7 +357,21 @@ export class PluginDevWorkerHost extends EventEmitter {
       }
     });
 
+    // A fatal V8 error in the worker, such as the plugin hitting its heap cap.
+    // UtilityProcess is an EventEmitter, so with no listener this would throw in
+    // main and take the whole app down over one plugin. The exit that always
+    // follows owns the crash ladder; the diagnostic report stays out of the log.
+    child.on("error", (type, location) => {
+      logger.warn(`[${this.serviceName}] Worker fatal error`, {
+        pluginId: this.pluginId,
+        pid: child.pid ?? null,
+        type,
+        location,
+      });
+    });
+
     child.on("exit", (code) => {
+      this.dropSpawnKill(child);
       if (this.child !== child) return;
       this.handleExit(code);
     });
@@ -404,14 +413,50 @@ export class PluginDevWorkerHost extends EventEmitter {
         this.readyResolve = null;
       }
       this.expectingExit = true;
-      noteTerminationIntent({ serviceName: this.serviceName }, "failed to start");
-      try {
-        child.kill();
-      } catch {
-        // already gone
-      }
+      this.forceKill(child, "failed to start");
     }, READY_TIMEOUT_MS);
     this.readyTimer.unref?.();
+  }
+
+  /**
+   * Deliberately NOT `child.kill()` (#11069): on macOS `UtilityProcess.kill()`
+   * runs `base::EnsureProcessTerminated`, which blocks main for up to 2s waiting
+   * for the child to die. A raw SIGKILL is non-blocking and cannot be trapped.
+   *
+   * A worker that has not spawned has no pid yet, so the signal waits for
+   * `spawn`; repeated asks while it waits share the one listener, and an exit
+   * before spawn drops it. The intent is noted when the signal actually goes
+   * out, so a late spawn cannot outlive its TTL.
+   */
+  private forceKill(child: UtilityProcess, reason: string): void {
+    const pid = child.pid;
+    if (pid === undefined) {
+      if (this.spawnKill?.child === child) return;
+      const onSpawn = (): void => {
+        if (this.spawnKill?.onSpawn !== onSpawn) return;
+        this.spawnKill = null;
+        this.forceKill(child, reason);
+      };
+      this.spawnKill = { child, onSpawn };
+      child.once("spawn", onSpawn);
+      return;
+    }
+    noteTerminationIntent({ serviceName: this.serviceName }, reason);
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      logger.warn(`[${this.serviceName}] Failed to kill worker (${reason})`, {
+        error: formatErrorMessage(error, "kill failed"),
+      });
+    }
+  }
+
+  private dropSpawnKill(child: UtilityProcess): void {
+    const pending = this.spawnKill;
+    if (pending?.child !== child) return;
+    this.spawnKill = null;
+    child.off("spawn", pending.onSpawn);
   }
 
   private clearReadyDeadline(): void {
@@ -549,6 +594,10 @@ export class PluginDevWorkerHost extends EventEmitter {
 
   private handleExit(code: number | undefined): void {
     this.clearReadyDeadline();
+    if (this.disposeTimer) {
+      clearTimeout(this.disposeTimer);
+      this.disposeTimer = null;
+    }
     const wasExpected = this.expectingExit;
     this.expectingExit = false;
     this.child = null;

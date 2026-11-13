@@ -6,9 +6,10 @@
  * - `host.registerHandler(channel, fn)` calls `fn(ctx, payload)`. A handler
  *   written as `(payload) => …` is handed the IPC context instead, so every
  *   field it reads is missing.
- * - `host.registerAction(descriptor, fn)` calls `fn(args)` and passes no
- *   context at all. A handler written as `(ctx, args) => …` gets the payload in
- *   the first parameter and `undefined` in the second.
+ * - `host.registerAction(descriptor, fn)` calls `fn(args, context)`, payload
+ *   first. A handler written as `(ctx, args) => …` gets the payload in the
+ *   first parameter and the dispatch context in the second, so it reads its
+ *   payload's fields off the context, where none of them exist.
  *
  * Both produce the same unhelpful `Cannot read properties of undefined` from
  * inside the plugin's own code, where nothing names the cause. Declared arity
@@ -35,14 +36,15 @@ function isPropertyOfUndefined(error: unknown): boolean {
 }
 
 /**
- * The hint an action handler earns, or null. `run(args)` is the whole contract,
- * so a second declared parameter is always `undefined` and reading through it
- * always throws.
+ * The hint an action handler earns, or null. `handler(args, context)` is the
+ * contract, and a two-parameter handler is now as likely to be right as wrong,
+ * so the hint says what the order is and leaves the author to check which one
+ * they wrote: the context holds only `dispatchSource`, `origin` and `approval`.
  */
 export function actionHandlerArityHint(handler: unknown, error: unknown): string | null {
   if (typeof handler !== "function" || handler.length < 2) return null;
   if (!isPropertyOfUndefined(error)) return null;
-  return `${HINT_MARKER} an action handler is called with the arguments object as its only parameter — there is no context parameter, so a handler declaring a second one always receives undefined. Read the payload from the first parameter.`;
+  return `${HINT_MARKER} an action handler is called as (args, context): the arguments object first, then the dispatch context ({ dispatchSource, origin, approval }). A handler written as (ctx, args) reads its payload from the context, where none of its fields exist.`;
 }
 
 /**

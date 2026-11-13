@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
-import { McpSurfaceResultSchema } from "../../../../shared/types/mcpSurface.js";
+import {
+  McpSurfaceResultSchema,
+  type McpSessionRole,
+} from "../../../../shared/types/mcpSurface.js";
 import { NON_RENDERER_OWNED_TIER_ALLOWLISTS, TIER_ALLOWLISTS, type McpTier } from "../shared.js";
 import { shouldExposeTool } from "../tierAuth.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "../surfaceManifest.js";
 
 const APP_VERSION = "9.9.9";
+const ROLE: McpSessionRole = "project-assistant";
 
 function entry(overrides: Partial<ActionManifestEntry> & { id: string }): ActionManifestEntry {
   return {
@@ -51,9 +55,9 @@ describe("buildSurfaceManifest", () => {
         .filter((e) => shouldExposeTool(e, tier))
         .map((e) => e.id)
         .sort();
-      expect(buildSurfaceManifest(manifest, tier, APP_VERSION).tools.map((t) => t.id)).toEqual(
-        expected
-      );
+      expect(
+        buildSurfaceManifest(manifest, tier, ROLE, APP_VERSION).tools.map((t) => t.id)
+      ).toEqual(expected);
     }
   });
 
@@ -61,8 +65,8 @@ describe("buildSurfaceManifest", () => {
     const forward = realisticManifest();
     const reversed = [...forward].reverse();
 
-    const a = buildSurfaceManifest(forward, "full", APP_VERSION);
-    const b = buildSurfaceManifest(reversed, "full", APP_VERSION);
+    const a = buildSurfaceManifest(forward, "full", ROLE, APP_VERSION);
+    const b = buildSurfaceManifest(reversed, "full", ROLE, APP_VERSION);
 
     expect(a.tools.map((t) => t.id)).toEqual([...a.tools.map((t) => t.id)].sort());
     expect(b.tools).toEqual(a.tools);
@@ -70,7 +74,7 @@ describe("buildSurfaceManifest", () => {
   });
 
   it("stamps a usable shape version, the app version it was given, and the caller tier", () => {
-    const result = buildSurfaceManifest(realisticManifest(), "core", APP_VERSION);
+    const result = buildSurfaceManifest(realisticManifest(), "core", ROLE, APP_VERSION);
 
     // Asserting equality against the imported constant would compare the
     // implementation with itself. What a client needs is that the field is a
@@ -81,8 +85,28 @@ describe("buildSurfaceManifest", () => {
     expect(result.tier).toBe("core");
   });
 
+  it("reports the role it was given, which the published schema holds to its values", () => {
+    const roles: McpSessionRole[] = [
+      "global-assistant",
+      "project-assistant",
+      "agent-pane",
+      "external-client",
+      "relay",
+    ];
+    for (const role of roles) {
+      const report = buildSurfaceManifest(realisticManifest(), "core", role, APP_VERSION);
+      expect(report.role).toBe(role);
+      expect(McpSurfaceResultSchema.safeParse(report).success).toBe(true);
+    }
+
+    const result = buildSurfaceManifest(realisticManifest(), "core", "relay", APP_VERSION);
+    const { role: _role, ...withoutRole } = result;
+    expect(McpSurfaceResultSchema.safeParse(withoutRole).success).toBe(false);
+    expect(McpSurfaceResultSchema.safeParse({ ...result, role: "assistant" }).success).toBe(false);
+  });
+
   it("returns an empty, still-valid surface for an empty manifest", () => {
-    const result = buildSurfaceManifest([], "core", APP_VERSION);
+    const result = buildSurfaceManifest([], "core", ROLE, APP_VERSION);
 
     expect(result.tools).toEqual([]);
     expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
@@ -96,7 +120,7 @@ describe("buildSurfaceManifest", () => {
     // this catches — neither side is a copy of the other.
     const advertised = Object.keys(McpSurfaceResultSchema.shape).sort();
     const emitted = Object.keys(
-      buildSurfaceManifest(realisticManifest(), "full", APP_VERSION)
+      buildSurfaceManifest(realisticManifest(), "full", ROLE, APP_VERSION)
     ).sort();
 
     expect(emitted).toEqual(advertised);
@@ -104,7 +128,7 @@ describe("buildSurfaceManifest", () => {
 
   it("satisfies the schema published as the tool's outputSchema", () => {
     for (const tier of ["core", "full", "external"] as const) {
-      const result = buildSurfaceManifest(realisticManifest(), tier, APP_VERSION);
+      const result = buildSurfaceManifest(realisticManifest(), tier, ROLE, APP_VERSION);
       expect(McpSurfaceResultSchema.safeParse(result).success).toBe(true);
     }
   });
@@ -120,7 +144,7 @@ describe("per-tool tier", () => {
     const rungs = ["core", "full"] as const;
     for (const rendererOwnedOrigin of [false, true]) {
       const allowlists = rendererOwnedOrigin ? TIER_ALLOWLISTS : NON_RENDERER_OWNED_TIER_ALLOWLISTS;
-      const result = buildSurfaceManifest(realisticManifest(), "full", APP_VERSION, {
+      const result = buildSurfaceManifest(realisticManifest(), "full", ROLE, APP_VERSION, {
         workspaceBound: false,
         rendererOwnedOrigin,
       });
@@ -147,6 +171,7 @@ describe("per-tool tier", () => {
     const result = buildSurfaceManifest(
       twins.map((id) => entry({ id, kind: "command" })),
       "full",
+      ROLE,
       APP_VERSION
     );
 
@@ -170,6 +195,7 @@ describe("per-tool tier", () => {
     const result = buildSurfaceManifest(
       ids.map((id) => entry({ id, kind: "command" })),
       "full",
+      ROLE,
       APP_VERSION,
       { workspaceBound: true, relay: true, assistantCaller: true }
     );
@@ -182,7 +208,7 @@ describe("per-tool tier", () => {
   });
 
   it("reports `external` for every tool an external caller sees", () => {
-    const result = buildSurfaceManifest(realisticManifest(), "external", APP_VERSION);
+    const result = buildSurfaceManifest(realisticManifest(), "external", ROLE, APP_VERSION);
 
     expect(result.tools.length).toBeGreaterThan(0);
     expect(result.tools.every((t) => t.tier === "external")).toBe(true);
@@ -191,7 +217,7 @@ describe("per-tool tier", () => {
   it("never reports a rung above the caller's own tier", () => {
     const order: Record<string, number> = { core: 0, full: 1 };
     for (const tier of ["core", "full"] as const) {
-      const result = buildSurfaceManifest(realisticManifest(), tier, APP_VERSION);
+      const result = buildSurfaceManifest(realisticManifest(), tier, ROLE, APP_VERSION);
       for (const tool of result.tools) {
         expect(order[tool.tier]).toBeLessThanOrEqual(order[tier]);
       }
@@ -206,7 +232,7 @@ describe("hints", () => {
       entry({ id: "terminal.new", kind: "command" }),
     ];
     const byId = new Map(
-      buildSurfaceManifest(manifest, "full", APP_VERSION).tools.map((t) => [t.id, t])
+      buildSurfaceManifest(manifest, "full", ROLE, APP_VERSION).tools.map((t) => [t.id, t])
     );
 
     expect(byId.get("actions.list")).toMatchObject({ readOnlyHint: true, idempotentHint: true });
@@ -220,6 +246,7 @@ describe("hints", () => {
       buildSurfaceManifest(
         [entry({ id: "terminal.new", kind: "command", mcpAnnotations })],
         "full",
+        ROLE,
         APP_VERSION
       ).tools[0]!;
 
@@ -239,6 +266,7 @@ describe("hints", () => {
     const [tool] = buildSurfaceManifest(
       [entry({ id: "actions.list", kind: "query", mcpAnnotations: { idempotentHint: false } })],
       "full",
+      ROLE,
       APP_VERSION
     ).tools;
 
@@ -248,7 +276,12 @@ describe("hints", () => {
 
 describe("deprecation", () => {
   it("omits the field for a tool that is not deprecated", () => {
-    const [tool] = buildSurfaceManifest([entry({ id: "actions.list" })], "full", APP_VERSION).tools;
+    const [tool] = buildSurfaceManifest(
+      [entry({ id: "actions.list" })],
+      "full",
+      ROLE,
+      APP_VERSION
+    ).tools;
 
     expect(tool).not.toHaveProperty("deprecated");
   });
@@ -262,7 +295,7 @@ describe("deprecation", () => {
       entry({ id: "actions.search", deprecated: { reason: "No replacement" } }),
     ];
     const byId = new Map(
-      buildSurfaceManifest(manifest, "full", APP_VERSION).tools.map((t) => [t.id, t])
+      buildSurfaceManifest(manifest, "full", ROLE, APP_VERSION).tools.map((t) => [t.id, t])
     );
 
     expect(byId.get("actions.list")?.deprecated).toEqual({
@@ -275,12 +308,12 @@ describe("deprecation", () => {
 
 describe("hash", () => {
   const hashOf = (manifest: ActionManifestEntry[], tier: McpTier = "full"): string =>
-    buildSurfaceManifest(manifest, tier, APP_VERSION).hash;
+    buildSurfaceManifest(manifest, tier, ROLE, APP_VERSION).hash;
 
   it("does not depend on the app version", () => {
     const manifest = realisticManifest();
-    expect(buildSurfaceManifest(manifest, "full", "1.0.0").hash).toBe(
-      buildSurfaceManifest(manifest, "full", "2.0.0").hash
+    expect(buildSurfaceManifest(manifest, "full", ROLE, "1.0.0").hash).toBe(
+      buildSurfaceManifest(manifest, "full", ROLE, "2.0.0").hash
     );
   });
 
@@ -459,6 +492,10 @@ describe("hash", () => {
     // `action` (with `actions.list` reported as `workbench`) can no longer be
     // built. That legacy preimage still hashes to e19447a2…efe4 under the
     // current code; only the surface moved.
+    //
+    // Re-frozen for v4 (#16765), which put `role` in the preimage beside the
+    // tier, here a project assistant's own. Nothing else moved: without the
+    // role, the same rows still hash to the v3 digest 9e18cad3…de79.
     const frozen: ActionManifestEntry[] = [
       entry({
         id: "actions.list",
@@ -473,8 +510,8 @@ describe("hash", () => {
       entry({ id: "terminal.new", kind: "command", danger: "safe" }),
     ];
 
-    expect(buildSurfaceManifest(frozen, "full", APP_VERSION).hash).toBe(
-      "9e18cad35e47aec474582a605315a717165f473e07d29efbb900528e2ed6de79"
+    expect(buildSurfaceManifest(frozen, "full", "project-assistant", APP_VERSION).hash).toBe(
+      "64e0a1aea62ae524f8e2880aafc172e4a56b6127031d70a153cf256e5a2afeaa"
     );
   });
 
@@ -493,6 +530,22 @@ describe("hash", () => {
 
     const hashes = (["core", "full", "external"] as const).map((t) => hashOf(manifest, t));
     expect(new Set(hashes).size).toBe(hashes.length);
+  });
+
+  it("differs across roles even when they list the same tools (#16765)", () => {
+    const manifest = realisticManifest();
+    const roles: McpSessionRole[] = [
+      "global-assistant",
+      "project-assistant",
+      "agent-pane",
+      "external-client",
+      "relay",
+    ];
+
+    const reports = roles.map((role) => buildSurfaceManifest(manifest, "core", role, APP_VERSION));
+    // Premise: the tools really are identical, so only the role can move it.
+    for (const report of reports) expect(report.tools).toEqual(reports[0]!.tools);
+    expect(new Set(reports.map((report) => report.hash)).size).toBe(roles.length);
   });
 });
 
@@ -515,8 +568,10 @@ describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
       entry({ id: "terminal.new", kind: "command" }),
       entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
     ];
-    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION).tools.map((t) => t.id);
-    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).tools.map(
+    const unbound = buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION).tools.map(
+      (t) => t.id
+    );
+    const bound = buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION, BOUND).tools.map(
       (t) => t.id
     );
     const confirmGated = new Set(manifest.filter((e) => e.danger === "confirm").map((e) => e.id));
@@ -532,23 +587,23 @@ describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
       entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
     ];
 
-    expect(buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).hash).not.toBe(
-      buildSurfaceManifest(manifest, "external", APP_VERSION).hash
+    expect(buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION, BOUND).hash).not.toBe(
+      buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION).hash
     );
   });
 
   it("leaves the unbound output identical to the pre-binding shape", () => {
     const manifest = realisticManifest();
     expect(
-      buildSurfaceManifest(manifest, "external", APP_VERSION, { workspaceBound: false })
-    ).toEqual(buildSurfaceManifest(manifest, "external", APP_VERSION));
+      buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION, { workspaceBound: false })
+    ).toEqual(buildSurfaceManifest(manifest, "external", ROLE, APP_VERSION));
   });
 
   it("does not narrow a non-external tier, so the pinned Assistant is unaffected", () => {
     const manifest = realisticManifest();
     for (const tier of ["core", "full"] as const) {
-      expect(buildSurfaceManifest(manifest, tier, APP_VERSION, BOUND)).toEqual(
-        buildSurfaceManifest(manifest, tier, APP_VERSION)
+      expect(buildSurfaceManifest(manifest, tier, ROLE, APP_VERSION, BOUND)).toEqual(
+        buildSurfaceManifest(manifest, tier, ROLE, APP_VERSION)
       );
     }
   });

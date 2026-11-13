@@ -296,6 +296,12 @@ npx daintree-plugin install https://github.com/acme/my-plugin/releases/latest/do
 
 The second form needs a release asset with a fixed name; `package` writes a versioned one, so see [CI integration](#ci-integration). Useful in CI scripts and setup automation.
 
+`--sha256 <hex>` holds a fresh install to a known digest: Daintree refuses the archive unless its SHA-256 matches, and refuses if the plugin is already installed. A Daintree too old to check the digest refuses the call rather than installing unchecked.
+
+```bash
+npx daintree-plugin install https://github.com/acme/my-plugin/releases/download/v0.2.0/acme.my-plugin-0.2.0.dntr --sha256 "$SHA256"
+```
+
 ### `daintree-plugin uninstall <pluginId>`
 
 ```bash
@@ -514,7 +520,7 @@ If neither explains it:
 
 > `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`), 0.1.0 included, though the 0.1.0 mock has no `databases` option, no agent-pane drivers (`agents`, `simulateSendToAgentPick`) and no `terminals.readScreen` or `onDidChangeFocusedPanel`; those ship in the next release. Inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
-Drive the plugin the way the host does: call `activate(host)`, then reach what it registered through the mock's recorders. A command runs through `host.dispatch` with its fully namespaced id, `{pluginId}.{commandId}`, which calls the handler with the args alone; a channel handler on `registeredHandlers` is called context first, payload second.
+Drive the plugin the way the host does: call `activate(host)`, then reach what it registered through the mock's recorders. A command runs through `host.dispatch` with its fully namespaced id, `{pluginId}.{commandId}`, which calls the handler with the args and the plugin-source context `{ dispatchSource: "plugin" }`, as a real `host.dispatch` would; to test what a handler does with `approval: "person"`, call it from `registeredActions` with a context of your own; a channel handler on `registeredHandlers` is called context first, payload second.
 
 ```ts
 // src/index.test.ts
@@ -551,7 +557,7 @@ describe("acme.linear-planner", () => {
 });
 ```
 
-A filesystem-convention handler (a compiled `src/{id}.js` default export) receives the args only, never `host`, so it can be imported and called directly with an args object.
+A filesystem-convention handler (a compiled `src/{id}.js` default export) receives the args and the dispatch context, never `host`, so it can be imported and called directly with an args object and a context such as `{ dispatchSource: "user" }`.
 
 `createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, quick-pick items, and channel names: a colon in a `registerHandler`, `postToPanel` or `broadcastToRenderer` channel is refused with the host's own error) and gates the agent APIs (`getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent`, `sendToAgent`), `terminals.readScreen` and `onDidChangeFocusedPanel` on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `capabilities` defaults to `["agent:read", "agent:input"]`, so a test of `readScreen` or of panel focus passes `terminal:read` or `panel:focus-read` itself. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
 

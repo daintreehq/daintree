@@ -37,6 +37,7 @@ import {
   broadcastToProjectRenderersExcept,
   broadcastToRemoteEndpoints,
   broadcastToRenderer,
+  broadcastToRendererExcept,
   broadcastToVisibleRenderers,
   sendToRenderer,
   sendToRendererContext,
@@ -175,6 +176,32 @@ describe("broadcast helpers with remote endpoints", () => {
     ]);
     expect(local.send).not.toHaveBeenCalled();
     expect(view.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("a broadcast that skips every local view still reaches remote endpoints (#16810)", () => {
+    const skipped = localView(1);
+    const withheld = localView(2);
+    const kept = localView(3);
+    const destroyed = { ...localView(4), isDestroyed: () => true };
+    localViews.push(skipped, withheld, destroyed, kept);
+    const remote = endpoint(-1, "proj-1");
+    getEndpointRegistry().add(remote);
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 2);
+    const skip = vi.fn((wc: { id: number }) => wc.id === 1);
+
+    broadcastToRendererExcept(skip, "a:b", 1);
+    broadcastToRendererExcept(() => true, "a:c", 2);
+    uninstall();
+
+    expect(skip.mock.calls.map(([wc]) => wc.id)).toEqual([1, 3]);
+    expect(destroyed.send).not.toHaveBeenCalled();
+    expect(skipped.send).not.toHaveBeenCalled();
+    expect(withheld.send).not.toHaveBeenCalled();
+    expect(kept.send.mock.calls).toEqual([["a:b", 1]]);
+    expect(remote.send.mock.calls).toEqual([
+      [{ type: "event", channel: "a:b", args: [1] }],
+      [{ type: "event", channel: "a:c", args: [2] }],
+    ]);
   });
 
   it("scope project broadcasts to the project's remote endpoints and honour exclusions", () => {

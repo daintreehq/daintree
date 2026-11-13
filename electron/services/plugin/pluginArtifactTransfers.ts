@@ -7,7 +7,7 @@ import https from "node:https";
 import type { IncomingMessage } from "node:http";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { net as ElectronNet } from "electron";
+import type { ManualRedirectFetch } from "../../utils/netManualRedirectFetch.js";
 import {
   PLUGIN_ARTIFACT_IDLE_TIMEOUT_MS,
   PLUGIN_ARTIFACT_UPLOAD_RESPONSE_MAX_BYTES,
@@ -230,7 +230,7 @@ interface ResumeAnchor {
  * and starts over. Nothing from an error response is ever written.
  */
 export async function downloadToPart(options: {
-  netFetch: typeof ElectronNet.fetch;
+  netFetch: ManualRedirectFetch;
   url: URL;
   headers: Record<string, string>;
   isAllowed: ArtifactUrlMatcher;

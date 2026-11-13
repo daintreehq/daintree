@@ -1,7 +1,9 @@
+import { CHANNELS } from "../ipc/channels.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { AppError } from "../utils/errorTypes.js";
+import type { AgentDirectorySubject } from "../../shared/types/agentDirectory.js";
 import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 import { isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {
@@ -14,6 +16,8 @@ import type { WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
 import {
+  activeWebContents,
+  afterHydrated,
   landInOwner,
   untilWindowHydrated,
   WORKSPACE_LANDING_TIMEOUT_MS,
@@ -30,6 +34,16 @@ export type CanopyRunWindowOpener = (workspaceId: string) => Promise<number | nu
 export interface CanopyRunTarget {
   workspaceId: string;
   runId: string;
+}
+
+/**
+ * What the Canopy window sends to a workspace's window: the intent its view
+ * lands, and for a run's pane, the run a cached scratch's window opens itself.
+ */
+interface CanopyLanding {
+  workspaceId: string;
+  intent: ProjectFocusOnActivateIntent;
+  runId?: string;
 }
 
 /** How long a window opened for a run may take to open and hydrate. */
@@ -66,18 +80,25 @@ function noWindow(): AppError {
  * A scratch's owner, brought to it the way a project's is. `project.switch`
  * rejects a scratch, so a window holding one in its cache is asked to open the
  * run itself, as its fleet overview would: its renderer saves the layout it
- * leaves and carries the pane to focus. Anywhere else the intent is parked for
- * the switch that lands the scratch. Returns that switch when main makes it, so
- * its failure is the request's.
+ * leaves and carries the pane to focus. No such request carries an assistant's
+ * lane, so that window is left as it is and the person told where to switch.
+ * Anywhere else the intent is parked for the switch that lands the scratch.
+ * Returns that switch when main makes it, so its failure is the request's.
  */
 function redirectToScratchOwner(
   owner: ProjectOwner,
-  { workspaceId, runId }: CanopyRunTarget,
-  intent: ProjectFocusOnActivateIntent
+  { workspaceId, runId, intent }: CanopyLanding
 ): Promise<void> | undefined {
   const { context, projectViewManager, state } = owner;
   let switching: Promise<void> | undefined;
   if (state === "cached" && !isWindowOnRemoteHost(context.windowId)) {
+    if (runId === undefined) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "The scratch is cached behind another workspace in its window",
+        userMessage: "Switch to its scratch in the window that has it, then open it from there.",
+      });
+    }
     requestOwnerAction(owner, "pilot.openRun", { runId, workspaceId });
   } else {
     projectViewManager.setPendingFocusIntent(workspaceId, intent);
@@ -94,23 +115,20 @@ function redirectToScratchOwner(
 type OwnerRedirect = (owner: ProjectOwner) => Promise<void> | undefined;
 
 /**
- * How an owner that isn't showing the run's workspace is brought to it, or a
- * refusal when the workspace is gone. Read before anything moves, so a run in
- * a removed project opens nothing.
+ * How an owner that isn't showing the workspace is brought to it, or a refusal
+ * when the workspace is gone. Read before anything moves, so a run in a
+ * removed project opens nothing.
  */
-function ownerRedirect(
-  target: CanopyRunTarget,
-  intent: ProjectFocusOnActivateIntent
-): { redirect: OwnerRedirect; canOpen: boolean } {
-  if (isScratchWorkspaceId(target.workspaceId)) {
-    if (!scratchStore.getScratchById(target.workspaceId)) throw gone();
-    return { redirect: (owner) => redirectToScratchOwner(owner, target, intent), canOpen: true };
+function ownerRedirect(landing: CanopyLanding): { redirect: OwnerRedirect; canOpen: boolean } {
+  if (isScratchWorkspaceId(landing.workspaceId)) {
+    if (!scratchStore.getScratchById(landing.workspaceId)) throw gone();
+    return { redirect: (owner) => redirectToScratchOwner(owner, landing), canOpen: true };
   }
-  const project = projectStore.getProjectById(target.workspaceId);
+  const project = projectStore.getProjectById(landing.workspaceId);
   if (!project) throw gone();
   return {
     redirect: (owner) => {
-      redirectToProjectOwner(owner, project, intent);
+      redirectToProjectOwner(owner, project, landing.intent);
       return undefined;
     },
     // A window already showing a project whose folder has gone still reaches
@@ -188,15 +206,36 @@ function openWindowFor(workspaceId: string): Promise<boolean> {
  * before. Resolves once the run is on its way; rejects with why when it can't
  * be reached.
  */
-export async function goToCanopyRun(target: CanopyRunTarget): Promise<void> {
-  const { workspaceId } = target;
+export function goToCanopyRun({ workspaceId, runId }: CanopyRunTarget): Promise<void> {
+  return landFromCanopy({
+    workspaceId,
+    runId,
+    intent: { intent: "focus-panel", panelId: runId },
+  });
+}
+
+/**
+ * Open in Assistant from the Canopy window (#16758), for a lane of one of this
+ * machine's projects or scratches that main has just found running and held
+ * by a view: reached as Go to pane reaches a run, the window holding the
+ * workspace comes forward, or one opens on it, and its view shows the lane once
+ * it has checked again that the same session still runs there.
+ */
+export function openCanopyAssistantLane(
+  workspaceId: string,
+  subject: AgentDirectorySubject
+): Promise<void> {
+  return landFromCanopy({ workspaceId, intent: { intent: "open-assistant", subject } });
+}
+
+async function landFromCanopy(landing: CanopyLanding): Promise<void> {
+  const { workspaceId, intent } = landing;
   const inFlight = opening.get(workspaceId);
   if (inFlight) await inFlight;
   if (getActiveShutdown() !== null) return;
   const registry = getWindowRegistry();
   if (!registry) throw noWindow();
-  const intent: ProjectFocusOnActivateIntent = { intent: "focus-panel", panelId: target.runId };
-  const { redirect, canOpen } = ownerRedirect(target, intent);
+  const { redirect, canOpen } = ownerRedirect(landing);
   if (await landInHolder(registry, workspaceId, intent, redirect)) return;
   if (!canOpen) {
     throw new AppError({
@@ -211,11 +250,67 @@ export async function goToCanopyRun(target: CanopyRunTarget): Promise<void> {
   if (!opened) throw noWindow();
   // Routed again once it is up, so the pane is focused in the window that
   // shows the workspace now, as it is for one that already did.
-  if (
-    !(await landInHolder(registry, workspaceId, intent, ownerRedirect(target, intent).redirect))
-  ) {
+  if (!(await landInHolder(registry, workspaceId, intent, ownerRedirect(landing).redirect))) {
     throw noWindow();
   }
+}
+
+/**
+ * Whether one of this machine's windows holds a view of the workspace with
+ * this WebContents id, shown or cached: a lane held there can be shown by
+ * bringing that window to it. A remote person's view of it is held elsewhere.
+ */
+export function isWorkspaceViewHere(workspaceId: string, webContentsId: number): boolean {
+  return (getWindowRegistry()?.all() ?? []).some((context) => {
+    try {
+      return (context.services.projectViewManager?.getAllViews() ?? []).some(
+        (entry) =>
+          entry.projectId === workspaceId &&
+          !entry.view.webContents.isDestroyed() &&
+          entry.view.webContents.id === webContentsId
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Open in Assistant from the Canopy window for this machine's global session
+ * (#16758), which no workspace holds: the window whose view has its input, or
+ * else the one on this machine the person was last in, comes forward and shows
+ * it in its Assistant panel once its view has checked again that the same
+ * session still runs. A window on a remote host is passed over: its view types
+ * to that host, not to this machine.
+ */
+export function showCanopyGlobalAssistant(
+  subject: AgentDirectorySubject,
+  inputOwnerWebContentsId: number | null
+): void {
+  if (getActiveShutdown() !== null) return;
+  const candidates = (getWindowRegistry()?.focusOrder() ?? []).flatMap((context) => {
+    if (context.browserWindow.isDestroyed() || isWindowOnRemoteHost(context.windowId)) return [];
+    const webContents = activeWebContents(context, { orStartup: true });
+    return webContents ? [{ context, webContents }] : [];
+  });
+  const target =
+    candidates.find(({ webContents }) => webContents.id === inputOwnerWebContentsId) ??
+    candidates[0];
+  if (!target) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "No window on this machine to show the global assistant in",
+      userMessage: "Open a Daintree window on this computer, then open the assistant again.",
+    });
+  }
+  const { context, webContents } = target;
+  const intent: ProjectFocusOnActivateIntent = { intent: "open-assistant", subject };
+  revealWindow(context.browserWindow);
+  afterHydrated(webContents, (hydrated) => {
+    if (!hydrated || webContents.isDestroyed()) return;
+    webContents.focus();
+    webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
+  });
 }
 
 /** @internal Tests only. */

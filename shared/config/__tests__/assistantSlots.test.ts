@@ -9,6 +9,7 @@ import {
   isValidAssistantSlot,
   projectIdFromSlotKey,
   sessionIdFromLaneMcpConfigName,
+  slotFromSlotKey,
 } from "../assistantSlots.js";
 
 const HASH = "0123456789abcdef";
@@ -26,6 +27,16 @@ describe("assistantSlots", () => {
     );
   });
 
+  it("names a lane's own directory apart from every agent key, and recognises it", () => {
+    const lane = assistantSessionDirName(HASH, "antigravity", 3);
+    expect(lane).not.toBe(assistantSessionDirName(HASH, "antigravity"));
+    // An agent key can't hold a dot, so no agent's id can spell a lane.
+    expect(lane).not.toBe(assistantSessionDirName(HASH, "antigravity-s3"));
+    expect(isAssistantSessionDirName(lane, HASH.length)).toBe(true);
+    // A lane needs an agent key; the bare hash stays Claude's.
+    expect(assistantSessionDirName(HASH, null, 3)).toBe(HASH);
+  });
+
   it("recognises the project hash, bare or agent-qualified, as a live session directory", () => {
     // Load-bearing for GC, which deletes whatever this rejects. The two legacy
     // shapes — per-launch UUIDs and the `-sN` per-lane directories — must be
@@ -34,6 +45,17 @@ describe("assistantSlots", () => {
     expect(isAssistantSessionDirName(`${HASH}.codex`, HASH.length)).toBe(true);
     expect(isAssistantSessionDirName(`${HASH}.my-agent-2`, HASH.length)).toBe(true);
     expect(isAssistantSessionDirName(`${HASH}.s1`, HASH.length)).toBe(true);
+    // A lane suffix after an agent key: Antigravity's folder per lane (#16814).
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s0`, HASH.length)).toBe(true);
+    expect(
+      isAssistantSessionDirName(`${HASH}.antigravity.s${MAX_ASSISTANT_SLOTS - 1}`, HASH.length)
+    ).toBe(true);
+    expect(
+      isAssistantSessionDirName(`${HASH}.antigravity.s${MAX_ASSISTANT_SLOTS}`, HASH.length)
+    ).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.x1`, HASH.length)).toBe(false);
+    expect(isAssistantSessionDirName(`${HASH}.antigravity.s1.s2`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.Codex`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.`, HASH.length)).toBe(false);
     expect(isAssistantSessionDirName(`${HASH}.-codex`, HASH.length)).toBe(false);
@@ -69,6 +91,23 @@ describe("assistantSlots", () => {
     expect(projectIdFromSlotKey(key)).toBe(id);
     expect(projectIdFromSlotKey(`weird\u0000inside\u00001`)).toBe("weird\u0000inside");
     expect(projectIdFromSlotKey("no-delimiter")).toBe("no-delimiter");
+  });
+
+  it("reads back the slot of a key, and none from one that names no valid slot", () => {
+    expect(slotFromSlotKey(assistantSlotKey("/repo\u0000x", 2))).toBe(2);
+    expect(slotFromSlotKey(assistantSlotKey("p", MAX_ASSISTANT_SLOTS - 1))).toBe(
+      MAX_ASSISTANT_SLOTS - 1
+    );
+    for (const key of [
+      "no-delimiter",
+      "p\u0000",
+      "p\u0000-1",
+      "p\u00001.5",
+      "p\u0000 1",
+      `p\u0000${MAX_ASSISTANT_SLOTS}`,
+    ]) {
+      expect(slotFromSlotKey(key)).toBeNull();
+    }
   });
 
   it("accepts exactly the slots below the ceiling", () => {

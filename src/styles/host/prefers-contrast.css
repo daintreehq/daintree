@@ -39,6 +39,18 @@
     border-color: var(--theme-text-primary);
   }
 
+  /* The 3px ring this mode gives every focus target would overhang the
+     capsule's clip at the stats segments' 2px inset, and on an open segment
+     land on its 2px edge; both move in so ring and edge stay whole. */
+  .toolbar-stat-pill:focus-visible,
+  .toolbar-stat-status:focus-visible {
+    outline-offset: -3px;
+  }
+
+  .toolbar-stat-pill[aria-expanded="true"]:focus-visible {
+    outline-offset: -5px;
+  }
+
   :is(.toolbar-icon-button, .toolbar-agent-button):is(
       [aria-expanded="true"],
       [aria-pressed="true"],
@@ -47,9 +59,14 @@
     border-color: var(--theme-text-primary);
   }
 
-  /* Group dividers stay visible between framed buttons. */
-  .toolbar-divider {
-    background-color: var(--theme-text-secondary);
+  /* Group dividers stay visible between framed buttons. Guarded like the
+     highlighted-row block below: under forced colours this theme ink would
+     replace the toolbar's `CanvasText` divider at equal specificity, and the UA
+     would then reset it to Canvas, so every group boundary vanished. */
+  @media (forced-colors: none) {
+    .toolbar-divider {
+      background-color: var(--theme-text-secondary);
+    }
   }
 
   /* A preset split is one control: one frame, one seam. */
@@ -302,31 +319,6 @@
      click target's frame. */
   .row-select-target {
     border-width: 0;
-  }
-
-  /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the
-   * class attribute and bakes the alpha into `color-mix()` on the color
-   * property — `opacity: 1` cannot recover the lost contrast. Forcing the
-   * solid token restores it. !important is required because the Tailwind
-   * utility rule has equal specificity (0,1,0) and wins on source order.
-   *
-   * #12065 narrowed this rule by emptying it, not by editing it. What it used
-   * to catch was 1,906 sites, most of them prose expressing a hierarchy through
-   * alpha; those now spell a solid text token and this selector no longer
-   * reaches them. What is left inside it is the reviewed carve-out set — icon
-   * affordances, decorative glyphs, deliberate disabled states, text already
-   * composited by an ancestor's opacity — and flattening exactly those under
-   * Increase Contrast is the right behaviour rather than the bug the rule was
-   * once accused of. Every survivor is named in
-   * `scripts/baselines/text-ramp-manifest.json`.
-   *
-   * Deliberately still keyed on the legacy namespace. Repointing it at
-   * `[class*="text-text-primary/"]` would force-flatten the fifteen semantic
-   * slash-alpha sites that have nothing to do with the ramp — among them two
-   * drag handles resting at `/25` that darken to `/40` on hover, whose whole
-   * affordance is that they stay faint until you reach for them. */
-  [class*="text-daintree-text/"] {
-    color: var(--color-text-primary) !important;
   }
 
   /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme

@@ -19,7 +19,7 @@
  *     `rounded-[calc(2px)]`, `rounded-[2px_4px]`
  *
  * Not flagged:
- *   - the named scale `rounded-xs` … `rounded-3xl`, which IS the token scale:
+ *   - the named scale `rounded-3xs` … `rounded-3xl`, which IS the token scale:
  *     `@theme inline` compiles `rounded-md` to `calc(var(--radius) - 2px)`. Stops
  *     at `3xl` because that is where the design contract stops redefining; Tailwind's
  *     stock `rounded-4xl` is a fixed 2rem that no theme can scale.
@@ -53,8 +53,8 @@ const SIDES = new Set([
   "es",
   "ee",
 ]);
-/** The steps `src/styles/design-contract.css` actually redefines from `--radius`. */
-const NAMED_SCALE = /^(?:xs|sm|md|lg|xl|2xl|3xl)$/;
+/** The steps `src/styles/design-contract.css` actually derives from `--radius`. */
+const NAMED_SCALE = /^(?:3xs|2xs|xs|sm|md|lg|xl|2xl|3xl)$/;
 const SHAPE = /^(?:full|none)$/;
 
 /** Strip `rounded` and any side segment, returning the scale value (`""` when absent). */

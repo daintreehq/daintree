@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  AgentDirectorySubjectSchema,
+  type AgentDirectorySubject,
+} from "../../../shared/types/agentDirectory.js";
+import type { CanopyAssistantOpenRefusal } from "../../../shared/types/ipc/canopy.js";
+import { isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import { readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { AppError } from "../../utils/errorTypes.js";
 import {
@@ -8,10 +14,21 @@ import {
   isCanopyWindowView,
   openCanopyWindow,
 } from "../../window/canopyWindow.js";
-import { goToCanopyRun } from "../../window/canopyGoToRun.js";
+import {
+  goToCanopyRun,
+  isWorkspaceViewHere,
+  openCanopyAssistantLane,
+  showCanopyGlobalAssistant,
+} from "../../window/canopyGoToRun.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
-import { observeCanopySnapshots } from "./canopy.js";
+import {
+  assistantLaneHolder,
+  globalAssistantInputOwner,
+  observeCanopySnapshots,
+  resolveAssistantDestination,
+} from "./canopy.js";
+import { checkRateLimit } from "../utils.js";
 import { CANOPY_WINDOW_METHOD_CHANNELS } from "./canopyWindow.preload.js";
 
 const id = z.string().min(1).max(512);
@@ -92,6 +109,45 @@ export const canopyWindowNamespace = defineIpcNamespace({
       ): Promise<void> => {
         refuseUnlessCanopyWindow(ctx, "Only the Canopy window goes to a run this way");
         await goToCanopyRun({ workspaceId, runId });
+      },
+      { withContext: true }
+    ),
+    /**
+     * Open in Assistant from the Canopy window (#16758), for an assistant on
+     * this machine: the window holding its lane, or for the global session the
+     * one with its input or else the one last in use, comes forward and shows
+     * it. Main finds where it runs itself rather than take a project from the
+     * renderer, and refuses before anything moves when it has ended or no view
+     * here holds its lane: null once it is on its way. Another host's assistant
+     * opens through that host's window switch instead.
+     */
+    openAssistant: opValidated(
+      CANOPY_WINDOW_METHOD_CHANNELS.openAssistant,
+      AgentDirectorySubjectSchema,
+      async (
+        ctx: IpcContext,
+        subject: AgentDirectorySubject
+      ): Promise<CanopyAssistantOpenRefusal | null> => {
+        refuseUnlessCanopyWindow(ctx, "Only the Canopy window opens an assistant this way");
+        checkRateLimit(CANOPY_WINDOW_METHOD_CHANNELS.openAssistant, 20, 10_000);
+        if (!isLocalHostId(subject.hostId)) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Another host's assistant opens through its own window switch",
+          });
+        }
+        const destination = await resolveAssistantDestination(subject);
+        if (!destination) return "ended";
+        if (destination.scope === "global") {
+          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner());
+          return null;
+        }
+        const holder = await assistantLaneHolder(destination.projectId, destination.lane);
+        if (holder === null || !isWorkspaceViewHere(destination.projectId, holder)) {
+          return "not-attached";
+        }
+        await openCanopyAssistantLane(destination.projectId, subject);
+        return null;
       },
       { withContext: true }
     ),

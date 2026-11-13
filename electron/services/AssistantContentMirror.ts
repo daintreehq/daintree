@@ -8,7 +8,7 @@ import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 /**
  * Mirrors user-authored assistant commands and skills into the per-project
  * help-session directory at provision time, so the CLIs launched there
- * (Claude Code, Codex, Copilot) discover them through their native cwd-scoped
+ * (Claude Code, Codex, Copilot, Antigravity) discover them through their native cwd-scoped
  * mechanisms — no agent config outside Daintree-owned directories is ever
  * touched (precedent #4100).
  *
@@ -46,6 +46,10 @@ import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
  *     never mirrored to a .codex destination, because <cwd>/.codex rides
  *     Codex's trust-gated project-config layer.
  *   - Copilot CLI reads both .claude/skills and .agents/skills from cwd.
+ *   - Antigravity (agy) registers each <cwd>/.agents/skills/<name>/SKILL.md
+ *     as a slash command and reads no .claude folder, so it gets the shared
+ *     tree only. Its lane folder also holds .agents/mcp_config.json, which
+ *     sits outside every mirror root and is never touched here.
  */
 interface ContentMapping {
   sourceDir: string;
@@ -104,6 +108,10 @@ const AGENT_CONTENT_MAPPINGS: Record<string, readonly ContentMapping[]> = {
     { sourceDir: ".claude/skills", destDir: ".claude/skills", granularity: "skillDir" },
     REFERENCE_MAPPING,
   ],
+  antigravity: [
+    { sourceDir: ".agents/skills", destDir: ".agents/skills", granularity: "skillDir" },
+    REFERENCE_MAPPING,
+  ],
 };
 
 // Union of every mapping's destDir. Stale-entry deletion is restricted to
@@ -126,6 +134,7 @@ const PLUGIN_SKILL_DEST_ROOTS: Record<string, string> = {
   claude: ".claude/skills",
   codex: ".agents/skills",
   copilot: ".agents/skills",
+  antigravity: ".agents/skills",
 };
 
 /** Session folder holding each plugin's Assistant reference files, one folder per plugin. */
@@ -1014,8 +1023,8 @@ async function removeEmptyParents(fileAbs: string, sessionBase: string): Promise
 const CONTENT_README = `# Daintree Assistant — your assistant folder
 
 Everything here is added to each new Daintree Assistant session when it
-backs onto Claude Code, Codex or Copilot. Hiding and showing the panel keeps
-the running session, so start a new session to pick up changes.
+backs onto Claude Code, Codex, Copilot or Antigravity. Hiding and showing the
+panel keeps the running session, so start a new session to pick up changes.
 
 Commands and skills (agent-native hidden folders):
 
@@ -1053,6 +1062,7 @@ Nothing else in this folder is copied.
 
 Notes:
 - Codex no longer supports prompt files; write skills instead.
+- Antigravity reads only .agents/skills, and doesn't load mcp.json servers.
 - On macOS, press Cmd+Shift+. in Finder to show the hidden folders.
 `;
 

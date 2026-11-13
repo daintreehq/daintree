@@ -121,6 +121,13 @@ export const CORE_TIER_TOOLS = [
   // a model the user names ("use Sol") is resolved here rather than from a slug
   // the prompt would have to carry (#13437).
   "agent.listModels",
+  // Bringing agents back after a restart is part of the loop (#16764): the
+  // history is a read, and the reopen launches into a pane the caller owns,
+  // the reach `agent.launch` already has. `agentSessionHistory.resume` stays
+  // in `full`, since the pane it opens is never the caller's.
+  "agentSessionHistory.list",
+  // Run in main so it needs no view (#16341).
+  "agent.resumeOwned",
 
   "terminal.list",
   "terminal.getStatus",
@@ -185,6 +192,7 @@ export const CORE_TIER_TOOLS = [
   // Codex quota. Offered only to an assistant caller: this machine's own, or
   // another machine's through its Shell's `host.call`.
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
   // This Shell's hosts, and their own tools run there for this machine's
@@ -246,10 +254,7 @@ export const FULL_TIER_ADDONS = [
   "worktree.setCustomTitle",
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
-  "agentSessionHistory.list",
   "agentSessionHistory.resume",
-  // The same reopen as a pane the caller owns, run in main so it needs no view (#16341).
-  "agent.resumeOwned",
 
   "terminal.new",
   "terminal.inject",
@@ -348,6 +353,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // Assistants are an assistant's to find and start, never a pane's (#13496);
   // a relayed assistant is admitted to them by its own rule.
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "agent.readQuota",
   // So is the Shell's reach into its hosts (#13493).

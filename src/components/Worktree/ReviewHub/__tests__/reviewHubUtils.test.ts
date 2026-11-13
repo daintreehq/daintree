@@ -5,6 +5,7 @@ import {
   countNonDefaultView,
   readGitErrorFields,
   resolveBulkScope,
+  reviewForCommittedPush,
   sortFiles,
   matchesFilter,
   compileFilter,
@@ -298,5 +299,79 @@ describe("sortFiles unknown status", () => {
       { path: "m.ts", status: "modified" },
     ] as unknown as StagingFileEntry[];
     expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual(["m.ts", "a.ts", "z.ts"]);
+  });
+});
+
+describe("reviewForCommittedPush (#16790)", () => {
+  const TIP = "a".repeat(40);
+  const COMMIT = "b".repeat(40);
+  const destination = { remote: "origin", branch: "feature/x" };
+  const committed = (overrides: { oid?: string | null; parentOids?: string[] } = {}) => ({
+    hash: "bbbbbbb",
+    summary: "1 changed",
+    oid: COMMIT,
+    parentOids: [TIP],
+    ...overrides,
+  });
+
+  it("pins a confirmed push to the commit made on the tip the confirm previewed", () => {
+    expect(
+      reviewForCommittedPush(committed(), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: TIP.toUpperCase(),
+      })
+    ).toEqual({ branch: "feature/x", headOid: COMMIT, destination });
+  });
+
+  it("withholds a confirmed push whose commit landed on a tip the confirm never showed", () => {
+    const agentTip = "c".repeat(40);
+    expect(
+      reviewForCommittedPush(committed({ parentOids: [agentTip] }), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: TIP,
+      })
+    ).toBeNull();
+  });
+
+  it("withholds a confirmed push of a merge commit, whose second parent was never previewed", () => {
+    expect(
+      reviewForCommittedPush(committed({ parentOids: [TIP, "d".repeat(40)] }), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: TIP,
+      })
+    ).toBeNull();
+  });
+
+  it("withholds a confirmed push whose commit has no parent", () => {
+    expect(
+      reviewForCommittedPush(committed({ parentOids: [] }), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: TIP,
+      })
+    ).toBeNull();
+  });
+
+  it("still pins an opted-out push, which previewed no tip, to the commit itself", () => {
+    expect(
+      reviewForCommittedPush(committed({ parentOids: [TIP, "d".repeat(40)] }), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: null,
+      })
+    ).toEqual({ branch: "feature/x", headOid: COMMIT, destination });
+  });
+
+  it("withholds any push when the commit could not be read back", () => {
+    expect(
+      reviewForCommittedPush(committed({ oid: null, parentOids: [] }), {
+        branch: "feature/x",
+        destination,
+        reviewedHeadOid: null,
+      })
+    ).toBeNull();
   });
 });

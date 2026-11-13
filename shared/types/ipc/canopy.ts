@@ -253,6 +253,14 @@ export type AssistantOpenDestination =
     }
   | { scope: "global"; hostId: string; terminalId: string; incarnation: number };
 
+/**
+ * Why "Open in Assistant" from the Canopy window moved nothing, for an
+ * assistant on this machine (#16758). `ended`: its session stopped or was
+ * replaced. `not-attached`: its lane runs with no view holding it, so no window
+ * can show it as it is.
+ */
+export type CanopyAssistantOpenRefusal = "ended" | "not-attached";
+
 /** What a watched terminal's stream carries, in order. */
 export type CanopyTerminalData =
   | {

@@ -1,5 +1,5 @@
 import path from "path";
-import { existsSync, promises as fsp, watch as fsWatch, type FSWatcher } from "fs";
+import { existsSync, promises as fsp, realpathSync, watch as fsWatch, type FSWatcher } from "fs";
 
 import type { AsyncSubscription } from "@parcel/watcher";
 
@@ -203,6 +203,31 @@ export function attributeProjectPluginEvent(pluginsRoot: string, eventPath: stri
   const second = segments[1];
   if (second === "plugin.json" || second === "dist") return { kind: "dir", dirName };
   return { kind: "ignore" };
+}
+
+/**
+ * The lowercased entry names a non-recursive sentinel on `watchedDir` has to
+ * act on: the next directory down towards the plugins root, and the watched
+ * directory's own name, which is how a deletion or move of that directory is
+ * reported. inotify uses the name as watched, Windows its full path (hence the
+ * caller's basename), and FSEvents the resolved one, which differs for a
+ * symlinked `.daintree`. Lowercased because the macOS and Windows defaults are
+ * case-insensitive, so `.Daintree` satisfies the existence check. Null when
+ * the plugins root does not live under `watchedDir`, as after `arm()` resolved
+ * a symlinked root, and no name can be ruled out.
+ */
+function sentinelRelevantNames(watchedDir: string, pluginsRoot: string): Set<string> | null {
+  const rel = path.relative(watchedDir, pluginsRoot);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    return null;
+  }
+  const names = new Set([rel.split(path.sep)[0], path.basename(watchedDir)]);
+  try {
+    names.add(path.basename(realpathSync(watchedDir)));
+  } catch {
+    // Already gone: the watch about to be opened fails too, and polls instead.
+  }
+  return new Set([...names].map((name) => name.toLowerCase()));
 }
 
 /**
@@ -477,8 +502,21 @@ export class ProjectPluginWatcher {
     // non-recursive watch on the project root will never report
     // `.daintree/plugins` being created inside it. Migrate inward.
     if (state.sentinel) this.disarmSentinel(state);
+    const relevantNames = sentinelRelevantNames(parent, state.pluginsRoot);
     try {
-      const sentinel = fsWatch(parent, { persistent: false }, () => {
+      const sentinel = fsWatch(parent, { persistent: false }, (_event, filename) => {
+        // A vanilla project root churns on every save, lockfile write and
+        // build, and each check is two synchronous stats on the main thread.
+        // A nameless event could be anything, so it still checks; the poll
+        // backstops whatever the native watch misses.
+        if (
+          relevantNames &&
+          typeof filename === "string" &&
+          filename !== "" &&
+          !relevantNames.has(path.basename(filename).toLowerCase())
+        ) {
+          return;
+        }
         this.checkSentinel(state, generation);
       });
       sentinel.on("error", () => {

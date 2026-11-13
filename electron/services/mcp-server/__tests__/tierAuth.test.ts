@@ -23,6 +23,7 @@ import {
   parseToolArguments,
   precomputeApiKeyBearerHash,
   readSearchLimit,
+  resolveCredentialKind,
   resolveTokenTier,
   shouldExposeTool,
   isWithheldFromBoundSession,
@@ -38,12 +39,14 @@ import {
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
   isApprovalRequestable,
+  pluginActionMinimumTier,
   isPaneAutoConfirmed,
   PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
-import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE } from "../shared.js";
+import { TIER_ALLOWLISTS, TIER_NOT_PERMITTED_CODE, minimumPermittingTier } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import {
   OWNED_TWIN_TOOLS,
@@ -58,6 +61,12 @@ import {
   McpGetSchemaWireResultSchema,
   McpTargetPolicySchema,
 } from "../../../../shared/types/mcpTargetPolicy.js";
+import {
+  ASKS_FOR_EVERYTHING,
+  type AssistantConfirmationPolicy,
+} from "../../../../shared/utils/assistantDaintreeConfirmations.js";
+
+const SKIPS_ALL: AssistantConfirmationPolicy = { skipsAll: true, delegated: new Set() };
 
 beforeEach(() => {
   mockPaneConfigService.isValidPaneToken.mockReset();
@@ -203,6 +212,52 @@ describe("resolveTokenTier", () => {
 
   it("falls back to core when the header has no whitespace after the scheme", () => {
     expect(resolveTokenTier("Bearerfoo", null, null)).toBe("core");
+  });
+});
+
+// #16765 — the tier can't tell a pane from an assistant; the kind can.
+describe("resolveCredentialKind", () => {
+  const helpValidator = (t: string) => (t === "help-tok" ? ("core" as const) : false);
+
+  beforeEach(() => {
+    mockPaneConfigService.isValidPaneToken.mockImplementation((t) => t === "pane-tok");
+  });
+
+  afterEach(() => {
+    mockPaneConfigService.isValidPaneToken.mockImplementation(() => false);
+  });
+
+  it("reads the api key, and the empty header a keyless server admits, as an external client", () => {
+    const hash = precomputeApiKeyBearerHash("secret");
+    expect(resolveCredentialKind("Bearer secret", hash, helpValidator)).toBe("external-client");
+    expect(resolveCredentialKind("", null, helpValidator)).toBe("external-client");
+    expect(resolveCredentialKind("", hash, helpValidator)).toBeNull();
+  });
+
+  it("tells a pane bearer from an assistant's at the same tier", () => {
+    expect(resolveCredentialKind("Bearer pane-tok", null, helpValidator)).toBe("agent-pane");
+    expect(resolveCredentialKind("Bearer\thelp-tok", null, helpValidator)).toBe("assistant");
+  });
+
+  it("reads the api key as an external client before asking anything else", () => {
+    const hash = precomputeApiKeyBearerHash("secret");
+    mockPaneConfigService.isValidPaneToken.mockClear();
+    mockPaneConfigService.isValidPaneToken.mockImplementation(() => true);
+    const validator = vi.fn(() => "core" as const);
+
+    expect(resolveCredentialKind("Bearer secret", hash, validator)).toBe("external-client");
+    expect(mockPaneConfigService.isValidPaneToken).not.toHaveBeenCalled();
+    expect(validator).not.toHaveBeenCalled();
+  });
+
+  it("checks the pane service before the help validator, as isAuthorized does", () => {
+    expect(resolveCredentialKind("Bearer pane-tok", null, () => "full")).toBe("agent-pane");
+  });
+
+  it("recognises nothing else, and no assistant without a validator", () => {
+    expect(resolveCredentialKind("Bearer unknown", null, helpValidator)).toBeNull();
+    expect(resolveCredentialKind("Bearer help-tok", null, null)).toBeNull();
+    expect(resolveCredentialKind("Bearerfoo", null, helpValidator)).toBeNull();
   });
 });
 
@@ -459,7 +514,7 @@ describe("shouldExposeTool", () => {
   // #13496: finding and starting assistants, and the quota, answer to their
   // caller: an assistant here or another machine's through host.call, at any
   // in-app tier; never a pane or an api-key client, whatever else it holds.
-  it.each(["assistant.list", "assistant.start", "agent.readQuota"])(
+  it.each(["assistant.list", "assistant.start", "assistant.resume", "agent.readQuota"])(
     "offers %s to an assistant caller alone",
     (id) => {
       const entry = makeEntry({ id });
@@ -1297,6 +1352,78 @@ describe("getTierPermittedActionIds", () => {
   });
 });
 
+describe("plugin actions opted into the project Assistant (#16751)", () => {
+  const REACH = "acme.stages.resume";
+  let uninstall: () => void = () => {};
+
+  beforeEach(() => {
+    uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+  });
+
+  afterEach(() => uninstall());
+
+  const entry = () =>
+    makeEntry({
+      id: REACH as ActionManifestEntry["id"],
+      name: REACH,
+      category: "Stages",
+      kind: "command",
+      danger: "confirm",
+      pluginId: "acme.stages",
+    });
+
+  it.each(["core", "full"] as const)(
+    "lists, admits and enumerates it for the project Assistant at %s",
+    (tier) => {
+      const assistant = { ...UNBOUND_SESSION_SURFACE, rendererOwnedOrigin: true };
+      expect(shouldExposeTool(entry(), tier, assistant)).toBe(true);
+      expect(isTierPermitted(tier, REACH, true)).toBe(true);
+      expect(getTierPermittedActionIds(tier, true).has(REACH)).toBe(true);
+    }
+  );
+
+  it.each(["core", "full", "external"] as const)(
+    "keeps it from every session whose origin isn't the Assistant, at %s",
+    (tier) => {
+      // An agent pane, an api-key client, and another machine's assistant
+      // relaying through host.call are all `external` by origin.
+      expect(shouldExposeTool(entry(), tier, UNBOUND_SESSION_SURFACE)).toBe(false);
+      expect(isTierPermitted(tier, REACH, false)).toBe(false);
+      expect(getTierPermittedActionIds(tier, false).has(REACH)).toBe(false);
+      expect(getReachableActionIds(tier, false, true).has(REACH)).toBe(false);
+      expect(isApprovalRequestable(tier, REACH, true)).toBe(false);
+    }
+  );
+
+  it("is not on the external tier even for an Assistant origin", () => {
+    expect(isTierPermitted("external", REACH, true)).toBe(false);
+  });
+
+  it("admits nothing a source no longer names", () => {
+    uninstall();
+    expect(isTierPermitted("core", REACH, true)).toBe(false);
+    // With no plugin action to add, the built-in set itself comes back: a
+    // vanilla install allocates nothing per call.
+    expect(getTierPermittedActionIds("core", true)).toBe(getTierPermittedActionIds("core", true));
+    expect(getTierPermittedActionIds("core", true).has(REACH)).toBe(false);
+  });
+
+  it("describes it at core, so actions.getSchema answers rather than failing closed", () => {
+    const policy = buildTargetPolicy(entry(), {
+      tier: "full",
+      rendererOwnedOrigin: true,
+      perToolGrantedActionIds: new Set<string>(),
+      nativeGrantedActionIds: new Set<string>(),
+    });
+    expect(policy).toMatchObject({ minimumTier: "core", authorizedBy: "tier" });
+    expect(pluginActionMinimumTier(REACH, true)).toBe("core");
+    expect(pluginActionMinimumTier(REACH, false)).toBeNull();
+  });
+});
+
 describe("readSearchLimit", () => {
   it("falls back to the schema default when limit is absent", () => {
     expect(readSearchLimit(undefined)).toBe(ACTIONS_SEARCH_DEFAULT_LIMIT);
@@ -1809,14 +1936,14 @@ describe("filterIntrospectionResultForSession", () => {
       it("clears requiresConfirmation under the skip preference, per-resolved-target tools included (#12989)", () => {
         const skipped = policyOf(
           lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
-            policySnapshot: snapshot({ confirmationsSkipped: true }),
+            policySnapshot: snapshot({ confirmationPolicy: SKIPS_ALL }),
           })
         );
         expect(skipped.requiresConfirmation).toBe(false);
 
         const asking = policyOf(
           lookup(makeEntry({ id: "worktree.list", danger: "confirm" }), {
-            policySnapshot: snapshot({ confirmationsSkipped: false }),
+            policySnapshot: snapshot({ confirmationPolicy: ASKS_FOR_EVERYTHING }),
           })
         );
         expect(asking.requiresConfirmation).toBe(true);
@@ -1824,10 +1951,32 @@ describe("filterIntrospectionResultForSession", () => {
         const fanOut = policyOf(
           lookup(makeEntry({ id: "terminal.closeAll", danger: "confirm" }), {
             permittedActionIds: new Set([...permitted, "terminal.closeAll"]),
-            policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+            policySnapshot: snapshot({ tier: "full", confirmationPolicy: SKIPS_ALL }),
           })
         );
         expect(fanOut.requiresConfirmation).toBe(false);
+      });
+
+      // Handed over one by one (#16752): only the called id it names stops asking.
+      it("clears requiresConfirmation only for an id handed over", () => {
+        const policySnapshot = snapshot({
+          confirmationPolicy: { skipsAll: false, delegated: new Set(["worktree.deleteOwned"]) },
+        });
+        const permittedIds = new Set([...permitted, "worktree.deleteOwned", "worktree.delete"]);
+        const owned = policyOf(
+          lookup(makeEntry({ id: "worktree.deleteOwned", danger: "confirm" }), {
+            permittedActionIds: permittedIds,
+            policySnapshot,
+          })
+        );
+        const plain = policyOf(
+          lookup(makeEntry({ id: "worktree.delete", danger: "confirm" }), {
+            permittedActionIds: permittedIds,
+            policySnapshot,
+          })
+        );
+        expect(owned.requiresConfirmation).toBe(false);
+        expect(plain.requiresConfirmation).toBe(true);
       });
 
       it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
@@ -2033,11 +2182,11 @@ describe("filterIntrospectionResultForSession", () => {
         ]);
         const skipping = {
           permittedActionIds: permittedIds,
-          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: true }),
+          policySnapshot: snapshot({ tier: "full", confirmationPolicy: SKIPS_ALL }),
         };
         const asking = {
           permittedActionIds: permittedIds,
-          policySnapshot: snapshot({ tier: "full", confirmationsSkipped: false }),
+          policySnapshot: snapshot({ tier: "full", confirmationPolicy: ASKS_FOR_EVERYTHING }),
         };
         for (const id of ["terminal.close", "terminal.closeMany"]) {
           const skipped = policyOf(lookup(makeEntry({ id }), skipping));
@@ -2287,8 +2436,14 @@ describe("filterIntrospectionResultForSession", () => {
     // #13496: the assistant tools answer their caller too, so a relayed
     // assistant, with no ladder tier to place them on, can still read them.
     it("describes the assistant tools for an assistant caller, relayed or not", () => {
-      for (const id of ["assistant.list", "assistant.start", "agent.readQuota"]) {
-        const entry = makeEntry({ id, kind: id === "assistant.start" ? "command" : "query" });
+      for (const id of [
+        "assistant.list",
+        "assistant.start",
+        "assistant.resume",
+        "agent.readQuota",
+      ]) {
+        const kind = id === "assistant.start" || id === "assistant.resume" ? "command" : "query";
+        const entry = makeEntry({ id, kind });
         const relayed = { ...snap, tier: "full" as const, rendererOwnedOrigin: false, relay: true };
 
         expect(buildTargetPolicy(entry, { ...relayed, assistantControl: true }), id).toMatchObject({
@@ -2439,13 +2594,17 @@ describe("filterIntrospectionResultForSession", () => {
 
     // The host and assistant tools exist only for an assistant, so a session
     // is never told to raise its tier for them (#13493, #13496).
-    it.each(["host.list", "host.call", "assistant.list", "assistant.start", "agent.readQuota"])(
-      "offers no upgrade stub for %s",
-      (id) => {
-        const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
-        expect(buildUnavailableStub(entry, firstParty())).toBeNull();
-      }
-    );
+    it.each([
+      "host.list",
+      "host.call",
+      "assistant.list",
+      "assistant.start",
+      "assistant.resume",
+      "agent.readQuota",
+    ])("offers no upgrade stub for %s", (id) => {
+      const entry = makeEntry({ id, title: "Assistant tool", category: "help", danger: "safe" });
+      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+    });
 
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
@@ -2795,6 +2954,115 @@ describe("filterIntrospectionResultForSession", () => {
       expect(payload.ok).toBe(false);
       expect(payload.error?.code).toBe("NOT_FOUND");
       expect(payload.unavailable).toBeUndefined();
+    });
+
+    // An assistant reaching a project through its Shell's `host.call` holds an
+    // `external` origin and the tier its own Tool set gave it (#16764). It is
+    // told what Full would unlock for it, and nothing Full never would: the
+    // relay's origin swaps unscoped panel tools for their owned twins, and the
+    // global Assistant's runtime refuses what its allowlist does not name.
+    describe("relayed sessions (#16764)", () => {
+      // On the full add-ons and on the global Assistant's allowlist.
+      const RELAY_FULL_ONLY = "recipe.run";
+
+      function relayed(
+        overrides: Partial<TargetPolicySessionSnapshot> = {}
+      ): TargetPolicySessionSnapshot {
+        return firstParty({ rendererOwnedOrigin: false, relay: true, ...overrides });
+      }
+
+      it.each([
+        ["a project assistant's relay", relayed()],
+        ["the global Assistant's relay", relayed({ relayGlobal: true })],
+      ])("names a full-only action to %s", (_label, snap) => {
+        expect(buildUnavailableStub(makeEntry({ id: RELAY_FULL_ONLY }), snap)).toMatchObject({
+          id: RELAY_FULL_ONLY,
+          minimumTier: "full",
+          callable: false,
+        });
+      });
+
+      it("names an owned twin, never the unscoped tool a relay never holds", () => {
+        expect(
+          buildUnavailableStub(makeEntry({ id: "terminal.injectOwned" }), relayed())
+        ).toMatchObject({ minimumTier: "full" });
+        // A renderer-owned session at core is offered the unscoped inject, so
+        // the null below is the relay's origin speaking, not the id.
+        expect(
+          buildUnavailableStub(makeEntry({ id: "terminal.inject" }), firstParty())
+        ).toMatchObject({ minimumTier: "full" });
+        expect(buildUnavailableStub(makeEntry({ id: "terminal.inject" }), relayed())).toBeNull();
+      });
+
+      it.each(["agentSessionHistory.resume", OUT_OF_TIER])(
+        "offers the global Assistant no stub for %s, which it may never send",
+        (id) => {
+          expect(buildUnavailableStub(makeEntry({ id }), relayed())).toMatchObject({
+            minimumTier: "full",
+          });
+          expect(
+            buildUnavailableStub(makeEntry({ id }), relayed({ relayGlobal: true }))
+          ).toBeNull();
+        }
+      );
+
+      it("reaches the recovery tools at core, so no stub names them", () => {
+        for (const id of ["agentSessionHistory.list", "agent.resumeOwned"]) {
+          expect(
+            buildUnavailableStub(makeEntry({ id }), relayed({ relayGlobal: true })),
+            id
+          ).toBeNull();
+          expect(minimumPermittingTier(id, false), id).toBe("core");
+        }
+      });
+
+      it("answers actions.getSchema with the tier", () => {
+        const payload = schemaFor(
+          makeEntry({ id: RELAY_FULL_ONLY }),
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.ok).toBe(false);
+        expect(payload.entry).toBeNull();
+        expect(payload.policy).toBeNull();
+        expect(payload.error?.code).toBe("TIER_NOT_PERMITTED");
+        expect(payload.unavailable).toEqual(
+          expect.objectContaining({ id: RELAY_FULL_ONLY, minimumTier: "full", callable: false })
+        );
+        expect(McpGetSchemaWireResultSchema.safeParse(payload).success).toBe(true);
+      });
+
+      it("keeps the plain NOT_FOUND for what the global Assistant may never send", () => {
+        const payload = schemaFor(
+          makeEntry({ id: "agentSessionHistory.resume" }),
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.error?.code).toBe("NOT_FOUND");
+        expect(payload.unavailable).toBeUndefined();
+      });
+
+      it("reports relay stubs in actions.search, with nothing the caller can't reach", () => {
+        const payload = searchFor(
+          [
+            makeEntry({ id: "worktree.list" }),
+            makeEntry({ id: RELAY_FULL_ONLY }),
+            makeEntry({ id: "terminal.inject" }),
+            makeEntry({ id: OUT_OF_TIER }),
+          ],
+          relayed({ relayGlobal: true })
+        );
+
+        expect(payload.totalMatches).toBe(1);
+        expect(stubIds(payload.unavailable)).toEqual([RELAY_FULL_ONLY]);
+      });
+
+      it.each([
+        ["a relay flag on the external tier", relayed({ tier: "external" })],
+        ["a foreign origin with no relay flag", relayed({ relay: false })],
+      ])("stays closed to %s", (_label, snap) => {
+        expect(buildUnavailableStub(makeEntry({ id: RELAY_FULL_ONLY }), snap)).toBeNull();
+      });
     });
   });
 });

@@ -115,6 +115,7 @@ export const HOST_CONTROL_OUTCOMES = [
   "rate_limited",
   "too_large",
   "conflict",
+  "confirmation_timeout",
 ] as const;
 
 export type HostControlOutcomeCode = (typeof HOST_CONTROL_OUTCOMES)[number];

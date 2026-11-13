@@ -3,9 +3,10 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { readAssistantConfirmationsSkipped } from "./assistantConfirmationsPreference.js";
+import { readAssistantConfirmationPolicy } from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
+import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -310,6 +311,8 @@ export interface SessionServerDepsSource {
  */
 export interface SessionHandshakeCapture {
   readonly sessionId: string;
+  /** Which kind of session the handshake took this for (#16765). */
+  readonly role: McpSessionRole;
   readonly workspaceBinding?: McpWorkspaceBinding;
   readonly paneBinding?: PaneWorkspaceBinding;
   readonly ownPane?: import("./terminalNotify.js").OwnPane | null;
@@ -591,7 +594,7 @@ export function createSessionServerDeps(
   host: SessionServerDepsHost,
   capture: SessionHandshakeCapture
 ): import("./sessionServer.js").SessionServerDeps {
-  const { sessionId, workspaceBinding, paneBinding, ownPane, relay } = capture;
+  const { sessionId, role, workspaceBinding, paneBinding, ownPane, relay } = capture;
   const pinnedDispatch = deps.dispatchActionForWebContents;
   const pinnedManifest = deps.requestManifestForWebContents;
   const workspaceDispatch = deps.dispatchActionForWorkspace;
@@ -1090,6 +1093,7 @@ export function createSessionServerDeps(
 
   return {
     sessionStore: deps.sessionStore,
+    sessionRole: role,
     // Forwarded so the session server can echo it in the `initialize` result
     // (#11789) — a client must be able to verify where its calls will land
     // before it issues the first mutation.
@@ -1322,12 +1326,12 @@ export function createSessionServerDeps(
       helpSessionId !== null
         ? deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
         : null,
-    // Live, never snapshotted (#12874): "Always ask" takes effect on the
-    // assistant's next call. sessionServer consults it for help sessions only.
-    // The default follows the skip setting of the agent this session runs,
-    // else the assistant's chosen agent (#14141).
-    readAssistantConfirmationsSkipped: () =>
-      readAssistantConfirmationsSkipped(
+    // Live, never snapshotted (#12874): "Always ask", or an unticked action
+    // (#16752), takes effect on the assistant's next call. sessionServer
+    // consults it for help sessions only. The default follows the skip setting
+    // of the agent this session runs, else the assistant's chosen agent (#14141).
+    readAssistantConfirmationPolicy: () =>
+      readAssistantConfirmationPolicy(
         (helpSessionId !== null
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
           : null) ?? null

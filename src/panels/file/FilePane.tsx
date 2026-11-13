@@ -986,6 +986,7 @@ export function FilePane({
           {filePath && viewMode === "edit" && builtinEditor && (
             <Suspense fallback={<EditorLoadingSkeleton />}>
               <builtinEditor.Component
+                key={filePath}
                 panelId={id}
                 filePath={filePath}
                 fileName={fileName ?? filePath}

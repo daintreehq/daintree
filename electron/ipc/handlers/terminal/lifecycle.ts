@@ -930,6 +930,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             `${safeCommand} ${copilotArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`.trim();
         }
       }
+      // Antigravity finds its MCP servers in the lane's `.agents/mcp_config.json`
+      // under cwd; what it needs on the command line is `--settings`, naming
+      // the lane's session-only trust and allow-rule file. Same `null`
+      // contract: another agent's help token refuses to spawn.
+      if (launchAgentId === "antigravity") {
+        const antigravityArgs = helpSessionService.getAntigravityLaunchArgs(helpToken);
+        if (antigravityArgs === null) {
+          throw new Error(
+            "Daintree Assistant help token does not belong to an Antigravity session; refusing to spawn"
+          );
+        }
+        if (antigravityArgs.length > 0) {
+          safeCommand = `${safeCommand} ${antigravityArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
+        }
+      }
 
       // Claude help sessions read their MCP wiring from a per-lane file
       // handed over with `--mcp-config`, not from the cwd's `.mcp.json`. Every
@@ -950,7 +965,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       }
 
       // Inject the per-session assistant scratch dir into the PTY spawn env
-      // for every help-session agent (Claude, Codex, Copilot).
+      // for every help-session agent.
       // Paired with the markdown addendum written into the session dir at
       // provision time so the agent has both a literal path in its
       // instruction surface and an env var for shell substitution. Merged

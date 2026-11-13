@@ -43,6 +43,7 @@ import {
   readDarwinKernelPressureLevel,
 } from "../services/SystemMemoryPressureMonitor.js";
 import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { releaseRendererMemory, sampleBlinkMemory } from "./rendererMemorySignals.js";
 import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js";
 import { withTimeout } from "../utils/withTimeout.js";
 
@@ -75,6 +76,7 @@ import { countResumableAgentPanels } from "../services/projectStateRestore.js";
 import type { Project, ProjectState } from "../../shared/types/project.js";
 import type { Scratch } from "../../shared/types/scratch.js";
 import { sendToRenderer } from "../ipc/handlers.js";
+import { retireIdleCanopyReader } from "../ipc/handlers/canopy.js";
 import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
@@ -899,31 +901,9 @@ export async function initGlobalServices(
             if (!windowRegistry) return;
             reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
           },
+          retireIdleCanopyReader,
           sampleBlinkMemory: () => {
-            if (!windowRegistry) return;
-            const requestId = `blink-${Date.now().toString(36)}`;
-            for (const wCtx of windowRegistry.all()) {
-              const w = wCtx.browserWindow;
-              if (w.isDestroyed()) continue;
-              // Per-window PVM tracks every cached project renderer; falling
-              // back to the app webContents covers windows still on the
-              // bootstrap shell (no PVM yet).
-              const pvm = wCtx.services.projectViewManager;
-              const targets = pvm
-                ? pvm.getAllViews().map((v) => v.view.webContents)
-                : [getAppWebContents(w)];
-              for (const wc of targets) {
-                if (!wc || wc.isDestroyed()) continue;
-                try {
-                  wc.send(CHANNELS.EVENTS_PUSH, {
-                    name: "window:sample-blink-memory",
-                    payload: { requestId },
-                  });
-                } catch {
-                  /* non-critical */
-                }
-              }
-            }
+            if (windowRegistry) sampleBlinkMemory(windowRegistry.all());
           },
           sampleSystemHealth: systemMemoryPressure
             ? () => {
@@ -934,13 +914,8 @@ export async function initGlobalServices(
           // runner's own pressure must not reclaim inside an unrelated spec.
           readKernelPressureLevel:
             process.platform === "darwin" && !isE2EMode ? readDarwinKernelPressureLevel : undefined,
-          // Every view, cached ones included: a hidden renderer is exactly the
-          // one that can give memory back without anyone seeing a difference.
           releaseRendererMemory: () => {
-            broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-              name: "window:reclaim-memory",
-              payload: { reason: "system-memory-pressure" },
-            });
+            releaseRendererMemory(windowRegistry?.all() ?? []);
           },
           sampleRendererElu: () => {
             if (!windowRegistry) return;
@@ -1482,14 +1457,16 @@ export async function initGlobalServices(
     // finishes in single-digit ms, long before loadURL even resolves, so
     // floating keeps the disk I/O off the renderer-load dispatch path while
     // comfortably beating the deadline.
-    void (async () => {
+    const pendingStoreWired = (async () => {
       const { getPendingHelpHibernationStore } =
         await import("../services/PendingHelpHibernationStore.js");
       const pendingStore = getPendingHelpHibernationStore();
       await pendingStore.load();
       helpSessionService.setPendingHibernationStore(pendingStore);
+      return pendingStore;
     })().catch((err) => {
       console.warn("[MAIN] Failed to wire pending-hibernation store:", err);
+      return null;
     });
 
     registerDeferredTask({
@@ -1566,6 +1543,27 @@ export async function initGlobalServices(
         } catch (err) {
           console.warn("[MAIN] Failed to wire HelpSessionService PtyClient:", err);
         }
+      },
+    });
+
+    // The Assistant lanes a restart to install an update stopped come back now,
+    // each into its own conversation (#16753). After `help-session-pty`, so a
+    // displaced or revoked lane can still be killed. Nothing is loaded unless
+    // the last quit was that restart, and the queue doesn't wait on the starts.
+    registerDeferredTask({
+      name: "assistant-update-resume",
+      run: async () => {
+        const record = (await pendingStoreWired)?.takeResumeAtLaunch();
+        const ptyClient = getPtyClient();
+        if (!record || !ptyClient) return;
+        void (async () => {
+          await ptyClient.waitForReady();
+          const { resumeLanesAfterUpdateLive } =
+            await import("../services/assistants/updateRestartResume.js");
+          await resumeLanesAfterUpdateLive(record);
+        })().catch((err) => {
+          console.warn("[MAIN] Resuming assistant lanes after the update failed:", err);
+        });
       },
     });
   }

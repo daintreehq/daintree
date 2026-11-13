@@ -101,9 +101,12 @@ describe("agentRegistry", () => {
   });
 
   describe("assistant support", () => {
-    it("returns claude and codex as the stable-tier assistant agents", () => {
+    it("returns claude, antigravity and codex as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(["claude", "codex"]);
+      expect(ids).toEqual(["claude", "antigravity", "codex"]);
+      // Copilot is wired but stays experimental, so the picker keeps hiding it.
+      expect(getAssistantWiredAgentIds()).toContain("copilot");
+      expect(ids).not.toContain("copilot");
     });
 
     it("getAssistantWiredAgentIds includes stable and experimental tiers but excludes deprecated (#8811)", () => {
@@ -312,10 +315,9 @@ describe("agentRegistry", () => {
       try {
         const ids = getAssistantSupportedAgentIds();
         // Built-ins first, in BUILT_IN_AGENT_IDS order
-        expect(ids[0]).toBe("claude");
-        expect(ids[1]).toBe("codex");
+        expect(ids.slice(0, 3)).toEqual(["claude", "antigravity", "codex"]);
         // Then user-defined agents in registration order
-        const userDefinedIds = ids.slice(2);
+        const userDefinedIds = ids.slice(3);
         expect(userDefinedIds[0]).toBe("zzz-last-agent");
         expect(userDefinedIds[1]).toBe("aaa-first-agent");
       } finally {
@@ -951,6 +953,42 @@ describe("getAgentDisplayTitle", () => {
   it("returns plain agent name for agent without models", () => {
     expect(getAgentDisplayTitle("cursor", "some-model")).toBe("Cursor");
   });
+
+  describe("with the runtime catalog (#16783)", () => {
+    const codexName = () => getAgentConfig("codex")!.name;
+
+    it("names a model only the catalog lists, as a bundled one is named", () => {
+      expect(getAgentConfig("codex")!.models ?? []).toHaveLength(0);
+      const resolved = [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }];
+
+      expect(getAgentDisplayTitle("codex", "gpt-5.5", resolved)).toBe(`${codexName()} (GPT-5.5)`);
+    });
+
+    it("falls back to the model's name when it has no short label", () => {
+      expect(getAgentDisplayTitle("codex", "o9", [{ id: "o9", name: "o9 Preview" }])).toBe(
+        `${codexName()} (o9 Preview)`
+      );
+      expect(
+        getAgentDisplayTitle("codex", "o9", [{ id: "o9", name: "o9 Preview", shortLabel: "  " }])
+      ).toBe(`${codexName()} (o9 Preview)`);
+    });
+
+    it("prefers the bundled entry when both list the id", () => {
+      const model = getAgentConfig("qwen")!.models![1]!;
+      const resolved = [{ ...model, shortLabel: "Remote label" }];
+
+      expect(getAgentDisplayTitle("qwen", model.id, resolved)).toBe(
+        `${getAgentConfig("qwen")!.name} (${model.shortLabel})`
+      );
+    });
+
+    it("stays the bare agent name for an id neither lists", () => {
+      const resolved = [{ id: "gpt-5.5", name: "GPT-5.5", shortLabel: "GPT-5.5" }];
+
+      expect(getAgentDisplayTitle("codex", "gpt-4-retired", resolved)).toBe(codexName());
+      expect(getAgentDisplayTitle("codex", undefined, resolved)).toBe(codexName());
+    });
+  });
 });
 
 describe("getAgentPreset", () => {
@@ -1530,9 +1568,10 @@ describe("Antigravity install help (#15622)", () => {
     expect(paths.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
   });
 
-  it("stays out of the assistant until its wiring is verified against a live agy", () => {
-    expect(getAssistantSupportedAgentIds()).not.toContain("antigravity");
-    expect(getAssistantWiredAgentIds()).not.toContain("antigravity");
+  it("is admitted for help sessions and offered in the assistant picker (#16815)", () => {
+    expect(getAssistantWiredAgentIds()).toContain("antigravity");
+    expect(hasAssistantMcpImplementation("antigravity")).toBe(true);
+    expect(getAssistantSupportedAgentIds()).toContain("antigravity");
   });
 });
 

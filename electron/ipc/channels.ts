@@ -1191,6 +1191,10 @@ export const CHANNELS = {
   PLUGIN_INSTALL_FROM_FILE: "plugin:install-from-file",
   PLUGIN_INSTALL_FROM_PATH: "plugin:install-from-path",
   PLUGIN_INSTALL_FROM_URL: "plugin:install-from-url",
+  PLUGIN_PREVIEW_FROM_URL: "plugin:preview-from-url",
+  PLUGIN_PREVIEW_FROM_CATALOG: "plugin:preview-from-catalog",
+  PLUGIN_INSTALL_FROM_CATALOG: "plugin:install-from-catalog",
+  PLUGIN_BROWSE_CATALOG: "plugin:browse-catalog",
   PLUGIN_UNINSTALL: "plugin:uninstall",
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
@@ -1214,6 +1218,7 @@ export const CHANNELS = {
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
   PLUGIN_VALIDATE_MANIFEST: "plugin:validate-manifest",
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
+  PLUGIN_ACTIONS_INVOKE: "plugin:actions-invoke",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
@@ -1430,6 +1435,11 @@ export const CHANNELS = {
   // on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
   PLUGIN_CAPABILITY_GET_PROJECT_TARGETING: "plugin-capability:get-project-targeting",
   PLUGIN_CAPABILITY_SET_PROJECT_TARGETING: "plugin-capability:set-project-targeting",
+  // The per-plugin "Allow host targeting" switch (#16767): the `host:dispatch`
+  // grant that lets an app-wide plugin list this Shell's Remote Hosts and name
+  // one on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_HOST_TARGETING: "plugin-capability:get-host-targeting",
+  PLUGIN_CAPABILITY_SET_HOST_TARGETING: "plugin-capability:set-host-targeting",
   // The per-plugin "Allow OS notifications" switch (#13505): the
   // `notification:os` grant behind `host.notify({ os: true })`. Set only from
   // the Plugin Manager, never by a prompt.
@@ -1562,6 +1572,7 @@ export const CHANNELS = {
   // A pane composer's send held while its agent works (#16379)
   COMPOSER_HOLD_HOLD: "composer-hold:hold",
   COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
+  COMPOSER_HOLD_SEND_NOW: "composer-hold:send-now",
   COMPOSER_HOLD_LIST: "composer-hold:list",
   COMPOSER_HOLD_CHANGED: "composer-hold:changed",
 
@@ -1809,6 +1820,7 @@ export const CHANNELS = {
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",
   CANOPY_WINDOW_FOCUS_LAST_PROJECT_WINDOW: "canopy-window:focus-last-project-window",
   CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
+  CANOPY_WINDOW_OPEN_ASSISTANT: "canopy-window:open-assistant",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",

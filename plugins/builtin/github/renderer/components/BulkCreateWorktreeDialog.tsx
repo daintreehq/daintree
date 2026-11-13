@@ -32,11 +32,12 @@ import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import {
   useRecipePicker,
   resolveEligibleDefaultRecipeId,
@@ -72,10 +73,84 @@ import {
 } from "./bulkCreateUtils";
 import type { PlannedWorktree } from "./bulkCreateUtils";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
-import type { BranchInfo } from "@shared/types";
+import type { BranchInfo, RecipeTerminal } from "@shared/types";
 
 /** Conforms to the host's bulk-create slot contract (forge-normalized shapes). */
 export type BulkCreateWorktreeDialogProps = ForgeBulkCreateWorktreeDialogProps;
+
+interface BatchItemTracking {
+  worktreeId?: string;
+  worktreePath?: string;
+  resolvedBranch?: string;
+  // Keyed by the entry's index in the recipe or cloned layout, so a retry can
+  // relaunch exactly the entries that are missing and leave the rest running.
+  terminalIdByIndex: Map<number, string>;
+  failedTerminalIndices: number[];
+  // Once a launch has run, only failed entries launch again.
+  terminalsLaunched: boolean;
+}
+
+function newTerminalTracking(): Pick<
+  BatchItemTracking,
+  "terminalIdByIndex" | "failedTerminalIndices" | "terminalsLaunched"
+> {
+  return { terminalIdByIndex: new Map(), failedTerminalIndices: [], terminalsLaunched: false };
+}
+
+function recordTerminalLaunch(
+  tracked: BatchItemTracking,
+  spawned: ReadonlyArray<{ index: number; terminalId: string }>,
+  failedIndices: number[]
+) {
+  for (const { index, terminalId } of spawned) tracked.terminalIdByIndex.set(index, terminalId);
+  tracked.failedTerminalIndices = failedIndices;
+  tracked.terminalsLaunched = true;
+}
+
+function exitedNonZero(panel: PanelInstance): boolean {
+  return isPtyPanel(panel) && panel.exitCode !== undefined && panel.exitCode !== 0;
+}
+
+// A terminal mid-restart belongs to whoever is restarting it, and a restart
+// that failed can't be told from one that left the old process running, so
+// neither counts: Retry must never trash or duplicate a live terminal.
+function terminalIsDead(panelId: string, panel: PanelInstance): boolean {
+  if (!isPtyPanel(panel) || panel.isRestarting || isTerminalRestarting(panelId)) return false;
+  return exitedNonZero(panel) || panel.spawnStatus === "failed";
+}
+
+/**
+ * Settles, before a retry, which of an item's entries launch again. A dead
+ * terminal still in this worktree goes to the trash (recoverable) and its
+ * entry relaunches, so the replacement doesn't sit beside a dead copy of
+ * itself; that covers entries that died after an earlier failure, not just the
+ * ones verification flagged. A failed entry whose terminal is running again
+ * stays as it is. One whose terminal is gone, already trashed or moved to
+ * another worktree relaunches without touching that panel.
+ */
+function releaseDeadTerminals(
+  tracked: BatchItemTracking,
+  panelsById: Record<string, PanelInstance | undefined>,
+  trashPanel: (id: string) => void
+) {
+  const failed = new Set(tracked.failedTerminalIndices);
+  for (const [index, panelId] of [...tracked.terminalIdByIndex]) {
+    const panel = panelsById[panelId];
+    const owned =
+      panel !== undefined && panel.location !== "trash" && panel.worktreeId === tracked.worktreeId;
+    if (!owned) {
+      // A healthy entry the user closed or moved stays that way.
+      tracked.terminalIdByIndex.delete(index);
+    } else if (terminalIsDead(panelId, panel)) {
+      trashPanel(panelId);
+      tracked.terminalIdByIndex.delete(index);
+      failed.add(index);
+    } else {
+      failed.delete(index);
+    }
+  }
+  tracked.failedTerminalIndices = [...failed].sort((a, b) => a - b);
+}
 
 function waitForPanelSpawns(panelIds: string[], timeoutMs: number): Promise<void> {
   if (panelIds.length === 0) return Promise.resolve();
@@ -324,7 +399,11 @@ export function BulkCreateWorktreeDialog({
   // The base Create was pressed with. Retry reuses it, so a branch list that
   // lands after submission can't move a retried item onto a different base.
   const submittedBaseRef = useRef<{ name: string; fromRemote: boolean } | null>(null);
-  const planned = useMemo(() => {
+  // The layout Clone was pressed with. A finished run selects a worktree it
+  // created, so regenerating on retry would clone that one instead, and the
+  // indices of the entries still to launch would point into a different layout.
+  const submittedCloneTerminalsRef = useRef<RecipeTerminal[] | null>(null);
+  const livePlan = useMemo(() => {
     if (mode === "pr") {
       const existingPRNumbers = new Set<number>();
       for (const wt of worktreeMap.values()) {
@@ -338,6 +417,11 @@ export function BulkCreateWorktreeDialog({
     }
     return planIssueWorktrees(selectedIssues, existingIssueNumbers);
   }, [mode, selectedIssues, selectedPRs, worktreeMap]);
+  // Frozen at Create. Each worktree the run lands makes the live plan read its
+  // item as "Has worktree" with no branch, which would shift the counts mid-run
+  // and hand Retry an item with nothing to create from.
+  const [submittedPlan, setSubmittedPlan] = useState<PlannedWorktree[] | null>(null);
+  const planned = progress.phase === "idle" ? livePlan : (submittedPlan ?? livePlan);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
   const selectedCount = planned.length;
@@ -372,26 +456,16 @@ export function BulkCreateWorktreeDialog({
   const processedCount = succeededCount + failedCount;
 
   // Local tracking map shared across runBatch calls — survives stale closures
-  const batchTrackingRef = useRef(
-    new Map<
-      number,
-      {
-        worktreeId?: string;
-        worktreePath?: string;
-        resolvedBranch?: string;
-        spawnedTerminalIds: string[];
-        failedTerminalIndices: number[];
-        cloneComplete?: boolean;
-      }
-    >()
-  );
+  const batchTrackingRef = useRef(new Map<number, BatchItemTracking>());
 
   useLayoutEffect(() => {
     if (isOpen && !prevIsOpenRef.current) {
       dispatchProgress({ type: "RESET" });
       batchTrackingRef.current = new Map();
       setPickedBase(null);
+      setSubmittedPlan(null);
       submittedBaseRef.current = null;
+      submittedCloneTerminalsRef.current = null;
       closeBaseBranchPicker(false);
     }
     prevIsOpenRef.current = isOpen;
@@ -443,12 +517,13 @@ export function BulkCreateWorktreeDialog({
       };
 
       const tracking = batchTrackingRef.current;
+      // A retried item whose worktree already exists goes straight to its
+      // terminals, so it needs no branch or path lookups — and a lookup that
+      // timed out would fail an item that has nothing left to create.
+      const needsWorktree = toCreate.filter((p) => !tracking.get(p.item.number)?.worktreeId);
 
-      const sourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       const cloneTerminals =
-        selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId
-          ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
-          : null;
+        selectedRecipeId === CLONE_LAYOUT_ID ? submittedCloneTerminalsRef.current : null;
 
       // Pre-fetch agent settings once so each cloned agent panel can regenerate
       // its spawn command from current config (mirrors recipeStore.ts). Source
@@ -508,15 +583,16 @@ export function BulkCreateWorktreeDialog({
       const precomputed = new Map<number, { branch: string; path: string }>();
       const prequeryFailed = new Set<number>();
 
-      if (toCreate.some((p) => p.mode === "pr")) {
+      if (needsWorktree.some((p) => p.mode === "pr")) {
         try {
           sharedBranches = await worktreeClient.listBranches(rootPath);
           if (runIdRef.current !== currentRunId) return;
         } catch (err) {
           if (runIdRef.current !== currentRunId) return;
           const errorMsg = normalizeError(err);
-          for (const planned of toCreate) {
+          for (const planned of needsWorktree) {
             if (planned.mode !== "pr") continue;
+            prequeryFailed.add(planned.item.number);
             failedItems.add(planned.item.number);
             dispatchProgress({
               type: "ITEM_FAILED",
@@ -526,7 +602,7 @@ export function BulkCreateWorktreeDialog({
               failedStep: "worktree",
             });
           }
-          if (toCreate.every((p) => p.mode === "pr")) {
+          if (toCreate.every((p) => failedItems.has(p.item.number))) {
             dispatchProgress({ type: "DONE" });
             if (queueRef.current === queue) queueRef.current = null;
             if (activeRunRef.current === activeRun) activeRunRef.current = null;
@@ -545,7 +621,7 @@ export function BulkCreateWorktreeDialog({
       // Two-phase approach: (1) resolve branch candidates with bounded concurrency,
       // (2) apply deterministic uniqueness suffixes in input order, (3) resolve paths
       // with bounded concurrency using final unique branch names.
-      const prequeryInput = toCreate.filter((p) => p.mode === "issue");
+      const prequeryInput = needsWorktree.filter((p) => p.mode === "issue");
 
       if (prequeryInput.length > 0) {
         const { results, failedItems: prequeryFailures } = await resolveIssuePrequeries({
@@ -745,8 +821,7 @@ export function BulkCreateWorktreeDialog({
                   worktreeId,
                   worktreePath: worktreePath!,
                   resolvedBranch: resolvedBranch!,
-                  spawnedTerminalIds: [],
-                  failedTerminalIndices: [],
+                  ...newTerminalTracking(),
                 });
 
                 dispatchProgress({
@@ -758,11 +833,10 @@ export function BulkCreateWorktreeDialog({
                 });
               } else if (!tracked?.worktreeId) {
                 tracking.set(itemNumber, {
+                  ...(tracked ?? newTerminalTracking()),
                   worktreeId,
                   worktreePath: worktreePath!,
                   resolvedBranch: resolvedBranch!,
-                  spawnedTerminalIds: tracked?.spawnedTerminalIds ?? [],
-                  failedTerminalIndices: tracked?.failedTerminalIndices ?? [],
                 });
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
@@ -778,25 +852,35 @@ export function BulkCreateWorktreeDialog({
               // the click doesn't go on to start terminals or agents in it.
               if (runIdRef.current !== currentRunId) return;
 
-              // Step 2: Clone layout or run recipe
-              const currentItem = tracking.get(itemNumber);
-              if (cloneTerminals && worktreePath && worktreeId && !currentItem?.cloneComplete) {
+              // Step 2: Clone layout or run recipe. The first launch starts every
+              // entry; after that only the entries still failed launch again, so
+              // a retry never duplicates a terminal that is already running. A
+              // fully healthy item (an assignment-only retry) launches nothing.
+              const launchTracked = tracking.get(itemNumber);
+              const pendingIndices = launchTracked?.terminalsLaunched
+                ? launchTracked.failedTerminalIndices
+                : undefined;
+              const launchNeeded = pendingIndices === undefined || pendingIndices.length > 0;
+              if (launchNeeded && cloneTerminals && worktreePath && worktreeId) {
                 dispatchProgress({
                   type: "ITEM_TERMINALS_SPAWNING",
                   issueNumber: itemNumber,
                 });
-                const spawnedIds: string[] = [];
+                const launchIndices = pendingIndices ?? cloneTerminals.map((_, index) => index);
+                const spawned: Array<{ index: number; terminalId: string }> = [];
                 const failedIndices: number[] = [];
                 await spawnPanelsFromRecipe({
-                  terminals: cloneTerminals,
+                  terminals: launchIndices.map((index) => cloneTerminals[index]!),
                   worktreeId,
                   cwd: worktreePath,
                   agentSettings: cloneAgentSettings,
                   clipboardDirectory: cloneClipboardDirectory,
                   signal: activeRun.controller.signal,
-                  onPanelSpawned: (index, panelId, _error) => {
+                  // Indices come back relative to the subset passed in.
+                  onPanelSpawned: (subsetIndex, panelId, _error) => {
+                    const index = launchIndices[subsetIndex]!;
                     if (panelId != null) {
-                      spawnedIds.push(panelId);
+                      spawned.push({ index, terminalId: panelId });
                     } else {
                       failedIndices.push(index);
                     }
@@ -806,18 +890,11 @@ export function BulkCreateWorktreeDialog({
                 // cancelled run must not read its partial result as an outcome.
                 if (runIdRef.current !== currentRunId) return;
                 const updatedTracked = tracking.get(itemNumber);
-                if (updatedTracked) {
-                  updatedTracked.spawnedTerminalIds = [
-                    ...updatedTracked.spawnedTerminalIds,
-                    ...spawnedIds,
-                  ];
-                  updatedTracked.failedTerminalIndices = failedIndices;
-                  updatedTracked.cloneComplete = failedIndices.length === 0;
-                }
+                if (updatedTracked) recordTerminalLaunch(updatedTracked, spawned, failedIndices);
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
                   issueNumber: itemNumber,
-                  spawnedTerminalIds: spawnedIds,
+                  spawnedTerminalIds: spawned.map((s) => s.terminalId),
                   failedTerminalIndices: failedIndices,
                 });
 
@@ -834,92 +911,71 @@ export function BulkCreateWorktreeDialog({
                   return;
                 }
               } else if (
+                launchNeeded &&
                 selectedRecipeId &&
                 selectedRecipeId !== CLONE_LAYOUT_ID &&
                 worktreePath &&
                 worktreeId
               ) {
-                const currentTracked = tracking.get(itemNumber);
-                const failedIndices = currentTracked?.failedTerminalIndices;
-                const shouldRetryTerminals =
-                  failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
-                // Skip the recipe when terminals are already healthy (e.g. an assignment-only
-                // retry preserved its terminal tracking). Otherwise retrying after a 403 from
-                // POST /assignees would re-spawn the recipe and duplicate every terminal.
-                const allTerminalsHealthy =
-                  currentTracked != null &&
-                  currentTracked.spawnedTerminalIds.length > 0 &&
-                  (!failedIndices || failedIndices.length === 0);
-                if (allTerminalsHealthy) {
-                  // fall through to step 3 without re-running the recipe
-                } else {
-                  dispatchProgress({
-                    type: "ITEM_TERMINALS_SPAWNING",
-                    issueNumber: itemNumber,
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_SPAWNING",
+                  issueNumber: itemNumber,
+                });
+
+                const recipeContext =
+                  planned.mode === "pr"
+                    ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
+                    : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
+
+                const results: RecipeSpawnResults = await useRecipeStore
+                  .getState()
+                  .runRecipeWithResults(selectedRecipeId, worktreePath, worktreeId, recipeContext, {
+                    terminalIndices: pendingIndices,
+                    spawnBatch: recipeSpawnBatches.get(itemNumber),
                   });
 
-                  const recipeContext =
-                    planned.mode === "pr"
-                      ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
-                      : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
+                // Defence in depth: the assignment and success gates below
+                // already stop a cancelled run, but returning here keeps a
+                // dead run from writing tracking and reducer state on its way
+                // out, matching every other checkpoint in this loop.
+                if (runIdRef.current !== currentRunId) return;
 
-                  const results: RecipeSpawnResults = await useRecipeStore
-                    .getState()
-                    .runRecipeWithResults(
-                      selectedRecipeId,
-                      worktreePath,
-                      worktreeId,
-                      recipeContext,
-                      {
-                        terminalIndices: shouldRetryTerminals,
-                        spawnBatch: recipeSpawnBatches.get(itemNumber),
-                      }
+                // Recorded before any transient backoff, so the next attempt
+                // relaunches only what is still failed.
+                const failedIndices = results.failed.map((f) => f.index);
+                const updatedTracked = tracking.get(itemNumber);
+                if (updatedTracked) {
+                  recordTerminalLaunch(updatedTracked, results.spawned, failedIndices);
+                }
+
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_RESULT",
+                  issueNumber: itemNumber,
+                  spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
+                  failedTerminalIndices: failedIndices,
+                });
+
+                if (results.failed.length > 0) {
+                  const hasTransient = results.failed.some((f) => isTransientError(f.error));
+                  const remaining = MAX_TRANSIENT_RETRY_MS - (performance.now() - itemStart);
+                  if (hasTransient && remaining > 0) {
+                    backoffDelay = nextBackoffDelay(backoffDelay);
+                    await cancellableDelay(
+                      Math.min(backoffDelay, remaining),
+                      () => runIdRef.current !== currentRunId
                     );
-
-                  // Defence in depth: the assignment and success gates below
-                  // already stop a cancelled run, but returning here keeps a
-                  // dead run from writing tracking and reducer state on its way
-                  // out, matching every other checkpoint in this loop.
-                  if (runIdRef.current !== currentRunId) return;
-
-                  const updatedTracked = tracking.get(itemNumber);
-                  if (updatedTracked) {
-                    updatedTracked.spawnedTerminalIds = [
-                      ...updatedTracked.spawnedTerminalIds,
-                      ...results.spawned.map((s) => s.terminalId),
-                    ];
-                    updatedTracked.failedTerminalIndices = results.failed.map((f) => f.index);
+                    continue;
                   }
-
+                  const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
+                  failedItems.add(itemNumber);
                   dispatchProgress({
-                    type: "ITEM_TERMINALS_RESULT",
+                    type: "ITEM_FAILED",
                     issueNumber: itemNumber,
-                    spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
-                    failedTerminalIndices: results.failed.map((f) => f.index),
+                    error: errorMsg,
+                    attempts: attempt,
+                    failedStep: "terminals",
                   });
-
-                  if (results.failed.length > 0) {
-                    const hasTransient = results.failed.some((f) => isTransientError(f.error));
-                    const remaining = MAX_TRANSIENT_RETRY_MS - (performance.now() - itemStart);
-                    if (hasTransient && remaining > 0) {
-                      backoffDelay = nextBackoffDelay(backoffDelay);
-                      await cancellableDelay(
-                        Math.min(backoffDelay, remaining),
-                        () => runIdRef.current !== currentRunId
-                      );
-                      continue;
-                    }
-                    const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                    failedItems.add(itemNumber);
-                    dispatchProgress({
-                      type: "ITEM_FAILED",
-                      issueNumber: itemNumber,
-                      error: errorMsg,
-                      attempts: attempt,
-                      failedStep: "terminals",
-                    });
-                    return;
-                  }
+                  return;
                 }
               }
 
@@ -1038,7 +1094,7 @@ export function BulkCreateWorktreeDialog({
               !failedItems.has(itemNumber) &&
               tracked.failedTerminalIndices.length === 0
           )
-          .flatMap(([, tracked]) => tracked.spawnedTerminalIds);
+          .flatMap(([, tracked]) => [...tracked.terminalIdByIndex.values()]);
         await waitForPanelSpawns(verificationPanelIds, VERIFICATION_SPAWN_WAIT_MS);
         await delay(VERIFICATION_EXIT_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
@@ -1050,15 +1106,19 @@ export function BulkCreateWorktreeDialog({
           // Items that already failed (e.g. assignment) must not get their
           // ITEM_FAILED dispatch overwritten by a verification check.
           if (failedItems.has(itemNumber)) continue;
-          if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
+          if (!tracked.worktreeId || tracked.terminalIdByIndex.size === 0) continue;
           if (tracked.failedTerminalIndices.length > 0) continue;
 
-          const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
+          const crashedIndices: number[] = [];
+          for (const [index, tid] of tracked.terminalIdByIndex) {
             const t = panelsById[tid];
-            return t && isPtyPanel(t) && t.exitCode !== undefined && t.exitCode !== 0;
-          }).length;
+            if (t && exitedNonZero(t)) crashedIndices.push(index);
+          }
+          const crashedCount = crashedIndices.length;
 
           if (crashedCount > 0) {
+            // Marked as failed entries so Retry relaunches only these.
+            tracked.failedTerminalIndices = crashedIndices;
             succeededItems.delete(itemNumber);
             failedItems.add(itemNumber);
             dispatchProgress({ type: "ITEM_VERIFYING", issueNumber: itemNumber });
@@ -1088,7 +1148,7 @@ export function BulkCreateWorktreeDialog({
     if (isExecutingRef.current) return;
     isExecutingRef.current = true;
     try {
-      const toCreate = planned.filter((p) => !p.skipped);
+      const toCreate = livePlan.filter((p) => !p.skipped);
       if (mode === "issue" && !baseBranch) return;
       if (toCreate.length === 0) {
         console.warn(
@@ -1104,6 +1164,12 @@ export function BulkCreateWorktreeDialog({
 
       batchTrackingRef.current = new Map();
       submittedBaseRef.current = baseBranch;
+      const sourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      submittedCloneTerminalsRef.current =
+        selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId
+          ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
+          : null;
+      setSubmittedPlan(livePlan);
       dispatchProgress({
         type: "START",
         issueNumbers: toCreate.map((p) => p.item.number),
@@ -1113,7 +1179,7 @@ export function BulkCreateWorktreeDialog({
       isExecutingRef.current = false;
     }
   }, [
-    planned,
+    livePlan,
     selectedRecipeId,
     projectId,
     recipeSelectionTouchedRef,
@@ -1144,19 +1210,12 @@ export function BulkCreateWorktreeDialog({
       );
       if (toRetry.length === 0) return;
 
-      // Reset terminal tracking for retried items so verification doesn't use stale data.
-      // cloneComplete is also cleared so retry re-enters the clone branch — otherwise a
-      // post-success verification failure silently short-circuits to ITEM_SUCCEEDED.
-      // Assignment-only failures keep their terminal tracking: the worktree and terminals
-      // are healthy, only the GitHub assign call needs to retry.
+      // Terminal tracking survives the retry: healthy terminals stay, and the
+      // run relaunches only the entries still marked failed.
+      const { panelsById, trashPanel } = usePanelStore.getState();
       for (const issueNumber of failedIssueNumbers) {
-        if (progress.items.get(issueNumber)?.failedStep === "assignment") continue;
         const tracked = batchTrackingRef.current.get(issueNumber);
-        if (tracked) {
-          tracked.spawnedTerminalIds = [];
-          tracked.failedTerminalIndices = [];
-          tracked.cloneComplete = false;
-        }
+        if (tracked) releaseDeadTerminals(tracked, panelsById, trashPanel);
       }
 
       dispatchProgress({ type: "RETRY_FAILED" });
@@ -1426,7 +1485,7 @@ export function BulkCreateWorktreeDialog({
                     </div>
                     {!item.skipped && (
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <Icon name="worktree" className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                        <Icon name="worktree" className="w-3 h-3 text-text-secondary shrink-0" />
                         <span className="text-xs text-text-secondary font-mono truncate">
                           {item.branchName}
                         </span>

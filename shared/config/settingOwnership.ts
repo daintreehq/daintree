@@ -302,6 +302,7 @@ export const SETTING_CATALOG = {
       "daintree-canopy-list-width": device,
       "daintree-canopy-global-docked": device,
       "daintree-canopy-dock-width": device,
+      "daintree-canopy-assistants-folded": device,
       "daintree:cliAvailability:v3": device,
       "daintree:fleet-selection-hint-dismissed": device,
       "daintree:host-build-noticed:*": devicePerHost,

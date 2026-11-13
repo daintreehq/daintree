@@ -35,16 +35,22 @@ export function TerminalWhenDoneBadge({ terminalId }: { terminalId: string }) {
             HEADER_CHIP_CLASS,
             HEADER_CHIP_SURFACE,
             HEADER_CHIP_FOCUS_CLASS,
-            "min-w-0 max-w-[12rem] shrink"
+            // Gone whole below 640px: a lone flag beside the context reading
+            // read as a mark on it. The terminal menu still names the choice.
+            "max-w-[12rem] shrink-0 @max-[640px]/header:not-focus-within:hidden"
           )}
           role="status"
           aria-live="off"
+          aria-label={copy.label}
           tabIndex={0}
           data-testid="terminal-when-done-badge"
+          data-fit-priority="20"
           data-when-done={choice}
         >
           <FlagTriangleRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{copy.label}</span>
+          <span className="truncate" aria-hidden="true">
+            {copy.label}
+          </span>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">

@@ -478,7 +478,16 @@ export class PluginWorker extends PluginChild {
     args: unknown,
     timeoutMs: number
   ): Promise<unknown | null> {
-    this.send({ type: "invoke", requestId, kind: "action", namespacedId, args });
+    // The dispatch context main sends with every action invoke (#16751); the
+    // plugin-source one claims nothing, which is all a benchmark can attest.
+    this.send({
+      type: "invoke",
+      requestId,
+      kind: "action",
+      namespacedId,
+      args,
+      context: { dispatchSource: "plugin" },
+    });
     const reply = await this.waitFor(
       (message) => message.type === "invoke-result" && message.requestId === requestId,
       timeoutMs

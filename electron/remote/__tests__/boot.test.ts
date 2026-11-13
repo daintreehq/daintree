@@ -541,6 +541,22 @@ vi.mock("../assistant/hostSenders.js", () => ({
 vi.mock("../assistant/hostMcpRelay.js", () => ({
   installHostMcpRelay: vi.fn(() => ({ dispose: vi.fn() })),
 }));
+const pluginControl = vi.hoisted(() => {
+  const uninstallClient = vi.fn();
+  const uninstallHost = vi.fn();
+  return {
+    uninstallClient,
+    uninstallHost,
+    installHostPluginControlClient: vi.fn((_deps: unknown) => uninstallClient),
+    installHostPluginControlHost: vi.fn((_server: unknown) => uninstallHost),
+  };
+});
+vi.mock("../pluginControl/install.js", () => ({
+  installHostPluginControlClient: pluginControl.installHostPluginControlClient,
+}));
+vi.mock("../pluginControl/hostInstall.js", () => ({
+  installHostPluginControlHost: pluginControl.installHostPluginControlHost,
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -839,6 +855,28 @@ describe("startRemoteHosts", () => {
     expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");
     await stopRemoteHosts();
     expect(control.uninstallLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands installed plugins this Shell's hosts from start, reaching only hosts it still knows (#16767)", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(pluginControl.installHostPluginControlClient).toHaveBeenCalledTimes(1);
+    expect(pluginControl.installHostPluginControlHost).not.toHaveBeenCalled();
+    const [deps] = pluginControl.installHostPluginControlClient.mock.calls[0] as [
+      { session(hostId: string): Promise<unknown>; credential(hostId: string): string | null },
+    ];
+    await expect(deps.session("unknown-host")).resolves.toBeNull();
+    expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");
+    // No link client keeping the Shell's secret: nothing to prove a plugin with.
+    expect(deps.credential("control-on")).toBeNull();
+    // With one, the plugins' own credential for that host, never the assistant's.
+    const pluginCredential = vi.fn((hostId: string) => `plugin-credential-for-${hostId}`);
+    const unregister = registerRemoteService("hostControlLinkClient", {
+      pluginCredential,
+    } as never);
+    expect(deps.credential("control-on")).toBe("plugin-credential-for-control-on");
+    unregister();
+    await stopRemoteHosts();
+    expect(pluginControl.uninstallClient).toHaveBeenCalledTimes(1);
   });
 
   it("answers hosts' view requests from start, and releases them on stop", async () => {
@@ -1181,6 +1219,8 @@ describe("startRemoteHosts", () => {
     expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server, expect.any(Function));
     // And can read its Canopy from a view bound elsewhere.
     expect(canopy.installCanopyHost).toHaveBeenCalledWith(m.server);
+    // And reach it from its own installed plugins, as themselves (#16767).
+    expect(pluginControl.installHostPluginControlHost).toHaveBeenCalledWith(m.server);
     expect(getRemoteService("hostServer")).toBe(m.server);
     expect(getRemoteService("hostMode")).toBeDefined();
   });

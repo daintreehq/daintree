@@ -98,6 +98,40 @@ describe("createMockHost", () => {
     expect(h1).not.toHaveBeenCalled();
   });
 
+  it("dispatches to a registered handler with a frozen plugin-source context (#16751)", async () => {
+    const host = createMockHost({ pluginId: "daintree.hello" });
+    const handler = vi.fn(async () => "hi");
+    await host.registerAction(sampleAction, handler);
+
+    await host.dispatch("daintree.hello.greet", { name: "x" });
+
+    const [args, context] = handler.mock.calls[0] as unknown as [unknown, unknown];
+    expect(args).toEqual({ name: "x" });
+    // A plugin's own dispatch says nothing about a person or an assistant.
+    expect(context).toEqual({ dispatchSource: "plugin" });
+    expect(Object.isFrozen(context)).toBe(true);
+  });
+
+  it("validates assistantReach as the host does (#16751)", () => {
+    const host = createMockHost();
+    const handler = vi.fn() as unknown as Parameters<typeof host.registerAction>[1];
+    expect(() =>
+      host.registerAction({ ...sampleAction, assistantReach: "confirm-only" }, handler)
+    ).toThrow(/needs danger "confirm"/);
+    expect(() =>
+      host.registerAction(
+        { ...sampleAction, danger: "confirm", assistantReach: "always" as "confirm-only" },
+        handler
+      )
+    ).toThrow(/assistantReach "always" is invalid/);
+    expect(() =>
+      host.registerAction(
+        { ...sampleAction, danger: "confirm", assistantReach: "confirm-only" },
+        handler
+      )
+    ).not.toThrow();
+  });
+
   describe("registerAction validation", () => {
     it("rejects null/undefined/non-object descriptors", () => {
       const host = createMockHost();
@@ -302,6 +336,63 @@ describe("createMockHost", () => {
     await host.showToast({ message: "hi", type: "info", durationMs: 100 });
     expect(host.shownToasts).toEqual([{ message: "hi", type: "info", durationMs: 100 }]);
     await expect(host.showToast({ message: "" })).rejects.toThrow(/non-empty/);
+  });
+
+  it("lists the Remote Hosts it was given, held to host:dispatch and an installed plugin (#16767)", async () => {
+    const remoteHosts = [
+      {
+        hostId: "studio",
+        name: "Studio",
+        connection: "connected" as const,
+        projects: [{ projectId: "p1", name: "beads" }],
+      },
+    ];
+    const allowed = createMockHost({
+      pluginId: "acme.demo",
+      capabilities: ["host:dispatch"],
+      remoteHosts,
+    });
+    await expect(allowed.remoteHosts.list()).resolves.toEqual(remoteHosts);
+
+    const undeclared = createMockHost({ pluginId: "acme.demo", remoteHosts });
+    await expect(undeclared.remoteHosts.list()).rejects.toThrow(/"host:dispatch"/);
+
+    const projectPlugin = createMockHost({
+      pluginId: "project__b6700c7a__acme.demo",
+      capabilities: ["host:dispatch"],
+      remoteHosts,
+    });
+    await expect(projectPlugin.remoteHosts.list()).rejects.toThrow(/only an installed plugin/);
+  });
+
+  it("keeps a host's launched agents apart from this machine's (#16767)", async () => {
+    const host = createMockHost({
+      pluginId: "acme.demo",
+      capabilities: ["host:dispatch", "agent:input"],
+      dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-1" } }),
+    });
+    await host.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { hostId: "studio", projectId: "p" }
+    );
+
+    await expect(host.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+    await expect(host.agents.interrupt("t-1", { hostId: "other" })).resolves.toEqual({
+      status: "not-found",
+    });
+    await expect(host.agents.interrupt("t-1", { hostId: "studio" })).resolves.toMatchObject({
+      status: "sent",
+    });
+    expect(host.agentInputCalls.at(-1)).toMatchObject({ terminalId: "t-1", hostId: "studio" });
+
+    const undeclared = createMockHost({ pluginId: "acme.demo", capabilities: ["agent:input"] });
+    await expect(
+      undeclared.dispatch("worktree.list", {}, { hostId: "studio", projectId: "p" })
+    ).rejects.toThrow(/"host:dispatch"/);
+    await expect(undeclared.agents.submit("t-1", "go", { hostId: "studio" })).rejects.toThrow(
+      /"host:dispatch"/
+    );
   });
 
   it("records notify calls with a fresh id each (#13505)", async () => {

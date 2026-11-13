@@ -20,6 +20,11 @@ import {
   type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
+import {
+  ASKS_FOR_EVERYTHING,
+  assistantPolicySkips,
+  type AssistantConfirmationPolicy,
+} from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
@@ -144,8 +149,10 @@ import {
   AGENT_READ_QUOTA_TOOL,
   ASSISTANT_CONTROL_TOOL_IDS,
   ASSISTANT_LIST_TOOL,
+  ASSISTANT_RESUME_TOOL,
   ASSISTANT_START_TOOL,
   ASSISTANT_TARGET_REFUSALS,
+  AssistantResumeArgsSchema,
   AssistantStartArgsSchema,
   WORKER_STEER_REFUSALS,
   type AgentReadQuotaResult,
@@ -153,6 +160,7 @@ import {
 import {
   HOST_CALL_TOOL,
   HOST_CONTROL_TOOL_IDS,
+  HOST_SETTINGS_TOOL,
   HOST_STATUS_TOOL,
 } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
@@ -276,10 +284,11 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
   // A held prompt lives in main beside them (#16187).
   TERMINAL_CANCEL_QUEUED_SEND_TOOL,
-  // Assistants are found, started and quota read in main (#13496), from the
-  // caller's own session, never a view.
+  // Assistants are found, started, resumed and quota read in main (#13496,
+  // #16763), from the caller's own session, never a view.
   ASSISTANT_LIST_TOOL,
   ASSISTANT_START_TOOL,
+  ASSISTANT_RESUME_TOOL,
   AGENT_READ_QUOTA_TOOL,
   // Reopens a session from the journal main holds (#16341), with or without a
   // view: recovering after a restart can't wait for a window to open.
@@ -803,7 +812,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifySessionRevoked,
     clearDenialState,
     getCurrentTurnId,
-    readAssistantConfirmationsSkipped,
+    readAssistantConfirmationPolicy,
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -871,7 +880,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // A batch item whose reply the batch waits for: its notice holds on this.
     // `closeApproved` marks a close the batch already put to the user (#12881),
     // so the item does not ask a second time; `confirmationsSkipped` carries the
-    // batch's skip decision so every item runs under the one the batch read.
+    // batch's blanket skip so every item runs under the one the batch read.
     // Never reachable from a client.
     batchItem?: {
       noticeHold?: NoticeHold;
@@ -1160,18 +1169,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       return steer.interrupt(target);
     };
     // Daintree's own assistant only (#12874): not agent panes, not api-key
-    // clients. Read live per call, and a
-    // failed read keeps the dialog. A batch item inherits its batch's answer.
-    let confirmationsSkipped = false;
+    // clients. Read live per call, and a failed read keeps the dialog. A
+    // batch item inherits its batch's blanket skip; an action handed over on
+    // its own (#16752) covers the id it names and never the items of a call,
+    // so each item settles its own.
+    let confirmationPolicy: AssistantConfirmationPolicy = ASKS_FOR_EVERYTHING;
     if (batchItem?.confirmationsSkipped !== undefined) {
-      confirmationsSkipped = batchItem.confirmationsSkipped;
+      confirmationPolicy = {
+        skipsAll: batchItem.confirmationsSkipped,
+        delegated: ASKS_FOR_EVERYTHING.delegated,
+      };
     } else if (sessionStore.getOrigin(sessionId) === "help") {
       try {
-        confirmationsSkipped = readAssistantConfirmationsSkipped?.() === true;
+        confirmationPolicy = readAssistantConfirmationPolicy?.() ?? ASKS_FOR_EVERYTHING;
       } catch (err) {
         console.error("[MCP] Failed to read the assistant confirmation preference:", err);
       }
     }
+    const confirmationsSkipped = assistantPolicySkips(confirmationPolicy, actionId);
+    const itemsSkipConfirmations = confirmationPolicy.skipsAll;
     // Whose ownership records this call reads and writes (#12487): the
     // bearer's principal for a pane session, else the session itself. Captured
     // at admission so the ownership gate, an `owned` listing and the
@@ -1229,7 +1245,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           facts,
           {
             ...callers,
-            confirmationsSkipped,
+            confirmationPolicy,
             searchLimit,
             listPaging,
           }
@@ -2084,9 +2100,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           emitToolCallStarted(false, false);
           const stepOptions =
-            confirmationsSkipped || relayCallId !== undefined
+            itemsSkipConfirmations || relayCallId !== undefined
               ? {
-                  ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                  ...(itemsSkipConfirmations ? { confirmationsSkipped: true } : {}),
                   ...(relayCallId !== undefined ? { relayCallId } : {}),
                 }
               : undefined;
@@ -2252,12 +2268,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 extra,
                 noticeHold !== undefined ||
                   closeApproved !== undefined ||
-                  confirmationsSkipped ||
+                  itemsSkipConfirmations ||
                   relayCallId !== undefined
                   ? {
                       ...(noticeHold !== undefined ? { noticeHold } : {}),
                       ...(closeApproved !== undefined ? { closeApproved: true } : {}),
-                      ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                      ...(itemsSkipConfirmations ? { confirmationsSkipped: true } : {}),
                       ...(relayCallId !== undefined ? { relayCallId } : {}),
                     }
                   : undefined
@@ -2637,11 +2653,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           try {
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
             // Its record says when what it ran there ran under this machine's
-            // own skip preference (#15698), which only this machine decides.
+            // own skip preference (#15698), which only this machine decides;
+            // so does a `host.settings` apply the person handed over (#16752).
             // `host.status` reads each project at that tier too (#16191), and asks nobody.
             const callContext =
               tier === "core" || tier === "full"
-                ? actionId === HOST_CALL_TOOL
+                ? actionId === HOST_CALL_TOOL || actionId === HOST_SETTINGS_TOOL
                   ? {
                       tier,
                       noteSkipPreference: () => {
@@ -2688,10 +2705,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: finding and starting an assistant, and this machine's
-        // quota (#13496), run in main for the assistant this call came from,
-        // whatever admitted it above. A start is a change this process makes
-        // itself, so a relayed one answers to the drive rule as a check does.
+        // Short-circuit: finding, starting and resuming an assistant, and this
+        // machine's quota (#13496, #16763), run in main for the assistant this
+        // call came from, whatever admitted it above. A start or resume is a
+        // change this process makes itself, so a relayed one answers to the
+        // drive rule as a check does.
         if (ASSISTANT_CONTROL_TOOL_IDS.has(actionId)) {
           emitToolCallStarted(false, false);
           const refuseAssistant = (code: string, message: string) => {
@@ -2719,6 +2737,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               const startRefusal = assistantWriteRefusal(assistantCaller.projectId);
               if (startRefusal) return refuseAssistant(startRefusal.code, startRefusal.message);
               result = await assistantControl.start(assistantCaller, parsed.data);
+            } else if (actionId === ASSISTANT_RESUME_TOOL) {
+              const parsed = AssistantResumeArgsSchema.safeParse(args ?? {});
+              if (!parsed.success) {
+                return refuseAssistant(
+                  "VALIDATION_ERROR",
+                  "The arguments don't match this tool's schema."
+                );
+              }
+              const resumeRefusal = assistantWriteRefusal(assistantCaller.projectId);
+              if (resumeRefusal) return refuseAssistant(resumeRefusal.code, resumeRefusal.message);
+              result = await assistantControl.resume(assistantCaller, parsed.data);
             } else {
               const readQuota = deps.readCodexQuota;
               if (readQuota === undefined) {
@@ -2790,7 +2819,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === MCP_SURFACE_TOOL_ID) {
           emitToolCallStarted(false, false);
           try {
-            const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            const resolved = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            // The global assistant's report keeps to its own set, as its
+            // listing does (#16765), whichever manifest answered.
+            const manifest = isGlobalSession()
+              ? resolved.filter((entry) => GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+              : resolved;
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather
             // than re-reading after the await. Authorization has one lifetime
@@ -2804,6 +2838,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const result = buildSurfaceManifest(
               manifest,
               tier,
+              deps.sessionRole,
               app.getVersion(),
               // Same binding and origin the gate above authorized this call
               // against, and the same ones `tools/list` filters by — so the

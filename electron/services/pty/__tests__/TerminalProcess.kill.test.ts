@@ -708,10 +708,29 @@ describe("TerminalProcess snapshots", () => {
       pty.emitData("promoted terminal output\r\n");
       await exitAndAwaitDispose(terminal, pty);
 
-      expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      const [persistedId, persistedState] = persistSyncMock.mock.calls[0]!;
+      // Off the pty-host loop: a 5 MB sync write here stalls every terminal on
+      // the shard (#16806).
+      expect(persistSyncMock).not.toHaveBeenCalled();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      const [persistedId, persistedState] = persistAsyncMock.mock.calls[0]! as unknown as [
+        string,
+        { data: string },
+      ];
       expect(persistedId).toBe("t1");
       expect(persistedState.data).toContain("promoted terminal output");
+    });
+
+    it("still preserves the snapshot in memory when the async persist rejects", async () => {
+      persistAsyncMock.mockImplementationOnce(() => Promise.reject(new Error("disk full")));
+      const pty = createControllablePty();
+      const terminal = createTerminal({ launchAgentId: undefined }, pty);
+      terminal.getInfo().everDetectedAgent = true;
+
+      pty.emitData("survives a failed write\r\n");
+      await exitAndAwaitDispose(terminal, pty);
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      expect(terminal.getSerializedState()?.data).toContain("survives a failed write");
     });
 
     it("does not write a crash-recovery snapshot for agent terminals", async () => {
@@ -722,6 +741,7 @@ describe("TerminalProcess snapshots", () => {
       await exitAndAwaitDispose(terminal, pty);
 
       expect(persistSyncMock).not.toHaveBeenCalled();
+      expect(persistAsyncMock).not.toHaveBeenCalled();
       expect(terminal.getSerializedState()?.data).toContain("agent output");
     });
 

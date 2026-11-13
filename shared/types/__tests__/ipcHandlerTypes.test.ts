@@ -70,6 +70,8 @@ describe("hand-typed IPC handler contracts", () => {
       expectTypeOf<InvokeResult<"git:commit">>().toEqualTypeOf<{
         hash: string;
         summary: string;
+        oid: string | null;
+        parentOids: string[];
       }>();
     });
 

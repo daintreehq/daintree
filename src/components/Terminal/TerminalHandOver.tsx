@@ -348,6 +348,7 @@ export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
           aria-live="off"
           tabIndex={0}
           data-testid="terminal-driven-by-badge"
+          data-fit-priority="50"
         >
           <Plug className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{label}</span>

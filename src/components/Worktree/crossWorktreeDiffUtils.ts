@@ -20,6 +20,34 @@ export function worktreeOptionLabel(wt: WorktreeSnapshot): string {
   return wt.isMainWorktree ? `${wt.branch} (main worktree)` : wt.branch;
 }
 
+export type ComparisonSide = "base" | "compare";
+
+export type ComparisonBlocker =
+  | { kind: "unchosen" }
+  | { kind: "missing"; side: ComparisonSide }
+  | { kind: "detached"; side: ComparisonSide; name: string }
+  | { kind: "same-branch"; branch: string };
+
+/**
+ * Why the chosen pair can't be compared, or null when it can. A chosen side
+ * that has since left the store or lost its branch is reported ahead of a side
+ * not chosen yet: it is what explains a comparison that was on screen.
+ */
+export function comparisonBlocker(
+  baseId: string | null,
+  base: WorktreeSnapshot | null,
+  compareId: string | null,
+  compare: WorktreeSnapshot | null
+): ComparisonBlocker | null {
+  if (baseId && !base) return { kind: "missing", side: "base" };
+  if (compareId && !compare) return { kind: "missing", side: "compare" };
+  if (base && !base.branch) return { kind: "detached", side: "base", name: base.name };
+  if (compare && !compare.branch) return { kind: "detached", side: "compare", name: compare.name };
+  if (!base?.branch || !compare?.branch) return { kind: "unchosen" };
+  if (base.branch === compare.branch) return { kind: "same-branch", branch: base.branch };
+  return null;
+}
+
 /**
  * Unchanged lines asked for when the compare side's file text is wanted:
  * enough that git emits the whole file as one hunk.

@@ -1345,6 +1345,53 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("lets Canopy's idle reader go at tier 1, before the settle window (#16816)", async () => {
+      const retireIdleCanopyReader = vi.fn(() => 1);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader });
+
+      for (let i = 0; i < WARMUP_INTERVALS + 1; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      // Pulled on the pressure poll itself; the pass reports once the window has run.
+      expect(retireIdleCanopyReader).toHaveBeenCalledTimes(1);
+      expect(logInfo).not.toHaveBeenCalledWith("memory-pressure-tier1-reclaim", expect.any(Object));
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ canopyReadersRetired: 1, canopyReaderRetireFailed: false })
+      );
+    });
+
+    it("counts a retired Canopy reader as productive even when the re-sample fails (#16816)", async () => {
+      let throwNextSample = false;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (throwNextSample) {
+          throwNextSample = false;
+          throw new Error("getAppMetrics unavailable");
+        }
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) throwNextSample = true;
+        return 0;
+      });
+      stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader: vi.fn(() => 1) });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          resampleFailed: true,
+          canopyReadersRetired: 1,
+          outcome: "productive",
+        })
+      );
+    });
+
     it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
       // Fire-and-forget left the host still processing the trim while the
       // sampler was already reading the "after" footprint, so the bracket
@@ -1761,6 +1808,40 @@ describe("ProcessMemoryMonitor", () => {
       expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
     });
 
+    it("counts a retired Canopy reader as productive whatever the sampler saw (#16816)", async () => {
+      mockActions.retireIdleCanopyReader = vi.fn(() => 1);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("neither grows nor forgets the backoff when the Canopy reader lever throws (#16816)", async () => {
+      let throws = false;
+      mockActions.retireIdleCanopyReader = vi.fn(() => {
+        if (throws) throw new Error("reader gone");
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      // A reader with nothing to let go finds nothing: 10 minutes, then 20.
+      await advanceMinutes(15);
+      expect(passes[1]).toHaveLength(2);
+
+      throws = true;
+      await advanceMinutes(20);
+      expect(passes[1]).toHaveLength(3);
+      throws = false;
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([10, 20, 20]);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ outcome: "unknown", canopyReaderRetireFailed: true })
+      );
+    });
+
     it("never counts the renderer scrollback request as productive (#14215)", async () => {
       // The request is unacknowledged: sending it proves nothing was reclaimed,
       // so an otherwise empty pass still backs off.
@@ -2140,6 +2221,28 @@ describe("ProcessMemoryMonitor", () => {
         "blink-memory-sample",
         expect.objectContaining({ webContentsId: 42, allocatedMb: 50, totalMb: 60 })
       );
+    });
+
+    it("keeps a view's last sample through polls it isn't asked in, until a new report (#16810)", () => {
+      // A frozen view is skipped by the sampler, so its pre-freeze reading
+      // must survive any number of polls to stay in the diagnostics export.
+      recordBlinkSample(7, { allocated: 30 * 1024, total: 36 * 1024 });
+      const preFreeze = { ...getBlinkSamples().get(7)! };
+      const sampleBlinkMemory = vi.fn();
+      stop = startAppMetricsMonitor({
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleBlinkMemory,
+      });
+
+      const polls = WARMUP_INTERVALS + 20;
+      vi.advanceTimersByTime(30_000 * polls);
+      expect(sampleBlinkMemory).toHaveBeenCalledTimes(polls);
+      expect(getBlinkSamples().get(7)).toEqual(preFreeze);
+
+      recordBlinkSample(7, { allocated: 40 * 1024 });
+      expect(getBlinkSamples().get(7)?.allocated).toBe(40 * 1024);
+      expect(getBlinkSamples().get(7)?.timestamp).toBeGreaterThan(preFreeze.timestamp);
     });
 
     it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {

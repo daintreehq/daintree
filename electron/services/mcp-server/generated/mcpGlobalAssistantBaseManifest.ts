@@ -61,6 +61,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -208,6 +209,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -1185,6 +1187,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -1221,6 +1224,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   "rate_limited",
                   "too_large",
                   "conflict",
+                  "confirmation_timeout",
                 ],
               },
               detail: {
@@ -1396,6 +1400,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   "rate_limited",
                   "too_large",
                   "conflict",
+                  "confirmation_timeout",
                 ],
               },
               detail: {
@@ -1759,6 +1764,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "rate_limited",
             "too_large",
             "conflict",
+            "confirmation_timeout",
           ],
         },
         detail: {
@@ -2128,5 +2134,97 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     },
     requiresArgs: true,
     title: "Watch a host",
+  },
+  {
+    band: "reversible",
+    category: "introspection",
+    danger: "safe",
+    description:
+      "Report this session's tool surface as data: its tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints and deprecation. Call once at startup to check it matches what this client expects, then compare the hash to detect drift.",
+    enabled: true,
+    id: "mcp.surface",
+    kind: "query",
+    mcpVisibility: "core",
+    name: "mcp.surface",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        manifestVersion: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+          description: "Payload shape version, bumped when a field changes meaning",
+        },
+        appVersion: {
+          type: "string",
+          description: "The running Daintree build",
+        },
+        tier: {
+          type: "string",
+          enum: ["core", "full", "external"],
+          description: "The authorization tier this call was admitted at",
+        },
+        role: {
+          type: "string",
+          enum: ["global-assistant", "project-assistant", "agent-pane", "external-client", "relay"],
+          description: "The kind of session the server took this for",
+        },
+        hash: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+          description: "Hex SHA-256 of the surface, for drift checks",
+        },
+        tools: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+              },
+              tier: {
+                type: "string",
+                enum: ["core", "full", "external"],
+                description: "Lowest tier on this caller's ladder that permits the tool",
+              },
+              kind: {
+                type: "string",
+                enum: ["command", "query"],
+              },
+              readOnlyHint: {
+                type: "boolean",
+                description: "The tool does not modify state, so a retry is safe",
+              },
+              idempotentHint: {
+                type: "boolean",
+                description: "Repeating with the same arguments has no further effect",
+              },
+              deprecated: {
+                description: "Present only when the tool is on its way out",
+                type: "object",
+                properties: {
+                  reason: {
+                    type: "string",
+                  },
+                  replacedBy: {
+                    type: "string",
+                  },
+                },
+                required: ["reason"],
+                additionalProperties: false,
+              },
+            },
+            required: ["id", "tier", "kind", "readOnlyHint", "idempotentHint"],
+            additionalProperties: false,
+          },
+          description: "Every tool `tools/list` advertises here, sorted by id",
+        },
+      },
+      required: ["manifestVersion", "appVersion", "tier", "role", "hash", "tools"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "Get MCP surface",
   },
 ];

@@ -4,6 +4,7 @@ import {
   type ComposerHoldDropReason,
   type ComposerHoldChange,
   type ComposerHoldOutcome,
+  type ComposerHoldSendNowResult,
   type HeldComposerSend,
 } from "../../../shared/types/ipc/composerHold.js";
 import {
@@ -33,8 +34,21 @@ export interface ComposerSendHoldDeps {
   paneFor(terminalId: string): OwnPane;
   getLiveGeneration(terminalId: string): number | null;
   getTerminalProjectId(terminalId: string): string | null;
-  /** Read once a line stops taking a held send, to say why. Null when it can't be read. */
-  readTerminal(terminalId: string): Promise<NotifyTerminalInfo | null>;
+  /**
+   * Read once a line stops taking a held send, to say why, and to follow one
+   * sent now by its `submissionToken`. Null when it can't be read.
+   */
+  readTerminal(terminalId: string, submissionToken?: string): Promise<NotifyTerminalInfo | null>;
+  /**
+   * Type a held send now, as the composer types a send: whatever the pane is
+   * doing, filed as the person's prompt.
+   */
+  submit(
+    terminalId: string,
+    text: string,
+    submissionToken: string,
+    imagePaths: readonly string[]
+  ): void;
   publish(projectId: string, change: ComposerHoldChange): void;
   now?: () => number;
   newToken?: () => string;
@@ -58,6 +72,22 @@ export interface ComposerHoldRequest {
 export type ComposerHoldAdmission =
   { ok: true; send: HeldComposerSend } | { ok: false; reason: "already-held" | "unavailable" };
 
+export interface ComposerSendNowRequest {
+  terminalId: string;
+  token: string;
+  projectId: string;
+  /** The view asking can't take input: the send ends dropped rather than typed. */
+  inputBlocked: boolean;
+  /** Whether the screen asking drives the project, read now. */
+  authorize(): boolean;
+}
+
+/**
+ * Reads of a send typed now, until its write is confirmed: about half a
+ * minute, for a send whose images take a while to paste.
+ */
+const SEND_NOW_CONFIRM_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+
 interface Entry {
   readonly send: HeldComposerSend;
   readonly projectId: string;
@@ -71,6 +101,10 @@ interface Entry {
   ended: boolean;
   /** Its outcome went to the project's views. */
   published: boolean;
+  /** Sent now, outside the pane's notice line, which lets it go unreported. */
+  sentNow: boolean;
+  /** The next read of a send typed now. */
+  confirmTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -79,7 +113,8 @@ interface Entry {
  * into that prompt, and goes only when the pane waits at its own prompt: never
  * mid-turn, at a question or at an approval. Any input that could reach the
  * prompt since it was held, a restart, or the pane closing drops it, and its
- * views are told why. Kept in memory only.
+ * views are told why. Send now types one at once instead, outside that line
+ * (#16745). Kept in memory only.
  */
 export class ComposerSendHold {
   private readonly entries = new Map<string, Entry>();
@@ -114,6 +149,7 @@ export class ComposerSendHold {
       authorize: request.authorize,
       ended: false,
       published: false,
+      sentNow: false,
     };
     this.entries.set(request.terminalId, entry);
     const wake: LaneWake = {
@@ -156,6 +192,62 @@ export class ComposerSendHold {
     return true;
   }
 
+  /**
+   * Type `token` into its pane now, whatever the pane was last seen doing.
+   * It is claimed from the pane's notice line synchronously with the submit,
+   * so whichever of the two takes it first types it, once. It is dropped, and
+   * its views told why, when the panel can't take input, another screen
+   * drives the project, or the pane's line would have dropped it.
+   */
+  async sendNow(request: ComposerSendNowRequest): Promise<ComposerHoldSendNowResult> {
+    const entry = this.entries.get(request.terminalId);
+    if (
+      this.disposed ||
+      entry === undefined ||
+      entry.ended ||
+      entry.send.token !== request.token ||
+      entry.projectId !== request.projectId
+    ) {
+      return { outcome: "not-held" };
+    }
+    if (entry.send.status !== "held") return { outcome: "already-sending" };
+    const drop = (reason: ComposerHoldDropReason): ComposerHoldSendNowResult => {
+      this.end(entry, { kind: "dropped", reason });
+      return { outcome: "dropped" };
+    };
+    // Main's word on who drives first: a view blocked for that reason says so.
+    if (!safely(request.authorize)) return drop("driven-elsewhere");
+    if (request.inputBlocked) return drop("input-blocked");
+    let info: NotifyTerminalInfo | null;
+    try {
+      info = await this.deps.readTerminal(request.terminalId);
+    } catch {
+      info = null;
+    }
+    // The pane's prompt may have taken it, or something ended it, meanwhile.
+    if (entry.ended) return { outcome: "not-held" };
+    if (entry.send.status !== "held") return { outcome: "already-sending" };
+    if (info === null) return drop("ended");
+    const reason = this.dropReason(entry, info);
+    if (reason !== null) return drop(reason);
+    if (!safely(request.authorize)) return drop("driven-elsewhere");
+    // Nothing awaited from here to the submit: the line's `beforeType` refuses it now.
+    entry.sentNow = true;
+    entry.send.status = "sending";
+    this.publish(entry);
+    const submissionToken = this.deps.newToken?.() ?? randomUUID();
+    try {
+      this.deps.submit(request.terminalId, entry.send.text, submissionToken, entry.send.imagePaths);
+    } catch (err) {
+      console.error("[ComposerSendHold] Sending a held send now failed:", err);
+      // Whether any of it reached the terminal is unknown: it is never typed again.
+      this.end(entry, { kind: "dropped", reason: "unconfirmed" });
+      return { outcome: "dropped" };
+    }
+    this.followSendNow(entry, submissionToken, 0);
+    return { outcome: "sending" };
+  }
+
   /** The pane was closed or its agent restarted: what it holds is dropped, saying which. */
   endForTerminal(terminalId: string, reason: "restarted" | "closed"): void {
     const entry = this.entries.get(terminalId);
@@ -180,50 +272,108 @@ export class ComposerSendHold {
 
   private recheck(entry: Entry, info?: NotifyTerminalInfo): LaneWakeCheck {
     if (entry.ended) return { kind: "unavailable", reason: "ended" };
-    const drop = (reason: ComposerHoldDropReason): LaneWakeCheck => {
+    // Sent now, outside the line: the line lets it go and its outcome stays with the send.
+    if (entry.sentNow) return { kind: "unavailable", reason: "sent-now" };
+    const reason = this.dropReason(entry, info);
+    if (reason !== null) {
       this.end(entry, { kind: "dropped", reason });
       return { kind: "unavailable", reason };
-    };
-    const { terminalId } = entry.send;
-    if (this.now() >= entry.send.expiresAt) return drop("expired");
-    const projectId = this.deps.getTerminalProjectId(terminalId);
-    if (projectId === null) return drop("ended");
-    if (projectId !== entry.projectId) return drop("closed");
-    const generation = this.deps.getLiveGeneration(terminalId);
-    if (generation !== entry.generation) return drop(generation === null ? "ended" : "restarted");
+    }
     if (info === undefined) return { kind: "ready" };
-    if (info.isTrashed === true) return drop("closed");
+    const verdict = evaluateWakeGate(info, EXACT_PROMPT_GATE);
+    return verdict.kind === "ready" ? verdict : { kind: "held", reason: verdict.reason };
+  }
+
+  /**
+   * Why a held send can no longer be typed, the pane's prompt aside; null
+   * while it can. `info` is the pane's record as just read: without one, only
+   * what main knows of the terminal is checked.
+   */
+  private dropReason(entry: Entry, info?: NotifyTerminalInfo): ComposerHoldDropReason | null {
+    const { terminalId } = entry.send;
+    if (this.now() >= entry.send.expiresAt) return "expired";
+    const projectId = this.deps.getTerminalProjectId(terminalId);
+    if (projectId === null) return "ended";
+    if (projectId !== entry.projectId) return "closed";
+    const generation = this.deps.getLiveGeneration(terminalId);
+    if (generation !== entry.generation) return generation === null ? "ended" : "restarted";
+    if (info === undefined) return null;
+    if (info.isTrashed === true) return "closed";
     if (
       info.isExited === true ||
       info.hasPty === false ||
       info.isClosing === true ||
       info.agentState === "exited"
     ) {
-      return drop("ended");
+      return "ended";
     }
-    if (info.projectId !== undefined && info.projectId !== entry.projectId) return drop("closed");
+    if (info.projectId !== undefined && info.projectId !== entry.projectId) return "closed";
     if (
       info.agentIncarnation !== entry.agentIncarnation ||
       (info.launchGeneration !== undefined && info.launchGeneration !== entry.generation) ||
       (entry.agentSessionId !== undefined && info.agentSessionId !== entry.agentSessionId) ||
       (info.worktreeId ?? "") !== (entry.worktreeId ?? "")
     ) {
-      return drop("restarted");
+      return "restarted";
     }
     // Keys pressed at an approval dialog aren't prompt input and leave it be;
     // anything else reaching the agent since it was held moved the moment on.
     if (foreignPromptInputMoved(info, COMPOSER_PROMPT_OWNER, entry.promptBaseline)) {
-      return drop("typed");
+      return "typed";
     }
-    let authorized: boolean;
+    if (!safely(entry.authorize)) return "driven-elsewhere";
+    return null;
+  }
+
+  /** Read a send typed now after the next delay, until its write is confirmed. */
+  private followSendNow(entry: Entry, submissionToken: string, attempt: number): void {
+    if (entry.ended) return;
+    const delayMs = SEND_NOW_CONFIRM_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      this.end(entry, { kind: "dropped", reason: "unconfirmed" });
+      return;
+    }
+    entry.confirmTimer = setTimeout(() => {
+      entry.confirmTimer = undefined;
+      void this.confirmSendNow(entry, submissionToken, attempt);
+    }, delayMs);
+  }
+
+  private async confirmSendNow(
+    entry: Entry,
+    submissionToken: string,
+    attempt: number
+  ): Promise<void> {
+    if (entry.ended) return;
+    let info: NotifyTerminalInfo | null;
     try {
-      authorized = entry.authorize();
+      info = await this.deps.readTerminal(entry.send.terminalId, submissionToken);
     } catch {
-      authorized = false;
+      info = null;
     }
-    if (!authorized) return drop("driven-elsewhere");
-    const verdict = evaluateWakeGate(info, EXACT_PROMPT_GATE);
-    return verdict.kind === "ready" ? verdict : { kind: "held", reason: verdict.reason };
+    if (entry.ended) return;
+    // Only this send's own record speaks for it.
+    const phase = info?.submission?.token === submissionToken ? info.submission.phase : undefined;
+    if (phase === "pty_written") {
+      this.end(entry, { kind: "delivered" });
+      return;
+    }
+    // Refused before any of it was written: the terminal ended or stopped taking input.
+    if (phase === "cancelled") {
+      const reason = this.stopReason(
+        entry,
+        info,
+        this.deps.getLiveGeneration(entry.send.terminalId)
+      );
+      this.end(entry, { kind: "dropped", reason: reason ?? "input-blocked" });
+      return;
+    }
+    // Part of it may have been written: never typed again.
+    if (phase === "failed" || phase === "unknown") {
+      this.end(entry, { kind: "dropped", reason: "unconfirmed" });
+      return;
+    }
+    this.followSendNow(entry, submissionToken, attempt + 1);
   }
 
   private beforeType(entry: Entry): boolean {
@@ -234,7 +384,7 @@ export class ComposerSendHold {
   }
 
   private report(entry: Entry, outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void {
-    if (outcome.kind === "held" || entry.ended) return;
+    if (outcome.kind === "held" || entry.ended || entry.sentNow) return;
     const sending = entry.send.status === "sending";
     if (outcome.kind === "delivered" && sending) {
       const written = evidence?.phase === "pty_written" && evidence.submissionToken !== undefined;
@@ -261,15 +411,25 @@ export class ComposerSendHold {
       const { terminalId } = entry.send;
       const generation = this.deps.getLiveGeneration(terminalId);
       const info = await this.deps.readTerminal(terminalId);
-      if (generation !== null && generation !== entry.generation) reason = "restarted";
-      else if (info === null || info.hasPty === false || info.isExited === true) reason = "ended";
-      else if (info.isTrashed === true) reason = "closed";
-      else if (info.agentState === "exited" || info.isClosing === true) reason = "ended";
-      else if (info.agentIncarnation !== entry.agentIncarnation) reason = "restarted";
+      reason = this.stopReason(entry, info, generation) ?? "stopped";
     } catch {
       // An unreadable terminal says nothing more than that it stopped.
     }
     this.end(entry, { kind: "dropped", reason });
+  }
+
+  /** What the terminal says of why a send stopped going to it, if anything. */
+  private stopReason(
+    entry: Entry,
+    info: NotifyTerminalInfo | null,
+    generation: number | null
+  ): ComposerHoldDropReason | null {
+    if (generation !== null && generation !== entry.generation) return "restarted";
+    if (info === null || info.hasPty === false || info.isExited === true) return "ended";
+    if (info.isTrashed === true) return "closed";
+    if (info.agentState === "exited" || info.isClosing === true) return "ended";
+    if (info.agentIncarnation !== entry.agentIncarnation) return "restarted";
+    return null;
   }
 
   private end(entry: Entry, outcome: ComposerHoldOutcome): void {
@@ -292,6 +452,10 @@ export class ComposerSendHold {
 
   private forget(entry: Entry): void {
     entry.ended = true;
+    if (entry.confirmTimer !== undefined) {
+      clearTimeout(entry.confirmTimer);
+      entry.confirmTimer = undefined;
+    }
     if (this.entries.get(entry.send.terminalId) === entry) {
       this.entries.delete(entry.send.terminalId);
     }
@@ -331,6 +495,15 @@ export class ComposerSendHold {
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
+  }
+}
+
+/** A drive-lease read that throws counts as not driving. */
+function safely(authorize: () => boolean): boolean {
+  try {
+    return authorize();
+  } catch {
+    return false;
   }
 }
 

@@ -94,6 +94,7 @@ import {
   handleAcknowledgeConsent,
   handleGetOsNotifications,
   handleGetPanelAttention,
+  handleGetHostTargeting,
   handleGetProjectTargeting,
   handleListPanelAttention,
   handleListPresetGrants,
@@ -103,6 +104,7 @@ import {
   handleGetWorktreeDeleteNotes,
   handleSetWorktreeDeleteNotes,
   handleSetPanelAttention,
+  handleSetHostTargeting,
   handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
@@ -805,6 +807,42 @@ describe("pluginCapability project targeting switch (#13119)", () => {
       handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: "yes" as never })
     ).rejects.toThrow(/enabled/);
     expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+});
+
+describe("pluginCapability host targeting switch (#16767)", () => {
+  it("is its own grant, off until turned on, separate from project targeting", async () => {
+    expect(await handleGetHostTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+
+    expect(await handleSetHostTargeting({ pluginId: "acme.orchestrator", enabled: true })).toBe(
+      true
+    );
+    expect(await handleGetHostTargeting({ pluginId: "acme.orchestrator" })).toBe(true);
+    expect(
+      getPluginCapabilityConsentStore().hasGrant({
+        pluginId: "acme.orchestrator",
+        capability: "host:dispatch",
+        scopeKey: "global",
+      })
+    ).toBe(true);
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+    expect(await handleGetHostTargeting({ pluginId: "acme.other" })).toBe(false);
+
+    expect(await handleSetHostTargeting({ pluginId: "acme.orchestrator", enabled: false })).toBe(
+      false
+    );
+    expect(await handleGetHostTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+
+  it("is purged with the plugin's other grants on uninstall, and refuses malformed input", async () => {
+    await handleSetHostTargeting({ pluginId: "acme.orchestrator", enabled: true });
+    getPluginCapabilityConsentService().revokeAllForPlugin("acme.orchestrator");
+    expect(await handleGetHostTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+
+    await expect(handleGetHostTargeting({ pluginId: "" })).rejects.toThrow(/pluginId/);
+    await expect(
+      handleSetHostTargeting({ pluginId: "acme.orchestrator", enabled: "yes" as never })
+    ).rejects.toThrow(/enabled/);
   });
 });
 

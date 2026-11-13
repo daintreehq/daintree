@@ -1410,8 +1410,9 @@ describe("McpServerService", () => {
         title: "Cancel Held Terminal Message",
         description: "Cancel a held terminal message.",
       }),
-      // Session continuity + recipe-editor handoffs from #11908. The resume is
-      // on the full set; the bookmark and recipe-editor handoffs are on neither
+      // Session continuity + recipe-editor handoffs from #11908. The owned
+      // reopen is on core (#16764) and the unowned resume on the full set; the
+      // bookmark and recipe-editor handoffs are on neither
       // set now, which the off-MCP loop below pins. The coverage loops iterate
       // the live allowlists, so an id tiered without an entry here fails as a
       // missing tool rather than as the fixture gap it actually is.

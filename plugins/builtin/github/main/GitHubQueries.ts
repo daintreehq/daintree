@@ -87,6 +87,27 @@ export const REPO_STATS_AND_PAGE_QUERY = `
   }
 `;
 
+// The two open totals and nothing else: what the background poll asks when its
+// REST pair disagrees with a held count, since REST can trail a close (#16866).
+export const REPO_OPEN_COUNTS_QUERY = `
+  query GetRepoOpenCounts($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      issues(states: OPEN) {
+        totalCount
+      }
+      pullRequests(states: OPEN) {
+        totalCount
+      }
+    }
+    rateLimit {
+      cost
+      remaining
+      resetAt
+      limit
+    }
+  }
+`;
+
 // Fast-changing project health: CI status, latest release, security alerts.
 // The open issue/PR counts are NOT fetched here — they are already retrieved
 // (and cached) by REPO_STATS_AND_PAGE_QUERY, so `getProjectHealth` reads them

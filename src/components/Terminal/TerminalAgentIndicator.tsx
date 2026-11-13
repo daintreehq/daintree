@@ -27,6 +27,9 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
+
+const ErrorMark = SEVERITY_VISUAL.error.Icon;
 
 const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   input: "Input",
@@ -75,6 +78,9 @@ export function AgentStateChip({
         tone
       )}
       role="status"
+      // The global announcer speaks each transition once, with the pane's
+      // name; a live region per pane would compete across a fleet (#9204).
+      aria-live="off"
       aria-label={ariaLabel}
     >
       <StateIcon
@@ -207,7 +213,12 @@ export function TerminalAgentIndicator({
   return (
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
-        <div className="relative inline-flex items-center shrink-0">
+        {/* Focusable so the explanation behind the bar's most important mark
+            reaches the keyboard too. Inset ring: the bar clips at its edge. */}
+        <div
+          className="relative inline-flex shrink-0 cursor-default items-center rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          tabIndex={0}
+        >
           <AgentStateChip
             agentState={shownState}
             ariaLabel={chipAriaLabel}
@@ -234,11 +245,16 @@ export function TerminalAgentIndicator({
           </span>
           {exitStatus && (
             <span
-              className={cn(
-                "tabular-nums",
-                exitStatus.failed ? "text-status-error" : "text-text-secondary"
-              )}
+              // Neutral ink with the failure marked in shape: the error hue on
+              // tooltip text falls under 4.5:1 on several themes.
+              className="inline-flex items-center gap-1 tabular-nums text-text-secondary"
             >
+              {exitStatus.failed && (
+                <ErrorMark
+                  className={cn("h-3 w-3 shrink-0", SEVERITY_VISUAL.error.toneClass)}
+                  aria-hidden="true"
+                />
+              )}
               {exitStatus.detail}
             </span>
           )}
@@ -270,7 +286,13 @@ export function TerminalAgentIndicator({
           {/* No cost line: the settled trace chip in the header row is the one
               place a session's cost and tokens are disclosed, in full. */}
           {errorCount > 0 && (
-            <span className="text-status-error">{pluralize(errorCount, "error")}</span>
+            <span className="inline-flex items-center gap-1">
+              <ErrorMark
+                className={cn("h-3 w-3 shrink-0", SEVERITY_VISUAL.error.toneClass)}
+                aria-hidden="true"
+              />
+              {pluralize(errorCount, "error")}
+            </span>
           )}
         </div>
       </TooltipContent>

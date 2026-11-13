@@ -1,6 +1,9 @@
+import type { CanopyAssistantItem } from "@/components/Canopy/canopyAssistants";
 import type { CanopyFrame, CanopyGoToRun } from "@/components/Canopy/canopyFrame";
+import { assistantOpenRefusal } from "@/components/Canopy/openAssistantItem";
 import { switchToHost } from "@/components/Hosts/hostSwitching";
 import { notify } from "@/lib/notify";
+import { openAssistantFromCanopyWindow } from "@/services/assistantSubject";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 
 /**
@@ -50,6 +53,25 @@ function goToRun({ place }: CanopyGoToRun): void {
 }
 
 /**
+ * Open in Assistant from a window with no project of its own (#16758): the
+ * assistant opens in a window of the machine it runs on, and this window stays
+ * open on its selection. Whatever kept it from opening, a window that didn't
+ * come forward included, is said in its pane.
+ */
+async function openAssistant(item: CanopyAssistantItem): Promise<string | null> {
+  try {
+    const result = await openAssistantFromCanopyWindow(item.subject, item.attached);
+    if (result.ok) return null;
+    // The shared wording says the asking window couldn't move; this one never does.
+    return result.reason === "not-switched"
+      ? "This assistant runs on another host, and a window there didn't open on it."
+      : assistantOpenRefusal(result.reason);
+  } catch (error) {
+    return clientErrorText(error, "Daintree couldn't open this assistant.");
+  }
+}
+
+/**
  * The Canopy window's answers to what only a host can decide. It holds no
  * project and moves to none: a pane opens in the window that has it, and what
  * needs a project says which one to open.
@@ -65,7 +87,7 @@ export const CANOPY_WINDOW_FRAME: CanopyFrame = {
       duration: 6000,
     });
   },
-  openAssistant: async () => "Open this assistant from its project's Assistant panel.",
+  openAssistant,
   // Open all day beside the agents' own panes: a row left selected moves no PTY.
   takesTerminalSize: "on-use",
 };

@@ -53,6 +53,24 @@ describe("SectionBar's arrow keys", () => {
     const { button } = bar();
     expect(fireEvent.keyDown(button, { key: "ArrowUp" })).toBe(true);
   });
+
+  it("steps with j and k as with the arrows, and leaves them alone under a modifier", () => {
+    const onLeaveUp = vi.fn();
+    const onLeaveDown = vi.fn(() => true);
+    const { onEnter, button } = bar({ onLeaveUp, onLeaveDown });
+    expect(fireEvent.keyDown(button, { key: "k" })).toBe(false);
+    expect(fireEvent.keyDown(button, { key: "j" })).toBe(false);
+    expect(onLeaveUp).toHaveBeenCalledTimes(1);
+    expect(onLeaveDown).toHaveBeenCalledTimes(1);
+    expect(fireEvent.keyDown(button, { key: "k", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(button, { key: "j", ctrlKey: true })).toBe(true);
+    expect(onLeaveUp).toHaveBeenCalledTimes(1);
+    expect(onLeaveDown).toHaveBeenCalledTimes(1);
+    const open = bar({ expanded: true });
+    expect(fireEvent.keyDown(open.button, { key: "j" })).toBe(false);
+    expect(open.onEnter).toHaveBeenCalledTimes(1);
+    expect(onEnter).not.toHaveBeenCalled();
+  });
 });
 
 describe("SectionBar's arrow keys beyond the bar", () => {

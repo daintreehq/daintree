@@ -6,8 +6,10 @@ import { defineIpcNamespace, op } from "../define.js";
 import { OS_DND_METHOD_CHANNELS } from "./osDnd.preload.js";
 
 export function registerOsDndHandlers(_deps: HandlerDependencies): () => void {
-  // Initialize eagerly during handler registration so the first renderer
-  // hydrate IPC call always lands on a probed service. The matching deferred
+  // Initialize during handler registration so the macOS probe is already in
+  // flight when the first renderer hydrates. `initialize()` only starts the
+  // probe; `getState` awaits it, so hydration still gets a probed boolean
+  // without the cold start blocking on plutil (#16809). The matching deferred
   // task (electron/window/globalServicesInit.ts) is idempotent and remains in
   // place for symmetry with sibling services.
   const osDndService = initializeOsDndService();
@@ -16,7 +18,7 @@ export function registerOsDndHandlers(_deps: HandlerDependencies): () => void {
     name: "osDnd",
     ops: {
       getState: op(OS_DND_METHOD_CHANNELS.getState, async (): Promise<boolean | undefined> =>
-        osDndService.getState()
+        osDndService.getStateWhenReady()
       ),
     },
   });

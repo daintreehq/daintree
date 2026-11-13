@@ -36,9 +36,11 @@ import { DiffFilePath, DiffViewer, type DiffViewerSideLabels } from "./DiffViewe
 import { WorktreeSelector } from "./WorktreeSelector";
 import {
   WHOLE_FILE_CONTEXT_LINES,
+  comparisonBlocker,
   committedSourceFromFullDiff,
   sortWorktreesForComparison,
   worktreeOptionLabel,
+  type ComparisonBlocker,
 } from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -313,6 +315,46 @@ function CanvasState({ children }: { children: ReactNode }) {
   return <div className="flex h-full w-full items-center justify-center p-6">{children}</div>;
 }
 
+/** What the canvas says in place of a comparison the chosen pair can't make. */
+function blockedCopy(
+  blocker: ComparisonBlocker,
+  baseLabel: string | null,
+  onlyDetached: boolean,
+  hasBase: boolean
+): { title: string; description: string } {
+  switch (blocker.kind) {
+    case "missing":
+      return {
+        title: `Choose another ${blocker.side} worktree`,
+        description: `The ${blocker.side} worktree you chose is no longer in the list.`,
+      };
+    case "detached":
+      return {
+        title: `Choose a ${blocker.side} worktree on a branch`,
+        description: `${blocker.name} has a detached HEAD, so it has no branch to compare. Check out a branch there or choose another worktree.`,
+      };
+    case "same-branch":
+      return {
+        title: "Choose a different branch to compare",
+        description: `Both worktrees have ${blocker.branch} checked out, so there's nothing to compare.`,
+      };
+    case "unchosen":
+      if (onlyDetached) {
+        return {
+          title: "Check out a branch to compare",
+          description:
+            "Worktrees are compared branch against branch, and every worktree here has a detached HEAD.",
+        };
+      }
+      return {
+        title: hasBase ? "Choose a worktree to compare" : "Choose two worktrees to compare",
+        description: baseLabel
+          ? `Its committed changes are shown against ${baseLabel}. Uncommitted edits aren't included.`
+          : "The compare branch's committed changes are shown against the base. Uncommitted edits aren't included.",
+      };
+  }
+}
+
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
   const shelfId = useId();
   const worktreeMap = useWorktreeStore((state) => state.worktrees);
@@ -338,34 +380,45 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // The key of the comparison `result` belongs to, so a rerun for the same
   // comparison can refresh in place instead of starting over.
   const resultKeyRef = useRef<string | null>(null);
+  const refocusLabelRef = useRef<string | null>(null);
+
+  // Drops the comparison on screen and anything still in flight for it.
+  const resetComparison = useCallback(() => {
+    resultKeyRef.current = null;
+    refocusLabelRef.current = null;
+    compareTokenRef.current++;
+    fileDiffTokenRef.current++;
+    setResult(null);
+    setSelectedFile(null);
+    setFileDiff(null);
+    setFileSource(null);
+    setFileDiffError(false);
+    setError(null);
+    setLoading(false);
+    setFileDiffLoading(false);
+  }, []);
 
   // Initialize / reset state when modal opens or closes
   useEffect(() => {
     if (!isOpen) {
-      resultKeyRef.current = null;
-      compareTokenRef.current++;
-      fileDiffTokenRef.current++;
+      resetComparison();
       setLeftId(null);
       setRightId(null);
-      setResult(null);
-      setSelectedFile(null);
-      setFileDiff(null);
-      setFileSource(null);
-      setFileDiffError(false);
-      setError(null);
-      setLoading(false);
-      setFileDiffLoading(false);
       return;
     }
     if (initialWorktreeId) {
-      // Only accept if the worktree still exists
-      const exists = worktrees.some((wt) => wt.id === initialWorktreeId);
-      if (exists) setLeftId(initialWorktreeId);
+      const initial = worktrees.find((wt) => wt.id === initialWorktreeId);
+      // A detached worktree can't be a side (its option is disabled), so the
+      // base starts from the first one that has a branch instead.
+      const base = initial?.branch ? initial : initial && worktrees.find((wt) => wt.branch);
+      if (base) setLeftId(base.id);
     }
   }, [isOpen, initialWorktreeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const leftWorktree = worktrees.find((wt) => wt.id === leftId) ?? null;
   const rightWorktree = worktrees.find((wt) => wt.id === rightId) ?? null;
+  const blocker = comparisonBlocker(leftId, leftWorktree, rightId, rightWorktree);
+  const canCompare = blocker === null;
 
   // The comparison is branch against branch, so it depends on these values and
   // not on the snapshot objects, which the store replaces for every status or
@@ -530,14 +583,22 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     [leftPath, leftBranch, rightBranch, comparisonKey, fetchFileDiff]
   );
 
+  // Once the pair can't be compared (a side gone, detached, or on the other
+  // side's branch), nothing of the last comparison may stay or land late.
+  // Layout, not passive: the stale list and diff are never painted. A change
+  // to another comparable pair is the fetch's job, which starts over.
+  useLayoutEffect(() => {
+    if (!canCompare) resetComparison();
+  }, [canCompare, resetComparison]);
+
   // Auto-fetch when both sides are selected, and again when either branch
   // moves to a new commit. Only that second case may refresh in place.
   useEffect(() => {
-    if (leftId && rightId && leftId !== rightId) {
+    if (canCompare) {
       void fetchComparison(resultKeyRef.current === comparisonKey);
     }
     // The heads are triggers, not inputs: a new commit reruns the comparison.
-  }, [leftId, rightId, comparisonKey, leftHead, rightHead, fetchComparison]);
+  }, [canCompare, comparisonKey, leftHead, rightHead, fetchComparison]);
 
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
@@ -562,7 +623,6 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     return files.findIndex((f) => isSameFile(f, selectedFile));
   }, [files, selectedFile]);
 
-  const refocusLabelRef = useRef<string | null>(null);
   const navigateFile = useCallback(
     (delta: -1 | 1) => {
       if (!files || files.length === 0) return;
@@ -643,8 +703,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // The shelf can only be put away while a file is open: with nothing on the
   // canvas, the list is the only thing to act on.
   const hasFiles = listReady && result !== null && result.files.length > 0;
+  // A list skeleton holds its floor after the comparison is dropped; a pair
+  // that can't be compared has no list to show, not even a pending one.
   const showShelf =
-    (showListSkeleton && diffShowFileList) || (hasFiles && (diffShowFileList || !selectedFile));
+    canCompare &&
+    ((showListSkeleton && diffShowFileList) || (hasFiles && (diffShowFileList || !selectedFile)));
 
   const rightPath = rightWorktree?.path;
 
@@ -763,18 +826,20 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   }, [canvasElement, diffHeaderShown, selectedFile, fileDiff]);
 
   let canvas: ReactNode = null;
-  if (!leftId || !rightId) {
+  if (blocker) {
+    const copy = blockedCopy(
+      blocker,
+      baseLabel,
+      worktrees.length > 0 && !worktrees.some((wt) => wt.branch),
+      Boolean(leftId)
+    );
     canvas = (
       <EmptyState
         variant="zero-data"
         scale="canvas"
         icon={<GitCompare />}
-        title={leftId ? "Choose a worktree to compare" : "Choose two worktrees to compare"}
-        description={
-          baseLabel
-            ? `Its committed changes are shown against ${baseLabel}. Uncommitted edits aren't included.`
-            : "The compare branch's committed changes are shown against the base. Uncommitted edits aren't included."
-        }
+        title={copy.title}
+        description={copy.description}
       />
     );
   } else if (error && !loading) {

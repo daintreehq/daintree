@@ -125,6 +125,7 @@ import {
   fileAttachmentEntryFromSource,
   insertFileAttachments,
   insertPreparedAttachments,
+  restoreImageChips,
 } from "./fileAttachments";
 import {
   composerUploadSurface,
@@ -224,6 +225,7 @@ import {
   takePendingComposerSelection,
 } from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
+import { restoreChange, takePendingComposerImages } from "@/lib/composerPendingImages";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -1366,6 +1368,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       const view = editorViewRef.current;
       if (!view) return;
+      // A sent message taken back for editing brings its images (#16786).
+      const restoring = takePendingComposerImages(makeDraftKey(terminalId, projectId), draft);
       // A recalled prompt is another draft, even one that reads the same.
       const replacedAt = inputState.replacedDraftRevisions.get(makeDraftKey(terminalId, projectId));
       if (replacedAt !== undefined && replacedAt > appliedBefore) advanceComposerDraft(view);
@@ -1384,8 +1388,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
       syncedDraftRef.current = draft;
       // Only what differs is replaced, so an append leaves the image and
-      // file chips already in the draft attached.
-      const change = outsideWriteChange(shown, draft, landed);
+      // file chips already in the draft attached. A restore over the draft
+      // shown is made as written, so text it repeats keeps its own chips.
+      const change =
+        restoring !== null && restoring.before === shown && landed === null
+          ? restoreChange(restoring, draft)
+          : outsideWriteChange(shown, draft, landed);
       if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;
@@ -1412,6 +1420,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             selection: { anchor: pendingSelection.from, head: pendingSelection.to },
           });
         }
+      }
+      // Also when the editor already showed the draft: one mounting with it.
+      if (restoring !== null) {
+        restoreImageChips(view, restoring.images, () => editorViewRef.current === view);
       }
     }, [externalDraftRevision, terminalId, projectId]);
 

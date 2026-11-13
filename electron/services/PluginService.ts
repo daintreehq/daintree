@@ -12,6 +12,7 @@ import { setArtifactSourceResolver } from "../setup/artifactSourceResolver.js";
 import type { PluginArtifact, PluginArtifactSource } from "../../shared/types/pluginArtifacts.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
+import { createManualRedirectFetch } from "../utils/netManualRedirectFetch.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -42,6 +43,8 @@ import {
   appendHandlerHint,
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
+import { UNATTESTED_PLUGIN_ACTION_CONTEXT } from "./plugin/pluginActionContext.js";
+import { setPluginAssistantReachSource } from "./plugin/pluginAssistantReach.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import {
   attachPluginLaunchPersistence,
@@ -80,6 +83,7 @@ import type {
   PluginChannelSchema,
   PluginTypedIpcHandler,
   ActionHandler,
+  PluginActionContext,
   BuiltInPluginCapability,
   PluginLoadError,
   PluginActivationResult,
@@ -2821,7 +2825,7 @@ export class PluginService {
     channel: string,
     resolvedPath: string
   ): ActionHandler {
-    return async (args: unknown) => {
+    return async (args: unknown, context?: PluginActionContext) => {
       const entry = this.pluginWorkers.get(pluginId);
       if (!entry || entry.activation.ok === false) {
         throw new Error(`Plugin "${pluginId}" is not activated; cannot run command "${channel}"`);
@@ -2830,7 +2834,12 @@ export class PluginService {
       // which survives the worker it described: after a crash the entry and its
       // stale `ok: true` both persist while a replacement forks. The bridge's
       // own generation state is the live fact, so it makes the final call.
-      return entry.bridge.invokeCommand(channel, resolvedPath, args);
+      return entry.bridge.invokeCommand(
+        channel,
+        resolvedPath,
+        args,
+        context ?? UNATTESTED_PLUGIN_ACTION_CONTEXT
+      );
     };
   }
 
@@ -4215,7 +4224,7 @@ export class PluginService {
       store: new PluginArtifactStore({
         rootDir: path.join(app.getPath("userData"), "plugin-artifacts"),
       }),
-      netFetch: (input, init) => net.fetch(input, init),
+      netFetch: createManualRedirectFetch((options) => net.request(options)),
     });
     this.artifactService = service;
     setArtifactSourceResolver((artifactId, lease) => service.openLeased(artifactId, lease));
@@ -4952,7 +4961,8 @@ export class PluginService {
     pluginId: string,
     channel: string,
     ctx: PluginIpcContext,
-    args: unknown[]
+    args: unknown[],
+    actionContext?: PluginActionContext
   ): Promise<unknown> {
     // Metered here rather than from the audit log, which can be disabled and is
     // capped. Timed from after activation: a cold start is recorded as the
@@ -4968,7 +4978,14 @@ export class PluginService {
     const sameGeneration = (): boolean =>
       generation !== undefined && this.plugins.get(pluginId) === generation;
     try {
-      const result = await this.dispatchHandlerOnHost(pluginId, channel, ctx, args, timing);
+      const result = await this.dispatchHandlerOnHost(
+        pluginId,
+        channel,
+        ctx,
+        args,
+        timing,
+        actionContext
+      );
       if (sameGeneration()) {
         this.metrics.recordInvoke(
           pluginId,
@@ -4996,16 +5013,24 @@ export class PluginService {
     channel: string,
     ctx: PluginIpcContext,
     args: unknown[],
-    timing: { handlerStart: number; promptMark?: InvokePromptMark }
+    timing: { handlerStart: number; promptMark?: InvokePromptMark },
+    actionContext: PluginActionContext | undefined
   ): Promise<unknown> {
     if (ctx.origin?.kind !== "remote")
-      return this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      return this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing, actionContext);
     // A window on another machine may still show a plugin this host has since
     // removed. It is told so in a form it can build its placeholder from, both
     // up front and for a call the removal cut short.
     if (!this.plugins.has(pluginId)) throw new PluginNotOnHostInvokeError(pluginId, channel);
     try {
-      return await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      return await this.dispatchHandlerUnmetered(
+        pluginId,
+        channel,
+        ctx,
+        args,
+        timing,
+        actionContext
+      );
     } catch (err) {
       if (this.plugins.has(pluginId)) throw err;
       // A handler that was running when its plugin went is audited already;
@@ -5022,7 +5047,8 @@ export class PluginService {
     channel: string,
     ctx: PluginIpcContext,
     args: unknown[],
-    timing: { handlerStart: number; promptMark?: InvokePromptMark }
+    timing: { handlerStart: number; promptMark?: InvokePromptMark },
+    actionContext: PluginActionContext | undefined
   ): Promise<unknown> {
     // Ownership guard (#10462): the renderer is a single shared WebContents in
     // which every plugin runs in the same realm, so a caller can pass an
@@ -5084,6 +5110,14 @@ export class PluginService {
     if (!actionHandler && !handler) {
       throw new Error(`No plugin handler registered for ${key}`);
     }
+    // A dispatch context speaks for an action dispatch, so a call that carries
+    // one must reach an action this plugin registered. One whose metadata came
+    // over `plugin:actions-register` may still be served by a channel handler
+    // under its id, which runs as it always has: its `(ctx, ...args)` shape
+    // has no place for the context.
+    if (actionContext !== undefined && !actionHandler && descriptor?.pluginId !== pluginId) {
+      throw new Error(`No plugin action registered for ${key}`);
+    }
 
     if (descriptor?.inputSchema && descriptor.pluginId === pluginId) {
       let validator = this.actionValidators.get(channel);
@@ -5111,16 +5145,21 @@ export class PluginService {
       }
     }
 
-    // A main-side action handler receives the args payload only — no IPC ctx,
-    // per the ActionHandler contract. The renderer's synthetic action forwards
-    // a single args object; default to `{}` when called with none so the
-    // handler sees the same value the input-schema validation accepted above
-    // (which also defaults the empty case to `{}`).
+    // A main-side action handler receives the args payload and the dispatch
+    // context, never the IPC ctx, per the ActionHandler contract. The renderer's
+    // synthetic action forwards a single args object; default to `{}` when
+    // called with none so the handler sees the same value the input-schema
+    // validation accepted above (which also defaults the empty case to `{}`).
+    // A call nothing attested (a panel's own invoke, an event route) gets the
+    // context that claims nothing.
     if (actionHandler) {
       let actionResult: unknown;
       const endRun = this.beginActionRun(pluginId, channel, generation);
       try {
-        actionResult = await actionHandler(args.length > 0 ? args[0] : {});
+        actionResult = await actionHandler(
+          args.length > 0 ? args[0] : {},
+          actionContext ?? UNATTESTED_PLUGIN_ACTION_CONTEXT
+        );
       } catch (err) {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
@@ -5419,8 +5458,8 @@ export class PluginService {
   }
 
   /**
-   * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
-   * the downloaded archive, and compares it against the installed `archiveHash`.
+   * Manual update check (#9297). Re-fetches a URL install's `originalUrl` and
+   * compares digests, or reads the catalog for a catalog install (#16781).
    * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
    */
   async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
@@ -8254,6 +8293,7 @@ export class PluginService {
         updatedAt: record?.updatedAt,
         archiveHash: record?.archiveHash ?? null,
         originalUrl: record?.originalUrl ?? null,
+        catalog: record?.source === "catalog" ? (record.catalog ?? null) : null,
         // A blocklisted plugin is a policy refusal, not a technical failure —
         // suppress any stale activation error so the UI shows only "Blocked".
         //
@@ -8707,6 +8747,22 @@ export class PluginService {
         `Plugin action "${id}" has invalid danger "${danger}". Plugins may only register "safe" or "confirm" actions.`
       );
     }
+    // The Assistant reaches only what its confirm gate covers (#16751), and the
+    // declared danger is what pins that: a capability-raised "confirm" moves
+    // with the plugin's capabilities, so it can't stand in.
+    const assistantReach: unknown = contribution.assistantReach;
+    if (assistantReach !== undefined) {
+      if (assistantReach !== "confirm-only") {
+        throw new Error(
+          `Plugin action "${id}" has invalid assistantReach "${String(assistantReach)}". The only value is "confirm-only".`
+        );
+      }
+      if (danger !== "confirm") {
+        throw new Error(
+          `Plugin action "${id}" declares assistantReach, which needs danger "confirm" on the same action.`
+        );
+      }
+    }
 
     // Host-authoritative danger: the plugin's self-reported `danger` is
     // advisory. Raise it to "confirm" (never lower) when the plugin holds a
@@ -8759,6 +8815,7 @@ export class PluginService {
       kind,
       danger,
       effectiveDanger,
+      ...(assistantReach === "confirm-only" ? { assistantReach } : {}),
       when,
       enablement,
       keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
@@ -8938,6 +8995,31 @@ export class PluginService {
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */
   listPluginActions(): PluginActionDescriptor[] {
     return Array.from(this.pluginActions.values());
+  }
+
+  /**
+   * Whether a loaded plugin's action is on the project Assistant's MCP tools
+   * (#16751): it opted in, and it is confirm-gated as declared and as the host
+   * classifies it. Read live, so an unload or a re-registration without the
+   * opt-in takes it off at the next call.
+   */
+  isAssistantReachAction(actionId: string): boolean {
+    const descriptor = this.pluginActions.get(actionId);
+    return (
+      descriptor !== undefined &&
+      descriptor.assistantReach === "confirm-only" &&
+      descriptor.danger === "confirm" &&
+      descriptor.effectiveDanger === "confirm"
+    );
+  }
+
+  /** Every action {@link isAssistantReachAction} admits, for listing a tier's surface. */
+  listAssistantReachActionIds(): string[] {
+    const ids: string[] = [];
+    for (const id of this.pluginActions.keys()) {
+      if (this.isAssistantReachAction(id)) ids.push(id);
+    }
+    return ids;
   }
 
   // ============================================================
@@ -9344,6 +9426,11 @@ export class PluginService {
 export const pluginService = new PluginService(undefined, undefined, {
   sideloadPluginsRoot: e2eSideloadPluginDir,
   whenProtocolReady: whenPluginDirResolverLive,
+});
+
+setPluginAssistantReachSource({
+  has: (actionId) => pluginService.isAssistantReachAction(actionId),
+  ids: () => pluginService.listAssistantReachActionIds(),
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC

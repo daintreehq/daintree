@@ -46,6 +46,8 @@ import {
   type PluginPresetGrantEntry,
   type PluginPresetGrantRevoke,
   type PluginPresetGrantsQuery,
+  type PluginHostTargetingQuery,
+  type PluginHostTargetingUpdate,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
   type PluginWorktreeDeleteNotesQuery,
@@ -434,6 +436,36 @@ export async function handleSetProjectTargeting(
   return store.hasGrant(identity);
 }
 
+function hostTargetingIdentity(pluginId: unknown) {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // Always the app-wide scope: a project plugin can never target a host.
+  return { pluginId, capability: "host:dispatch", scopeKey: "global" } as const;
+}
+
+/** Read an app-wide plugin's "Allow host targeting" switch (#16767). */
+export async function handleGetHostTargeting(input: PluginHostTargetingQuery): Promise<boolean> {
+  return getPluginCapabilityConsentStore().hasGrant(hostTargetingIdentity(input?.pluginId));
+}
+
+/**
+ * Flip an app-wide plugin's "Allow host targeting" switch (#16767) and return
+ * the persisted state. One switch covers every host; off revokes the grant
+ * outright, and uninstall purges it with the plugin's other grants.
+ */
+export async function handleSetHostTargeting(input: PluginHostTargetingUpdate): Promise<boolean> {
+  const identity = hostTargetingIdentity(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const store = getPluginCapabilityConsentStore();
+  if (!store.setGrant(identity, input.enabled)) {
+    throw new Error("The host targeting setting could not be saved");
+  }
+  return store.hasGrant(identity);
+}
+
 function osNotificationsIdentity(pluginId: unknown) {
   if (typeof pluginId !== "string" || pluginId.length === 0) {
     throw new Error("pluginId must be a non-empty string");
@@ -603,6 +635,14 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     setProjectTargeting: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setProjectTargeting,
       handleSetProjectTargeting
+    ),
+    getHostTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getHostTargeting,
+      handleGetHostTargeting
+    ),
+    setHostTargeting: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setHostTargeting,
+      handleSetHostTargeting
     ),
     getOsNotifications: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.getOsNotifications,

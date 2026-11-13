@@ -946,7 +946,8 @@ ptyManager.on(
     signal?: number,
     launchGeneration?: number,
     preserveSession?: boolean,
-    spawnedAt?: number
+    spawnedAt?: number,
+    preserved?: boolean
   ) => {
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
@@ -1009,9 +1010,14 @@ ptyManager.on(
       launchGeneration,
       ...(spawnedAt !== undefined && { spawnedAt }),
       ...(preserveSession && { preserveSession }),
+      ...(preserved && { preserved }),
     });
   }
 );
+
+ptyManager.on("terminal-removed", (id: string) => {
+  sendEvent({ type: "terminal-removed", id });
+});
 
 // A replaced incarnation's exit: no per-id cleanup here, the id is its successor's.
 ptyManager.on(

@@ -12,6 +12,10 @@ import {
   PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
   PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
 } from "../../../../shared/types/pluginCapabilityConsent.js";
+import { PLUGIN_CONTROL_CALL_MS } from "../../../remote/pluginControl/linkMethods.js";
+
+/** What the Shell's boot gives a host call to connect before it is sent. */
+const HOST_CALL_CONNECT_BUDGET_MS = 10_000;
 
 describe("hostCallDeadlineMs (#13410)", () => {
   it("leaves the prompts unbounded, since they wait on a person", () => {
@@ -51,6 +55,21 @@ describe("hostCallDeadlineMs (#13410)", () => {
         actionId: "agent.launch",
         args: { agentId: "claude", presetId: "zai", env: { X: "1" } },
       })
+    ).toBe(plain);
+  });
+
+  it("waits for a Remote Host's dispatch to dial the host and run there (#16767)", () => {
+    const plain = hostCallDeadlineMs("dispatch", { actionId: "worktree.list", args: {} });
+    const remote = hostCallDeadlineMs("dispatch", {
+      actionId: "worktree.list",
+      args: {},
+      options: { hostId: "studio", projectId: "p" },
+    });
+    // The host's link may take its connect budget before the call's own 60 s start.
+    expect(remote).toBeGreaterThan(HOST_CALL_CONNECT_BUDGET_MS + PLUGIN_CONTROL_CALL_MS);
+    expect(remote).toBeGreaterThan(plain);
+    expect(
+      hostCallDeadlineMs("dispatch", { actionId: "worktree.list", options: { projectId: "p" } })
     ).toBe(plain);
   });
 

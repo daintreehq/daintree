@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 import {
   resolveLaunchableAssistantAgentId,
   selectInstalledAssistantAgentIds,
@@ -50,5 +51,26 @@ describe("resolveLaunchableAssistantAgentId", () => {
   it("has no target with none or several installed and nothing saved", () => {
     expect(resolveLaunchableAssistantAgentId(null, [])).toBeNull();
     expect(resolveLaunchableAssistantAgentId(null, ["claude", "codex"])).toBeNull();
+  });
+});
+
+describe("Antigravity against the real registry (#16815)", () => {
+  it("is offered once agy is installed, and launches alone without asking", () => {
+    const installed = selectInstalledAssistantAgentIds(
+      getAssistantSupportedAgentIds(),
+      { antigravity: "ready", copilot: "ready" },
+      true
+    );
+    // Copilot is wired but experimental, so only Antigravity is a choice.
+    expect(installed).toEqual(["antigravity"]);
+    expect(resolveLaunchableAssistantAgentId(null, installed)).toBe("antigravity");
+
+    const several = selectInstalledAssistantAgentIds(
+      getAssistantSupportedAgentIds(),
+      { antigravity: "ready", codex: "ready" },
+      true
+    );
+    expect(resolveLaunchableAssistantAgentId(null, several)).toBeNull();
+    expect(resolveLaunchableAssistantAgentId("antigravity", several)).toBe("antigravity");
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import {
@@ -49,6 +49,7 @@ vi.mock("@/components/Plugin/PluginHostedView", () => ({
 }));
 
 import { SidebarViewHost } from "../SidebarViewHost";
+import { preloadPluginHostedView } from "@/components/Plugin/LazyPluginHostedView";
 import { SidebarViewHeading, _resetSidebarViewSwitcherForTest } from "../SidebarViewSwitcher";
 import { useBuiltInSidebarViewHidden } from "../sidebarViewContext";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
@@ -106,6 +107,13 @@ async function openSwitcher() {
   fireEvent.keyDown(trigger, { key: "Enter" });
   return screen.findAllByRole("menuitemradio");
 }
+
+// The hosted-view chunk loads on first use (#16802), which
+// LazyPluginHostedView's own suite covers; loaded up front here, every test
+// reads what the host hands its view from the first render.
+beforeAll(async () => {
+  await preloadPluginHostedView();
+});
 
 beforeEach(() => {
   h.options = resolveSidebarViewOptions(null, {});

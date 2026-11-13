@@ -1039,6 +1039,7 @@ describe("McpServerService", () => {
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-token" ? win.webContents.id : null
     );
+    service.setHelpSessionIdResolver((token) => (token === "help-token" ? "help-1" : null));
 
     const helped = await connectClient(service.currentPort!, {
       Authorization: "Bearer help-token",
@@ -1120,6 +1121,7 @@ describe("McpServerService", () => {
     ]);
     service.setHelpTokenValidator((token) => (tokenToWcId.has(token) ? "core" : false));
     service.setHelpSessionWebContentsResolver((token) => tokenToWcId.get(token) ?? null);
+    service.setHelpSessionIdResolver((token) => (tokenToWcId.has(token) ? `help-${token}` : null));
 
     const a = await connectClient(service.currentPort!, { Authorization: "Bearer help-A" });
     transports.push(a.transport);
@@ -1241,6 +1243,7 @@ describe("McpServerService", () => {
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );
+    service.setHelpSessionIdResolver((token) => (token === "help-A" ? "help-1" : null));
 
     const a = await connectClient(service.currentPort!, { Authorization: "Bearer help-A" });
     transports.push(a.transport);
@@ -1301,6 +1304,7 @@ describe("McpServerService", () => {
     service.setHelpSessionWebContentsResolver((token) =>
       token === "help-A" ? winA.webContents.id : null
     );
+    service.setHelpSessionIdResolver((token) => (token === "help-A" ? "help-1" : null));
 
     const { client, transport } = await connectClient(
       service.currentPort!,

@@ -354,13 +354,15 @@ function storageOutageToast(
   status: DecisionsStatus
 ): MainProcessToastPayload | null {
   if (status.state !== "not-connected" || status.problem !== "storage") return null;
-  const forSpace = isDiskSpaceFault(running.getStore()?.faultReason() ?? null);
+  const reason = running.getStore()?.faultReason() ?? null;
   return {
     type: "warning",
     title: "Decisions connection lost",
-    message: forSpace
+    message: isDiskSpaceFault(reason)
       ? "The local Decisions database stopped accepting writes while disk space ran low, so agents can't ask you questions through Decisions. It tries again by itself once there's space; if it stays disconnected, turn Decisions off and on in Settings."
-      : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
+      : reason === "storage-busy"
+        ? "The local Decisions database was too busy to accept a write, so agents can't ask you questions through Decisions. It tries again by itself shortly; if it stays disconnected, turn Decisions off and on in Settings."
+        : "The local Decisions database isn't accepting writes, so agents can't ask you questions through Decisions. Turn Decisions off and on in Settings to try again.",
     rateLimitKey: "decisions-storage",
     rateLimitLabel: "Decisions",
     replaceKey: "decisions-storage",

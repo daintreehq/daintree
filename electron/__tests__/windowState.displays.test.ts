@@ -748,6 +748,51 @@ describe("when that display is absent at launch", () => {
   });
 });
 
+describe("a window reopened full screen, for the background-reveal restack", () => {
+  async function reopen(isFullScreen: boolean) {
+    fakes.store.state[CANOPY_BOUNDS_KEY] = {
+      x: 100,
+      y: 100,
+      width: 1000,
+      height: 700,
+      isMaximized: false,
+      isFullScreen,
+    };
+    vi.resetModules();
+    windowState = await import("../windowState.js");
+    const entry = await import("../window/fullScreenEntry.js");
+    const win = windowState.createSeparateWindowWithState(
+      { show: false },
+      CANOPY_BOUNDS_KEY,
+      CANOPY_SIZE
+    ) as unknown as FakeWindow;
+    return { win, entering: () => entry.isInOrEnteringNativeFullScreen(win as never) };
+  }
+
+  it("counts as going full screen from creation, through the transition, until it leaves", async () => {
+    fakes.FakeWindow.asyncFullScreen = true;
+    const { win, entering } = await reopen(true);
+    expect(entering()).toBe(true);
+
+    win.emit("show");
+    // macOS still reports it windowed: only the mark says where it is headed.
+    expect(win.isFullScreen()).toBe(false);
+    expect(entering()).toBe(true);
+
+    win.finishFullScreen();
+    expect(entering()).toBe(true);
+
+    win.setFullScreen(false);
+    expect(entering()).toBe(false);
+  });
+
+  it("never counts a window reopened windowed", async () => {
+    const { win, entering } = await reopen(false);
+    win.emit("show");
+    expect(entering()).toBe(false);
+  });
+});
+
 describe("a save before the window is revealed", () => {
   it("keeps a full-screen window's mode and display", async () => {
     await leftOnIpad("full screen");

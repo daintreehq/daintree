@@ -26,6 +26,8 @@ function resetTripped() {
   usePRCircuitBreakerStore.setState({ tripped: false });
 }
 
+const PAUSED = "PR detection paused — retrying";
+
 describe("PRDetectionPausedIndicator", () => {
   beforeEach(resetTripped);
 
@@ -34,38 +36,57 @@ describe("PRDetectionPausedIndicator", () => {
       usePRCircuitBreakerStore.setState({ tripped: true });
     });
 
-    it("renders the status trigger with CloudOff icon", () => {
+    it("renders a focusable status slot with the CloudOff icon", () => {
       const { container } = renderIndicator();
 
-      const status = screen.getByRole("status");
-      expect(status.getAttribute("aria-label")).toBe("PR detection paused — retrying");
-      expect(status.getAttribute("aria-live")).toBe("polite");
+      const slot = screen.getByRole("button", { name: PAUSED });
+      expect(slot.hasAttribute("data-toolbar-item")).toBe(true);
       expect(container.querySelector(".lucide-cloud-off")).toBeTruthy();
+    });
+
+    it("announces the pause as live-region text", () => {
+      renderIndicator();
+
+      const status = screen.getByRole("status");
+      expect(status.getAttribute("aria-live")).toBe("polite");
+      expect(status.textContent).toBe(PAUSED);
     });
 
     it("renders tooltip content when open", () => {
       renderIndicator(true);
 
-      expect(screen.getAllByText("PR detection paused — retrying").length).toBeGreaterThan(0);
+      expect(screen.getAllByText(PAUSED).length).toBeGreaterThan(0);
     });
 
     it("keeps the indicator at normal opacity (no dimming classes)", () => {
       renderIndicator();
 
-      const status = screen.getByRole("status");
-      expect(status.className).not.toMatch(/opacity-/);
+      expect(screen.getByRole("button", { name: PAUSED }).className).not.toMatch(/opacity-/);
+    });
+
+    it("announces without a slot when another slot stands for the fault", () => {
+      render(
+        <TooltipProvider>
+          <PRDetectionPausedIndicator showSlot={false} />
+        </TooltipProvider>
+      );
+
+      expect(screen.queryByRole("button", { name: PAUSED })).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe(PAUSED);
     });
   });
 
   describe("state toggling", () => {
-    it("mounts when tripped flips true and unmounts when false", () => {
+    it("keeps the live region mounted and shows the slot only while tripped", () => {
       const { rerender, unmount } = render(
         <TooltipProvider>
           <PRDetectionPausedIndicator />
         </TooltipProvider>
       );
 
-      expect(screen.queryByRole("status")).toBeNull();
+      // Mounted empty first, so the pause is a change the region announces.
+      expect(screen.getByRole("status").textContent).toBe("");
+      expect(screen.queryByRole("button", { name: PAUSED })).toBeNull();
 
       usePRCircuitBreakerStore.setState({ tripped: true });
       rerender(
@@ -73,7 +94,8 @@ describe("PRDetectionPausedIndicator", () => {
           <PRDetectionPausedIndicator />
         </TooltipProvider>
       );
-      expect(screen.getByRole("status")).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe(PAUSED);
+      expect(screen.getByRole("button", { name: PAUSED })).toBeTruthy();
 
       usePRCircuitBreakerStore.setState({ tripped: false });
       rerender(
@@ -81,7 +103,8 @@ describe("PRDetectionPausedIndicator", () => {
           <PRDetectionPausedIndicator />
         </TooltipProvider>
       );
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+      expect(screen.queryByRole("button", { name: PAUSED })).toBeNull();
 
       unmount();
     });

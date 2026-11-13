@@ -13,6 +13,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 interface SavedFleetsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  onCloseComplete?: () => void;
   restoreFocusTo?: RestoreFocusTarget;
 }
 
@@ -26,6 +27,7 @@ interface SavedFleetsDialogProps {
 export function SavedFleetsDialog({
   isOpen,
   onClose,
+  onCloseComplete,
   restoreFocusTo,
 }: SavedFleetsDialogProps): ReactElement {
   const { snapshotUsable, snapshotStale, rules, countById } = useSavedFleets();
@@ -128,6 +130,7 @@ export function SavedFleetsDialog({
       onClose={onClose}
       size="md"
       restoreFocusTo={restoreFocusTo}
+      onCloseComplete={onCloseComplete}
       data-testid="fleet-saved-manage-dialog"
     >
       <AppDialog.Header>

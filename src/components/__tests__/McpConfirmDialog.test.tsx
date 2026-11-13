@@ -2108,10 +2108,62 @@ describe("McpConfirmDialog", () => {
       expect(text).toContain("Follows Claude's skip permission prompts setting (off)");
     });
 
+    // The fourth mode's actions are chosen in Settings (#16752); the dialog
+    // names it in full to a screen reader and says how many it hands over.
+    it("shows ask-except with the number of actions it hands over", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({
+        daintreeConfirmations: "ask-except",
+        daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+      });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(segment("Ask, except for…").getAttribute("aria-checked")).toBe("true");
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Ask, except for 2 actions");
+      expect(text).toContain("Choose the actions that don't ask in Settings > Daintree Assistant");
+    });
+
+    it("saves ask-except when chosen, and offers it only when the answer carries the list", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({
+        daintreeConfirmations: "never-ask",
+        daintreeConfirmationsExcept: [],
+      });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      await act(async () => {
+        fireEvent.click(segment("Ask, except for…"));
+      });
+      expect(helpAssistantApi.setSettings).toHaveBeenCalledWith({
+        daintreeConfirmations: "ask-except",
+      });
+    });
+
+    it("still shows ask-except as chosen when it is the stored mode, list or not", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: "ask-except" });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const chosen = segment("Ask, except for…");
+      expect(chosen.getAttribute("aria-checked")).toBe("true");
+      expect(chosen.tabIndex).toBe(0);
+    });
+
+    it("leaves ask-except out for a Daintree too old to keep it", async () => {
+      helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: "never-ask" });
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(screen.queryByRole("radio", { name: "Ask, except for…" })).toBeNull();
+      expect(segment("Never ask").getAttribute("aria-checked")).toBe("true");
+    });
+
     it.each([
       ["inherit", true, "Follow agent setting · doesn't ask"],
       ["always-ask", true, "Always ask · asks"],
       ["never-ask", false, "Never ask · doesn't ask"],
+      ["ask-except", true, "Ask, except for… · asks"],
     ] as const)(
       "states what %s resolves to with the global setting %s",
       async (preference, globalSkip, expected) => {

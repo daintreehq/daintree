@@ -363,7 +363,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#F6F0E7",
     "toolbar-stats-border": "rgba(207,199,184,0.7)",
     "toolbar-stats-divider": "rgba(207,199,184,0.7)",
-    "toolbar-stats-hover-bg": "#F9F4ED",
     // Filter rail sits flush on the field; the raised search input carries it.
     "worktree-filter-bar-bg": "#F2E9DA",
     // Active quick-state tab lifts to white under its inset underline.

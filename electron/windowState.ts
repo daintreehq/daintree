@@ -5,6 +5,7 @@ import {
   isSeparateBoundsKey,
   scratchBoundsKey,
 } from "./window/windowBoundsKeys.js";
+import { markEnteringFullScreen } from "./window/fullScreenEntry.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
@@ -678,6 +679,7 @@ function createWindowAtSavedBounds(
   let fullScreenPending = false;
   if (windowState.isFullScreen) {
     if (options.show === false) {
+      markEnteringFullScreen(win);
       fullScreenPending = true;
       win.once("enter-full-screen", () => {
         fullScreenPending = false;

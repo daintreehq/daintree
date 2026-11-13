@@ -383,6 +383,12 @@ export async function runAgentLaunch(
       ),
     getCliDetail: (id) => deps.agents.getCliDetail(id),
     getClipboardDirectory: async () => agentClipboardDirectory(deps.hostPlatform.tmpDir, false),
+    getModelCatalog: (id) =>
+      deps.invoke<ResolvedModelCatalog | null>(
+        project.id,
+        CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+        [id]
+      ),
     // No `onStalePreset`: a saved preset that no longer exists is still fallen
     // back from here, and clearing it is left to the next launch from a view,
     // whose settings store owns that write and tells every window about it.
@@ -536,6 +542,11 @@ export async function spawnHostAssistant(
     /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
     resumeAgentSessionId?: string;
     /**
+     * Refuse rather than open an empty conversation under that id when it was
+     * never written (#16019, #16753).
+     */
+    exactResume?: true;
+    /**
      * A schedule's run (#16169): the prompt gets the run's handback
      * instruction, and the spawn handler registers the run from this spawn.
      */
@@ -619,6 +630,7 @@ export async function spawnHostAssistant(
         launchAgentId: agentId,
         agentLaunchFlags: plan.launchFlags,
         agentSessionId: spec.resumeAgentSessionId ?? plan.assignedSessionId,
+        ...(spec.resumeAgentSessionId && spec.exactResume ? { exactResume: true } : {}),
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,

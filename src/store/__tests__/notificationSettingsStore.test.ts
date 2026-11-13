@@ -123,6 +123,28 @@ describe("notificationSettingsStore — osDndActive", () => {
     expect(useNotificationSettingsStore.getState().osDndActive).toBe(true);
   });
 
+  it("preserves a push that lands while main is still awaiting its initial DND probe", async () => {
+    // Main answers os-dnd:get-state only once its async plutil probe settles,
+    // so a live transition can be pushed while that reply is outstanding.
+    let resolveOsDnd: ((v: boolean) => void) | undefined;
+    getSettings.mockResolvedValue({ enabled: true });
+    getOsDndState.mockReturnValue(
+      new Promise<boolean>((r) => {
+        resolveOsDnd = r;
+      })
+    );
+
+    const hydratePromise = useNotificationSettingsStore.getState().hydrate();
+    await vi.waitFor(() => expect(getOsDndState).toHaveBeenCalled());
+
+    useNotificationSettingsStore.getState().setOsDndActive(false);
+    resolveOsDnd?.(true);
+    await hydratePromise;
+
+    expect(useNotificationSettingsStore.getState().osDndActive).toBe(false);
+    expect(useNotificationSettingsStore.getState().hydrated).toBe(true);
+  });
+
   it("treats an IPC failure as a no-op — osDndActive stays at its prior value", async () => {
     getSettings.mockResolvedValue({ enabled: true });
     getOsDndState.mockRejectedValue(new Error("ipc down"));

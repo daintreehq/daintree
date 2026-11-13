@@ -293,7 +293,7 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     const block = readForcedColorsBlocks(readToolbarCss());
     // All pip selectors must share a rule whose body sets background-color.
     expect(block).toMatch(
-      /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
+      /\.toolbar-badge\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
     );
   });
 

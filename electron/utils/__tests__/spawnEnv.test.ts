@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildInstallEnv, buildProbeEnv } from "../spawnEnv.js";
+import { buildInstallEnv, buildNetworkProbeEnv, buildProbeEnv } from "../spawnEnv.js";
 
 const originalEnv = process.env;
 const originalPlatform = process.platform;
@@ -207,6 +207,48 @@ describe("spawnEnv", () => {
       setEnv({});
       const env = buildInstallEnv();
       expect(env.HOME).toBeTruthy();
+    });
+  });
+
+  describe("buildNetworkProbeEnv", () => {
+    it("passes the named credential vars and the proxy and CA keys", () => {
+      setEnv({
+        PATH: "/usr/bin",
+        HOME: "/home/u",
+        https_proxy: "http://proxy:8080",
+        NODE_EXTRA_CA_CERTS: "/etc/ssl/corp-ca.pem",
+        GOOGLE_API_KEY: "google-key",
+        ACME_AGENT_TOKEN: "acme-token",
+      });
+      const env = buildNetworkProbeEnv(["GOOGLE_API_KEY", "ACME_AGENT_TOKEN"]);
+      expect(env.ACME_AGENT_TOKEN).toBe("acme-token");
+      expect(env.PATH).toBe("/usr/bin");
+      expect(env.HOME).toBe("/home/u");
+      expect(env.https_proxy).toBe("http://proxy:8080");
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp-ca.pem");
+      expect(env.GOOGLE_API_KEY).toBe("google-key");
+      expect(env.TERM).toBe("dumb");
+    });
+
+    it("keeps out every credential the caller didn't name", () => {
+      setEnv({
+        HOME: "/h",
+        GOOGLE_API_KEY: "google-key",
+        OPENAI_API_KEY: "sk-x",
+        GITHUB_TOKEN: "ghp_x",
+        NODE_OPTIONS: "--require /tmp/x.js",
+      });
+      const named = buildNetworkProbeEnv(["GOOGLE_API_KEY"]);
+      expect(named.OPENAI_API_KEY).toBeUndefined();
+      expect(named.GITHUB_TOKEN).toBeUndefined();
+      expect(named.NODE_OPTIONS).toBeUndefined();
+      expect(buildNetworkProbeEnv().GOOGLE_API_KEY).toBeUndefined();
+    });
+
+    it("matches a declared credential var case-insensitively", () => {
+      setEnv({ HOME: "/h", google_api_key: "google-key", ACME_AGENT_TOKEN: "acme-token" });
+      expect(buildNetworkProbeEnv(["GOOGLE_API_KEY"]).google_api_key).toBe("google-key");
+      expect(buildNetworkProbeEnv(["acme_agent_token"]).ACME_AGENT_TOKEN).toBe("acme-token");
     });
   });
 });

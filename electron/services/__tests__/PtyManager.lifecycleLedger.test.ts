@@ -20,6 +20,7 @@ const shared = vi.hoisted(() => ({
   agentEmitKilled: vi.fn(),
   disposeSerializer: vi.fn(),
   deleteSessionFile: vi.fn(),
+  flushPendingSessionWritesSync: vi.fn(),
   getGitBranch: vi.fn(),
 }));
 
@@ -216,6 +217,7 @@ vi.mock("../pty/TerminalSerializerService.js", () => ({
 
 vi.mock("../pty/terminalSessionPersistence.js", () => ({
   deleteSessionFile: shared.deleteSessionFile,
+  flushPendingSessionWritesSync: shared.flushPendingSessionWritesSync,
 }));
 
 vi.mock("../../utils/gitUtils.js", () => ({
@@ -299,7 +301,7 @@ describe("PtyManager lifecycle ledger", () => {
     expect(manager.getTerminal("t1")?.launchGeneration).toBe(2);
 
     second!.callbacks.onExit("t1", 0);
-    expect(exits).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, 2, undefined, 2_000);
+    expect(exits).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, 2, undefined, 2_000, false);
     expect(superseded).toHaveBeenCalledTimes(1);
   });
 

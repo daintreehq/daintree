@@ -189,6 +189,8 @@ vi.mock("@/config/agents", () => ({
       };
     if (id === "codex")
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
+    if (id === "antigravity")
+      return { name: "Antigravity", supports: { permissionBypass: true, tier: "stable" } };
     // Assistant-wired but with no bypass mechanism of any kind — the shape a
     // user-defined agent takes.
     if (id === "byoa")
@@ -633,6 +635,110 @@ describe("DaintreeAssistantSettingsTab", () => {
       expect(container.textContent).not.toContain("unless an automation grant covers them");
     });
 
+    it("lists the actions it can hand over under ask-except, the rest greyed with the reason (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: true,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "ask-except",
+          daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+        }),
+        setSettings,
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Delete a worktree it created");
+      expect(container.textContent).toContain(
+        "except those ticked under Daintree confirmations below"
+      );
+
+      const box = (label: string) => {
+        const found = Array.from(container.querySelectorAll('[role="checkbox"]')).find((el) =>
+          el.closest("[data-settings-reset-scope]")?.textContent?.includes(label)
+        );
+        if (!found) throw new Error(`expected a checkbox for ${label}`);
+        return found as HTMLElement;
+      };
+      expect(box("Delete a worktree it created").getAttribute("aria-checked")).toBe("true");
+      expect(box("Delete any worktree").hasAttribute("disabled")).toBe(true);
+      expect(container.textContent).toContain("Always asks: it moves the window you're using");
+
+      fireEvent.click(box("Change a host's settings"));
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({
+          daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+        })
+      );
+    });
+
+    it("offers ask-except to a host whose answer carries the list, and saves it (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+          daintreeConfirmationsExcept: [],
+        }),
+        setSettings,
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      const combobox = screen.getByRole("combobox", { name: "Daintree confirmations" });
+      await waitFor(() =>
+        expect(within(combobox).queryByRole("option", { name: "Ask, except for…" })).toBeTruthy()
+      );
+
+      fireEvent.change(combobox, { target: { value: "ask-except" } });
+
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({ daintreeConfirmations: "ask-except" })
+      );
+      await waitForContent(container, "Delete a worktree it created");
+    });
+
+    it("doesn't offer ask-except to a host whose answer has no list (#16752)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          customArgs: "",
+          daintreeConfirmations: "always-ask",
+        }),
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      const select = within(screen.getByRole("combobox", { name: "Daintree confirmations" }));
+      await waitFor(() => expect(select.queryByRole("option", { name: "Never ask" })).toBeTruthy());
+      expect(select.queryByRole("option", { name: "Ask, except for…" })).toBeNull();
+    });
+
     it("keeps the dialog copy while the assistant is set to always ask", async () => {
       helpPanelState.preferredAgentId = "claude";
       useAgentSettingsStore.setState({
@@ -687,6 +793,32 @@ describe("DaintreeAssistantSettingsTab", () => {
     // Scoped to Codex's OWN approvals (#12119): an unqualified "without
     // approval" contradicts the host-confirmation exception appended below it.
     expect(container.textContent).toContain("without its own approval prompts");
+  });
+
+  it("names Antigravity and its flag in the bypass row once it's the selected agent (#16815)", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "antigravity", "codex"]);
+    helpPanelState.preferredAgentId = "antigravity";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Bypass Antigravity permission prompts");
+
+    const select = container.querySelector("select[aria-label='Agent']");
+    if (!(select instanceof HTMLSelectElement)) throw new Error("select not found");
+    expect(Array.from(select.options).map((o) => o.textContent ?? "")).toContain("Antigravity");
+    expect(container.textContent).toContain("(passes --dangerously-skip-permissions)");
+    expect(container.textContent).not.toContain("Bypass Claude permission prompts");
+    expect(container.textContent).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+
+    fireEvent.click(
+      screen.getByLabelText("Bypass Antigravity permission prompts during help sessions")
+    );
+    // Shell commands and edits outside the folder are the blast radius, not just MCP calls.
+    await waitForContent(container, "runs shell commands, edits files and calls MCP tools");
+    expect(container.textContent).not.toContain("built-in (Bash, Write)");
   });
 
   // #11907: with the permission gate off, the tool set carries most of the

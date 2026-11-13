@@ -2,7 +2,6 @@ import { useCallback, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
-import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { PluginPanelToolbar } from "@/components/Panel/PluginPanelToolbar";
 import { PluginViewLoadError } from "@/components/Plugin/PluginViewLoadError";
@@ -13,6 +12,11 @@ import {
   setPanelTitleThroughAccessor,
 } from "@/store/storeAccessors";
 import { decodePanelExtensionState } from "@shared/utils/panelExtensionState";
+import { lazyWithPreload, usePreloadedComponent } from "@/lib/lazyWithPreload";
+
+// The plugin-view loader stays off the first-render path (#16802): vanilla
+// Daintree registers no plugin panel view, so it never loads this chunk.
+const loadPluginViewContent = () => import("@/components/Plugin/PluginViewContent");
 
 /**
  * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
@@ -69,22 +73,28 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     };
   }
 
+  // Re-bound inside the guarded region so the narrowing survives into the
+  // component closure below, where the misconfigured branch is already gone.
+  const ownerPluginId: string = pluginId;
+
   // Created once per host, at factory-construction scope. Constructing it inside
   // `PluginViewHost` would produce a new component type per render, remounting
   // the plugin view and restarting its import every time a panel prop changed.
   // (`useMemo` with a stable dep array would survive ordinary rerenders, but it
   // ties the view's identity to a hook that remounts it whenever a dep changes;
-  // the construction belongs outside the component entirely.)
-  // Re-bound inside the guarded region so the narrowing survives into the
-  // component closure below, where the misconfigured branch is already gone.
-  const ownerPluginId: string = pluginId;
-
-  const PluginViewContent = makePluginViewContent({
-    id: kindId,
-    name: displayName,
-    componentPath,
-    extensionId: pluginId,
-  });
+  // the construction belongs outside the component entirely.) The loader's
+  // chunk starts loading here, when a plugin registers the kind, so a panel
+  // opened later finds it ready; the content is made once, when it lands.
+  const PluginViewContent = lazyWithPreload(loadPluginViewContent, (m) =>
+    m.makePluginViewContent({
+      id: kindId,
+      name: displayName,
+      componentPath,
+      extensionId: pluginId,
+    })
+  );
+  // A failed load is shown in the panel when it renders; it retries there.
+  PluginViewContent.preload().catch(() => {});
 
   function PluginViewHost({
     extensionState,
@@ -92,6 +102,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     ...panelProps
   }: PluginViewHostProps) {
     const { onClose } = panelProps;
+    const content = usePreloadedComponent(PluginViewContent);
     // Refuse a bag written by a NEWER build of this plugin rather than hand the
     // view state it will misread and then overwrite (#12280). The record and
     // its `extensionState` are untouched by this — reinstalling the newer build
@@ -184,7 +195,21 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
-        {decoded.ok ? (
+        {!decoded.ok ? (
+          <PluginViewStateVersionError
+            pluginId={ownerPluginId}
+            displayName={displayName}
+            persistedVersion={decoded.persistedVersion}
+            declaredVersion={decoded.declaredVersion}
+          />
+        ) : content.status === "failed" ? (
+          <PluginViewLoadError
+            pluginId={ownerPluginId}
+            displayName={displayName}
+            message="Daintree couldn't load its plugin view host. Restart Daintree to try again."
+            diagnostic={String(content.error)}
+          />
+        ) : content.status === "ready" ? (
           <PluginViewContent
             // Keyed by panel: a tab group reuses this host when the active tab
             // switches between two panels of one kind, and everything the
@@ -206,14 +231,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             offerToolbar={panelProps.location !== "dialog"}
             setPanelTitle={setPanelTitle}
           />
-        ) : (
-          <PluginViewStateVersionError
-            pluginId={ownerPluginId}
-            displayName={displayName}
-            persistedVersion={decoded.persistedVersion}
-            declaredVersion={decoded.declaredVersion}
-          />
-        )}
+        ) : null}
       </ContentPanel>
     );
   }

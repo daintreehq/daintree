@@ -1,7 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import { PaneState } from "@/components/ui/PaneState";
-import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
+import { LazyPluginHostedView } from "@/components/Plugin/LazyPluginHostedView";
 import { usePanelKindRegistry } from "@/hooks/useRenderableSurfaceClaim";
 import {
   usePluginToolbarPopoverStore,
@@ -228,7 +228,7 @@ function PluginToolbarPopoverView({
     );
   }
   return (
-    <PluginHostedView
+    <LazyPluginHostedView
       source={{ from: "panel-kind", config: kind }}
       host="popover"
       mountId={`toolbar-popover:${config.id}`}

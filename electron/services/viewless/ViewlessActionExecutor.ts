@@ -237,6 +237,12 @@ export interface ViewlessActionRequest {
    * refused rather than run.
    */
   confirmed: boolean;
+  /**
+   * Who is asking: an agent (MCP, the default) or a Shell's installed plugin
+   * reaching this host (#16767). A plugin's call is held to a plugin
+   * dispatch's tiers, has no approval to run under, and is never asked about.
+   */
+  source?: "agent" | "plugin";
   /** An agent pane's launch-time context, which names its own worktree. */
   context?: ActionContext;
   /** How the dispatching MCP session authenticated; decides the spawn's provenance. */
@@ -571,8 +577,24 @@ async function runWorktreeCreate(
  * never confirm-gated on one side and not the other.
  */
 function admit(request: ViewlessActionRequest, danger: ActionDanger): ActionDispatchResult | null {
-  const effective = resolveEffectiveActionDanger(request.actionId, danger, "agent", request.args);
-  if (effective === "safe" || request.confirmed) return null;
+  const plugin = request.source === "plugin";
+  const effective = resolveEffectiveActionDanger(
+    request.actionId,
+    danger,
+    plugin ? "plugin" : "agent",
+    request.args
+  );
+  if (effective === "safe") return null;
+  // Plugins have no confirm path, here as in a view: no approval stands in.
+  if (plugin) {
+    return failure(
+      effective === "restricted" ? "RESTRICTED" : "CONFIRMATION_REQUIRED",
+      `Action '${request.actionId}' ${
+        effective === "restricted" ? "is restricted" : "requires confirmation"
+      }, which a plugin can't get. The action was not run.`
+    );
+  }
+  if (request.confirmed) return null;
   const launchArg =
     request.actionId === TERMINAL_LAUNCH_ACTION_ID
       ? readDispatchTerminalCommand(request.args) !== undefined
@@ -623,6 +645,7 @@ export async function executeViewlessAction(
   let approvedUntil: number | undefined;
   const refusal = admit(request, entry.danger);
   if (refusal) {
+    if (request.source === "plugin") return refusal;
     const asked = await askForApproval(request, project, deps);
     if (asked === null) return refusal;
     if (asked.kind === "answered") return asked.result;

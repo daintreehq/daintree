@@ -29,6 +29,16 @@ const BUILT_IN_THEMES = path.join(REPO_ROOT, "shared/theme/builtInThemes");
 const SOURCE_ROOTS = ["src", "plugins"];
 const SKIP_DIRS = new Set(["node_modules", "dist", "__tests__", "__mocks__"]);
 
+/** The named type steps under Tailwind's `text-xs`, largest first. */
+const SUB_XS_TEXT_STEPS = [
+  "--text-2xs",
+  "--text-3xs",
+  "--text-4xs",
+  "--text-5xs",
+  "--text-6xs",
+  "--text-7xs",
+];
+
 /** Which scale a value is supposed to be following. */
 type Scale = "type" | "radius";
 
@@ -157,39 +167,6 @@ const EXCEPTIONS: {
   reason: string;
   prefix?: boolean;
 }[] = [
-  {
-    file: "src/components/Setup/AgentSetupWizard.tsx",
-    match: "text-[6px]",
-    count: 3,
-    reason:
-      "Miniature of the app UI inside the setup wizard — the type is scenery at a fixed miniature ratio, not text anyone reads, so it must not track the real type scale",
-  },
-  {
-    file: "src/components/Setup/AgentSetupWizard.tsx",
-    match: "text-[7px]",
-    count: 2,
-    reason: "Same miniature; the 7px rows are the mock terminal body against the 6px chrome",
-  },
-  {
-    file: "src/components/Pulse/PulseHeatmap.tsx",
-    match: "rounded-[2px]",
-    count: 1,
-    reason:
-      "Heat cells read as squares on purpose (#2645); pinned by pulseContrast.test.ts, and a theme radius would round them into dots",
-  },
-  {
-    file: "src/components/Pulse/ProjectPulseCard.tsx",
-    match: "rounded-[2px]",
-    count: 2,
-    reason: "Same heat-cell geometry as PulseHeatmap, plus its loading skeleton",
-  },
-  {
-    file: "src/components/Terminal/VoiceInputButton.tsx",
-    match: "rounded-[1.5px]",
-    count: 1,
-    reason:
-      "An 8x8px status mark: rounded-full would make it a circle and any scale step would round it past recognition",
-  },
   {
     file: "src/styles/host/base.css",
     match: "border-radius: 3px",
@@ -387,8 +364,8 @@ describe("numeric scales contract (#12033)", () => {
       if (!exception) {
         offenders.push(
           `  ${hit.file}:${hit.lines.join(",")} — ${hit.token}\n` +
-            `    Not on a scale. Use text-4xs/3xs/2xs/xs/sm (or var(--text-*)) for type and\n` +
-            `    var(--radius-xs…4xl) / rounded-xs…4xl for radius. If it genuinely cannot follow\n` +
+            `    Not on a scale. Use text-7xs…2xs/xs/sm (or var(--text-*)) for type and\n` +
+            `    var(--radius-3xs…4xl) / rounded-3xs…4xl for radius. If it genuinely cannot follow\n` +
             `    the scale, add an EXCEPTIONS entry saying why — do not widen an existing one.`
         );
         continue;
@@ -449,13 +426,12 @@ describe("numeric scales contract (#12033)", () => {
     // These steps replace bare arbitrary values that only ever set font-size, so
     // a paired leading here would reflow hundreds of call sites that inherit it.
     const text = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--text-");
-    const steps = ["--text-2xs", "--text-3xs", "--text-4xs"];
-    expect(steps.filter((step) => !text.has(step))).toEqual([]);
-    expect(steps.filter((step) => text.has(`${step}--line-height`))).toEqual([]);
+    expect(SUB_XS_TEXT_STEPS.filter((step) => !text.has(step))).toEqual([]);
+    expect(SUB_XS_TEXT_STEPS.filter((step) => text.has(`${step}--line-height`))).toEqual([]);
   });
 
   it("keeps the sub-xs steps a descending scale under text-xs", () => {
-    // Names alone would let the three steps be equal, reversed, or arbitrary.
+    // Names alone would let the steps be equal, reversed, or arbitrary.
     // Comparing them to each other and to Tailwind's own floor tests the shape of
     // the scale without copying any of its values into the test.
     const rem = (value: string | undefined) => {
@@ -465,7 +441,7 @@ describe("numeric scales contract (#12033)", () => {
     const ours = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--text-");
     const ladder = [
       rem(readDeclarationsFrom(readCss(TAILWIND_THEME_CSS), "--text-xs").get("--text-xs")),
-      ...["--text-2xs", "--text-3xs", "--text-4xs"].map((step) => rem(ours.get(step))),
+      ...SUB_XS_TEXT_STEPS.map((step) => rem(ours.get(step))),
     ];
 
     expect(ladder.filter(Number.isNaN)).toEqual([]);

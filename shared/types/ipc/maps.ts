@@ -1,4 +1,4 @@
-import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
+import type { GitCommitResult, GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type {
   VoiceInputError,
@@ -970,7 +970,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "git:commit": {
     args: [payload: { cwd: string; message: string }];
-    result: { hash: string; summary: string };
+    result: GitCommitResult;
   };
   "git:push": {
     args: [payload: GitPushPayload];

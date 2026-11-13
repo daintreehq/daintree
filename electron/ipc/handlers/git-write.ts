@@ -25,6 +25,7 @@ import type {
   ConflictedFileEntry,
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
+  GitCommitResult,
   GitPushCommitPreview,
   GitPushReview,
   GitRebaseCommitPreview,
@@ -840,6 +841,36 @@ async function readOid(
 }
 
 /**
+ * The full OID and parents of the commit `git commit` just reported.
+ *
+ * Read from the hash git printed, never from `HEAD`: an agent commit landing
+ * right after this one would move `HEAD`, and a push pinned to that would
+ * publish a commit nobody approved. git prints a prefix unique when it was
+ * printed, so it names exactly this commit; on any failure to read it back
+ * there is nothing to pin to, and the caller is told so rather than handed a
+ * guess. A detached `HEAD` prints `HEAD <hash>`, so only the last word counts.
+ */
+async function readCommitted(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  printedHash: string
+): Promise<Pick<GitCommitResult, "oid" | "parentOids">> {
+  const unread = { oid: null, parentOids: [] };
+  const abbrev = printedHash.trim().split(/\s+/).pop() ?? "";
+  if (!/^[0-9a-f]{4,64}$/i.test(abbrev)) return unread;
+  try {
+    const out = await git.raw(["rev-list", "--parents", "--max-count=1", `${abbrev}^{commit}`]);
+    const oids = out.trim().split(/\s+/);
+    // Every word an OID, or none trusted: a parent list read short would let a
+    // merge commit pass for one made on top of the reviewed tip alone.
+    if (!oids[0] || !oids.every((oid) => FULL_OID_PATTERN.test(oid))) return unread;
+    const [oid, ...parentOids] = oids.map((o) => o.toLowerCase());
+    return { oid, parentOids };
+  } catch {
+    return unread;
+  }
+}
+
+/**
  * Refuse the write if anything moved between the preview and the approval.
  *
  * The confirm dialog is a promise about specific commits: *these* get replayed,
@@ -1291,7 +1322,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const handleCommit = async (payload: {
     cwd: string;
     message: string;
-  }): Promise<{ hash: string; summary: string }> => {
+  }): Promise<GitCommitResult> => {
     checkRateLimit(CHANNELS.GIT_COMMIT, 5, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.message !== "string" || !payload.message.trim()) {
@@ -1304,9 +1335,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
       playSoundFireAndForget("git-commit");
     }
+    const hash = result.commit || "";
     return {
-      hash: result.commit || "",
+      hash,
       summary: `${result.summary.changes} changed, ${result.summary.insertions} insertions(+), ${result.summary.deletions} deletions(-)`,
+      ...(await readCommitted(git, hash)),
     };
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));

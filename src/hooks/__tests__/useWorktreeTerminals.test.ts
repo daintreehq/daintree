@@ -4,9 +4,15 @@ import { renderHook, act } from "@testing-library/react";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { bandForRun, type FleetBand } from "@/lib/fleetAttention";
-import { aggregateAgentStates, useWorktreeTerminals } from "../useWorktreeTerminals";
+import {
+  aggregateAgentStates,
+  countsFromKey,
+  countsKey,
+  useWorktreeTerminals,
+  type WorktreeTerminalCounts,
+} from "../useWorktreeTerminals";
 
 // #6650 — Active agentState (working/waiting/directing) credited to counts
 // even when agent identity hasn't committed yet, so collapsed worktree badges
@@ -215,6 +221,160 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(result.current.counts.byState.completed).toBe(1);
       // The dominant state follows the observation, not the read state.
       expect(result.current.dominantAgentState).toBe("waiting");
+    });
+  });
+
+  describe("counts key (#16800)", () => {
+    it("round-trips every field to its own slot", () => {
+      const counts: WorktreeTerminalCounts = {
+        total: 1,
+        byState: { idle: 2, working: 3, waiting: 4, directing: 5, completed: 6, exited: 7 },
+        unread: 8,
+        blocked: 9,
+      };
+      expect(countsFromKey(countsKey(counts))).toEqual(counts);
+    });
+  });
+
+  describe("useWorktreeTerminals under streaming panel patches (#16800)", () => {
+    afterEach(() => {
+      usePanelStore.setState({ panelsById: {}, panelIdsByWorktreeId: {} });
+      useFleetSnapshotStore.setState({ snapshot: null });
+      vi.useRealTimers();
+    });
+
+    const seed = (panels: PtyPanelData[]) => {
+      const panelsById: Record<string, PtyPanelData> = {};
+      const panelIdsByWorktreeId: Record<string, string[]> = {};
+      for (const panel of panels) {
+        panelsById[panel.id] = panel;
+        const key = panel.worktreeId ?? "__none__";
+        (panelIdsByWorktreeId[key] ??= []).push(panel.id);
+      }
+      usePanelStore.setState({ panelsById, panelIdsByWorktreeId });
+    };
+
+    // Patches a panel the way the status buffer does: a fresh object in a
+    // fresh `panelsById`, with every bucket array left as it was.
+    const patch = (id: string, fields: Partial<PtyPanelData>) =>
+      act(() => {
+        usePanelStore.setState((state) => {
+          const panel = state.panelsById[id];
+          if (!panel || !isPtyPanel(panel)) throw new Error(`no PTY panel ${id}`);
+          return { panelsById: { ...state.panelsById, [id]: { ...panel, ...fields } } };
+        });
+      });
+
+    const advance = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+
+    it("lands a count change within the debounce while a sibling streams patches", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "agent", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "streamer", worktreeId: "wt-s" }),
+      ]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      expect(result.current.counts.byState.working).toBe(1);
+
+      patch("agent", { agentState: "idle" });
+      advance(100);
+      patch("streamer", { activityHeadline: "line 1" });
+      advance(100);
+      patch("streamer", { activityHeadline: "line 2" });
+      advance(49);
+      expect(result.current.counts.byState.working).toBe(1);
+
+      advance(1);
+      expect(result.current.counts.byState.working).toBe(0);
+      expect(result.current.counts.byState.idle).toBe(2);
+
+      // The stream carrying on neither republishes nor rebuilds the counts.
+      const landed = result.current.counts;
+      for (let i = 3; i < 7; i++) {
+        patch("streamer", { activityHeadline: `line ${i}` });
+        advance(100);
+      }
+      expect(result.current.counts).toBe(landed);
+    });
+
+    it("keeps the counts object through a change that reverts before it lands", () => {
+      vi.useFakeTimers();
+      seed([term({ id: "a", worktreeId: "wt-s", agentState: "working" })]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current.counts;
+
+      patch("a", { agentState: "idle" });
+      advance(100);
+      patch("a", { agentState: "working" });
+      expect(result.current.counts).toBe(before);
+
+      // Stepped so a stale timer for the excursion would land on its own,
+      // not be batched away by the restoring one.
+      advance(149);
+      expect(result.current.counts).toBe(before);
+      advance(1);
+      expect(result.current.counts).toBe(before);
+      advance(100);
+      expect(result.current.counts).toBe(before);
+    });
+
+    it("keeps the counts object when a patch leaves every count unchanged", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "a", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "b", worktreeId: "wt-s" }),
+      ]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current;
+
+      patch("b", { activityHeadline: "compiling" });
+      advance(300);
+
+      // The panel changed, so the list carries it; the counts did not.
+      expect(result.current.terminals).not.toBe(before.terminals);
+      expect(result.current.terminals[1]?.activityHeadline).toBe("compiling");
+      expect(result.current.counts).toBe(before.counts);
+    });
+
+    it("hands back a fresh counts object once a count does change", () => {
+      vi.useFakeTimers();
+      seed([term({ id: "a", worktreeId: "wt-s", agentState: "working" })]);
+      const { result } = renderHook(() => useWorktreeTerminals("wt-s"));
+      const before = result.current.counts;
+
+      patch("a", { agentState: "idle" });
+      advance(300);
+
+      expect(result.current.counts).not.toBe(before);
+      expect(result.current.counts.byState.idle).toBe(1);
+      expect(before.byState.working).toBe(1);
+    });
+
+    it("neither re-renders nor rebuilds anything when another worktree's panel streams", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "mine", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "theirs", worktreeId: "wt-other" }),
+      ]);
+      let renders = 0;
+      const { result } = renderHook(() => {
+        renders += 1;
+        return useWorktreeTerminals("wt-s");
+      });
+      const before = result.current;
+      const rendersBefore = renders;
+
+      for (let i = 0; i < 3; i++) {
+        patch("theirs", { activityHeadline: `line ${i}` });
+        advance(100);
+      }
+
+      expect(renders).toBe(rendersBefore);
+      expect(result.current.terminals).toBe(before.terminals);
+      expect(result.current.counts).toBe(before.counts);
     });
   });
 });

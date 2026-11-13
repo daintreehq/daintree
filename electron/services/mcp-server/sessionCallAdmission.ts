@@ -6,6 +6,7 @@ import {
   TERMINAL_LAUNCH_ACTION_ID,
 } from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
+import type { AssistantConfirmationPolicy } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import {
   TIER_NOT_PERMITTED_CODE,
@@ -18,6 +19,7 @@ import {
   isWithheldFromRelaySession,
   isWithheldFromRelayDiscovery,
   isTierPermitted,
+  pluginActionMinimumTier,
   isApprovalRequestable,
   type TargetPolicySessionSnapshot,
   getReachableActionIds,
@@ -51,7 +53,7 @@ export function buildCallIntrospectionSurface(
   hostCallOffered: () => boolean,
   facts: CallFacts,
   call: CallerAdmission & {
-    readonly confirmationsSkipped: boolean;
+    readonly confirmationPolicy: AssistantConfirmationPolicy;
     readonly searchLimit: ReturnType<typeof readSearchLimit>;
     readonly listPaging: ReturnType<typeof readListPaging>;
   }
@@ -60,7 +62,7 @@ export function buildCallIntrospectionSurface(
   const {
     commandRunnerCaller,
     assistantControlCaller,
-    confirmationsSkipped,
+    confirmationPolicy,
     searchLimit,
     listPaging,
   } = call;
@@ -118,13 +120,16 @@ export function buildCallIntrospectionSurface(
       // policy record carries it rather than re-deriving it.
       rendererOwnedOrigin,
       relay: sessionSurface.relay === true,
+      // So an existence stub names nothing the global Assistant's runtime
+      // would refuse to send (#16764).
+      relayGlobal: sessionSurface.relayGlobal === true,
       paneApproval: sessionSurface.paneApproval === true,
       paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
       hostCall: hostCallOffered(),
       assistantControl: assistantControlCaller,
       perToolGrantedActionIds,
       nativeGrantedActionIds,
-      confirmationsSkipped,
+      confirmationPolicy,
     } satisfies TargetPolicySessionSnapshot,
   };
 }
@@ -319,8 +324,17 @@ export function admitToolCall(
     // tier — true of the gate, and useless to a caller deciding what to do
     // next (#12407). An unscoped tool with an owned twin names the twin,
     // which is the call that would have worked.
+    // A plugin's opted-in action is offered to the project Assistant alone
+    // (#16751); it reaches no terminal, so the reasons below don't fit it.
+    const pluginAssistantOnly =
+      !rendererOwnedOrigin &&
+      tier !== "external" &&
+      pluginActionMinimumTier(actionId, true) !== null;
     const withheldByOrigin =
-      !rendererOwnedOrigin && tier !== "external" && isTierPermitted(tier, actionId, true);
+      !pluginAssistantOnly &&
+      !rendererOwnedOrigin &&
+      tier !== "external" &&
+      isTierPermitted(tier, actionId, true);
     const ownedTwin = withheldByOrigin
       ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
       : undefined;
@@ -337,8 +351,11 @@ export function admitToolCall(
       kind: "return",
       result: buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
-        message:
-          ownedTwin !== undefined
+        message: pluginAssistantOnly
+          ? relayed
+            ? `action '${actionId}' is a plugin's, offered only to the assistant of the machine it runs on.`
+            : `action '${actionId}' is a plugin's, offered only to Daintree's own assistant.`
+          : ownedTwin !== undefined
             ? relayed
               ? `action '${actionId}' can reach any terminal or worktree on this host, so another machine's assistant uses '${ownedTwin}' here, which acts on what its calls created or started.`
               : `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`

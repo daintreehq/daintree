@@ -44,7 +44,7 @@ const CARD_SELECTED_CLASSES =
   "border-border-strong bg-overlay-subtle text-text-primary shadow-[var(--theme-shadow-ambient)]";
 
 const CARD_UNSELECTED_CLASSES =
-  "border-border-default bg-surface-canvas text-text-secondary hover:border-daintree-text/30 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border-default disabled:hover:text-text-secondary";
+  "border-border-default bg-surface-canvas text-text-secondary hover:border-text-primary/30 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border-default disabled:hover:text-text-secondary";
 
 export function SettingsChoicebox<T extends string = string>({
   label,

@@ -24,6 +24,7 @@ import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js"
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
+import { installHostPluginControlClient } from "./pluginControl/install.js";
 import { getRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
@@ -40,7 +41,7 @@ import { installSettingsCopyClient } from "./settingsCopy/install.js";
 import { installSettingsControlClient } from "./settingsControl/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
-import type { HostDescriptor } from "../../shared/types/remoteHosts.js";
+import type { HostDescriptor, HostId } from "../../shared/types/remoteHosts.js";
 import type { LinkTransport } from "./client/transport.js";
 import type { HostSocketLocation } from "./host/hostSocketPath.js";
 import {
@@ -400,18 +401,20 @@ function startClient(options: StartRemoteHostsOptions): void {
       },
     })
   );
+  // A host's open session for a call, connecting it if need be.
+  const callSession = async (hostId: HostId) => {
+    if (!client.registry.get(hostId)) return null;
+    client.manager.touch(hostId);
+    if (client.manager.connectionState(hostId).status !== "connected") {
+      await client.client.connectAndWait(hostId, HOST_CALL_CONNECT_MS);
+    }
+    const session = client.sessionFor(hostId);
+    return session?.isOpen ? session : null;
+  };
   // The sender each session proves to a host before a call is relayed there.
   teardowns.push(
     installHostControlLinkClient({
-      async session(hostId) {
-        if (!client.registry.get(hostId)) return null;
-        client.manager.touch(hostId);
-        if (client.manager.connectionState(hostId).status !== "connected") {
-          await client.client.connectAndWait(hostId, HOST_CALL_CONNECT_MS);
-        }
-        const session = client.sessionFor(hostId);
-        return session?.isOpen ? session : null;
-      },
+      session: callSession,
       // An agent watch's arm reads over a link only while it is up (#16188).
       openSession: (hostId) => {
         const session = client.sessionFor(hostId);
@@ -422,6 +425,28 @@ function startClient(options: StartRemoteHostsOptions): void {
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
       hostName: (hostId) => client.registry.get(hostId)?.name ?? "a removed host",
+    })
+  );
+  // This Shell's installed plugins reaching its hosts as themselves (#16767):
+  // nothing runs until a plugin the person let target hosts makes a call.
+  teardowns.push(
+    installHostPluginControlClient({
+      hosts: () =>
+        client.client.list().map(({ descriptor, connection }) => ({
+          hostId: descriptor.id,
+          name: descriptor.name,
+          connection,
+          disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
+        })),
+      listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
+      connect: async (hostId, timeoutMs) => {
+        if (client.client.isDisconnectedByPerson(hostId)) return;
+        client.manager.touch(hostId);
+        await client.client.connectAndWait(hostId, timeoutMs);
+      },
+      session: callSession,
+      credential: (hostId) =>
+        getRemoteService("hostControlLinkClient")?.pluginCredential(hostId) ?? null,
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

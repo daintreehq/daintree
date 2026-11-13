@@ -403,10 +403,6 @@ export function WorktreeCard({
   const deleteError = useWorktreeStore((state) => state.deleteErrors.get(worktree.id) ?? null);
   const issueError = useWorktreeStore((state) => state.issueErrors.get(worktree.id) ?? null);
 
-  const handleRetryDelete = () => {
-    getCurrentViewStore().getState().retryDelete(worktree.id);
-  };
-
   const handleDismissDeleteError = () => {
     getCurrentViewStore().getState().clearDeleteError(worktree.id);
   };
@@ -485,6 +481,21 @@ export function WorktreeCard({
     worktree,
     teardownCommands,
   });
+
+  const handleRetryDelete = () => {
+    // A retry that has to see the tree again goes back through the dialog,
+    // which previews it fresh and asks again (#16791).
+    if (getCurrentViewStore().getState().retryDelete(worktree.id) === "needs-review") {
+      setShowDeleteDialog(true);
+    }
+  };
+
+  // A delete that starts while the dialog is open — a reconnect replaying the
+  // parked one under the banner, or another surface — runs with the options it
+  // was sent with, so the dialog's choices no longer apply to anything.
+  useEffect(() => {
+    if (isBeingDeleted) setShowDeleteDialog(false);
+  }, [isBeingDeleted, setShowDeleteDialog]);
 
   const handleOpenIssueExternal = () => {
     void actionService.dispatch(

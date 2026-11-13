@@ -268,9 +268,18 @@ vi.mock("electron", () => ({
   BrowserWindow: {
     getFocusedWindow: (...args: unknown[]) => mockGetFocusedWindow(...args),
   },
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
   net: {
-    fetch: (...args: unknown[]) => mockNetFetch(...args),
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
   },
+}));
+// URL downloads fetch through the manual-redirect adapter over `net.request`;
+// route it to the stub so each case still scripts every hop.
+vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => mockNetFetch(url, init),
 }));
 
 import { registerPluginHandlers } from "../plugin.js";
@@ -331,6 +340,7 @@ describe("registerPluginHandlers", () => {
     cleanup();
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:list");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:install-from-path");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:preview-from-url");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:validate-action-ids");
@@ -620,10 +630,36 @@ describe("registerPluginHandlers", () => {
       { ...REVIEWED, smuggled: true }
     );
     const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    // A binding with no `kind` is an update, and reaches the installer saying so.
     expect(opts).toEqual({
       source: "url",
       originalUrl: "https://example.com/p.dntr",
-      expected: REVIEWED,
+      expected: { kind: "update", ...REVIEWED },
+    });
+  });
+
+  // #16342: a fresh install can be held to a digest reviewed elsewhere, with or
+  // without the plugin id it should carry.
+  it.each([
+    [
+      "with a plugin id",
+      { kind: "install", pluginId: "acme.my-plugin", archiveHash: "b".repeat(64) },
+    ],
+    ["with only a digest", { kind: "install", archiveHash: "b".repeat(64) }],
+  ])("PLUGIN_INSTALL_FROM_URL forwards a fresh-install binding %s", async (_label, binding) => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    await handler({ sender: { id: 1 } }, "https://example.com/p.dntr", undefined, {
+      ...binding,
+      smuggled: true,
+    });
+    const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    expect(opts).toEqual({
+      source: "url",
+      originalUrl: "https://example.com/p.dntr",
+      expected: binding,
     });
   });
 
@@ -640,6 +676,19 @@ describe("registerPluginHandlers", () => {
     ["an array", ["acme.my-plugin", "a".repeat(64)]],
     ["an uppercase hash", { pluginId: "acme.my-plugin", archiveHash: "A".repeat(64) }],
     ["an unscoped plugin id", { pluginId: "../victim", archiveHash: "a".repeat(64) }],
+    [
+      "an unknown kind",
+      { kind: "replace", pluginId: "acme.my-plugin", archiveHash: "a".repeat(64) },
+    ],
+    ["a fresh install with no hash", { kind: "install", pluginId: "acme.my-plugin" }],
+    [
+      "a fresh install with an unscoped id",
+      { kind: "install", pluginId: "../victim", archiveHash: "a".repeat(64) },
+    ],
+    [
+      "a fresh install with a null id",
+      { kind: "install", pluginId: null, archiveHash: "a".repeat(64) },
+    ],
   ])(
     "PLUGIN_INSTALL_FROM_URL refuses %s expectation without downloading",
     async (_label, expected) => {
@@ -657,6 +706,29 @@ describe("registerPluginHandlers", () => {
       expect(mockInstallPlugin).not.toHaveBeenCalled();
     }
   );
+
+  // #16776: the review step downloads and reads, and never installs.
+  it("PLUGIN_PREVIEW_FROM_URL is registered and refuses an empty URL", async () => {
+    const handler = getHandler("plugin:preview-from-url");
+    await expect(handler({ sender: { id: 1 } }, "  ")).resolves.toEqual({
+      status: "invalid-url",
+    });
+    expect(mockNetFetch).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PREVIEW_FROM_URL never reaches the installer, whatever it downloads", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:preview-from-url");
+    const result = (await handler({ sender: { id: 1 } }, "https://example.com/p.dntr")) as {
+      status: string;
+      errors: Array<{ code: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.errors[0]!.code).toBe("archive_invalid");
+    expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
 
   it("PLUGIN_INSTALL_FROM_URL keeps the download on disk until the installer settles", async () => {
     mockNetFetch.mockResolvedValue(
@@ -1095,12 +1167,56 @@ describe("registerPluginHandlers", () => {
         webContentsId: 33,
         pluginId: "acme.my-plugin",
       },
-      ["arg1", "arg2"]
+      ["arg1", "arg2"],
+      // A channel call attests nothing about who dispatched it (#16751).
+      undefined
     );
     expect(result).toEqual({ data: "hello" });
     // Successful invokes are intentionally not audited — they would be
     // high-frequency and overwhelm the ring buffer (#9240).
     expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  // ── #16751: plugin:actions-invoke carries a dispatch context beside the args ──
+
+  it("PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the context, apart from the args", async () => {
+    mockDispatchHandler.mockResolvedValue({ resumed: true });
+    const handler = getHandler("plugin:actions-invoke");
+    const sent = { dispatchSource: "agent", origin: "assistant", approval: "person" };
+
+    const result = await handler(
+      { sender: { id: 33 } },
+      "acme.my-plugin",
+      "acme.my-plugin.resume",
+      { approval: "forged" },
+      sent
+    );
+
+    expect(result).toEqual({ resumed: true });
+    const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
+    expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
+    expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
+    // The args stay the plugin's payload, whatever they say.
+    expect(args).toEqual([{ approval: "forged" }]);
+    expect(actionContext).toEqual(sent);
+    expect(actionContext).not.toBe(sent);
+    expect(Object.isFrozen(actionContext)).toBe(true);
+  });
+
+  it.each([
+    ["an unknown field", { dispatchSource: "user", confirmed: true }],
+    ["an unknown source", { dispatchSource: "mcp" }],
+    ["an origin other than the assistant", { dispatchSource: "agent", origin: "pane" }],
+    ["an approval other than a person", { dispatchSource: "agent", approval: "grant" }],
+    ["an assistant origin off the agent source", { dispatchSource: "user", origin: "assistant" }],
+    ["a person's approval on a plugin dispatch", { dispatchSource: "plugin", approval: "person" }],
+    ["no context at all", undefined],
+  ])("PLUGIN_ACTIONS_INVOKE refuses %s without dispatching", async (_label, context) => {
+    const handler = getHandler("plugin:actions-invoke");
+    await expect(
+      handler({ sender: { id: 33 } }, "acme.my-plugin", "acme.my-plugin.resume", {}, context)
+    ).rejects.toThrow(/plugin:actions-invoke rejected/);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 
   // ── #11297: plugin:invoke carries the sender's real project/worktree ──
@@ -3484,7 +3600,8 @@ describe("plugin:invoke project binding", () => {
       INSTANCE_A,
       "get-data",
       expect.objectContaining({ projectId: PROJECT_A, pluginId: INSTANCE_A }),
-      []
+      [],
+      undefined
     );
   });
 
@@ -4000,8 +4117,30 @@ describe("plugin:invoke over the link", () => {
         pluginId: "acme.graph",
         origin: { kind: "remote", clientId: "client-greg-mbp", endpointId: "s1:ep-1" },
       },
-      [{ id: "n1" }]
+      [{ id: "n1" }],
+      undefined
     );
+  });
+
+  it("carries an action's dispatch context from a window on another machine (#16751)", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:actions-invoke",
+      [
+        "acme.graph",
+        "acme.graph.resume",
+        { id: "n1" },
+        { dispatchSource: "user", approval: "person" },
+      ]
+    );
+    expect(envelope).toMatchObject({ ok: true, data: { ok: 1 } });
+    const call = mockDispatchHandler.mock.calls[0]!;
+    expect(call[2]).toMatchObject({ projectId: PROJECT, origin: { kind: "remote" } });
+    expect(call[3]).toEqual([{ id: "n1" }]);
+    expect(call[4]).toEqual({ dispatchSource: "user", approval: "person" });
+    expect(Object.isFrozen(call[4])).toBe(true);
   });
 
   it("refuses another project's plugin by the endpoint's own binding", async () => {

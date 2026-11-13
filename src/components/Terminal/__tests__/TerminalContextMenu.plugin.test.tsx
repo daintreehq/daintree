@@ -69,6 +69,7 @@ vi.mock("@/components/ui/context-menu", () => {
     ContextMenuSeparator: () => <hr />,
     ContextMenuLabel: Passthrough,
     ContextMenuShortcut: ({ children }: { children?: React.ReactNode }) => <kbd>{children}</kbd>,
+    ContextMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
     ContextMenuGroup: Passthrough,
     ContextMenuPortal: Passthrough,
     ContextMenuSub: Passthrough,

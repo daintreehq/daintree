@@ -42,6 +42,7 @@ vi.stubGlobal("fetch", mockFetch);
 
 import { assignIssue, extractLinkedPR, listIssues } from "../GitHubIssues.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE } from "../GitHubPRs.js";
+import { getHeldCount, holdObservedCount, issueReadStamp } from "../GitHubCountLedger.js";
 import { GitHubAuth } from "../GitHubAuth.js";
 import {
   issueListCache,
@@ -322,42 +323,50 @@ describe("listIssues — mid-flight count-buster guard", () => {
     clearGitHubCaches();
   });
 
-  it("a response that started before a count bust neither repopulates the list cache nor rolls back the stats count", async () => {
-    let resolveQuery!: (value: unknown) => void;
-    const clientMock = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveQuery = resolve;
-        })
-    );
-    vi.mocked(GitHubAuth.createClient).mockReturnValueOnce(clientMock as never);
+  it("a response issued before a later count read neither repopulates the list cache nor rolls back the count", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      let resolveQuery!: (value: unknown) => void;
+      const clientMock = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveQuery = resolve;
+          })
+      );
+      vi.mocked(GitHubAuth.createClient).mockReturnValueOnce(clientMock as never);
 
-    // The count poll has already committed the post-change total.
-    repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
+      const pending = listIssues({ cwd: "/test", bypassCache: true });
+      // While the list query is in flight, the count poll reads the
+      // post-change total (issued later, at 1,002,000) and the count buster
+      // fires.
+      vi.setSystemTime(1_002_000);
+      holdObservedCount("testowner/testrepo", "issue", 6, issueReadStamp());
+      repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
+      invalidateRepoListCachesForCountChange("testowner", "testrepo", { issues: true, prs: false });
 
-    const pending = listIssues({ cwd: "/test", bypassCache: true });
-    // The count buster fires while the list query is in flight.
-    invalidateRepoListCachesForCountChange("testowner", "testrepo", { issues: true, prs: false });
-
-    // The stale response carries the pre-change total.
-    resolveQuery({
-      repository: {
-        issues: {
-          totalCount: 5,
-          pageInfo: { hasNextPage: false, endCursor: null },
-          nodes: [],
+      // The stale response carries the pre-change total.
+      resolveQuery({
+        repository: {
+          issues: {
+            totalCount: 5,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
         },
-      },
-    });
-    const result = await pending;
+      });
+      const result = await pending;
 
-    // The caller still receives the page…
-    expect(result.totalCount).toBe(5);
-    // …but it must not be committed anywhere shared: the cache write would pin
-    // a pre-change page for 60s, and the stats write would roll the toolbar
-    // count back under a fresh lastUpdated.
-    expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
-    expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(6);
+      // The caller still receives the page…
+      expect(result.totalCount).toBe(5);
+      // …but it must not be committed anywhere shared: the cache write would
+      // pin a pre-change page for 60s, and the count was read after it was.
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+      expect(getHeldCount("testowner/testrepo", "issue")?.count).toBe(6);
+      expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an undisturbed response commits both the list cache and the stats count", async () => {

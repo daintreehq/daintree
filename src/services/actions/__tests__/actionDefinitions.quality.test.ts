@@ -600,7 +600,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // over develop's 25_992): the assistant can open Canopy's own window. It has to
   // say what the window shows, and that an open one comes forward instead.
   // Assistant-only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 26_150;
+  // 26_150 → 26_400 for `assistant.resume` (#16763), measured at 26_362 B (+216
+  // over develop's 26_146): an assistant can reopen a stopped lane's kept
+  // conversation. It has to say the conversation stays in its own slot, and that
+  // it is refused rather than started fresh. Assistant-only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 26_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1521,7 +1525,7 @@ describe("destructive-action danger metadata", () => {
       setManualAssociation: () => {},
       clearManualAssociation: () => {},
       startDelete: () => {},
-      retryDelete: () => {},
+      retryDelete: () => "none",
       clearDeleteError: () => {},
       startAttachIssue: () => {},
       startDetachIssue: () => {},
@@ -1654,6 +1658,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.setWhenDone": { terminalId: "t-placeholder", choice: "keep" },
       "assistant.list": {},
       "assistant.start": {},
+      "assistant.resume": { slot: 0 },
       "agent.readQuota": {},
       "agent.resumeOwned": { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-1" },
       "host.list": {},
@@ -1668,16 +1673,42 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
     };
 
+    // terminal.resendLastMessage gates on `isEnabled`, which runs before the
+    // plugin gate: with nothing sent it answers DISABLED. A focused terminal
+    // with a message on record lets the plugin gate be what fires.
+    const { usePanelStore } = await import("@/store/panelStore");
+    const { claimComposerSendSeq, noteLastComposerSend, useLastComposerSendStore } =
+      await import("@/store/lastComposerSendStore");
+    const panelsBefore = usePanelStore.getState().panelsById;
+    usePanelStore.setState({
+      panelsById: {
+        ...panelsBefore,
+        "t-placeholder": { id: "t-placeholder", kind: "terminal" } as never,
+      },
+    });
+    noteLastComposerSend("t-placeholder", "again", [], claimComposerSendSeq());
+    const CONTEXT: Readonly<Record<string, { focusedTerminalId: string }>> = {
+      "terminal.resendLastMessage": { focusedTerminalId: "t-placeholder" },
+    };
+
     const failures: string[] = [];
-    for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
-      const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, { source: "plugin" });
-      if (result.ok) {
-        failures.push(`${id} (plugin dispatch succeeded — side door open)`);
-        continue;
+    try {
+      for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
+        const result = await service.dispatch(id, STRICT_ARGS[id] ?? args, {
+          source: "plugin",
+          ...(CONTEXT[id] && { contextOverride: CONTEXT[id] }),
+        });
+        if (result.ok) {
+          failures.push(`${id} (plugin dispatch succeeded — side door open)`);
+          continue;
+        }
+        if (result.error.code !== "RESTRICTED") {
+          failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
+        }
       }
-      if (result.error.code !== "RESTRICTED") {
-        failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
-      }
+    } finally {
+      usePanelStore.setState({ panelsById: panelsBefore });
+      useLastComposerSendStore.getState().clear("t-placeholder");
     }
     expect(failures).toEqual([]);
   });

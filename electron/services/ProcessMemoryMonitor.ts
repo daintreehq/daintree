@@ -530,6 +530,12 @@ export interface MemoryPressureActions {
    */
   reclaimDormantWorkspaceHosts?: () => number;
   /**
+   * Lets Canopy's local reader process go when no screen is being read: its
+   * model loads again, out of process, on the next read. Returns how many
+   * processes went; refused, it returns 0.
+   */
+  retireIdleCanopyReader?: () => number;
+  /**
    * Asks the pty-host to trim the scrollback of terminals its governance policy
    * clears — never one with a live agent. Resolves with the trimmed/skipped
    * counts, which are the only observable account of what it did: the trim
@@ -1132,6 +1138,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let tier1TabsEvicted = 0;
           let tier1Trim: TrimStateSummary | null = null;
           let tier1TrimFailed = false;
+          let tier1ReadersRetired = 0;
+          let tier1ReaderRetireFailed = false;
           if (shouldRunTier1) {
             tier1StartedAt = Date.now();
             lastTier1At = tier1StartedAt;
@@ -1168,6 +1176,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               /* non-critical */
             }
 
+            try {
+              tier1ReadersRetired = actions.retireIdleCanopyReader?.() ?? 0;
+            } catch {
+              tier1ReaderRetireFailed = true;
+            }
+
             await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
           }
 
@@ -1202,11 +1216,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               !pressureRemains ||
               tier1TabsEvicted > 0 ||
               tier1Trimmed > 0 ||
+              tier1ReadersRetired > 0 ||
               (!resampleFailed && !baselineFailed && deltaMb >= MIN_RECLAIMED_MB)
                 ? "productive"
                 : resampleFailed ||
                     baselineFailed ||
                     tier1TrimFailed ||
+                    tier1ReaderRetireFailed ||
                     (tier1Trim?.shardsFailed ?? 0) > 0
                   ? "unknown"
                   : "unproductive";
@@ -1221,10 +1237,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
-              // Attributable to the portal-tab teardown only. The scrollback
-              // trims (host and renderer) cannot move this inside the settle
-              // window whatever they did, so a zero here is not evidence any
-              // lever failed.
+              // Attributable to the portal-tab teardown and a retired Canopy
+              // reader only, the reader's once its process has exited. The
+              // scrollback trims (host and renderer) cannot move this inside
+              // the settle window whatever they did, so a zero here is not
+              // evidence any lever failed.
               deltaMb: Math.round(deltaMb),
               // Portal tabs are the only part of this lever whose outcome main
               // can observe (the webview push is fire-and-forget), so this is a
@@ -1240,6 +1257,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               ptyTrimShardsTotal: tier1Trim?.shardsTotal ?? 0,
               ptyTrimShardsFailed: tier1Trim?.shardsFailed ?? 0,
               ptyTrimFailed: tier1TrimFailed,
+              canopyReadersRetired: tier1ReadersRetired,
+              canopyReaderRetireFailed: tier1ReaderRetireFailed,
               pressureRemains,
               resampleFailed,
               ...tier1Backoff,

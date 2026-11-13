@@ -56,10 +56,11 @@ afterEach(async () => {
 });
 
 describe("agentSupportsAssistantContent", () => {
-  it("maps claude, codex, and copilot but not other built-in or unknown agents", () => {
+  it("maps claude, codex, copilot and antigravity but not other built-in or unknown agents", () => {
     expect(agentSupportsAssistantContent("claude")).toBe(true);
     expect(agentSupportsAssistantContent("codex")).toBe(true);
     expect(agentSupportsAssistantContent("copilot")).toBe(true);
+    expect(agentSupportsAssistantContent("antigravity")).toBe(true);
     expect(agentSupportsAssistantContent("gemini")).toBe(false);
     expect(agentSupportsAssistantContent("my-custom-agent")).toBe(false);
   });
@@ -119,6 +120,48 @@ describe("syncAssistantContent", () => {
     expect(await readSession(".agents/skills/a/SKILL.md")).toBe("a");
     expect(await readSession(".claude/skills/b/SKILL.md")).toBe("b");
     expect(await readSession(".claude/commands/c.md")).toBeNull();
+  });
+
+  it("mirrors only the shared skills tree and references for antigravity sessions", async () => {
+    await writeSource(globalDir, ".agents/skills/shared-thing/SKILL.md", "global shared");
+    await writeSource(
+      projectPath,
+      ".daintree/assistant/.agents/skills/shared-thing/SKILL.md",
+      "project shared"
+    );
+    await writeSource(globalDir, ".claude/skills/claude-only/SKILL.md", "claude skill");
+    await writeSource(globalDir, ".claude/commands/review.md", "claude command");
+    await writeSource(globalDir, ".codex/skills/codex-only/SKILL.md", "codex skill");
+    await writeSource(globalDir, "reference/guide.md", "guide");
+
+    const result = await sync("antigravity");
+
+    expect(result).toMatchObject({ copied: 2, referenceFiles: 1, staleFailures: [] });
+    expect(await readSession(".agents/skills/shared-thing/SKILL.md")).toBe("project shared");
+    expect(await readSession("reference/guide.md")).toBe("guide");
+    expect(await readSession(".claude/skills/claude-only/SKILL.md")).toBeNull();
+    expect(await readSession(".claude/commands/review.md")).toBeNull();
+    expect(await readSession(".agents/skills/codex-only/SKILL.md")).toBeNull();
+  });
+
+  it("leaves an antigravity lane's .agents/mcp_config.json alone while retiring skills beside it", async () => {
+    const mcpConfig = path.join(sessionPath, ".agents", "mcp_config.json");
+    await fs.mkdir(path.dirname(mcpConfig), { recursive: true });
+    await fs.writeFile(mcpConfig, '{"mcpServers":{}}', "utf-8");
+    await writeSource(globalDir, ".agents/skills/gone/SKILL.md", "gone");
+    await sync("antigravity");
+    await fs.rm(path.join(globalDir, ".agents", "skills", "gone"), { recursive: true });
+    // A corrupt manifest naming the config must not reach it either.
+    const manifestPath = path.join(sessionPath, ".daintree-user-content.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as { files: string[] };
+    manifest.files.push(".agents/mcp_config.json", ".agents/skills/../mcp_config.json");
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await sync("antigravity");
+
+    expect(result).toMatchObject({ removed: 1, staleFailures: [] });
+    expect(await readSession(".agents/skills/gone/SKILL.md")).toBeNull();
+    expect(await readSession(".agents/mcp_config.json")).toBe('{"mcpServers":{}}');
   });
 
   it("lets project sources override global sources", async () => {
@@ -900,6 +943,15 @@ describe("plugin knowledge (#13828)", () => {
       "Reconcile."
     );
     expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("puts a plugin's skills in the shared tree for antigravity, never under undefined", async () => {
+    const result = await syncWith("antigravity", [ledger()]);
+    expect(result).toMatchObject({ pluginContent: ["daintree-ledger"], staleFailures: [] });
+    expect(await readSession(".agents/skills/daintree-ledger-reconcile/SKILL.md")).toContain(
+      "Reconcile."
+    );
+    await expect(fs.stat(path.join(sessionPath, "undefined"))).rejects.toThrow();
   });
 
   it("retires a plugin's files once it is no longer handed over", async () => {

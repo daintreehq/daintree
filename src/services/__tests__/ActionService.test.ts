@@ -936,6 +936,77 @@ describe("ActionService", () => {
         );
       });
 
+      // #16751: who asked and whether a person answered, for a plugin action's
+      // handler. Narrower than hostConfirmed, and only the agent source has them.
+      it("stamps the Assistant origin and a person's approval for an agent dispatch", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostCallerOrigin: "assistant",
+          hostPersonApproved: true,
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostCallerOrigin: "assistant", hostPersonApproved: true })
+        );
+      });
+
+      it("never stamps a person's approval on a dispatch the gate didn't see confirmed", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register({ ...confirmAction(mockRun), danger: "safe" });
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          hostPersonApproved: true,
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostPersonApproved: undefined })
+        );
+      });
+
+      it("ignores both facts on an agent dispatch's contextOverride, confirmed or not", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
+        );
+      });
+
+      it.each(["user", "plugin", "keybinding"] as const)(
+        "drops both for a %s dispatch, from the options and from a contextOverride",
+        async (source) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register({ ...confirmAction(mockRun), danger: "safe" });
+
+          await service.dispatch("actions.list", undefined, {
+            source,
+            confirmed: true,
+            hostCallerOrigin: "assistant",
+            hostPersonApproved: true,
+            contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
+          });
+
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
+          );
+        }
+      );
+
       // The per-target half of the same attestation (#12123). A selectable
       // confirmation resolves to a SUBSET, and the action has to know which
       // subset — so the stamp carries the rows, on the same unspoofable terms.

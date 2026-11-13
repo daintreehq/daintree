@@ -208,7 +208,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#F6F7F2",
     "toolbar-stats-border": "rgba(203,208,193,0.7)",
     "toolbar-stats-divider": "rgba(203,208,193,0.7)",
-    "toolbar-stats-hover-bg": "#F9FAF6",
     // Gold as ritual detail, never interaction state; the field stays flat
     // (no welcome-field-wash — large-surface gradients band).
     "welcome-mark-color": "rgba(200,146,15,0.88)",

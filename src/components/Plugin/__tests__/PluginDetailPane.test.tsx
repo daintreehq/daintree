@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BuiltInPluginCapability, LoadedPluginInfo } from "@shared/types/plugin";
@@ -39,6 +39,10 @@ const projectTargetingMock = vi.hoisted(() => ({
   setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getHostTargeting: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setHostTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
   getOsNotifications: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
   setOsNotifications: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
@@ -62,6 +66,12 @@ beforeEach(() => {
   projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
   projectTargetingMock.setProjectTargeting.mockReset();
   projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  projectTargetingMock.getHostTargeting.mockReset();
+  projectTargetingMock.getHostTargeting.mockResolvedValue(false);
+  projectTargetingMock.setHostTargeting.mockReset();
+  projectTargetingMock.setHostTargeting.mockImplementation((input) =>
     Promise.resolve(input.enabled)
   );
   projectTargetingMock.getOsNotifications.mockReset();
@@ -328,6 +338,48 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
   });
 });
 
+describe("PluginDetailPane host targeting switch (#16767)", () => {
+  const hostSwitch = () => screen.getByTestId("plugin-host-targeting-switch");
+
+  it("is off by default and turns the host grant on, apart from project targeting", async () => {
+    renderPane(withCapabilities(["host:dispatch"]));
+    await vi.waitFor(() => expect(hostSwitch().hasAttribute("disabled")).toBe(false));
+    expect(hostSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+
+    fireEvent.click(hostSwitch());
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setHostTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+    expect(projectTargetingMock.setProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("shows the host grant as it is persisted, and turns it off", async () => {
+    projectTargetingMock.getHostTargeting.mockResolvedValue(true);
+    renderPane(withCapabilities(["host:dispatch", "project:dispatch"]));
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.getHostTargeting).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+
+    fireEvent.click(hostSwitch());
+    await vi.waitFor(() => expect(hostSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(projectTargetingMock.setHostTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+  });
+
+  it("is absent when undeclared, and for a project plugin, which can never target a host", () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.queryByTestId("plugin-host-targeting-switch")).toBeNull();
+    cleanup();
+    renderPane(withCapabilities(["host:dispatch"], { origin: "project", projectId: "project-a" }));
+    expect(screen.queryByTestId("plugin-host-targeting-switch")).toBeNull();
+    expect(projectTargetingMock.getHostTargeting).not.toHaveBeenCalled();
+  });
+});
+
 describe("PluginDetailPane OS notifications switch (#13505)", () => {
   const osSwitch = () => screen.getByTestId("plugin-os-notifications-switch");
 
@@ -483,6 +535,36 @@ describe("PluginDetailPane capabilities", () => {
 });
 
 describe("PluginDetailPane contributors (issue #10516)", () => {
+  const catalogInstall = (overrides: Partial<LoadedPluginInfo> = {}) =>
+    makePlugin({
+      source: "catalog",
+      originalUrl:
+        "https://github.com/northwind/tools-mirror/releases/download/v1.0.0/acme.demo-1.0.0.dntr",
+      catalog: {
+        id: "acme.demo",
+        version: "1.0.0",
+        repo: "https://github.com/northwind/tools-mirror",
+      },
+      ...overrides,
+    });
+
+  it("names a catalog install's repository as a community listing (#16779)", () => {
+    renderOverview(catalogInstall());
+    expect(screen.getByTestId("plugin-catalog-listing").textContent).toContain(
+      "Community listing from github.com/northwind/tools-mirror"
+    );
+  });
+
+  it("calls a dev instance of a catalog plugin no listing: it runs from a checkout", () => {
+    renderOverview(catalogInstall({ devMode: true }));
+    expect(screen.queryByTestId("plugin-catalog-listing")).toBeNull();
+  });
+
+  it("calls no other install a community listing", () => {
+    renderOverview(makePlugin({ source: "url", originalUrl: "https://example.com/p.dntr" }));
+    expect(screen.queryByTestId("plugin-catalog-listing")).toBeNull();
+  });
+
   it("does not render a Contributors section when authors are absent", () => {
     renderOverview(makePlugin());
     expect(screen.queryByText("Contributors")).toBeNull();

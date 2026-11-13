@@ -101,6 +101,17 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().droppedPreferredAgentId).toBeNull();
     });
 
+    it("launches a host's saved Antigravity choice once its CLI is installed (#16815)", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      store.getState().syncHostAssistantAgent("antigravity", installedOnly("antigravity")());
+
+      expect(store.getState().preferredAgentId).toBe("antigravity");
+      expect(store.getState().droppedPreferredAgentId).toBeNull();
+      expect(store.getState().hostAssistantAgentId).toBe("antigravity");
+    });
+
     it("explains a built-in that's no longer an assistant backend (issue #8775)", async () => {
       installLocalStorage({});
       const { useHelpPanelStore: store } = await import("../helpPanelStore");

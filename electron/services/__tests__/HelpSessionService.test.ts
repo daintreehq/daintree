@@ -157,7 +157,10 @@ vi.mock("../../store.js", () => ({
 vi.mock("../AssistantContentMirror.js", () => ({
   syncAssistantContent: (input: unknown) => mockSyncAssistantContent(input),
   agentSupportsAssistantContent: (agentId: string) =>
-    agentId === "claude" || agentId === "codex" || agentId === "copilot",
+    agentId === "claude" ||
+    agentId === "codex" ||
+    agentId === "copilot" ||
+    agentId === "antigravity",
 }));
 
 vi.mock("../AssistantPluginKnowledge.js", () => ({
@@ -185,6 +188,7 @@ import {
 } from "../HelpSessionService.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
+import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../shared/types/replyWait.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "assistant");
@@ -1038,6 +1042,26 @@ describe("HelpSessionService", () => {
         scheduleId: "schedule-1",
         runId: "run-1",
       });
+    });
+
+    it("starts a lane an update restart stopped with no view, for the first view to take over (#16753)", async () => {
+      const resumed = await service.provisionSession({
+        ...provisionInput(),
+        slot: 2,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy: { kind: "update-restart" },
+      });
+      if (!resumed) throw new Error("expected result");
+      expect(service.markTerminalForToken(resumed.token, "term-resumed")).toBe(true);
+
+      expect(service.getRunningLaneSession("proj-1", 2)).toMatchObject({
+        terminalId: "term-resumed",
+        startedBy: { kind: "update-restart" },
+      });
+      expect(service.detachedSlots("proj-1")).toEqual([2]);
+      expect(service.getScheduledRunOf(resumed.sessionId)).toBeNull();
     });
 
     it("refuses a schedule's start that names no run", async () => {
@@ -3621,6 +3645,7 @@ describe("HelpSessionService", () => {
       set: ReturnType<typeof vi.fn>;
       clear: ReturnType<typeof vi.fn>;
       flush: ReturnType<typeof vi.fn>;
+      recordResumeAtLaunch: ReturnType<typeof vi.fn>;
     };
 
     beforeEach(() => {
@@ -3629,6 +3654,7 @@ describe("HelpSessionService", () => {
         set: vi.fn().mockResolvedValue(undefined),
         clear: vi.fn().mockResolvedValue(undefined),
         flush: vi.fn().mockResolvedValue(undefined),
+        recordResumeAtLaunch: vi.fn().mockResolvedValue(undefined),
       };
       service.setPendingHibernationStore(hibernationStore as never);
     });
@@ -3912,6 +3938,293 @@ describe("HelpSessionService", () => {
         await expect(taking).resolves.toEqual(
           expect.objectContaining({ agentSessionId: "codex-thread-captured" })
         );
+      });
+
+      it("records each lane an update quit stops, by the id its capture settled on (#16753)", async () => {
+        await launchLane("term-claude", "claude-conv-1");
+        // Launched with no id yet, as a Codex lane is: only the quit's capture learns it.
+        const idless = await service.provisionSession({ ...provisionInput(), slot: 2 });
+        if (!idless) throw new Error("expected provision");
+        expect(service.markTerminalForToken(idless.token, "term-idless")).toBe(true);
+        await service.recordLaneLaunchForToken(idless.token);
+        expect(backing.get(slotKey("proj-1", 2))?.agentSessionId).toBe("");
+        const lanes = service.snapshotLaneTerminals();
+        await service.noteQuitCapture(lanes.get("term-idless")!, "captured-at-quit");
+
+        await service.recordLanesToResumeAtLaunch(lanes.values());
+
+        expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({
+          [slotKey("proj-1", 0)]: "claude-conv-1",
+          [slotKey("proj-1", 2)]: "captured-at-quit",
+        });
+      });
+
+      it("leaves out a lane with no id to resume, one restarted during the kill, an agent with no resume, and the global assistant (#16753)", async () => {
+        await launchLane("term-no-id");
+        const restarted = await service.provisionSession({ ...provisionInput(), slot: 1 });
+        if (!restarted) throw new Error("expected provision");
+        expect(service.markTerminalForToken(restarted.token, "term-restarted")).toBe(true);
+        await service.recordLaneLaunchForToken(restarted.token, "claude-conv-2");
+        const lanes = [...service.snapshotLaneTerminals().values()];
+        // Discarded and started over during the kill: it points at a conversation
+        // the quit never saw.
+        await service.discardConversation("proj-1", 1);
+        const again = await service.provisionSession({ ...provisionInput(), slot: 1 });
+        if (!again) throw new Error("expected provision");
+        expect(service.markTerminalForToken(again.token, "term-again")).toBe(true);
+        await service.recordLaneLaunchForToken(again.token, "claude-conv-3");
+        const globalKey = slotKey(GLOBAL_ASSISTANT_ID, 0);
+        const noResumeKey = slotKey("proj-1", 3);
+        for (const [key, agentId] of [
+          [globalKey, "claude"],
+          [noResumeKey, "no-such-agent"],
+        ] as const) {
+          backing.set(key, {
+            agentId,
+            agentSessionId: `${agentId}-conv`,
+            cwd: "/elsewhere",
+            capturedAt: Date.now(),
+          });
+        }
+
+        await service.recordLanesToResumeAtLaunch([
+          ...lanes,
+          { slotKey: globalKey, agentSessionId: "claude-conv", revision: 0 },
+          { slotKey: noResumeKey, agentSessionId: "no-such-agent-conv", revision: 0 },
+        ]);
+
+        expect(hibernationStore.recordResumeAtLaunch).toHaveBeenCalledExactlyOnceWith({});
+      });
+
+      it("has a view's launch stand down while main resumes the lane, and a discard drop the claim (#16753)", async () => {
+        backing.set(slotKey("proj-1", 1), {
+          agentId: "claude",
+          agentSessionId: "claude-conv-9",
+          cwd: "/help",
+          capturedAt: Date.now(),
+        });
+        const probe = vi.fn(async () => ({ cwd: "/help" }));
+        const claim = await service.claimLaneResume("proj-1", 1);
+        if (claim.status !== "claimed") throw new Error("expected claim");
+
+        await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
+          status: "occupied",
+        });
+        await expect(service.adoptDetachedSession("proj-1", 0, 42, probe)).resolves.toEqual({
+          status: "absent",
+        });
+        expect(claim.holds()).toBe(true);
+
+        await service.discardConversation("proj-1", 1);
+        expect(claim.holds()).toBe(false);
+
+        await claim.release();
+        await expect(service.adoptDetachedSession("proj-1", 1, 42, probe)).resolves.toEqual({
+          status: "absent",
+        });
+      });
+
+      describe("resuming a kept lane from main (#16753, #16763)", () => {
+        const resumeInput = (claimId: string) =>
+          ({
+            ...provisionInput(),
+            slot: 1,
+            windowId: NO_VIEW_HANDLE,
+            projectViewWebContentsId: NO_VIEW_HANDLE,
+            vacantOnly: true,
+            resumeClaimId: claimId,
+            startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+          }) as const;
+
+        beforeEach(() => {
+          backing.set(slotKey("proj-1", 1), {
+            agentId: "claude",
+            agentSessionId: "claude-conv-9",
+            cwd: "/help",
+            capturedAt: 1_000,
+          });
+        });
+
+        it("lists every kept lane with what its pointer holds", () => {
+          backing.set(slotKey("proj-1", 3), {
+            agentId: "codex",
+            agentSessionId: "",
+            cwd: "/help-codex",
+            capturedAt: 2_000,
+          });
+          backing.set(slotKey("proj-2", 0), {
+            agentId: "claude",
+            agentSessionId: "other",
+            cwd: "/other",
+            capturedAt: 3_000,
+          });
+
+          expect(service.listKeptLanes("proj-1")).toEqual([
+            { slot: 1, agentId: "claude", agentSessionId: "claude-conv-9", capturedAt: 1_000 },
+            { slot: 3, agentId: "codex", agentSessionId: "", capturedAt: 2_000 },
+          ]);
+          expect(service.listKeptLanes("")).toEqual([]);
+        });
+
+        it("admits only the provision quoting its claim, keeps a view's out, and lets a discard revoke it", async () => {
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+          expect(claim).toMatchObject({ agentId: "claude", agentSessionId: "claude-conv-9" });
+
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await expect(
+            service.provisionSession(resumeInput("not-the-claim"))
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          const resumed = await service.provisionSession(resumeInput(claim.claimId));
+          if (!resumed) throw new Error("expected result");
+          // Another lane is untouched.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 2 })
+          ).resolves.toBeTruthy();
+
+          // Discarded before its spawn: the bearer the spawn would carry is dead,
+          // and the claim a second provision would quote is gone.
+          expect(service.validateToken(resumed.token)).toBeTruthy();
+          await service.discardConversation("proj-1", 1);
+          expect(service.validateToken(resumed.token)).toBe(false);
+          await expect(service.provisionSession(resumeInput(claim.claimId))).rejects.toMatchObject({
+            code: "LANE_OCCUPIED",
+          });
+
+          await claim.release();
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
+
+        it("hands out one claim at a time, whoever asks, and none for a lane that runs or keeps nothing", async () => {
+          const first = await service.claimLaneResume("proj-1", 1);
+          if (first.status !== "claimed") throw new Error("expected claim");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "resuming",
+          });
+          // The refused second call left the first resume's mark in place.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await expect(service.claimLaneResume("proj-1", 2)).resolves.toEqual({ status: "none" });
+          // Nothing to claim leaves no mark behind.
+          const free = await service.provisionSession({ ...provisionInput(), slot: 2 });
+          if (!free) throw new Error("expected provision");
+          await service.revokeSession(free.sessionId);
+
+          await first.release();
+          expect(first.holds()).toBe(false);
+          // A late second release of the first claim never ends a newer resume's mark.
+          const second = await service.claimLaneResume("proj-1", 1);
+          if (second.status !== "claimed") throw new Error("expected claim");
+          await first.release();
+          expect(second.holds()).toBe(true);
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          await second.release();
+          // A view's resume of the lane holds it just the same.
+          const viewClaim = await service.takePendingHibernation("proj-1", 1, 42);
+          if (!viewClaim) throw new Error("expected view claim");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "resuming",
+          });
+          await service.restorePendingHibernation("proj-1", 1, viewClaim.claimId, 42);
+
+          const running = await service.provisionSession({ ...provisionInput(), slot: 1 });
+          if (!running) throw new Error("expected provision");
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "occupied",
+          });
+          await service.revokeSession(running.sessionId);
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toMatchObject({
+            status: "claimed",
+          });
+        });
+
+        it("spends the claim at the resumed spawn, leaving release only the lane's mark to lift", async () => {
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+          const resumed = await service.provisionSession(resumeInput(claim.claimId));
+          if (!resumed) throw new Error("expected result");
+          expect(service.markTerminalForToken(resumed.token, "term-resumed")).toBe(true);
+          await service.recordLaneLaunchForToken(resumed.token, "claude-conv-9");
+          expect(claim.holds()).toBe(false);
+
+          await claim.release();
+          expect(backing.get(slotKey("proj-1", 1))?.agentSessionId).toBe("claude-conv-9");
+          expect(service.getRunningLaneSession("proj-1", 1)).toMatchObject({
+            terminalId: "term-resumed",
+          });
+          // The lane runs: nothing is left to claim.
+          await expect(service.claimLaneResume("proj-1", 1)).resolves.toEqual({
+            status: "occupied",
+          });
+        });
+
+        it("lifts the lane's mark when the claim or its release fails", async () => {
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(service.claimLaneResume("proj-1", 1)).rejects.toThrow("store unreadable");
+          const claim = await service.claimLaneResume("proj-1", 1);
+          if (claim.status !== "claimed") throw new Error("expected claim");
+
+          hibernationStore.get.mockImplementationOnce(() => {
+            throw new Error("store unreadable");
+          });
+          await expect(claim.release()).rejects.toThrow("store unreadable");
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
+
+        it("answers a running lane with a pointer as in use, before as kept, and leaves it running", async () => {
+          const running = await service.provisionSession({
+            ...provisionInput(),
+            slot: 1,
+            windowId: NO_VIEW_HANDLE,
+            projectViewWebContentsId: NO_VIEW_HANDLE,
+            startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+          });
+          if (!running) throw new Error("expected provision");
+
+          await expect(
+            service.provisionSession({
+              ...provisionInput(),
+              slot: 1,
+              windowId: NO_VIEW_HANDLE,
+              projectViewWebContentsId: NO_VIEW_HANDLE,
+              vacantOnly: true,
+              refuseKept: true,
+              startedBy: { kind: "local", askingHelpSessionId: "asking-help-2" },
+            })
+          ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+          expect(service.validateToken(running.token)).toBeTruthy();
+        });
+
+        it("refuses a start that would take a kept lane, checked under the lane lock", async () => {
+          const start = (slot: number) =>
+            service.provisionSession({
+              ...provisionInput(),
+              slot,
+              windowId: NO_VIEW_HANDLE,
+              projectViewWebContentsId: NO_VIEW_HANDLE,
+              vacantOnly: true,
+              refuseKept: true,
+              startedBy: { kind: "local", askingHelpSessionId: "asking-help-1" },
+            });
+
+          await expect(start(1)).rejects.toMatchObject({ code: "LANE_KEPT" });
+          await expect(start(2)).resolves.toBeTruthy();
+          // Without the flag a start still takes it, as a schedule's does when nothing else is free.
+          await expect(
+            service.provisionSession({ ...provisionInput(), slot: 1 })
+          ).resolves.toBeTruthy();
+        });
       });
 
       it("drops a quit-time capture for a lane the user discarded during the kill", async () => {
@@ -5099,6 +5412,336 @@ describe("HelpSessionService", () => {
       );
       expect(mcp.mcpServers.daintree).toBeUndefined();
       expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    });
+  });
+
+  describe("Antigravity (#16814)", () => {
+    function agyInput(slot = 0) {
+      return { ...provisionInput(), agentId: "antigravity", slot };
+    }
+
+    type AgyConfig = {
+      mcpServers: Record<
+        string,
+        { url?: string; headers?: Record<string, string>; timeoutSeconds?: number }
+      >;
+    };
+
+    async function readAgyConfig(sessionPath: string): Promise<AgyConfig> {
+      return JSON.parse(
+        await fs.readFile(path.join(sessionPath, ".agents", "mcp_config.json"), "utf-8")
+      ) as AgyConfig;
+    }
+
+    async function readAgySettings(token: string): Promise<{
+      trustedWorkspaces: string[];
+      permissions?: { allow: string[] };
+    }> {
+      const args = service.getAntigravityLaunchArgs(token);
+      expect(args?.[0]).toBe("--settings");
+      return JSON.parse(await fs.readFile(args![1]!, "utf-8"));
+    }
+
+    async function exists(target: string): Promise<boolean> {
+      return fs.access(target).then(
+        () => true,
+        () => false
+      );
+    }
+
+    it("is admitted by the provision gate and gets a Streamable HTTP URL", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
+    });
+
+    it("gives each lane its own directory, apart from the project's other agents", async () => {
+      const claude = await service.provisionSession(provisionInput());
+      const lane0 = await service.provisionSession(agyInput(0));
+      const lane1 = await service.provisionSession(agyInput(1));
+      if (!claude || !lane0 || !lane1) throw new Error("expected results");
+
+      const hash = path.basename(claude.sessionPath);
+      expect(path.basename(lane0.sessionPath)).toBe(`${hash}.antigravity.s0`);
+      expect(path.basename(lane1.sessionPath)).toBe(`${hash}.antigravity.s1`);
+      // Both lanes stay live, each with its own bearer in its own folder.
+      expect(service.validateToken(lane0.token)).not.toBe(false);
+      expect(service.validateToken(lane1.token)).not.toBe(false);
+      expect((await readAgyConfig(lane0.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${lane0.token}`,
+      });
+      expect((await readAgyConfig(lane1.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${lane1.token}`,
+      });
+      // The Claude lane's folder has no `.agents/` for agy to find.
+      expect(await exists(path.join(claude.sessionPath, ".agents"))).toBe(false);
+    });
+
+    it("never shares a lane folder with a custom agent whose id reads like a lane", async () => {
+      setUserRegistry({
+        "antigravity-s0": {
+          id: "antigravity-s0",
+          name: "Lookalike",
+          command: "lookalike",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "env-only",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+      });
+      try {
+        const lane0 = await service.provisionSession(agyInput(0));
+        const lookalike = await service.provisionSession({
+          ...provisionInput(),
+          agentId: "antigravity-s0",
+          slot: 1,
+        });
+        if (!lane0 || !lookalike) throw new Error("expected results");
+
+        // The custom agent keeps the folder its id has always named.
+        expect(path.basename(lookalike.sessionPath)).toMatch(/\.antigravity-s0$/);
+        expect(lookalike.sessionPath).not.toBe(lane0.sessionPath);
+        expect(await exists(path.join(lookalike.sessionPath, ".agents"))).toBe(false);
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("writes .agents/mcp_config.json in agy's dialect, with the reply-wait timeout", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const { mcpServers } = await readAgyConfig(result.sessionPath);
+      expect(mcpServers.daintree).toEqual({
+        url: "http://127.0.0.1:45454/mcp",
+        headers: { Authorization: `Bearer ${result.token}` },
+        timeoutSeconds: HELP_MCP_TOOL_TIMEOUT_MS / 1_000,
+      });
+      expect(mcpServers["daintree-docs"]).toEqual({ url: "https://daintree.org/api/mcp" });
+      expect(mcpServers["daintree-runbooks"]).toEqual({
+        url: "https://assistant.daintree.org/v1/daintree/mcp",
+        headers: { "Daintree-Host-Control": "1" },
+      });
+      // agy reads no `type`; Claude's SSE dialect would be refused.
+      expect(JSON.stringify(mcpServers)).not.toContain('"type"');
+      if (process.platform !== "win32") {
+        const stat = await fs.stat(path.join(result.sessionPath, ".agents", "mcp_config.json"));
+        expect(stat.mode & 0o777).toBe(0o600);
+      }
+      // The template's `.mcp.json` is Claude's and Copilot's; agy's bearer never lands there.
+      const shared = await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8");
+      expect(shared).not.toContain(result.token);
+    });
+
+    it("hands agy a --settings file trusting the lane folder and allowing Daintree's servers", async () => {
+      // Reached through a symlink, so the folder as given and its canonical
+      // path differ, and agy keys trust by the canonical one.
+      const linkedUserData = path.join(tmpRoot, "userData-link");
+      await fs.symlink(userData, linkedUserData, process.platform === "win32" ? "junction" : "dir");
+      mockUserDataDir.mockReturnValue(linkedUserData);
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const settings = await readAgySettings(result.token);
+      const canonical = await fs.realpath(result.sessionPath);
+      expect(canonical).not.toBe(result.sessionPath);
+      expect(settings.trustedWorkspaces).toEqual([result.sessionPath, canonical]);
+      expect([...settings.permissions!.allow].sort()).toEqual([
+        "mcp(daintree-docs/*)",
+        "mcp(daintree-runbooks/*)",
+        "mcp(daintree/*)",
+      ]);
+      // Only keys agy's `--settings` accepts; an unknown one aborts its launch.
+      expect(Object.keys(settings).sort()).toEqual(["permissions", "trustedWorkspaces"]);
+      expect(JSON.stringify(settings)).not.toContain(result.token);
+    });
+
+    it("wires Daintree control alone when docs search is off", async () => {
+      mockStoreGet.mockReturnValue({
+        daintreeControl: true,
+        docSearch: false,
+        runbookSearch: false,
+      });
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      const { mcpServers } = await readAgyConfig(result.sessionPath);
+      expect(Object.keys(mcpServers)).toEqual(["daintree"]);
+      expect(mcpServers.daintree).toEqual({
+        url: "http://127.0.0.1:45454/mcp",
+        headers: { Authorization: `Bearer ${result.token}` },
+        timeoutSeconds: HELP_MCP_TOOL_TIMEOUT_MS / 1_000,
+      });
+      expect((await readAgySettings(result.token)).permissions?.allow).toEqual(["mcp(daintree/*)"]);
+    });
+
+    it("allows only the servers it wired, and no allow list at all when none are on", async () => {
+      mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: true });
+      const docsOnly = await service.provisionSession(agyInput());
+      if (!docsOnly) throw new Error("expected result");
+      expect((await readAgySettings(docsOnly.token)).permissions?.allow).toEqual([
+        "mcp(daintree-docs/*)",
+      ]);
+      expect(Object.keys((await readAgyConfig(docsOnly.sessionPath)).mcpServers)).toEqual([
+        "daintree-docs",
+      ]);
+
+      mockStoreGet.mockReturnValue({ daintreeControl: false, docSearch: false });
+      const none = await service.provisionSession(agyInput());
+      if (!none) throw new Error("expected result");
+      const settings = await readAgySettings(none.token);
+      // An allow list replaces the user's own for the session, so none is sent.
+      expect(settings.permissions).toBeUndefined();
+      expect(settings.trustedWorkspaces).toContain(none.sessionPath);
+      expect((await readAgyConfig(none.sessionPath)).mcpServers).toEqual({});
+    });
+
+    it("getAntigravityLaunchArgs answers null for other agents' sessions and dead tokens", async () => {
+      // Every session in a lane of its own, so each token is still live.
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      const copilot = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "copilot",
+        slot: 2,
+      });
+      const agy = await service.provisionSession(agyInput(3));
+      if (!claude || !codex || !copilot || !agy) throw new Error("expected results");
+      for (const live of [claude, codex, copilot, agy]) {
+        expect(service.validateToken(live.token)).not.toBe(false);
+      }
+
+      expect(service.getAntigravityLaunchArgs(claude.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs(codex.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs(copilot.token)).toBeNull();
+      expect(service.getAntigravityLaunchArgs("not-a-real-token")).toBeNull();
+      expect(service.getAntigravityLaunchArgs("")).toBeNull();
+      // And the reverse: an Antigravity token wires no other agent.
+      expect(service.getCodexLaunchArgs(agy.token)).toBeNull();
+      expect(service.getCopilotLaunchArgs(agy.token)).toBeNull();
+      expect(service.getClaudeLaunchArgs(agy.token)).toBeNull();
+
+      await service.revokeSession(agy.sessionId);
+      expect(service.getAntigravityLaunchArgs(agy.token)).toBeNull();
+    });
+
+    it("revokeSession leaves no bearer in the lane folder and keeps the docs server", async () => {
+      const result = await service.provisionSession(agyInput());
+      if (!result) throw new Error("expected result");
+
+      await service.revokeSession(result.sessionId);
+
+      const config = await readAgyConfig(result.sessionPath);
+      expect(config.mcpServers.daintree).toBeUndefined();
+      expect(config.mcpServers["daintree-docs"]).toBeDefined();
+      const onDisk = await fs.readdir(result.sessionPath, { recursive: true });
+      for (const entry of onDisk) {
+        const file = path.join(result.sessionPath, entry);
+        if (!(await fs.stat(file)).isFile()) continue;
+        expect(await fs.readFile(file, "utf-8"), entry).not.toContain(result.token);
+      }
+    });
+
+    it("a same-lane re-provision rewrites the lane's bearer and the old one stops validating", async () => {
+      const first = await service.provisionSession(agyInput());
+      const second = await service.provisionSession(agyInput());
+      if (!first || !second) throw new Error("expected results");
+
+      expect(second.sessionPath).toBe(first.sessionPath);
+      expect(service.validateToken(first.token)).toBe(false);
+      expect((await readAgyConfig(second.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${second.token}`,
+      });
+    });
+
+    it("throws MCP_PROBE_FAILED and removes the bearer it just wrote when the /mcp probe fails", async () => {
+      mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
+      mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 401"));
+
+      await expect(service.provisionSession(agyInput())).rejects.toMatchObject({
+        name: "HelpSessionError",
+        code: "MCP_PROBE_FAILED",
+      });
+
+      const sessionsRoot = path.join(userData, "help-sessions");
+      const [dir] = await fs.readdir(sessionsRoot);
+      expect(dir).toMatch(/\.antigravity\.s0$/);
+      const config = await readAgyConfig(path.join(sessionsRoot, dir!));
+      expect(config.mcpServers.daintree).toBeUndefined();
+    });
+
+    it("gcStaleSessions keeps a lane folder but strips a bearer left by a previous run", async () => {
+      const live = await service.provisionSession(agyInput(0));
+      if (!live) throw new Error("expected result");
+      const staleDir = path.join(userData, "help-sessions", "deadbeefdeadbeef.antigravity.s2");
+      const staleConfig = path.join(staleDir, ".agents", "mcp_config.json");
+      await fs.mkdir(path.dirname(staleConfig), { recursive: true });
+      await fs.writeFile(
+        staleConfig,
+        JSON.stringify({
+          mcpServers: {
+            daintree: {
+              url: "http://127.0.0.1:45454/mcp",
+              headers: { Authorization: "Bearer dead-token-from-prior-boot" },
+            },
+          },
+        })
+      );
+      const beforeBoot = new Date(Date.now() - (process.uptime() + 3600) * 1000);
+      await fs.utimes(staleConfig, beforeBoot, beforeBoot);
+
+      await service.gcStaleSessions();
+
+      expect(await exists(staleDir)).toBe(true);
+      expect((await readAgyConfig(staleDir)).mcpServers.daintree).toBeUndefined();
+      expect((await readAgyConfig(live.sessionPath)).mcpServers.daintree?.headers).toEqual({
+        Authorization: `Bearer ${live.token}`,
+      });
+    });
+
+    it("mirrors the lane's skills but describes no plugin, whose tools agy is never handed (#16815)", async () => {
+      mockResolveAssistantPluginKnowledge.mockResolvedValue([
+        {
+          key: "daintree-ledger",
+          pluginId: "acme.ledger",
+          displayName: "Ledger",
+          version: "1.2.0",
+          instructions: "Call month_total before listing transactions.",
+          instructionsFile: null,
+          skills: ["daintree-ledger-reconcile"],
+          references: [],
+          content: { key: "daintree-ledger", skills: new Map(), references: new Map() },
+        },
+      ]);
+
+      const lane = await service.provisionSession(agyInput());
+      if (!lane) throw new Error("expected result");
+
+      expect(mockResolveAssistantPluginKnowledge).not.toHaveBeenCalled();
+      expect(mockSyncAssistantContent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          sessionPath: lane.sessionPath,
+          agentId: "antigravity",
+          pluginContent: [],
+        })
+      );
+      const agents = await fs.readFile(path.join(lane.sessionPath, "AGENTS.md"), "utf-8");
+      expect(agents).not.toContain("Notes on Plugin Tools");
+
+      // A Claude lane of the same project is still handed the plugin's notes.
+      await service.provisionSession(provisionInput());
+      expect(mockResolveAssistantPluginKnowledge).toHaveBeenCalledTimes(1);
     });
   });
 

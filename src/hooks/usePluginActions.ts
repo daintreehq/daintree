@@ -175,12 +175,18 @@ function toSyntheticDefinition(
     scope: "renderer",
     keywords: keywords ? [...keywords] : undefined,
     run: async (args, ctx) => {
+      const dispatchSource = ctx?.dispatchSource ?? "user";
+      // Whether a person answered a confirm dialog for this very dispatch:
+      // this one's below, or the MCP bridge's for an agent call (#16751). A
+      // grant or Never ask confirms an agent call without showing anyone a
+      // dialog, so it never counts.
+      let personApproved = dispatchSource === "agent" && ctx?.hostPersonApproved === true;
       // Confirm before dispatching a host-classified destructive plugin
       // action. Skip for agent-sourced dispatch: the MCP bridge already
       // surfaced its own confirm dialog and a second prompt would
       // double-gate the same call. This is a UI consent gate, not a
       // security boundary (enforcement is trust-based per #5651).
-      if (effectiveDanger === "confirm" && ctx?.dispatchSource !== "agent") {
+      if (effectiveDanger === "confirm" && dispatchSource !== "agent") {
         const requestId = crypto.randomUUID();
         inFlightConfirms.add(requestId);
         let decision;
@@ -211,9 +217,16 @@ function toSyntheticDefinition(
         if (decision !== "approved") {
           return undefined;
         }
+        personApproved = dispatchSource !== "plugin";
       }
       try {
-        return await window.electron.plugin.invoke(pluginId, id, args);
+        return await window.electron.plugin.invokeAction(pluginId, id, args, {
+          dispatchSource,
+          ...(dispatchSource === "agent" && ctx?.hostCallerOrigin === "assistant"
+            ? { origin: "assistant" as const }
+            : {}),
+          ...(personApproved ? { approval: "person" as const } : {}),
+        });
       } catch (err) {
         // Surface the failure as a user-visible toast, then rethrow so
         // `ActionService.dispatch` returns `{ ok: false }` instead of treating

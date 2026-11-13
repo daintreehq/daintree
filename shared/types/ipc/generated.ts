@@ -294,6 +294,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "canopy-window:open-assistant": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").CanopyAssistantOpenRefusal | null;
+  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;
@@ -673,6 +685,10 @@ export interface GeneratedIpcInvokeMap {
   "composer-hold:list": {
     args: [];
     result: import("./composerHold.js").HeldComposerSend[];
+  };
+  "composer-hold:send-now": {
+    args: [terminalId: string, token: string, inputBlocked?: boolean | undefined];
+    result: import("./composerHold.js").ComposerHoldSendNowResult;
   };
   "composer-hold:withdraw": {
     args: [terminalId: string, token: string];
@@ -2805,6 +2821,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-host-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginHostTargetingQuery];
+    result: boolean;
+  };
   "plugin-capability:get-os-notifications": {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
     result: boolean;
@@ -2836,6 +2856,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-capability:revoke-preset-grant": {
     args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantRevoke];
     result: void;
+  };
+  "plugin-capability:set-host-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginHostTargetingUpdate];
+    result: boolean;
   };
   "plugin-capability:set-os-notifications": {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];
@@ -2949,6 +2973,15 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
   };
+  "plugin:actions-invoke": {
+    args: [
+      pluginId: string,
+      actionId: string,
+      args: unknown,
+      context: import("../plugin.js").PluginActionContext,
+    ];
+    result: import("../plugin.js").PluginActionInvokeResult;
+  };
   "plugin:actions-register": {
     args: [pluginId: string, contribution: import("../plugin.js").PluginActionContribution];
     result: void;
@@ -2992,6 +3025,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:bg-update-check-settings-set": {
     args: [enabled: boolean];
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
+  };
+  "plugin:browse-catalog": {
+    args: [];
+    result: import("../plugin.js").PluginCatalogBrowseResult;
   };
   "plugin:cancel-install": {
     args: [jobId: string];
@@ -3073,6 +3110,10 @@ export interface GeneratedIpcInvokeMap {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;
   };
+  "plugin:install-from-catalog": {
+    args: [request: import("../plugin.js").PluginCatalogInstallRequest, jobId?: string | undefined];
+    result: import("../plugin.js").PluginInstallResult;
+  };
   "plugin:install-from-file": {
     args: [jobId?: string | undefined];
     result: import("../plugin.js").PluginInstallResult;
@@ -3136,6 +3177,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:pick-path": {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
+  };
+  "plugin:preview-from-catalog": {
+    args: [request: import("../plugin.js").PluginCatalogPreviewRequest, jobId?: string | undefined];
+    result: import("../plugin.js").PluginUrlInstallPreviewResult;
+  };
+  "plugin:preview-from-url": {
+    args: [url: string, jobId?: string | undefined, expectedSha256?: string | undefined];
+    result: import("../plugin.js").PluginUrlInstallPreviewResult;
   };
   "plugin:project-activate-staged": {
     args: [pluginId: string];

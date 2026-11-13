@@ -225,7 +225,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-bg": "#F6F8FA",
     "toolbar-stats-border": "rgba(197,207,214,0.7)",
     "toolbar-stats-divider": "rgba(197,207,214,0.7)",
-    "toolbar-stats-hover-bg": "#F9FBFD",
     // The welcome field stays flat (a screen-tall wash would band); the mark
     // carries the warm note instead, 3.5:1 on canvas.
     "welcome-mark-color": "#A47634",

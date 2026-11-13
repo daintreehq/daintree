@@ -1,4 +1,5 @@
 import { WORKER_STEER_SLASH_FORMS } from "../../shared/config/workerSteerCommands.js";
+import { DELEGABLE_ASSISTANT_CONFIRMATIONS } from "../../shared/config/assistantConfirmationDelegation.js";
 
 // What a steer runs as a slash command (#16101), read off the policy that enforces it.
 const STEER_SLASH_FORMS = Object.entries(WORKER_STEER_SLASH_FORMS)
@@ -89,7 +90,7 @@ export function buildRunbooksAddendum(caller: { global?: boolean } = {}): string
   const toolNames = caller.global
     ? "**Tool names:** you have no project of your own: `host.list` finds projects, a page per host (follow `projectInventory.nextCursor`, or narrow by `projectQuery`, before calling one missing), and every step a runbook gives runs through `host.call` with that project's `hostId` and `projectId` (`local` for this machine). A status read across several projects is one `host.status`, with every project in its `targets`. Call the tools it names as written, `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.closeOwned` included. Prompting, keys, `terminal.interruptOwned` and `terminal.revealOwned` also reach an agent you didn't launch, given its `incarnation` from `host.list` as `generation`; you can close only what you launched. There a slash command runs only as one of its agent's fixed forms (" +
       STEER_SLASH_FORMS +
-      "), sent alone without `handback`; for any other, ask the person to type it, or to hand you the pane if it runs on this machine. Their `notify` steps apply to you too. A host's own settings, turning Canopy on included, are read and changed with `host.settings`, never through `host.call`. A host that is down can be tried with `host.bringBack`, which wakes or starts it where the person set that up and says what it observed. Holding work for a host that is down or busy, arm one notice for when its link or a fresh sample changes with `host.watch`, and list hosts again before acting on it."
+      "), sent alone without `handback`; for any other, ask the person to type it, or to hand you the pane if it runs on this machine. Their `notify` steps apply to you too. A host's own settings, turning Canopy on included, are read and changed with `host.settings`, never through `host.call`. A host that is down can be tried with `host.bringBack`, which wakes or starts it where the person set that up and says what it observed. Holding work for a host that is down or busy, arm one notice for when its link or a fresh sample changes with `host.watch`, and list hosts again before acting on it. With `host.list` missing, call `mcp.surface`: a `role` other than `global-assistant` means the server didn't take you for the global Assistant, so tell the person the `role` you got and use none of its tools."
     : "**Tool names:** runbooks are written for every caller. In your own project, where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Through `host.call` use the owned names as written. Their `notify` steps apply to you too.";
   return [
     "## Runbooks First",
@@ -122,6 +123,27 @@ export function buildConfirmationsAddendum(): string {
     "## Daintree Confirmations",
     "",
     "The user has told Daintree not to ask before your actions. Confirm-gated Daintree actions run as soon as you call them: deleting a worktree, closing a panel you didn't open or whose agent is mid-task, and closing panels in bulk included. No dialog, no typed-name check, so don't tell the user to watch for one. This overrides anything above about those actions waiting for the user. It doesn't change what you should do: close and remove only what the user asked for. Refusals still apply, and so does asking for a tool outside your tool set. The user can turn asking back on at any time, so if a call does wait for a dialog, tell them it is waiting for them.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The session-start correction for calls the user handed over one by one
+ * (#16752): only these run without a dialog, and everything else still waits.
+ * Like the blanket note it can go stale mid-session.
+ */
+export function buildDelegatedConfirmationsAddendum(delegated: readonly string[]): string {
+  const calls = DELEGABLE_ASSISTANT_CONFIRMATIONS.filter((entry) =>
+    delegated.includes(entry.id)
+  ).map((entry) => `- \`${entry.id}\`: ${entry.label.toLowerCase()}. ${entry.detail}.`);
+  return [
+    "## Daintree Confirmations",
+    "",
+    "The user has told Daintree not to ask before these calls of yours, here or through `host.call`. They run as soon as you call them, with no dialog, so don't tell the user to watch for one:",
+    "",
+    ...calls,
+    "",
+    "Every other confirm-gated Daintree action still waits for the user. This doesn't change what you should do: delete or change only what the user asked for, and refusals still apply. The user can take any of these back at any time, so if one of them does wait for a dialog, tell them it is waiting for them.",
     "",
   ].join("\n");
 }

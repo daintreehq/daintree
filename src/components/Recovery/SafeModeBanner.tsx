@@ -157,7 +157,7 @@ export function SafeModeBanner() {
             </p>
             <ul
               role="list"
-              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-daintree-text/10 text-2xs"
+              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-text-primary/10 text-2xs"
             >
               {quarantined.map((panel) => (
                 <QuarantinedPanelRow key={panel.id} panel={panel} />

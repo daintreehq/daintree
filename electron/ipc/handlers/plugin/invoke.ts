@@ -3,7 +3,11 @@ import { stableArgsSha256 } from "../../../utils/pluginMcpHash.js";
 import { isAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isPluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
-import type { PluginInvokeOrigin, PluginIpcContext } from "../../../../shared/types/plugin.js";
+import type {
+  PluginActionContext,
+  PluginInvokeOrigin,
+  PluginIpcContext,
+} from "../../../../shared/types/plugin.js";
 import { projectIdFromPluginInstanceKey } from "../../../services/plugin/projectPluginIdentity.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import {
@@ -57,7 +61,8 @@ export async function runPluginInvoke(
   source: PluginInvokeSource,
   pluginId: string,
   channel: string,
-  args: unknown[]
+  args: unknown[],
+  actionContext?: PluginActionContext
 ): Promise<unknown> {
   const { start } = source;
   // A project plugin answers only to its own project's renderers. The
@@ -103,7 +108,7 @@ export async function runPluginInvoke(
       pluginId,
       ...(source.origin ? { origin: source.origin } : {}),
     };
-    return await service.dispatchHandler(pluginId, channel, ctx, args);
+    return await service.dispatchHandler(pluginId, channel, ctx, args, actionContext);
   } catch (err) {
     if (!argsWithinLimit && isPluginPayloadTooLargeError(err)) {
       meterOversizeInvokeArgs(pluginId, source.projectId, Date.now() - start);

@@ -24,19 +24,37 @@ export const HEADER_CHIP_FOCUS_CLASS =
 export const HEADER_CHIP_CLASS =
   "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-2xs leading-4";
 
-/** The neutral surface most header chips sit on. */
-export const HEADER_CHIP_SURFACE = "border-divider bg-overlay-soft text-text-secondary";
+/**
+ * Ambient telemetry — context, the settled cost and tokens, CPU and memory —
+ * as plain secondary text rather than a chip. A box is kept for what answers
+ * the pointer or reports something unusual, so a fact never reads as a control
+ * and never outweighs the title. `data-header-fact` puts a dot between two
+ * facts in a row (panels.css), so a run of them reads as one line of readings.
+ */
+export const HEADER_FACT_CLASS =
+  "inline-flex shrink-0 items-center gap-1 rounded-sm whitespace-nowrap text-2xs leading-4 text-text-secondary tabular-nums";
 
 /**
- * A header chip that opens a popover (subagents, notices). Hover and open lift
- * the fill one step, the same on every such chip, so a chip that answers the
- * pointer reads as a control rather than a label. Ink stays with the caller: a
+ * The neutral surface most header chips sit on: a flat tint with no visible
+ * edge, for a chip that only reports (queued, exit, when done). The edge is
+ * kept for chips that answer the pointer (`HEADER_CHIP_TRIGGER_CLASS`), so a
+ * control can be told from a label at rest, not only on hover. Forced colours
+ * flatten the tint, so the edge comes back there.
+ */
+export const HEADER_CHIP_SURFACE =
+  "border-transparent bg-overlay-soft text-text-secondary forced-colors:border-[CanvasText]";
+
+/**
+ * A header chip that opens a popover or a menu (subagents, notices, decisions).
+ * It wears the edge a reporting chip doesn't, and hover and open lift the fill
+ * one step, the same on every such chip, so a chip that answers the pointer
+ * reads as a control rather than a label. Ink stays with the caller: a
  * neutral chip adds `hover:text-text-primary`, a toned one keeps its tone.
  * `aria-expanded` rather than `data-[state=open]`: a chip that is also a
  * tooltip trigger carries the tooltip's `data-state`, not the popover's.
  */
 export const HEADER_CHIP_TRIGGER_CLASS =
-  "transition-colors duration-150 ease-out hover:bg-overlay-medium aria-expanded:bg-overlay-medium";
+  "border-divider transition-colors duration-150 ease-out hover:bg-overlay-medium aria-expanded:bg-overlay-medium";
 
 /**
  * Wraps a header chip that opens a popover, so pressing it leaves the pane's

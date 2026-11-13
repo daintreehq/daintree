@@ -113,6 +113,11 @@ function makeHost() {
       sendKeys: vi.fn(async () => ({ status: "sent", keys: ["Enter"] })),
       submit: vi.fn(async () => ({ status: "not-found" })),
     },
+    remoteHosts: {
+      list: vi.fn(async () => [
+        { hostId: "studio", name: "Studio", connection: "connected", projects: [] },
+      ]),
+    },
     terminals: {
       readScreen: vi.fn(async (): Promise<unknown> => ({
         status: "ok",
@@ -285,6 +290,8 @@ function makeBridge(
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
+
+const USER_CONTEXT = Object.freeze({ dispatchSource: "user" as const });
 
 describe("PluginDevWorkerMainBridge", () => {
   beforeEach(() => {
@@ -965,11 +972,22 @@ describe("PluginDevWorkerMainBridge", () => {
       },
     });
     expect(host.registerAction).toHaveBeenCalledTimes(1);
-    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
+    const wrapper = host.registerAction.mock.calls[0][1] as (
+      a: unknown,
+      context: unknown
+    ) => Promise<unknown>;
+    const context = Object.freeze({
+      dispatchSource: "agent" as const,
+      origin: "assistant" as const,
+      approval: "person" as const,
+    });
 
-    const resultPromise = wrapper({ name: "world" });
+    const resultPromise = wrapper({ name: "world" }, context);
     const invoke = workerHost.sent.find((m) => m.type === "invoke" && m.kind === "action");
     expect(invoke).toMatchObject({ namespacedId: "acme.demo.greet", args: { name: "world" } });
+    // Every fact the host attested reaches the worker, as a fresh copy.
+    expect(invoke.context).toEqual(context);
+    expect(invoke.context).not.toBe(context);
 
     // Worker replies.
     workerHost.emit("worker-message", {
@@ -1972,8 +1990,11 @@ describe("PluginDevWorkerMainBridge", () => {
         },
       },
     });
-    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
-    const pending = wrapper({});
+    const wrapper = host.registerAction.mock.calls[0][1] as (
+      a: unknown,
+      context: typeof USER_CONTEXT
+    ) => Promise<unknown>;
+    const pending = wrapper({}, USER_CONTEXT);
     pending.catch(() => {});
 
     // A crash, not a reload: the host respawns a worker that has never seen
@@ -2001,8 +2022,11 @@ describe("PluginDevWorkerMainBridge", () => {
         },
       },
     });
-    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
-    const pending = wrapper({});
+    const wrapper = host.registerAction.mock.calls[0][1] as (
+      a: unknown,
+      context: typeof USER_CONTEXT
+    ) => Promise<unknown>;
+    const pending = wrapper({}, USER_CONTEXT);
     pending.catch(() => {});
 
     workerHost.emit("exit", 0, true);
@@ -2856,12 +2880,20 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     return made;
   }
 
-  it("sends the command id, the path main resolved, and the args", async () => {
+  it("sends the command id, the path main resolved, the args and the dispatch context", async () => {
     const { workerHost, bridge } = makeActivatedBridge();
-
-    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/plugins/acme.demo/src/plan.js", {
-      issue: 42,
+    const context = Object.freeze({
+      dispatchSource: "agent" as const,
+      origin: "assistant" as const,
+      approval: "person" as const,
     });
+
+    const resultPromise = bridge.invokeCommand(
+      "acme.demo.plan",
+      "/plugins/acme.demo/src/plan.js",
+      { issue: 42 },
+      context
+    );
 
     const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
     expect(invoke).toMatchObject({
@@ -2869,6 +2901,9 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
       resolvedPath: "/plugins/acme.demo/src/plan.js",
       args: { issue: 42 },
     });
+    // A fresh copy of the contract's fields, not the frozen original.
+    expect(invoke.context).toEqual(context);
+    expect(invoke.context).not.toBe(context);
 
     workerHost.emit("worker-message", {
       type: "invoke-result",
@@ -2882,7 +2917,12 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
   it("rejects with the worker's own error when the handler fails", async () => {
     const { workerHost, bridge } = makeActivatedBridge();
 
-    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const resultPromise = bridge.invokeCommand(
+      "acme.demo.plan",
+      "/p/src/plan.js",
+      {},
+      USER_CONTEXT
+    );
     const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "command");
     workerHost.emit("worker-message", {
       type: "invoke-result",
@@ -2898,15 +2938,20 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     const { workerHost, bridge } = makeActivatedBridge();
     workerHost.ready = false;
 
-    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
-      /not running/
-    );
+    await expect(
+      bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}, USER_CONTEXT)
+    ).rejects.toThrow(/not running/);
   });
 
   it("rejects an in-flight command when the bridge is disposed", async () => {
     const { bridge } = makeActivatedBridge();
 
-    const resultPromise = bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {});
+    const resultPromise = bridge.invokeCommand(
+      "acme.demo.plan",
+      "/p/src/plan.js",
+      {},
+      USER_CONTEXT
+    );
     const assertion = expect(resultPromise).rejects.toThrow();
     bridge.dispose();
     await assertion;
@@ -2916,9 +2961,9 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     // A fresh bridge has a forked child but no completed handshake.
     const { workerHost, bridge } = makeBridge();
 
-    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
-      /not ready to run command/
-    );
+    await expect(
+      bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}, USER_CONTEXT)
+    ).rejects.toThrow(/not ready to run command/);
     expect(workerHost.sent.find((m: any) => m.type === "invoke")).toBeUndefined();
   });
 
@@ -2930,14 +2975,16 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     // pending invoke would keep the worker off the idle-disposal path.
     const { workerHost, bridge } = makeActivatedBridge();
     // Sanity: it works before the crash.
-    void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
+    void bridge
+      .invokeCommand("acme.demo.plan", "/p/src/plan.js", {}, USER_CONTEXT)
+      .catch(() => undefined);
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(1);
 
     bridge.retire("worker crashed");
 
-    await expect(bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {})).rejects.toThrow(
-      /not ready to run command/
-    );
+    await expect(
+      bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}, USER_CONTEXT)
+    ).rejects.toThrow(/not ready to run command/);
     // Nothing new went to the booting replacement.
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(1);
 
@@ -2946,7 +2993,9 @@ describe("PluginDevWorkerMainBridge manifest commands (#12274)", () => {
     // commits it.
     workerHost.emit("ready");
     workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
-    void bridge.invokeCommand("acme.demo.plan", "/p/src/plan.js", {}).catch(() => undefined);
+    void bridge
+      .invokeCommand("acme.demo.plan", "/p/src/plan.js", {}, USER_CONTEXT)
+      .catch(() => undefined);
     expect(workerHost.sent.filter((m: any) => m.kind === "command")).toHaveLength(2);
   });
 });
@@ -3114,6 +3163,28 @@ describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
       ["t-1", "/compact"],
       { status: "not-found" },
     ],
+    // A Remote Host's agent (#16767): the host it runs on crosses with the call.
+    [
+      "agents.interrupt",
+      { terminalId: "t-1", options: { hostId: "studio" } },
+      "interrupt",
+      ["t-1", { hostId: "studio" }],
+      { status: "sent", cancelKey: "advertised" },
+    ],
+    [
+      "agents.sendKeys",
+      { terminalId: "t-1", input: { keys: ["Escape"] }, options: { hostId: "studio" } },
+      "sendKeys",
+      ["t-1", { keys: ["Escape"] }, { hostId: "studio" }],
+      { status: "sent", keys: ["Enter"] },
+    ],
+    [
+      "agents.submit",
+      { terminalId: "t-1", text: "/compact", options: { hostId: "studio" } },
+      "submit",
+      ["t-1", "/compact", { hostId: "studio" }],
+      { status: "not-found" },
+    ],
   ] as const)("routes %s to the real host", async (method, params, hostMethod, args, result) => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {
@@ -3128,6 +3199,24 @@ describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
     expect(workerHost.sent.find((m) => m.requestId === `in-${hostMethod}`)).toMatchObject({
       ok: true,
       result,
+    });
+  });
+});
+
+describe("PluginDevWorkerMainBridge Remote Hosts (#16767)", () => {
+  it("routes remoteHosts.list to the real host, which owns the gate", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "hosts-1",
+      method: "remoteHosts.list",
+    });
+    await flush();
+
+    expect(host.remoteHosts.list).toHaveBeenCalledTimes(1);
+    expect(workerHost.sent.find((m) => m.requestId === "hosts-1")).toMatchObject({
+      ok: true,
+      result: [{ hostId: "studio" }],
     });
   });
 });

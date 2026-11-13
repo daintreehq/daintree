@@ -444,7 +444,9 @@ export interface StoreSchema {
      */
     modelIds?: Record<string, string>;
     /** Absent in stores written before #12874; read as `"inherit"`. */
-    daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
+    daintreeConfirmations?: "inherit" | "always-ask" | "never-ask" | "ask-except";
+    /** Absent in stores written before #16752; read as none. */
+    daintreeConfirmationsExcept?: string[];
     /** Absent in stores written before #13493; read as on. */
     acceptRemoteControl?: boolean;
     /**

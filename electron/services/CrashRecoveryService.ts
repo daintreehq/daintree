@@ -1,7 +1,7 @@
 import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: reads/writes crash-recovery state via sync fs and store.get during early startup
 import { app, BrowserWindow } from "electron";
-import fs from "node:fs";
+import fs, { type Stats } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -26,9 +26,13 @@ import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 import {
+  prepareAtomicWriteFile,
   resilientAtomicWriteFileSync,
   resilientRenameSync,
+  syncParentDirectory,
+  tightenDirPermissions,
   tightenDirPermissionsSync,
+  tightenFilePermissions,
   tightenFilePermissionsSync,
   OWNER_RW_FILE_MODE,
   OWNER_RWX_DIR_MODE,
@@ -73,6 +77,11 @@ const HEARTBEAT_STALE_THRESHOLD_MS = 120_000;
 // after sessionStartMs. 5s of grace safely absorbs clock drift and fs jitter
 // without admitting any flag from a prior session.
 const WATCHDOG_GRACE_MS = 5_000;
+// Waits between tries of a scheduled write's rename when the file is locked
+// (AV or the search indexer on Windows): the ~500ms the synchronous retry used
+// to spin for, spent yielding instead.
+const COMMIT_RETRY_DELAYS_MS = [25, 50, 100, 150, 175];
+const TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES"]);
 
 const CRASH_CAUSES: ReadonlySet<CrashCause> = new Set<CrashCause>([
   "uncaught-exception",
@@ -191,6 +200,16 @@ export class CrashRecoveryService {
   private liveWorkspaceIdsProvider: (() => Iterable<string>) | null = null;
   private rendererGoneCount = 0;
   private rendererGoneLastAt = new Map<string, number>();
+  // Healthy ticks write asynchronously, while crash and shutdown paths write the
+  // same files synchronously. Every synchronous writer bumps its file's
+  // generation, and stopping the schedule bumps the epoch, so a scheduled write
+  // that started before either never lands over what they wrote.
+  private backupGeneration = 0;
+  private markerGeneration = 0;
+  private scheduledEpoch = 0;
+  private pendingScheduledBackup = false;
+  private pendingScheduledHeartbeat = false;
+  private scheduledWork: Promise<void> | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -403,17 +422,16 @@ export class CrashRecoveryService {
 
   startBackupTimer(): void {
     if (this.backupTimer) return;
-    this.takeBackup();
-    this.updateMarkerHeartbeat();
+    this.requestScheduledWork({ backup: true, heartbeat: true });
     this.backupTimer = setInterval(() => {
-      this.takeBackup();
-      this.updateMarkerHeartbeat();
+      this.requestScheduledWork({ backup: true, heartbeat: true });
     }, BACKUP_INTERVAL_MS);
     this.registerSleepListeners();
     this.registerBlurListener();
   }
 
   stopBackupTimer(): void {
+    this.cancelScheduledWork();
     if (this.backupTimer) {
       clearInterval(this.backupTimer);
       this.backupTimer = null;
@@ -430,6 +448,7 @@ export class CrashRecoveryService {
     this.unregisterSleepListeners();
     try {
       this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        this.cancelScheduledWork();
         // Stamp the suspend start time so a power loss during sleep can be
         // attributed to "suspended-then-lost" on the next launch instead of
         // looking like a generic crash with a stale heartbeat.
@@ -473,7 +492,7 @@ export class CrashRecoveryService {
       this.blurDebounceTimer = setTimeout(() => {
         this.blurDebounceTimer = null;
         if (!BrowserWindow.getFocusedWindow()) {
-          this.takeBackup();
+          this.requestScheduledWork({ backup: true });
         }
       }, BLUR_BACKUP_DEBOUNCE_MS);
     };
@@ -517,11 +536,166 @@ export class CrashRecoveryService {
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      this.takeBackup();
+      this.requestScheduledWork({ backup: true });
     }, DEBOUNCE_BACKUP_MS);
   }
 
+  /** Resolves once no scheduled backup or heartbeat is running or waiting to. */
+  whenScheduledWorkSettled(): Promise<void> {
+    return this.scheduledWork ?? Promise.resolve();
+  }
+
+  private requestScheduledWork(work: { backup?: boolean; heartbeat?: boolean }): void {
+    if (work.backup) this.pendingScheduledBackup = true;
+    if (work.heartbeat) this.pendingScheduledHeartbeat = true;
+    this.scheduledWork ??= this.drainScheduledWork();
+  }
+
+  // Requests not yet started are dropped, and a job already under way finds
+  // itself superseded before it renames anything into place.
+  private cancelScheduledWork(): void {
+    this.pendingScheduledBackup = false;
+    this.pendingScheduledHeartbeat = false;
+    this.scheduledEpoch++;
+  }
+
+  // One job at a time and at most one of each kind waiting, so a hung disk
+  // can't stack up ticks behind it. A job captures state when it starts, not
+  // when it was requested.
+  private async drainScheduledWork(): Promise<void> {
+    // Yield first, so the finally can never run before the caller has stored
+    // this promise, which would leave it set and stall every later request.
+    await Promise.resolve();
+    try {
+      while (this.pendingScheduledBackup || this.pendingScheduledHeartbeat) {
+        if (this.pendingScheduledBackup) {
+          this.pendingScheduledBackup = false;
+          await this.runScheduledBackup();
+        }
+        if (this.pendingScheduledHeartbeat) {
+          this.pendingScheduledHeartbeat = false;
+          await this.runScheduledHeartbeat();
+        }
+      }
+    } finally {
+      this.scheduledWork = null;
+    }
+  }
+
+  /**
+   * The healthy-tick counterpart to takeBackup: the reads, the temp write and
+   * its flush, and the directory sync run off Main's thread. Only the renames
+   * that install the result run on Main, where they are ordered against the
+   * synchronous writers, and only if none of them has written since this
+   * started.
+   */
+  private async runScheduledBackup(): Promise<void> {
+    const generation = this.backupGeneration;
+    const epoch = this.scheduledEpoch;
+    const isCurrent = () => this.backupGeneration === generation && this.scheduledEpoch === epoch;
+    let tempPath: string | null = null;
+    try {
+      const backupDir = path.dirname(this.backupPath);
+      await fs.promises.mkdir(backupDir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+      await tightenDirPermissions(backupDir);
+
+      const snapshot = await this.captureSessionSnapshotAsync();
+      const stateJson = backupStateJson(snapshot);
+      const lastFingerprint = this.lastWrittenFingerprint;
+      if (
+        stateJson === this.lastWrittenStateJson &&
+        lastFingerprint !== null &&
+        (await fileFingerprint(this.backupPath)) === lastFingerprint
+      ) {
+        return;
+      }
+      if (!isCurrent()) return;
+
+      tempPath = await prepareAtomicWriteFile(this.backupPath, JSON.stringify(snapshot), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
+      // rename keeps the inode and mtime, so the temp's fingerprint is the
+      // installed file's.
+      const fingerprint = await fileFingerprint(tempPath);
+      // rename also keeps the mode: a legacy 0o644 current would otherwise land
+      // as previous still world-readable.
+      await tightenFilePermissions(this.backupPath);
+
+      // Rotation and install each get their own retries. Between them the
+      // current file is missing, which a synchronous takeBackup handles.
+      const rotated = await commitOnMain(isCurrent, (finalAttempt) => {
+        try {
+          fs.renameSync(this.backupPath, this.previousBackupPath);
+        } catch (err) {
+          if (errorCode(err) !== "ENOENT") {
+            if (!finalAttempt && isTransientRenameError(err)) throw err;
+            // Best-effort, as in rotateBackup: the write still goes ahead.
+            console.warn("[CrashRecovery] Backup rotation rename failed:", err);
+          }
+        }
+        // Until the install lands, the current file isn't what the guard says.
+        this.lastWrittenStateJson = null;
+        this.lastWrittenFingerprint = null;
+      });
+      if (!rotated) return;
+      const staged = tempPath;
+      const installed = await commitOnMain(isCurrent, () => {
+        fs.renameSync(staged, this.backupPath);
+        this.lastWrittenStateJson = fingerprint === null ? null : stateJson;
+        this.lastWrittenFingerprint = fingerprint;
+      });
+      if (!installed) return;
+      tempPath = null;
+      await syncParentDirectory(this.backupPath);
+    } catch (err) {
+      console.error("[CrashRecovery] Failed to take backup:", err);
+    } finally {
+      if (tempPath) discardTempFile(tempPath);
+    }
+  }
+
+  // Read-modify-write of the marker from disk, as mutateMarker does, so the
+  // crash log path and suspend stamp it carries are preserved.
+  private async runScheduledHeartbeat(): Promise<void> {
+    const generation = this.markerGeneration;
+    const epoch = this.scheduledEpoch;
+    const isCurrent = () => this.markerGeneration === generation && this.scheduledEpoch === epoch;
+    let tempPath: string | null = null;
+    try {
+      let raw: string;
+      try {
+        raw = await fs.promises.readFile(this.markerPath, "utf8");
+      } catch (err) {
+        if (errorCode(err) === "ENOENT") return;
+        throw err;
+      }
+      const marker = JSON.parse(raw) as MarkerFile;
+      if (!isValidMarker(marker) || !isCurrent()) return;
+      marker.lastHeartbeatMs = Date.now();
+      tempPath = await prepareAtomicWriteFile(this.markerPath, JSON.stringify(marker), "utf-8", {
+        mode: OWNER_RW_FILE_MODE,
+      });
+      const staged = tempPath;
+      const committed = await commitOnMain(isCurrent, () => {
+        fs.renameSync(staged, this.markerPath);
+      });
+      if (!committed) return;
+      tempPath = null;
+      await syncParentDirectory(this.markerPath);
+    } catch (err) {
+      console.warn("[CrashRecovery] Failed to update marker heartbeat:", err);
+    } finally {
+      if (tempPath) discardTempFile(tempPath);
+    }
+  }
+
+  /**
+   * Synchronous and disk-authoritative, for the paths where nothing async gets
+   * to finish: quit-intent and clean exit. The timer, blur and layout triggers
+   * go through runScheduledBackup instead.
+   */
   takeBackup(): void {
+    this.backupGeneration++;
     try {
       const backupDir = path.join(this.userData, BACKUP_DIR);
       fs.mkdirSync(backupDir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
@@ -535,11 +709,7 @@ export class CrashRecoveryService {
       // copy over the previous generation. capturedAt is excluded because it
       // changes on every call regardless of app state. A backup file that has
       // since changed on disk or gone missing is always rewritten.
-      const stateJson = JSON.stringify({
-        appState: snapshot.appState,
-        windowStates: snapshot.windowStates,
-        projectLayouts: snapshot.projectLayouts,
-      });
+      const stateJson = backupStateJson(snapshot);
       if (
         stateJson === this.lastWrittenStateJson &&
         this.lastWrittenFingerprint !== null &&
@@ -573,8 +743,7 @@ export class CrashRecoveryService {
   // deleted standing in for the current state.
   private backupFingerprint(): string | null {
     try {
-      const stat = fs.statSync(this.backupPath);
-      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      return statFingerprint(fs.statSync(this.backupPath));
     } catch {
       return null;
     }
@@ -1217,6 +1386,7 @@ export class CrashRecoveryService {
   }
 
   private writeMarker(crashEntry?: CrashLogEntry): void {
+    this.markerGeneration++;
     try {
       const marker: MarkerFile = {
         sessionStartMs: this.sessionStartMs,
@@ -1246,6 +1416,7 @@ export class CrashRecoveryService {
    * to eliminate — we keep the marker as a single source of truth on disk.
    */
   private mutateMarker(mutate: (marker: MarkerFile) => void): void {
+    this.markerGeneration++;
     try {
       if (!fs.existsSync(this.markerPath)) return;
       const raw = fs.readFileSync(this.markerPath, "utf8");
@@ -1258,12 +1429,6 @@ export class CrashRecoveryService {
     } catch (err) {
       console.warn("[CrashRecovery] Failed to mutate marker:", err);
     }
-  }
-
-  private updateMarkerHeartbeat(): void {
-    this.mutateMarker((marker) => {
-      marker.lastHeartbeatMs = Date.now();
-    });
   }
 
   private stampSuspend(suspendStartMs: number): void {
@@ -1279,6 +1444,7 @@ export class CrashRecoveryService {
   }
 
   private deleteMarker(): void {
+    this.markerGeneration++;
     try {
       if (fs.existsSync(this.markerPath)) {
         fs.unlinkSync(this.markerPath);
@@ -1643,14 +1809,27 @@ export class CrashRecoveryService {
   }
 
   private captureSessionSnapshot(): SessionSnapshot {
-    const snapshot: SessionSnapshot = {
+    const snapshot = this.captureStoreSnapshot();
+    const projectLayouts = this.readLiveProjectLayoutsSync();
+    if (projectLayouts) snapshot.projectLayouts = projectLayouts;
+    return snapshot;
+  }
+
+  private async captureSessionSnapshotAsync(): Promise<SessionSnapshot> {
+    const snapshot = this.captureStoreSnapshot();
+    const projectLayouts = await this.readLiveProjectLayouts();
+    if (projectLayouts) snapshot.projectLayouts = projectLayouts;
+    return snapshot;
+  }
+
+  // Both stores serve reads from an in-memory snapshot of their file, which only
+  // a delete or reset elsewhere drops, and the next reader of any key reloads.
+  private captureStoreSnapshot(): SessionSnapshot {
+    return {
       capturedAt: Date.now(),
       appState: store.get("appState"),
       windowStates: windowStatesStore.get("windowStates"),
     };
-    const projectLayouts = this.readLiveProjectLayoutsSync();
-    if (projectLayouts) snapshot.projectLayouts = projectLayouts;
-    return snapshot;
   }
 
   /**
@@ -1661,48 +1840,56 @@ export class CrashRecoveryService {
    * unreadable is left out rather than recorded as empty.
    */
   private readLiveProjectLayoutsSync(): Record<string, Record<string, unknown>[]> | null {
-    let ids: string[];
+    const ids = this.liveWorkspaceIds();
+    if (!ids) return null;
+    return collectLayouts(
+      ids,
+      ids.map((id) => this.readProjectLayoutSync(id))
+    );
+  }
+
+  /** readLiveProjectLayoutsSync for healthy ticks, reading off Main's thread. */
+  private async readLiveProjectLayouts(): Promise<Record<
+    string,
+    Record<string, unknown>[]
+  > | null> {
+    const ids = this.liveWorkspaceIds();
+    if (!ids) return null;
+    return collectLayouts(ids, await Promise.all(ids.map((id) => this.readProjectLayout(id))));
+  }
+
+  private liveWorkspaceIds(): string[] | null {
     try {
-      ids = this.liveWorkspaceIdsProvider ? [...new Set(this.liveWorkspaceIdsProvider())] : [];
+      const ids = this.liveWorkspaceIdsProvider
+        ? [...new Set(this.liveWorkspaceIdsProvider())]
+        : [];
+      return ids.length > 0 ? ids.sort() : null;
     } catch (err) {
       console.warn("[CrashRecovery] Failed to enumerate live workspaces:", err);
       return null;
     }
-    if (ids.length === 0) return null;
-    const layouts: Record<string, Record<string, unknown>[]> = Object.create(null);
-    let found = false;
-    for (const id of ids.sort()) {
-      const layout = this.readProjectLayoutSync(id);
-      if (layout) {
-        layouts[id] = layout;
-        found = true;
-      }
-    }
-    return found ? layouts : null;
   }
 
   private readProjectLayoutSync(projectId: string): Record<string, unknown>[] | null {
     try {
-      const filePath = stateFilePath(path.join(this.userData, PROJECTS_DIR), projectId);
-      if (!filePath) return null;
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-      if (!isPlainObject(parsed)) return null;
-      // A newer build's layout is one hydration will refuse to read, so it
-      // must not be counted or offered for restore either.
-      if (
-        typeof parsed._schemaVersion === "number" &&
-        parsed._schemaVersion > PROJECT_STATE_SCHEMA_VERSION
-      ) {
-        return null;
-      }
-      if (parsed.terminals == null) return [];
-      if (!Array.isArray(parsed.terminals)) return null;
-      return parsed.terminals.filter(
-        (t): t is Record<string, unknown> => isPlainObject(t) && typeof t.id === "string"
-      );
+      const filePath = this.projectStateFilePath(projectId);
+      return filePath ? parseProjectLayout(fs.readFileSync(filePath, "utf-8")) : null;
     } catch {
       return null;
     }
+  }
+
+  private async readProjectLayout(projectId: string): Promise<Record<string, unknown>[] | null> {
+    try {
+      const filePath = this.projectStateFilePath(projectId);
+      return filePath ? parseProjectLayout(await fs.promises.readFile(filePath, "utf-8")) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private projectStateFilePath(projectId: string): string | null {
+    return stateFilePath(path.join(this.userData, PROJECTS_DIR), projectId);
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
@@ -1895,6 +2082,101 @@ function resolveRestoredAgentId(
   const kind = inferKind(saved, projectId);
   if (kind === "assistant" || !panelKindHasPty(kind)) return undefined;
   return resolveRespawnAgentId(saved, kind);
+}
+
+function parseProjectLayout(raw: string): Record<string, unknown>[] | null {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isPlainObject(parsed)) return null;
+  // A newer build's layout is one hydration will refuse to read, so it must
+  // not be counted or offered for restore either.
+  if (
+    typeof parsed._schemaVersion === "number" &&
+    parsed._schemaVersion > PROJECT_STATE_SCHEMA_VERSION
+  ) {
+    return null;
+  }
+  if (parsed.terminals == null) return [];
+  if (!Array.isArray(parsed.terminals)) return null;
+  return parsed.terminals.filter(
+    (t): t is Record<string, unknown> => isPlainObject(t) && typeof t.id === "string"
+  );
+}
+
+function collectLayouts(
+  ids: string[],
+  layouts: (Record<string, unknown>[] | null)[]
+): Record<string, Record<string, unknown>[]> | null {
+  const collected: Record<string, Record<string, unknown>[]> = Object.create(null);
+  let found = false;
+  ids.forEach((id, index) => {
+    const layout = layouts[index];
+    if (layout) {
+      collected[id] = layout;
+      found = true;
+    }
+  });
+  return found ? collected : null;
+}
+
+// Everything a backup's content depends on, leaving out capturedAt, which
+// changes on every call whatever the app state.
+function backupStateJson(snapshot: SessionSnapshot): string {
+  return JSON.stringify({
+    appState: snapshot.appState,
+    windowStates: snapshot.windowStates,
+    projectLayouts: snapshot.projectLayouts,
+  });
+}
+
+function statFingerprint(stat: Stats): string {
+  return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+async function fileFingerprint(filePath: string): Promise<string | null> {
+  try {
+    return statFingerprint(await fs.promises.stat(filePath));
+  } catch {
+    return null;
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error != null && typeof error === "object" && "code" in error
+    ? String((error as NodeJS.ErrnoException).code)
+    : undefined;
+}
+
+function isTransientRenameError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code !== undefined && TRANSIENT_RENAME_CODES.has(code);
+}
+
+/**
+ * Runs a scheduled write's install step on Main, where it is ordered against
+ * the synchronous crash and shutdown writers: an async rename queued on libuv's
+ * threadpool can land after a later synchronous write and undo it. `isCurrent`
+ * is checked before every try, and a locked file waits between tries instead
+ * of spinning the event loop. False when the write was superseded.
+ */
+async function commitOnMain(
+  isCurrent: () => boolean,
+  commit: (finalAttempt: boolean) => void
+): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    if (!isCurrent()) return false;
+    const finalAttempt = attempt >= COMMIT_RETRY_DELAYS_MS.length;
+    try {
+      commit(finalAttempt);
+      return true;
+    } catch (err) {
+      if (finalAttempt || !isTransientRenameError(err)) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, COMMIT_RETRY_DELAYS_MS[attempt]));
+  }
+}
+
+function discardTempFile(tempPath: string): void {
+  fs.promises.unlink(tempPath).catch(() => {});
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

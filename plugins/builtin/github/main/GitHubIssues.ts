@@ -11,14 +11,13 @@ import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
-  repoStatsCache,
   issueListCache,
   issueTooltipCache,
   issueTooltipWrittenAt,
   getRepoListEpoch,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import { buildListCacheKey, DEFAULT_LIST_PER_PAGE, updateRepoStatsCount } from "./GitHubPRs.js";
+import { issueReadStamp } from "./GitHubCountLedger.js";
 import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
   GitHubIssue,
@@ -499,6 +498,7 @@ export async function listIssues(
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
     const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+    const readAt = issueReadStamp();
 
     try {
       let result: GitHubListResponse<GitHubIssue>;
@@ -567,35 +567,21 @@ export async function listIssues(
           totalCount,
         };
 
-        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
-        // updates sit behind the same guard: a response too old to repopulate
-        // the list cache is also too old to roll `repoStatsCache` (or the
-        // disk stats) back to its pre-change total under a fresh
-        // `lastUpdated`.
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The open
+        // total is held outside it: the ledger orders it by when this read was
+        // issued, and an epoch moved by an unconfirmed REST delta must not
+        // swallow it (#16866).
         if (getRepoListEpoch("issue", context.owner, context.repo) === epochAtStart) {
           issueListCache.set(cacheKey, result);
-
-          if (
-            (!options.state || options.state === "open") &&
-            !options.cursor &&
-            totalCount !== undefined
-          ) {
-            const statsCacheKey = `${context.owner}/${context.repo}`;
-            updateRepoStatsCount(statsCacheKey, "issue", totalCount);
-
-            const memoryStats = repoStatsCache.get(statsCacheKey);
-            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-              const persistentCache = GitHubStatsCache.getInstance();
-              persistentCache.set(
-                statsCacheKey,
-                {
-                  issueCount: memoryStats.issueCount,
-                  prCount: memoryStats.prCount,
-                },
-                options.cwd
-              );
-            }
-          }
+        }
+        if (
+          (!options.state || options.state === "open") &&
+          !options.cursor &&
+          typeof totalCount === "number" &&
+          Number.isSafeInteger(totalCount) &&
+          totalCount >= 0
+        ) {
+          updateRepoStatsCount(`${context.owner}/${context.repo}`, "issue", totalCount, readAt);
         }
       }
 

@@ -175,7 +175,7 @@ Daintree:
 4. Atomically swaps the temp dir into `~/.daintree/plugins/{publisher}.{name}/`.
 5. Loads and activates the plugin.
 
-Only the double-click route shows that preview. Drag-and-drop, **Install from file**, URL installs and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
+The double-click route and [URL installs](#url-install) show that preview. Drag-and-drop, **Install from file** and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
 
 If a plugin with the same `name` is already installed, Daintree replaces it: it unloads the old plugin and atomically swaps the new directory into place (`electron/services/plugin/PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block. The swap preserves the original `installedAt` and records `updatedAt`, and it revokes the plugin's MCP consent pins and capability grants, so the new code asks again. Two exceptions: reinstalling a byte-identical archive (same `archiveHash`) keeps them, and after a replacing install Daintree offers back, in one approval, the capability grants the new version still declares. (Version-aware upgrade/downgrade gating is not yet implemented.) Two cases are refused or undone:
 
@@ -192,7 +192,9 @@ The user pastes an `https://` URL pointing to a `.dntr` file. Daintree:
 
 1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path). The URL must be `https:` — see the security notes below.
 2. Accepts the response when the content-type is one of `application/zip`, `application/x-zip`, `application/x-dntr`, or `application/octet-stream`, or — when none of those match — when the original URL's path ends in `.dntr`.
-3. Runs the same flow as file install from that point.
+3. Reads `plugin.json` and the archive's SHA-256 without extracting it, deletes the download, and shows the same preview as a double-clicked archive: name, id, version, authors, declared capabilities, recipes, project templates, and the full-privilege warning, plus the installed version it would replace. Nothing is installed until the user confirms, and the confirm button stays disabled for a moment after the preview opens, or after what it would replace changes.
+4. On confirm, downloads the URL again and installs it only if its SHA-256 matches the previewed one. The confirm is also held to what the preview said about the installed plugin: a fresh install refuses to replace one installed since, and a replacement refuses when the plugin has gone. A refused install is never retried unbound; installing from the URL again previews what it serves now.
+5. Runs the same flow as file install from that point.
 
 **Typical URL patterns:**
 
@@ -207,7 +209,7 @@ The user pastes an `https://` URL pointing to a `.dntr` file. Daintree:
 - Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected — a literal private address before the fetch runs, and a hostname that resolves to one at every hop (SSRF guard).
 - A URL carrying credentials (`https://user:pass@host/…`) is rejected outright, so they are never fetched or stored as the plugin's update URL.
-- Declared capabilities are not enumerated at install time on this route — consent is gathered per call at runtime (TOFU; see [Trust model](./trust-model.md)).
+- Declared capabilities are listed in the preview before install, and consent is still gathered per call at runtime (TOFU; see [Trust model](./trust-model.md)).
 
 Install only from URLs you trust.
 
@@ -215,8 +217,12 @@ Install only from URLs you trust.
 
 A web page or README can hand a plugin to Daintree with a `daintree://` link (`electron/setup/deepLinkInstall.ts`):
 
-- `daintree://plugin/install?url=<url>` opens the plugin manager with the **Install from URL** dialog pre-filled with `<url>` (URL-encoded). It never installs by itself: the user presses install, and the URL goes through every rule above, so it must be `https:`. If an install dialog is already open, the link doesn't replace what the user is typing.
+- `daintree://plugin/install?url=<url>` opens the plugin manager with the **Install from URL** dialog pre-filled with `<url>` (URL-encoded). It never installs by itself: the user presses install, and the URL goes through every rule above, preview included, so it must be `https:`. If an install dialog is already open, or a URL install is already behind the HTTP warning, downloading for its preview, or under review, the link doesn't replace it.
+- `daintree://plugin/install?url=<url>&sha256=<64 hex>` downloads the archive straight away and shows its preview only if its SHA-256 matches; the confirm installs only that digest. The URL must be `https:`, and the digest's letter case doesn't matter.
+- `daintree://plugin/install?id=<publisher.name>` installs from the [community catalog](./catalog.md): Daintree fetches a fresh catalog, resolves the plugin's newest release (the highest stable version, or the highest prerelease when the plugin has no stable one), downloads the entry's URL, and shows the preview only if the archive has the entry's SHA-256 and names its plugin and version. `&version=<semver>` asks for that exact release. On confirm, Daintree looks the release up in a fresh catalog again and installs it only if it is still listed from the same repository with the same digest. The install is recorded as `source: "catalog"` with the entry's id, version and repository, and the plugin manager shows it as a community listing from that repository.
 - `daintree://plugin/open?id=<publisher.name>` opens the plugin manager on that plugin, or says it isn't installed.
+
+A pinned or catalog link never falls back to an ordinary URL install. Each of these is refused with a message saying which: a malformed `sha256`, `id` or `version`, a pinned URL that isn't `https:`, parameters that don't belong together or repeat, a plugin or version the catalog doesn't list (a delisted release reads the same as an unknown one), a catalog that can't be fetched, a catalog that couldn't be refreshed (a cached copy is never used to install), and a download whose digest isn't the pinned or reviewed one. A pinned or catalog link that arrives while another install is open or under way says so and doesn't replace it.
 
 Any other `daintree://` link is ignored.
 
@@ -224,15 +230,19 @@ Any other `daintree://` link is ignored.
 
 `daintree-plugin install <path-or-url>` asks the running Daintree to install a local `.dntr` or an `https://` URL, with the same checks as the plugin manager's buttons, and exits non-zero on failure. See [Development loop → `install`](./dev-loop.md#daintree-plugin-install-path-or-url).
 
+With `--sha256 <hex>`, the install is held to that digest: the archive is refused before anything is extracted unless its SHA-256 matches, and the install is refused if the plugin is already installed: a digest-bound install never replaces one, so it can't overwrite a plugin the user already has. Use it with a release's published checksum, or a [catalog](./catalog.md) entry's `sha256`.
+
 ## Updating a plugin
 
-An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked:
+An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it; installing a file over one replaces the remembered URL, after which it is no longer checked. Plugins installed from the [community catalog](./catalog.md) are checked against the catalog instead:
 
-- **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's.
-- **Update all** — the plugin manager's header button checks every URL-installed plugin, then walks through each one that has an update.
-- **Check for plugin updates in the background** — an opt-in setting in Settings → Plugins, off by default. When on, Daintree checks URL-installed plugins about once a day and posts an inbox notification when updates are available. It never installs anything.
+- **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's. For a catalog install it reads a freshly fetched catalog and offers the newest reviewed release above the installed version (a stable install is never offered a prerelease, and an older release never is).
+- **Update all** — the plugin manager's header button checks every URL-installed and catalog-installed plugin, then walks through each one that has an update.
+- **Check for plugin updates in the background** — an opt-in setting in Settings → Plugins, off by default. When on, Daintree checks those plugins about once a day and posts an inbox notification when updates are available. It never installs anything.
 
-An available update opens a confirm showing the new version, the new display name if it changed, and the capabilities the new version declares. Confirming re-downloads the URL and installs only if the bytes match the archive that was reviewed; if the publisher replaced the file in between, nothing is installed and the user is asked to check again. Settings are kept.
+An available update opens a confirm showing the new version, the new display name if it changed, and the capabilities the new version declares; a catalog update also names the repository it is listed from, and warns when that differs from the installed release's. Confirming re-downloads the URL and installs only if the bytes match the archive that was reviewed; if the publisher replaced the file in between, nothing is installed and the user is asked to check again. A catalog update is looked up again in a fresh catalog and installs only the listed digest. Settings are kept.
+
+A catalog install's check never falls back to its install URL. If the catalog no longer lists the plugin, or lists neither the installed release nor anything newer, the check says it was delisted; the installed copy keeps running. If no fresh catalog can be read (offline, or only an older cached copy), the check says so and offers nothing.
 
 Publishers should use stable "latest" URLs where appropriate (GitHub's `releases/latest/download/`, with a fixed asset name).
 
@@ -281,7 +291,8 @@ For authors who want to share plugins publicly:
 
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
-- **Semver your releases.** Update detection doesn't read the version: "Check for updates" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string. The version still matters elsewhere — the update confirm shows it, the plugin blocklist matches against it, and a remote host is offered **Update on _host_** only when this machine's version is newer.
+- **Publish the archive's SHA-256** beside it (a `SHA256SUMS` asset works), so users can install with `daintree-plugin install <url> --sha256 <hex>` and a [catalog](./catalog.md) entry can pin it. [`plugins/README.md`](../../plugins/README.md#proposing-a-listing) covers proposing a listing. Use versioned asset URLs for this; a `latest/download` URL changes bytes with every release.
+- **Semver your releases.** For a URL install, update detection doesn't read the version: "Check for updates" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string. A catalog install is offered only a listed release with a higher version, so every release you list needs a new version. The version still matters elsewhere — the update confirm shows it, the plugin blocklist matches against it, and a remote host is offered **Update on _host_** only when this machine's version is newer.
 - **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret flags the plugin as possibly incompatible from the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.

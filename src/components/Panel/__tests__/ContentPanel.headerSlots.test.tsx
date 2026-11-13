@@ -77,7 +77,8 @@ describe("ContentPanel header slots", () => {
   it("names the worktree branch on a built-in panel, with a tooltip that says what it is", () => {
     render(panel("browser"));
 
-    expect(branchChip()?.textContent).toBe("feature/quotes");
+    // The mark paints the branch's last segment; its name and tooltip carry the full ref.
+    expect(branchChip()?.textContent).toBe("quotes");
     const tips = screen.getAllByTestId("tooltip-content").map((t) => t.textContent);
     expect(tips).toContain("Belongs to the worktree on feature/quotes");
   });

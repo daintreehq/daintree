@@ -40,9 +40,9 @@ test.describe.serial("Core: Error Recovery", () => {
 
     await runTerminalCommand(window, panel, "exit 1");
 
-    // The [exit 1] badge appears in the panel header via role="status"
-    const exitBadge = panel.getByRole("status").filter({ hasText: "[exit 1]" });
+    const exitBadge = panel.getByRole("status", { name: "exit 1, failed", exact: true });
     await expect(exitBadge).toBeVisible({ timeout: T_LONG });
+    await expect(exitBadge).toHaveText("exit 1");
 
     // The restart banner shows "Session exited with code 1" via role="alert"
     const banner = panel.getByRole("alert");

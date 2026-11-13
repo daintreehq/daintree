@@ -25,7 +25,7 @@ const loads = vi.hoisted(() => ({
   // While set, opening a store waits for it, holding a start partway.
   opening: null as Promise<void> | null,
   // Why the stores stopped writing; null while they write.
-  faultReason: null as "disk-pressure" | "disk-full" | "storage-fault" | null,
+  faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => vi.fn());
@@ -2277,6 +2277,18 @@ describe("Decisions entry", () => {
         connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
 
         expect(messageOf(0)).toMatch(/tries again by itself/);
+      });
+
+      it("says a store the database was busy for tries again by itself, without blaming disk space (#16840)", async () => {
+        saved.value = { enabled: true, ...RELAY };
+        await startDecisionsIfEnabled();
+        loads.faultReason = "storage-busy";
+
+        connections[0]!.options.onStatus({ state: "not-connected", problem: "storage" });
+
+        expect(messageOf(0)).toMatch(/tries again by itself/);
+        expect(messageOf(0)).toMatch(/busy/);
+        expect(messageOf(0)).not.toMatch(/disk space/);
       });
 
       it("warns again for an outage after Decisions was turned off and on", async () => {

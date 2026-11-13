@@ -93,6 +93,42 @@ export function aggregateAgentStates(
   return { byState, unread, blocked, agentStates };
 }
 
+/** A value key for counts: equal counts give equal keys. Exposed for tests. */
+export function countsKey({ total, byState: s, unread, blocked }: WorktreeTerminalCounts): string {
+  return [
+    total,
+    s.idle,
+    s.working,
+    s.waiting,
+    s.directing,
+    s.completed,
+    s.exited,
+    unread,
+    blocked,
+  ].join(",");
+}
+
+/** The inverse of `countsKey`, field for field in the same order. */
+export function countsFromKey(key: string): WorktreeTerminalCounts {
+  const [
+    total = 0,
+    idle = 0,
+    working = 0,
+    waiting = 0,
+    directing = 0,
+    completed = 0,
+    exited = 0,
+    unread = 0,
+    blocked = 0,
+  ] = key.split(",").map(Number);
+  return {
+    total,
+    byState: { idle, working, waiting, directing, completed, exited },
+    unread,
+    blocked,
+  };
+}
+
 function useDebouncedValue<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
   const isFirstRender = useRef(true);
@@ -146,26 +182,25 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     const { byState, unread, blocked, agentStates } = aggregateAgentStates(terminals, (id) =>
       bandById.get(id)
     );
-    const dominantAgentState = getDominantAgentState(agentStates);
-
     return {
       terminals,
-      counts: {
-        total: terminals.length,
-        byState,
-        unread,
-        blocked,
-      },
-      dominantAgentState,
+      countsKey: countsKey({ total: terminals.length, byState, unread, blocked }),
+      dominantAgentState: getDominantAgentState(agentStates),
     };
   }, [terminals, terminalIds, bands]);
 
-  // Debounce counts to prevent UI jitter during rapid state changes (e.g., app restart)
-  const debouncedCounts = useDebouncedValue(result.counts, 250);
+  // Debounce counts to prevent UI jitter during rapid state changes (e.g., app
+  // restart). It runs on a value key, not the counts object: any patch to a
+  // panel in this worktree rebuilds the counts, and a fresh but equal object
+  // restarted the timer each time, so a streaming sibling kept a real count
+  // change from landing until its output settled (#16800). The key also keeps
+  // `counts` the same object for as long as no count changes.
+  const debouncedCountsKey = useDebouncedValue(result.countsKey, 250);
+  const counts = useMemo(() => countsFromKey(debouncedCountsKey), [debouncedCountsKey]);
 
   return {
     terminals: result.terminals,
-    counts: debouncedCounts,
+    counts,
     dominantAgentState: result.dominantAgentState,
   };
 }

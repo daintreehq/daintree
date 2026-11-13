@@ -23,6 +23,10 @@ import {
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "../../../shared/config/mcpIntrospection.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
+import {
+  assistantPolicySkips,
+  type AssistantConfirmationPolicy,
+} from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
@@ -30,6 +34,10 @@ import { ASSISTANT_CONTROL_TOOL_IDS } from "../../../shared/types/assistantContr
 import { OWNED_TWIN_TOOLS } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import { globalAssistantMayRelay } from "../../../shared/config/globalAssistant.js";
+import {
+  isPluginAssistantReachAction,
+  pluginAssistantReachActionIds,
+} from "../plugin/pluginAssistantReach.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -46,22 +54,25 @@ export function precomputeApiKeyBearerHash(apiKey: string | null): Buffer | null
   return createHash("sha256").update(`Bearer ${apiKey}`).digest();
 }
 
+/**
+ * Whether the header is the api key, or the empty header a server with no key
+ * admits: an external client either way. Shared by every bearer classifier so
+ * they can never disagree on which header that is.
+ */
+function isExternalClientHeader(authHeader: string, apiKeyBearerHash: Buffer | null): boolean {
+  if (!apiKeyBearerHash) return authHeader.length === 0;
+  const actualHash = createHash("sha256").update(authHeader).digest();
+  return (
+    apiKeyBearerHash.length === actualHash.length && timingSafeEqual(actualHash, apiKeyBearerHash)
+  );
+}
+
 export function isAuthorized(
   authHeader: string,
   apiKeyBearerHash: Buffer | null,
   helpTokenValidator: HelpTokenValidator | null
 ): boolean {
-  if (apiKeyBearerHash) {
-    const actualHash = createHash("sha256").update(authHeader).digest();
-    if (
-      apiKeyBearerHash.length === actualHash.length &&
-      timingSafeEqual(actualHash, apiKeyBearerHash)
-    ) {
-      return true;
-    }
-  } else if (authHeader.length === 0) {
-    return true;
-  }
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return true;
 
   const token = extractBearerToken(authHeader);
   if (token === null) return false;
@@ -81,17 +92,7 @@ export function resolveTokenTier(
   apiKeyBearerHash: Buffer | null,
   helpTokenValidator: HelpTokenValidator | null
 ): McpTier {
-  if (apiKeyBearerHash) {
-    const actualHash = createHash("sha256").update(authHeader).digest();
-    if (
-      apiKeyBearerHash.length === actualHash.length &&
-      timingSafeEqual(actualHash, apiKeyBearerHash)
-    ) {
-      return "external";
-    }
-  } else if (authHeader.length === 0) {
-    return "external";
-  }
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return "external";
 
   const token = extractBearerToken(authHeader);
   if (token === null) return "core";
@@ -106,6 +107,27 @@ export function resolveTokenTier(
   }
 
   return "core";
+}
+
+/**
+ * Which kind of credential a bearer is (#16765), checked in the order
+ * {@link isAuthorized} admits them. Null for a bearer nothing here
+ * recognises, which that has already turned away.
+ *
+ * Kept apart from the tier because the tier can't say it: an agent pane and a
+ * Daintree Assistant both hold `core` or `full`.
+ */
+export function resolveCredentialKind(
+  authHeader: string,
+  apiKeyBearerHash: Buffer | null,
+  helpTokenValidator: HelpTokenValidator | null
+): "external-client" | "agent-pane" | "assistant" | null {
+  if (isExternalClientHeader(authHeader, apiKeyBearerHash)) return "external-client";
+  const token = extractBearerToken(authHeader);
+  if (token === null) return null;
+  if (mcpPaneConfigService.isValidPaneToken(token)) return "agent-pane";
+  if (helpTokenValidator?.(token)) return "assistant";
+  return null;
 }
 
 /**
@@ -407,7 +429,12 @@ export function getTierPermittedActionIds(
   tier: McpTier,
   rendererOwnedOrigin = false
 ): ReadonlySet<string> {
-  return rendererOwnedOrigin ? TIER_ALLOWLISTS[tier] : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  const builtIn = rendererOwnedOrigin
+    ? TIER_ALLOWLISTS[tier]
+    : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  if (!reachesPluginActions(tier, rendererOwnedOrigin)) return builtIn;
+  const pluginIds = pluginAssistantReachActionIds();
+  return pluginIds.length === 0 ? builtIn : new Set([...builtIn, ...pluginIds]);
 }
 
 export function isTierPermitted(
@@ -415,7 +442,34 @@ export function isTierPermitted(
   actionId: string,
   rendererOwnedOrigin = false
 ): boolean {
-  return getTierPermittedActionIds(tier, rendererOwnedOrigin).has(actionId);
+  const builtIn = rendererOwnedOrigin
+    ? TIER_ALLOWLISTS[tier]
+    : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
+  return (
+    builtIn.has(actionId) ||
+    (reachesPluginActions(tier, rendererOwnedOrigin) && isPluginAssistantReachAction(actionId))
+  );
+}
+
+/**
+ * Plugin actions that opted in with `assistantReach` (#16751) join the project
+ * Assistant's surface at both in-app tiers, and nobody else's: an agent pane or
+ * an api-key client is `external` by origin, and so is another machine's
+ * assistant relaying through `host.call`. The global Assistant's gate refuses
+ * everything outside its own tools before any tier is asked.
+ */
+function reachesPluginActions(tier: McpTier, rendererOwnedOrigin: boolean): boolean {
+  return rendererOwnedOrigin && (tier === "core" || tier === "full");
+}
+
+/**
+ * The rung an opted-in plugin action is reachable from for this origin: `core`
+ * for the project Assistant, null for everyone else. Kept apart from
+ * `minimumPermittingTier`, which also decides what a grant may name, so a
+ * grant never widens a plugin action's reach.
+ */
+export function pluginActionMinimumTier(id: string, rendererOwnedOrigin: boolean): "core" | null {
+  return rendererOwnedOrigin && isPluginAssistantReachAction(id) ? "core" : null;
 }
 
 /**
@@ -593,6 +647,11 @@ export interface TargetPolicySessionSnapshot {
    */
   relay?: boolean;
   /**
+   * Whether that relayed assistant is its Shell's global Assistant (#14545) —
+   * see {@link SessionSurfacePolicy.relayGlobal}. Read as `=== true`.
+   */
+  relayGlobal?: boolean;
+  /**
    * Whether the session is an agent pane (#12692) — see
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
@@ -619,11 +678,11 @@ export interface TargetPolicySessionSnapshot {
   /** Live native automation grants' `allowedTools`, unioned. */
   nativeGrantedActionIds: ReadonlySet<string>;
   /**
-   * Whether this help session's confirm-gated calls skip the host dialog under
-   * the "Skip permission prompts" preference (#12874), read live. Optional and
-   * read as `=== true`.
+   * Which of this help session's confirm-gated calls skip the host dialog
+   * under its Daintree confirmations (#12874): all, or the ids handed over
+   * one by one (#16752), read live. Absent, every one asks.
    */
-  confirmationsSkipped?: boolean;
+  confirmationPolicy?: AssistantConfirmationPolicy;
 }
 
 /** Swept by an agent, every panel in the worktree: always confirmed (#12881). */
@@ -750,7 +809,8 @@ export function buildTargetPolicy(
         ? TIER_ALLOWLISTS.external.has(id)
           ? "external"
           : null
-        : minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+        : (minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true) ??
+          pluginActionMinimumTier(id, snapshot.rendererOwnedOrigin === true));
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -787,8 +847,11 @@ export function buildTargetPolicy(
   // (#12881), and every caller here is an agent.
   const effectiveDanger = id === CLOSE_ALL_TOOL_ID ? "confirm" : danger;
   // Mirrors the dispatch gate's skip preference (#12874), which covers every
-  // confirm-gated tool, target-picking ones included (#12989).
-  const skipConfirmWaived = snapshot.confirmationsSkipped === true;
+  // confirm-gated tool, target-picking ones included (#12989), or only the
+  // ids handed over one by one (#16752).
+  const skipConfirmWaived =
+    snapshot.confirmationPolicy !== undefined &&
+    assistantPolicySkips(snapshot.confirmationPolicy, id);
   const requiresConfirmation =
     authorizedBy === "approval" ||
     (effectiveDanger === "confirm" && !nativeGranted && !paneConfirmWaived && !skipConfirmWaived);
@@ -896,18 +959,22 @@ const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
 /**
  * Whether this session may be told that actions exist above its tier (#12117).
  *
- * Two conditions, both necessary. The origin must be renderer-owned — `help`,
- * a pinned panel with a human watching and a first-party prompt that carries
- * the rule for reading a stub. And the tier must be on the
- * in-app ladder: `external` is a flat peer of that ladder rather than a rung on
- * it, so there is no tier an external caller could be raised to and nothing
- * honest to report.
+ * Two conditions, both necessary. The caller must be an assistant whose tier a
+ * person can raise: a renderer-owned origin — `help`, a pinned panel with a
+ * human watching and a first-party prompt that carries the rule for reading a
+ * stub — or a relay, an assistant reaching this project through its Shell's
+ * `host.call` at the tier its own Tool set gave it (#16764). And the tier must
+ * be on the in-app ladder: `external` is a flat peer of that ladder rather than
+ * a rung on it, so there is no tier an external caller could be raised to and
+ * nothing honest to report.
  *
  * Asked of the ORIGIN, never of the routing. `getOrigin` fails closed to
  * `external` for a session it does not recognise, and a workspace-bound
  * external session can hold a renderer route without being renderer-owned — so
  * "has a renderer" is the wrong question and would open the catalog to
- * api-key clients (#11789).
+ * api-key clients (#11789). A relay's origin is `external` too; it is admitted
+ * only by the relay flag, which main sets when it opens the session and no
+ * bearer can present.
  *
  * An absent snapshot is a denial. Every introspection call in `sessionServer`
  * supplies one; its absence means a caller this module cannot classify.
@@ -916,7 +983,7 @@ function isExistenceCatalogVisible(
   snapshot: TargetPolicySessionSnapshot | undefined
 ): snapshot is TargetPolicySessionSnapshot & { tier: LadderTier } {
   if (snapshot === undefined) return false;
-  if (!snapshot.rendererOwnedOrigin) return false;
+  if (!snapshot.rendererOwnedOrigin && snapshot.relay !== true) return false;
   // Named positively rather than as `!== "external"`. A second flat peer added
   // to `McpTier` would be admitted by the negative form on the day it landed,
   // with no tier to report and nothing here to notice; this form refuses it
@@ -942,7 +1009,12 @@ function isExistenceCatalogVisible(
  *   from;
  * - `hidden` and `restricted`, which are ceilings rather than tiers — no
  *   elevation reaches them, so naming them would describe a door with no key;
- * - an id no in-app tier permits, for the same reason;
+ * - an id no in-app tier permits for this caller's origin, for the same
+ *   reason: a relay's origin is not renderer-owned, so an unscoped panel tool
+ *   it reaches only through its owned twin is never offered (#16764);
+ * - an id a relay is never given, or that the calling Shell's global Assistant
+ *   is never allowed to send ({@link isWithheldFromRelayDiscovery}), since no
+ *   tier changes that either;
  * - an id whose minimum tier is not strictly above this session's. The ladder
  *   nests (`full` = core ∪ addons), so a
  *   non-permitted id always has a higher minimum and this is a backstop rather
@@ -967,6 +1039,7 @@ export function buildUnavailableStub(
   // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
   if (HOST_CONTROL_TOOL_IDS.has(id) && snapshot.hostCall !== true) return null;
   if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
+  if (isWithheldFromRelayDiscovery(id, snapshot)) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;
@@ -976,7 +1049,7 @@ export function buildUnavailableStub(
   if (typeof title !== "string" || title.length === 0) return null;
   if (typeof category !== "string" || category.length === 0) return null;
 
-  const minimumTier = minimumPermittingTier(id);
+  const minimumTier = minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
   if (minimumTier === null) return null;
   if (LADDER_RANK[minimumTier] <= LADDER_RANK[snapshot.tier]) return null;
 
@@ -1183,17 +1256,18 @@ export function filterIntrospectionResultForSession(
       }
     }
 
-    // A renderer-owned session asking about a real action above its tier is
-    // told so, and told which tier would permit it (#12117). This is the
-    // lookup the issue was filed about: the indistinguishable denial below
-    // left an assistant unable to tell "no such action" from "not at your
-    // tier", so it reported `worktree.delete` as a capability Daintree lacks.
+    // A renderer-owned or relayed session asking about a real action above
+    // its tier is told so, and told which tier would permit it (#12117,
+    // #16764). This is the lookup the issue was filed about: the
+    // indistinguishable denial below left an assistant unable to tell "no such
+    // action" from "not at your tier", so it reported `worktree.delete` as a
+    // capability Daintree lacks.
     //
     // Still a DENIAL — `ok: false`, no entry, no policy, no schemas. The
     // reasoning against a tier-specific error stands for everyone else and is
     // unchanged for them: naming an id an external client cannot act on only
-    // tells it about a door it has no key to. A renderer-owned session does
-    // have one — the panel's tier control — which is what makes the answer
+    // tells it about a door it has no key to. These sessions do have one — the
+    // Tool set of the assistant they belong to — which is what makes the answer
     // worth giving here and nowhere else.
     if (answersTheRequest && !introspectable) {
       const unavailable = buildUnavailableStub(payload?.entry, options.policySnapshot);

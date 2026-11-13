@@ -35,7 +35,7 @@ import {
 } from "@daintreehq/decisions-model";
 import { SqliteHistoryStore } from "@daintreehq/decisions-model/sqlite";
 import { DecisionModelRuntime } from "../decisionModel.js";
-import { DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
+import { BUSY_RESTART_DELAYS_MS, DISK_FULL_RESTART_DELAYS_MS } from "../storageRecovery.js";
 import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 
 interface FakeStore {
@@ -2197,7 +2197,7 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     deviceId: "dev_12345678",
   };
 
-  type FaultReason = "disk-pressure" | "disk-full" | "storage-fault";
+  type FaultReason = "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault";
 
   /** A fake store that can stop writing, as the real one latches a fault. */
   function faultableStore(rows: QuestionRow[]) {
@@ -2510,7 +2510,9 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
       await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
 
       expect(checks).toEqual(["check"]);
-      expect(stores).toHaveLength(2);
+      // Closing the old store's attachments waits on their spool sweep, real
+      // file I/O the fake clock doesn't drive, before the fresh store opens.
+      await vi.waitFor(() => expect(stores).toHaveLength(2));
       expect(made.map((m) => m.stopped)).toEqual([true, false]);
     } finally {
       vi.useRealTimers();
@@ -2567,5 +2569,157 @@ describe("DecisionsService disk-space recovery (#16605)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("after a busy database (#16840)", () => {
+    it("replaces the store after its own wait, reading no free space, even while writes are suppressed", async () => {
+      vi.useFakeTimers();
+      try {
+        const checks: string[] = [];
+        const { service, stores, made } = recovering({
+          checkDiskSpace: async () => {
+            checks.push("check");
+            return false;
+          },
+        });
+        await service.start(on(RELAY));
+        stores[0]!.fault("storage-busy");
+        halted(made);
+        // The disk-space exit replaces only a store stopped for disk space.
+        expect(await service.diskSpaceRecovered()).toBe(false);
+        setWritesSuppressed(true);
+
+        await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
+        await vi.waitFor(() => expect(stores).toHaveLength(2));
+        expect(checks).toEqual([]);
+        expect(made.map((m) => m.stopped)).toEqual([true, false]);
+
+        // The fresh store is refused its first write; the monitor's exit takes it from there.
+        stores[1]!.fault("disk-pressure");
+        resetWritesSuppressedForTesting();
+        expect(await service.diskSpaceRecovered()).toBe(true);
+        expect(stores).toHaveLength(3);
+      } finally {
+        resetWritesSuppressedForTesting();
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([null, "storage-fault", "disk-full", "disk-pressure"] as const)(
+      "replaces no store whose fault reads %s when the wait ends",
+      async (reason) => {
+        vi.useFakeTimers();
+        try {
+          const { service, stores } = recovering({ checkDiskSpace: async () => true });
+          await service.start(on(RELAY));
+          stores[0]!.fault("storage-busy");
+          Object.assign(stores[0]!.store, { faultReason: () => reason });
+
+          await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
+          // Behind any restart the wait queued, so it has run by now.
+          await service.start(on(RELAY));
+
+          expect(stores).toHaveLength(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it("leaves a store opened by a stop and start queued ahead of its restart to that store's own wait", async () => {
+      vi.useFakeTimers();
+      try {
+        const stores: Array<ReturnType<typeof faultableStore>> = [];
+        const { service } = recovering({
+          openStore: async () => {
+            const opened = faultableStore([row(1)]);
+            stores.push(opened);
+            if (stores.length === 2) {
+              // The next lifetime's store finds the database busy on its first read.
+              const list = opened.store.listQuestions.bind(opened.store);
+              Object.assign(opened.store, {
+                listQuestions: async () => {
+                  opened.fault("storage-busy");
+                  return list();
+                },
+              });
+            }
+            return opened.store;
+          },
+        });
+        await service.start(on(RELAY));
+        stores[0]!.fault("storage-busy");
+
+        const stopping = service.stop();
+        const starting = service.start(on(RELAY));
+        // The old wait ends before either runs, so its restart queues behind them.
+        vi.advanceTimersByTime(BUSY_RESTART_DELAYS_MS[0]!);
+        await stopping;
+        await starting;
+        await service.start(on(RELAY));
+
+        expect(stores).toHaveLength(2);
+        expect(service.getStore()).toBe(stores[1]!.store);
+        await vi.advanceTimersByTimeAsync(BUSY_RESTART_DELAYS_MS[0]!);
+        await vi.waitFor(() => expect(stores).toHaveLength(3));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the busy and disk-space budgets apart within a lifetime", async () => {
+      vi.useFakeTimers();
+      try {
+        const { service, stores } = recovering({ checkDiskSpace: async () => true });
+        await service.start(on(RELAY));
+        const replaced = (count: number) => vi.waitFor(() => expect(stores).toHaveLength(count));
+
+        for (const [i, wait] of BUSY_RESTART_DELAYS_MS.entries()) {
+          stores.at(-1)!.fault("storage-busy");
+          await vi.advanceTimersByTimeAsync(wait);
+          await replaced(i + 2);
+        }
+        const afterBusy = stores.length;
+        // A spent busy budget leaves the disk-space one whole.
+        stores.at(-1)!.fault("disk-full");
+        await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
+        await replaced(afterBusy + 1);
+
+        // That restart gave the busy budget nothing back.
+        stores.at(-1)!.fault("storage-busy");
+        await vi.advanceTimersByTimeAsync(Math.max(...BUSY_RESTART_DELAYS_MS));
+        await service.start(on(RELAY));
+        expect(stores).toHaveLength(afterBusy + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives a spent disk-space budget back when Decisions is turned off and on", async () => {
+      vi.useFakeTimers();
+      try {
+        const { service, stores } = recovering({ checkDiskSpace: async () => true });
+        await service.start(on(RELAY));
+        const replaced = (count: number) => vi.waitFor(() => expect(stores).toHaveLength(count));
+        for (const [i, wait] of DISK_FULL_RESTART_DELAYS_MS.entries()) {
+          stores.at(-1)!.fault("disk-full");
+          await vi.advanceTimersByTimeAsync(wait);
+          await replaced(i + 2);
+        }
+        const spent = stores.length;
+        stores.at(-1)!.fault("disk-full");
+        await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
+        await service.start(on(RELAY));
+        expect(stores).toHaveLength(spent);
+
+        await service.stop();
+        await service.start(on(RELAY));
+        stores.at(-1)!.fault("disk-full");
+        await vi.advanceTimersByTimeAsync(DISK_FULL_RESTART_DELAYS_MS[0]!);
+        await replaced(spent + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

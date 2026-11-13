@@ -223,6 +223,15 @@ function getReader(): CanopyLocalReader {
   return reader;
 }
 
+/**
+ * Lets the reader's model go, when no screen is being read, under memory
+ * pressure or as the machine sleeps; the next screen loads it again. Never
+ * makes a reader. Returns how many reader processes went.
+ */
+export function retireIdleCanopyReader(): number {
+  return reader?.retireIdle() ? 1 : 0;
+}
+
 function modelReady(): boolean {
   return models?.state()?.status === "ready";
 }
@@ -1579,6 +1588,60 @@ async function liveAssistantSources() {
 }
 
 /**
+ * Where "Open in Assistant" goes for one of this machine's assistants, if main
+ * still runs it. Passive: nothing is attached, switched, started or resumed to
+ * answer; null when the session has ended or been replaced.
+ */
+export async function resolveAssistantDestination(
+  subject: AgentDirectorySubject
+): Promise<AssistantOpenDestination | null> {
+  const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
+    (error: unknown) => {
+      // Only a session that has ended or been replaced answers "nothing to open";
+      // a bad subject, another host or a failure is said as itself.
+      if (
+        error instanceof AppError &&
+        (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  );
+  if (!binding) return null;
+  const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
+  return scope.kind === "project" && lane !== undefined
+    ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
+    : { scope: "global", hostId, terminalId, incarnation };
+}
+
+/**
+ * The view holding the lane's running assistant, by its WebContents id, or null
+ * when it runs detached, with no view to show it in until someone takes it
+ * over from its project's Assistant panel. A remote person's view is named by
+ * its endpoint handle in the same place, so the id alone says nothing of where
+ * the view is.
+ */
+export async function assistantLaneHolder(projectId: string, lane: number): Promise<number | null> {
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  const attached = helpSessionService
+    .listRunningLanes()
+    .some(
+      (running) => running.projectId === projectId && running.slot === lane && running.attached
+    );
+  if (!attached) return null;
+  return (
+    helpSessionService.getRunningLaneSession(projectId, lane)?.projectViewWebContentsId ?? null
+  );
+}
+
+/** The view on this machine that has the global assistant's input, if any. */
+export async function globalAssistantInputOwner(): Promise<number | null> {
+  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
+  return peekGlobalAssistantService()?.inputOwnerWebContentsId() ?? null;
+}
+
+/**
  * A card answer presses keys with no input ownership behind it, so it never
  * reaches the global assistant, whose input one window holds at a time (#14454).
  */
@@ -1806,24 +1869,7 @@ export const canopyNamespace = defineIpcNamespace({
       async (ctx, subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.resolveAssistant, 60, 10_000);
         assertViewsThisMachine(ctx);
-        const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
-          (error: unknown) => {
-            // Only a session that has ended or been replaced answers "nothing to open";
-            // a bad subject, another host or a failure is said as itself.
-            if (
-              error instanceof AppError &&
-              (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
-            ) {
-              return null;
-            }
-            throw error;
-          }
-        );
-        if (!binding) return null;
-        const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
-        return scope.kind === "project" && lane !== undefined
-          ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
-          : { scope: "global", hostId, terminalId, incarnation };
+        return resolveAssistantDestination(subject);
       },
       { withContext: true }
     ),

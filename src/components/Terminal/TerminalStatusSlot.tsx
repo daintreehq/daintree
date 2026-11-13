@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { cn } from "@/lib/utils";
 
 // FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
 // `PersistableFlowStatus`) so the suspended presentation below remains
@@ -93,10 +94,10 @@ export interface TerminalStatusSlotProps {
 }
 
 /**
- * Transient pane status as one fixed-size glyph, with the explanation in its
- * tooltip. `PanelHeader` reserves the box whether or not anything is showing,
- * so a status coming or going never moves the window controls and never
- * resizes the terminal (#12374).
+ * Transient pane status as one small glyph, with the explanation in its
+ * tooltip. It leads the header's metadata, in the region that absorbs width, so
+ * a status coming or going never moves the window controls and never resizes
+ * the terminal (#12374).
  *
  * Deliberately no action: a slow submit still has its original Enter armed, so
  * any "send again" affordance would double-submit, and flow holds recover on
@@ -129,13 +130,19 @@ export function TerminalStatusSlot({ id, flowStatus, submitStatus }: TerminalSta
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
-          className="flex h-5 w-5 items-center justify-center rounded-sm text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className={cn(
+            "flex h-5 items-center justify-center rounded-sm text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+            // Idle, it holds no width. Active, it is a 12px mark leading the
+            // header's readings, a size under the 14px window controls, so it
+            // reads as the pane's condition and never as a fifth button.
+            isActive ? "mr-1 w-5" : "w-0 overflow-hidden"
+          )}
           role={isActive ? "status" : undefined}
           aria-live="off"
           aria-label={isActive ? label : undefined}
           tabIndex={isActive ? 0 : -1}
         >
-          {isActive && <Icon className="h-3.5 w-3.5" aria-hidden="true" />}
+          {isActive && <Icon className="h-3 w-3" aria-hidden="true" />}
         </span>
       </TooltipTrigger>
       {isActive && (

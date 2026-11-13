@@ -215,7 +215,7 @@ Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakp
 
 **Radii**
 
-`rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
+`rounded-3xs` `rounded-2xs` `rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
 **Shadows**
 
@@ -223,7 +223,7 @@ Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakp
 
 **Type scale below Tailwind's floor**
 
-`text-2xs` `text-3xs` `text-4xs`
+`text-2xs` `text-3xs` `text-4xs` `text-5xs` `text-6xs` `text-7xs`
 
 **Fonts**
 

@@ -23,12 +23,18 @@ import {
   dntrSuffixOk,
   fetchWithPrivateHostGuard,
 } from "../../utils/pluginDownloadPolicy.js";
+import { createManualRedirectFetch } from "../../utils/netManualRedirectFetch.js";
 import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
+import { parseInstallExpectation } from "./installExpectation.js";
+import {
+  isCommunityPluginId,
+  isRequestablePluginVersion,
+} from "../../schemas/pluginIdentifiers.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -351,14 +357,16 @@ export class PluginInstaller {
    * 1. Acquire the cross-process `install.lock` (sub-30s stale TTL so a crashed
    *    prior install can't hold it forever). A second instance blocks, not races.
    * 2. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field. A
-   *    reviewed update (`opts.expected`) is refused here if the digest differs,
-   *    before anything is unpacked (#12612).
+   *    bound install (`opts.expected`: a reviewed update, #12612, or a fresh
+   *    install pinned to a reviewed digest, #16342) is refused here if the
+   *    digest differs, before anything is unpacked.
    * 3. Extract / copy the source into a sibling `.install-tmp-*` dir — same
    *    filesystem as the final location so the eventual rename is atomic.
    * 4. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
    *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
    *    doesn't fail the install — the load that follows warns about it (#12589).
-   *    A reviewed update must also still name the plugin it was approved for.
+   *    A bound install must also still name the plugin it was approved for, and
+   *    find it installed (an update) or not installed (a fresh install).
    * 5. If the id already exists: `unloadPlugin` as a reload (disposer cascade, agent
    *    credentials held until the version left loaded is known), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
@@ -413,6 +421,18 @@ export class PluginInstaller {
     // cancel was ever accepted.
     const fail = (code: PluginInstallErrorCode, message: string): PluginInstallResult =>
       jobSignal?.aborted === true ? cancelled : { status: "failed", errors: [{ code, message }] };
+
+    // Re-read rather than trusted: `expected` crosses IPC from the renderer on
+    // more than one route, and a malformed binding must refuse, not install
+    // unbound. Checked before the lock, since nothing has been staged yet.
+    const expected =
+      opts?.expected === undefined ? undefined : parseInstallExpectation(opts.expected);
+    if (expected === null) {
+      return fail(
+        "archive_mismatch",
+        "The install's digest binding was malformed, so nothing was installed."
+      );
+    }
 
     await fs.mkdir(this.pluginsRoot, { recursive: true });
 
@@ -473,7 +493,6 @@ export class PluginInstaller {
 
       pluginInstallJobs.setPhase(jobId, "extracting");
 
-      const expected = opts?.expected;
       let hash: string | null = null;
       if (sourceIsDir) {
         // A directory has no archive digest, so an approval bound to one can't
@@ -481,7 +500,9 @@ export class PluginInstaller {
         if (expected) {
           return fail(
             "archive_mismatch",
-            "A reviewed update can only be installed from the archive it was reviewed from"
+            expected.kind === "install"
+              ? "A digest-bound install needs a .dntr archive; a directory has no digest to check"
+              : "A reviewed update can only be installed from the archive it was reviewed from"
           );
         }
         try {
@@ -506,7 +527,9 @@ export class PluginInstaller {
         if (expected && hash !== expected.archiveHash) {
           return fail(
             "archive_mismatch",
-            "The downloaded archive isn't the one reviewed for this update"
+            expected.kind === "install"
+              ? "The archive's SHA-256 doesn't match the digest this install was bound to"
+              : "The downloaded archive isn't the one reviewed for this update"
           );
         }
         try {
@@ -575,8 +598,8 @@ export class PluginInstaller {
 
       // A matching digest already proves these are the reviewed bytes; this
       // keeps the destination below from ever being a different installed
-      // plugin than the one the user approved updating.
-      if (expected && manifest.name !== expected.pluginId) {
+      // plugin than the one the user approved updating or installing.
+      if (expected?.pluginId !== undefined && manifest.name !== expected.pluginId) {
         return fail(
           "archive_mismatch",
           `The archive is for "${manifest.name}", not "${expected.pluginId}"`
@@ -596,10 +619,19 @@ export class PluginInstaller {
 
       // A reviewed update replaces an installed plugin; one uninstalled since
       // its preview (say, from another window) isn't this approval's to restore.
-      if (expected && !existing) {
+      if (expected?.kind === "update" && !existing) {
         return fail(
           "archive_mismatch",
           `"${pluginId}" is no longer installed, so its update wasn't applied`
+        );
+      }
+      // A fresh install never replaces: new bytes for an installed plugin are an
+      // update, which has its own preview. Checked here, under the lock, so two
+      // bound installs queued for the same plugin can't both land.
+      if (expected?.kind === "install" && existing) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is already installed, so this install wasn't applied. Uninstall it first, or update it from the plugin manager.`
         );
       }
 
@@ -751,6 +783,9 @@ export class PluginInstaller {
       this.records.upsertInstalledRecord(pluginId, {
         source: opts?.source ?? "sideload",
         originalUrl: opts?.originalUrl ?? null,
+        // Always written: the upsert spreads over the old record, so a URL or
+        // file install over a catalog one would otherwise keep its listing.
+        catalog: opts?.source === "catalog" ? (opts.catalog ?? null) : null,
         archiveHash: hash,
         loadError: null,
         ...(existing
@@ -1089,29 +1124,35 @@ export class PluginInstaller {
   }
 
   /**
-   * Manual update check (#9297). Re-fetches the plugin's `originalUrl`, hashes
-   * the downloaded archive, and compares it against the installed `archiveHash`.
-   * Purely informational — it never installs. The user's follow-up is a manual
-   * reinstall (via `installFromUrl`), which preserves settings and `installedAt`.
+   * Manual update check (#9297). A URL install re-fetches its `originalUrl`,
+   * hashes the archive, and compares it against the installed `archiveHash`. A
+   * catalog install reads the catalog instead (#16781): its URL pins one
+   * reviewed release, so re-fetching it could never find the next one.
+   * Purely informational — it never installs. The user's follow-up is a
+   * reinstall held to the previewed digest, which preserves settings and
+   * `installedAt`.
    *
    * Domain failures (no record, no URL, network/content-type/size faults, a
-   * malformed archive) are returned as data — never thrown — so the structured
-   * result survives the structured-clone IPC boundary (#3769). The download is
-   * lock-free: it writes to a private temp dir and reads the hash/manifest, so
-   * it doesn't contend with the install lock.
+   * malformed archive, no fresh catalog) are returned as data — never thrown —
+   * so the structured result survives the structured-clone IPC boundary
+   * (#3769). The download is lock-free: it writes to a private temp dir and
+   * reads the hash/manifest, so it doesn't contend with the install lock.
    */
   async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
     if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
       return { status: "invalid-id" };
     }
     const record = this.records.getInstalledRecord(pluginId);
-    // No record, or a sideload/builtin with no original URL — the UI gates the
-    // button on `originalUrl !== null`, so the no-URL case is unreachable in
-    // practice; treat it as `invalid-id` defensively.
-    if (!record || !record.originalUrl) {
+    if (!record) return { status: "invalid-id" };
+    // Before the URL guards: a catalog install is never checked against the
+    // URL it came from, even when its provenance is unusable.
+    if (record.source === "catalog") return this._checkCatalogForUpdate(pluginId, record);
+    // A sideload/builtin with no original URL — the UI gates the button on
+    // `originalUrl !== null`, so this is unreachable in practice; treat it as
+    // `invalid-id` defensively.
+    if (!record.originalUrl) {
       return { status: "invalid-id" };
     }
-    const url = record.originalUrl;
     // Without a baseline hash (corrupt record, or a dir-load that never hashed)
     // there's nothing to compare against — a string never equals `null`, so the
     // diff would always read as "available". Fail loudly instead of misleading.
@@ -1119,7 +1160,122 @@ export class PluginInstaller {
       return { status: "fetch-failed", message: "No baseline archive hash to compare against" };
     }
     const baselineHash = record.archiveHash;
+    return this._downloadForUpdateCheck(record.originalUrl, async (archivePath, downloadedHash) => {
+      if (downloadedHash === baselineHash) {
+        return { status: "up-to-date" };
+      }
 
+      // Hashes differ — surface the new manifest's preview so the confirm dialog
+      // can show what the reinstall would bring in.
+      let manifest: PluginManifest;
+      try {
+        manifest = await readArchiveManifest(archivePath);
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
+        };
+      }
+      // The URL must still serve the SAME plugin — a redirected or swapped URL
+      // could serve a different archive, and a later reinstall would replace
+      // this plugin's directory with a stranger's. Reject the mismatch rather
+      // than presenting a foreign plugin as an "update".
+      if (manifest.name !== pluginId) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive is for a different plugin ("${manifest.name}")`,
+        };
+      }
+      return updatePreview(manifest, downloadedHash);
+    });
+  }
+
+  /**
+   * The catalog half of {@link checkForUpdate} (#16781). Reads a catalog fetched
+   * for this call, never a cached copy, and offers the newest reviewed release
+   * above the installed one. Its archive must hash to the entry's digest before
+   * its manifest is read, and must name the entry's plugin and version.
+   */
+  private async _checkCatalogForUpdate(
+    pluginId: string,
+    record: InstalledPluginRecord
+  ): Promise<PluginCheckUpdateResult> {
+    const installed = record.catalog;
+    const unusable: PluginCheckUpdateResult = {
+      status: "fetch-failed",
+      message: "The install record doesn't name the catalog release this plugin came from",
+    };
+    // Records are read back with a cast, so the provenance is checked before
+    // it decides what is fetched or compared.
+    if (
+      !installed ||
+      installed.id !== pluginId ||
+      !isCommunityPluginId(installed.id) ||
+      typeof installed.version !== "string" ||
+      !isRequestablePluginVersion(installed.version) ||
+      typeof installed.repo !== "string"
+    ) {
+      return unusable;
+    }
+    // Lazy: the catalog client costs nothing until a catalog install is checked.
+    const { getPluginCatalogService, isComparableVersion } =
+      await import("./PluginCatalogService.js");
+    // The pattern admits numbers semver can't hold, and its comparisons throw.
+    if (!isComparableVersion(installed.version)) return unusable;
+    const lookup = await getPluginCatalogService().lookupUpdate(pluginId, installed.version);
+    switch (lookup.status) {
+      case "stale":
+      case "unavailable":
+        return { status: "catalog-unavailable", catalog: lookup.status, failure: lookup.failure };
+      case "current":
+        return { status: "up-to-date" };
+      case "delisted":
+        return { status: "delisted", scope: lookup.scope, version: installed.version };
+      case "update":
+        break;
+    }
+    const { entry } = lookup;
+    return this._downloadForUpdateCheck(entry.url, async (archivePath, downloadedHash) => {
+      // Checked before the manifest is parsed, so bytes nobody reviewed are
+      // never read.
+      if (downloadedHash !== entry.sha256) {
+        return {
+          status: "fetch-failed",
+          message: "The downloaded archive isn't the one the plugin catalog reviewed",
+        };
+      }
+      let manifest: PluginManifest;
+      try {
+        manifest = await readArchiveManifest(archivePath);
+      } catch (err) {
+        return {
+          status: "fetch-failed",
+          message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
+        };
+      }
+      if (manifest.name !== pluginId || manifest.version !== entry.version) {
+        return {
+          status: "fetch-failed",
+          message: "The archive the catalog lists isn't the release it names",
+        };
+      }
+      return {
+        ...updatePreview(manifest, downloadedHash),
+        catalog: { id: entry.id, version: entry.version, repo: entry.repo },
+        ...(entry.repo === installed.repo ? {} : { previousRepo: installed.repo }),
+      };
+    });
+  }
+
+  /**
+   * Download an update candidate into a private temp dir, hash it, and hand the
+   * archive to `inspect` while it still exists. Every network, size and type
+   * fault comes back as `fetch-failed`; the temp dir is removed either way.
+   */
+  private async _downloadForUpdateCheck(
+    url: string,
+    inspect: (archivePath: string, archiveHash: string) => Promise<PluginCheckUpdateResult>
+  ): Promise<PluginCheckUpdateResult> {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
@@ -1155,12 +1311,14 @@ export class PluginInstaller {
       // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF).
       // The guard also re-resolves each hop's DNS and rejects a private resolved
       // IP, closing the DNS-rebinding TOCTOU (#10518); a sub-ms residual remains
-      // because net.fetch re-resolves independently (see pluginDownloadPolicy).
-      let response: Awaited<ReturnType<typeof net.fetch>>;
+      // because the request re-resolves independently (see pluginDownloadPolicy).
+      let response: Response;
       try {
-        const guarded = await fetchWithPrivateHostGuard(net.fetch, url, {
-          signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
-        });
+        const guarded = await fetchWithPrivateHostGuard(
+          createManualRedirectFetch((options) => net.request(options)),
+          url,
+          { signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS) }
+        );
         if (!guarded.ok) {
           return {
             status: "fetch-failed",
@@ -1172,7 +1330,7 @@ export class PluginInstaller {
                   : "The update URL followed too many redirects",
           };
         }
-        response = guarded.response as Awaited<ReturnType<typeof net.fetch>>;
+        response = guarded.response;
       } catch (err) {
         return {
           status: "fetch-failed",
@@ -1250,44 +1408,7 @@ export class PluginInstaller {
           message: `Couldn't hash the archive: ${(err as Error).message}`,
         };
       }
-      if (downloadedHash === baselineHash) {
-        return { status: "up-to-date" };
-      }
-
-      // Hashes differ — surface the new manifest's preview so the confirm dialog
-      // can show what the reinstall would bring in.
-      let manifest: PluginManifest;
-      try {
-        manifest = await readArchiveManifest(tmpArchive);
-      } catch (err) {
-        return {
-          status: "fetch-failed",
-          message: `Downloaded archive isn't a valid plugin: ${(err as Error).message}`,
-        };
-      }
-      // The URL must still serve the SAME plugin — a redirected or swapped URL
-      // could serve a different archive, and a later reinstall would replace
-      // this plugin's directory with a stranger's. Reject the mismatch rather
-      // than presenting a foreign plugin as an "update".
-      if (manifest.name !== pluginId) {
-        return {
-          status: "fetch-failed",
-          message: `Downloaded archive is for a different plugin ("${manifest.name}")`,
-        };
-      }
-      return {
-        status: "available",
-        name: manifest.name,
-        version: manifest.version,
-        displayName: manifest.displayName,
-        capabilities: manifest.capabilities ?? [],
-        // An update can add a bypass declaration, so its review names the
-        // agents that carry one (#16374). Author-controlled, so made safe to show.
-        permissionBypassAgents: (manifest.contributes?.agents ?? [])
-          .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
-          .map((agent) => displaySafeText(agent.name)),
-        archiveHash: downloadedHash,
-      };
+      return await inspect(tmpArchive, downloadedHash);
     } finally {
       if (tmpRoot) {
         await fs.rm(tmpRoot, { recursive: true, force: true }).catch((err) => {
@@ -1493,4 +1614,27 @@ function stillAsksFor(manifest: Readonly<PluginManifest>, capability: PluginGran
     return manifest.contributes.panels.some((panel) => panel.reportsActivity === true);
   }
   return manifest.capabilities?.includes(capability) ?? false;
+}
+
+/**
+ * The `available` preview an update check shows: the new manifest's identity
+ * and capabilities, and the digest a confirm is held to.
+ */
+function updatePreview(
+  manifest: PluginManifest,
+  archiveHash: string
+): Extract<PluginCheckUpdateResult, { status: "available" }> {
+  return {
+    status: "available",
+    name: manifest.name,
+    version: manifest.version,
+    displayName: manifest.displayName,
+    capabilities: manifest.capabilities ?? [],
+    // An update can add a bypass declaration, so its review names the
+    // agents that carry one (#16374). Author-controlled, so made safe to show.
+    permissionBypassAgents: (manifest.contributes?.agents ?? [])
+      .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
+      .map((agent) => displaySafeText(agent.name)),
+    archiveHash,
+  };
 }

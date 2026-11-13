@@ -3,8 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
 import {
+  getAssistantSupportedAgentIds,
+  getAssistantWiredAgentIds,
+} from "../../../../shared/config/agentRegistry.js";
+import {
+  firstUsableDefault,
+  meetsAssistantVersionFloor,
   spawnAndConfirm,
   startAssistantWithoutView,
+  viewlessLaunchableAgents,
   type AssistantLaunchDeps,
   type AssistantLaunchRequest,
 } from "../assistantLaunch.js";
@@ -164,10 +171,10 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
   it("starts only a live backend, and only one this machine can run", async () => {
     await expect(start({ agentId: "gemini" })).resolves.toEqual({
       status: "refused",
-      reason: "launch-failed",
+      reason: "agent-unavailable",
     });
     deps.launchableAgents = async () => [{ id: "gemini", byDefault: true }];
-    await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+    await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
     expect(deps.provision).not.toHaveBeenCalled();
   });
 
@@ -177,7 +184,62 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       agentId: "copilot",
     });
     deps.launchableAgents = async () => [{ id: "copilot", byDefault: false }];
-    await expect(start()).resolves.toEqual({ status: "refused", reason: "launch-failed" });
+    await expect(start()).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
+  });
+
+  it("starts Antigravity by name or as the default, ready at its own prompt with no keys typed (#16815)", async () => {
+    // agy's `--settings` trusts the lane folder, so its first screen is the prompt.
+    screens = [
+      ["  Antigravity CLI", "", ">", "", "? for shortcuts          Gemini 4 Carbon · high"].join(
+        "\n"
+      ),
+    ];
+    deps.launchableAgents = async () => [
+      { id: "codex", byDefault: true },
+      { id: "antigravity", byDefault: true },
+    ];
+    await expect(start({ agentId: "antigravity" })).resolves.toMatchObject({
+      status: "started",
+      agentId: "antigravity",
+      ready: true,
+    });
+    expect(deps.provision).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "antigravity" })
+    );
+    expect(deps.spawn.mock.calls.at(-1)![1]).toMatchObject({ agentId: "antigravity" });
+    expect(writes).toEqual([]);
+
+    // The machine's own pick comes first in the list the deps answer with.
+    deps.launchableAgents = async () => [
+      { id: "antigravity", byDefault: true },
+      { id: "codex", byDefault: true },
+    ];
+    await expect(start()).resolves.toMatchObject({ status: "started", agentId: "antigravity" });
+  });
+
+  it("asks only the agent it settles on whether its CLI is new enough, passing over a too-old one (#16815)", async () => {
+    const tooOld = new Set(["codex"]);
+    const meetsVersionFloor = vi.fn(async (id: string) => !tooOld.has(id));
+    deps.meetsVersionFloor = meetsVersionFloor;
+
+    // The default skips a too-old pick for the next default, and asks no further.
+    await expect(start()).resolves.toMatchObject({ status: "started", agentId: "claude" });
+    expect(meetsVersionFloor.mock.calls).toEqual([["codex"], ["claude"]]);
+
+    // Named, a too-old agent is refused before anything is provisioned.
+    deps.provision.mockClear();
+    meetsVersionFloor.mockClear();
+    await expect(start({ agentId: "codex" })).resolves.toEqual({
+      status: "refused",
+      reason: "agent-unavailable",
+    });
+    expect(meetsVersionFloor.mock.calls).toEqual([["codex"]]);
+    expect(deps.provision).not.toHaveBeenCalled();
+
+    // A new-enough named agent is the only one asked.
+    meetsVersionFloor.mockClear();
+    await expect(start({ agentId: "copilot" })).resolves.toMatchObject({ agentId: "copilot" });
+    expect(meetsVersionFloor.mock.calls).toEqual([["copilot"]]);
   });
 
   it("refuses a slot in use without touching it, and an unknown project", async () => {
@@ -246,6 +308,114 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     });
   });
 
+  describe("resuming a conversation by id (#16753)", () => {
+    const resume = { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" };
+    const UPDATE_RESTART = { kind: "update-restart" } as const;
+
+    it("reopens it in its own slot on its own agent, with no greeting, refusing a fresh one", async () => {
+      // Back at its prompt with the conversation on screen: nothing to wait on.
+      screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
+      const result = await start({
+        slot: 2,
+        agentId: "claude",
+        startedBy: UPDATE_RESTART,
+        resume,
+        stillWanted: () => true,
+      });
+
+      expect(result).toMatchObject({ status: "started", slot: 2, agentId: "claude", ready: true });
+      expect(clock).toBe(0);
+      expect(deps.provision).toHaveBeenCalledTimes(1);
+      expect(deps.provision.mock.calls[0]![0]).toMatchObject({
+        slot: 2,
+        agentId: "claude",
+        vacantOnly: true,
+        resumeClaimId: "claim-7",
+        startedBy: UPDATE_RESTART,
+      });
+      expect(deps.provision.mock.calls[0]![0]).not.toHaveProperty("refuseKept");
+      expect(deps.spawn.mock.calls[0]![1]).toMatchObject({
+        prompt: "",
+        resumeAgentSessionId: "conv-7",
+        exactResume: true,
+      });
+    });
+
+    it("never moves to another slot or agent, or starts with nothing to resume", async () => {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("busy"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(
+        start({ slot: 2, agentId: "claude", startedBy: UPDATE_RESTART, resume })
+      ).resolves.toEqual({ status: "refused", reason: "no-slot" });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+
+      deps.provision.mockClear();
+      for (const request of [
+        { slot: undefined, agentId: "claude" },
+        { slot: 2, agentId: undefined },
+        { slot: 2, agentId: "claude", resume: { ...resume, agentSessionId: "" } },
+        // Its provision would hold no claim on the lane.
+        { slot: 2, agentId: "claude", resume: { ...resume, claimId: "" } },
+        // A schedule's run starts fresh by definition.
+        {
+          slot: 2,
+          agentId: "claude",
+          scheduled: {
+            terminalId: "terminal-reserved",
+            prompt: "Run the checks.",
+            scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+          },
+        },
+      ]) {
+        await expect(start({ startedBy: UPDATE_RESTART, resume, ...request })).resolves.toEqual({
+          status: "refused",
+          reason: "launch-failed",
+        });
+      }
+      // Not one this machine starts with no view: no other agent stands in.
+      await expect(
+        start({ slot: 2, agentId: "gemini", startedBy: UPDATE_RESTART, resume })
+      ).resolves.toEqual({ status: "refused", reason: "agent-unavailable" });
+      expect(deps.provision).not.toHaveBeenCalled();
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("gives the lane back unspawned when its folder isn't the conversation's, or it's no longer wanted", async () => {
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          startedBy: UPDATE_RESTART,
+          resume: { ...resume, cwd: "/elsewhere" },
+        })
+      ).resolves.toEqual({ status: "refused", reason: "folder-moved" });
+
+      // Still wanted when it provisioned, no longer once its flags were read.
+      let wanted = true;
+      let flagsRead: ((flags: string[]) => void) | undefined;
+      deps.launchFlags = () =>
+        new Promise<string[]>((resolve) => {
+          flagsRead = resolve;
+        });
+      const started = start({
+        slot: 2,
+        agentId: "claude",
+        startedBy: UPDATE_RESTART,
+        resume,
+        stillWanted: () => wanted,
+      });
+      await vi.waitFor(() => expect(flagsRead).toBeDefined());
+      expect(deps.provision).toHaveBeenCalledTimes(2);
+      wanted = false;
+      flagsRead!([]);
+      await expect(started).resolves.toEqual({ status: "refused", reason: "withdrawn" });
+
+      expect(deps.revoke.mock.calls).toEqual([["session-1"], ["session-1"]]);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("tries a slot keeping a stopped session's conversation last", async () => {
     occupied = [0];
     deps.keptSlots = () => [1];
@@ -263,6 +433,185 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
     }
     await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 1 });
     expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([...fresh, 1]);
+  });
+
+  describe("preserving kept conversations (#16763)", () => {
+    const LANE_KEPT = () => Object.assign(new Error("kept"), { code: "LANE_KEPT" });
+
+    it("never tries a kept slot, and has every provision refuse one kept meanwhile", async () => {
+      occupied = [0];
+      deps.keptSlots = () => [1, 3];
+
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toMatchObject({
+        slot: 2,
+      });
+      expect(deps.provision.mock.calls[0]![0]).toMatchObject({ slot: 2, refuseKept: true });
+
+      // Kept since it was listed: passed over for the next vacant one.
+      deps.provision.mockClear();
+      deps.provision.mockRejectedValueOnce(LANE_KEPT());
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toMatchObject({
+        slot: 4,
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2, 4]);
+      // Every attempt is held to it, the retry included.
+      expect(deps.provision.mock.calls.every(([input]) => input.refuseKept === true)).toBe(true);
+    });
+
+    it("refuses with no slot rather than take a kept one once the vacant ones run out", async () => {
+      deps.keptSlots = () => [0, 1];
+      const fresh = ASSISTANT_SLOTS.filter((slot) => slot > 1);
+      for (const _slot of fresh) {
+        deps.provision.mockRejectedValueOnce(
+          Object.assign(new Error("taken"), { code: "LANE_OCCUPIED" })
+        );
+      }
+
+      await expect(start({ slot: undefined, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "no-slot",
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual(fresh);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("refuses a kept slot it names, as listed or as its provision finds it", async () => {
+      deps.keptSlots = () => [1];
+      await expect(start({ slot: 1, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "kept",
+      });
+      expect(deps.provision).not.toHaveBeenCalled();
+
+      deps.provision.mockRejectedValueOnce(LANE_KEPT());
+      await expect(start({ slot: 2, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "kept",
+      });
+      expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("reports a resume whose claim was dropped before its provision as withdrawn, not taken", async () => {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("being resumed"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          resume: { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" },
+          stillWanted: () => false,
+        })
+      ).resolves.toEqual({ status: "refused", reason: "withdrawn" });
+      expect(deps.spawn).not.toHaveBeenCalled();
+    });
+
+    it("answers a running slot it names as in use, though its lane has a pointer too", async () => {
+      occupied = [1];
+      deps.keptSlots = () => [1];
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("busy"), { code: "LANE_OCCUPIED" })
+      );
+      await expect(start({ slot: 1, preserveKept: true })).resolves.toEqual({
+        status: "refused",
+        reason: "no-slot",
+      });
+    });
+
+    it("leaves a resume in its own kept slot", async () => {
+      deps.keptSlots = () => [2];
+      screens = [["› earlier work", "", "› Ask Codex to do anything"].join("\n")];
+      await expect(
+        start({
+          slot: 2,
+          agentId: "claude",
+          preserveKept: true,
+          resume: { agentSessionId: "conv-7", cwd: SESSION_FOLDER, claimId: "claim-7" },
+        })
+      ).resolves.toMatchObject({ status: "started", slot: 2 });
+      expect(deps.provision.mock.calls[0]![0]).not.toHaveProperty("refuseKept");
+    });
+  });
+});
+
+describe("viewlessLaunchableAgents against the real registry (#16815)", () => {
+  const launchable = (installed: string[], preferred: (string | null)[] = [null, null]) =>
+    viewlessLaunchableAgents({
+      wired: getAssistantWiredAgentIds(),
+      offered: getAssistantSupportedAgentIds(),
+      isLaunchable: (id) => installed.includes(id),
+      preferred,
+    });
+
+  it("offers an installed Antigravity as a default, first when it's the assistant's pick", () => {
+    expect(launchable(["codex", "antigravity"], ["antigravity", "codex"])).toEqual([
+      { id: "antigravity", byDefault: true },
+      { id: "codex", byDefault: true },
+    ]);
+    // With no pick, the order a view's fallback would read keeps Codex first.
+    expect(launchable(["codex", "antigravity"])).toEqual([
+      { id: "codex", byDefault: true },
+      { id: "antigravity", byDefault: true },
+    ]);
+  });
+
+  it("keeps an experimental backend for starts that name it, and drops a picked agent with no viewless start", () => {
+    expect(launchable(["copilot", "gemini"], ["gemini", null])).toEqual([
+      { id: "copilot", byDefault: false },
+    ]);
+  });
+});
+
+describe("firstUsableDefault (#16815)", () => {
+  const agents = [
+    { id: "copilot", byDefault: false },
+    { id: "antigravity", byDefault: true },
+    { id: "codex", byDefault: true },
+    { id: "claude", byDefault: true },
+  ];
+
+  it("settles on the first default new enough, asking no agent after it", async () => {
+    const newEnough = vi.fn(async (id: string) => id !== "antigravity");
+    await expect(firstUsableDefault(agents, newEnough)).resolves.toBe("codex");
+    expect(newEnough.mock.calls).toEqual([["antigravity"], ["codex"]]);
+  });
+
+  it("settles on nothing when no default is new enough", async () => {
+    await expect(firstUsableDefault(agents, async () => false)).resolves.toBeUndefined();
+  });
+});
+
+describe("meetsAssistantVersionFloor (#16815)", () => {
+  const reads = (cached: string | null, fresh: string | null = cached) => {
+    const read = vi.fn(async (refresh: boolean) => (refresh ? fresh : cached));
+    return read;
+  };
+
+  it("passes a CLI at or above the floor on its cached reading alone", async () => {
+    const read = reads("1.5.5");
+    await expect(meetsAssistantVersionFloor("1.5.5", read)).resolves.toBe(true);
+    expect(read.mock.calls).toEqual([[false]]);
+  });
+
+  it("fails a CLI below the floor only once a fresh read agrees", async () => {
+    const read = reads("1.4.12");
+    await expect(meetsAssistantVersionFloor("1.5.5", read)).resolves.toBe(false);
+    expect(read.mock.calls).toEqual([[false], [true]]);
+    // An upgrade since the cached reading counts at once.
+    await expect(meetsAssistantVersionFloor("1.5.5", reads("1.4.12", "1.5.5"))).resolves.toBe(true);
+  });
+
+  it("doesn't hold back a CLI whose version can't be read or compared, or one with no floor", async () => {
+    await expect(meetsAssistantVersionFloor("1.5.5", reads(null))).resolves.toBe(true);
+    await expect(meetsAssistantVersionFloor("1.5.5", reads("not a version"))).resolves.toBe(true);
+    const failing = vi.fn(async () => {
+      throw new Error("probe failed");
+    });
+    await expect(meetsAssistantVersionFloor("1.5.5", failing)).resolves.toBe(true);
+    const unread = reads("0.0.1");
+    await expect(meetsAssistantVersionFloor(undefined, unread)).resolves.toBe(true);
+    expect(unread).not.toHaveBeenCalled();
   });
 });
 

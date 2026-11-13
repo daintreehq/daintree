@@ -19,6 +19,7 @@
 
 import type {
   PluginAccountRef,
+  PluginActionContext,
   PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
@@ -52,6 +53,7 @@ import type {
   PluginSendToAgentOptions,
   PluginRunRecipeOptions,
   PluginTerminalReadScreenOptions,
+  PluginAgentInputOptions,
   PluginAgentKeysInput,
   PluginFsReadFilesEncoding,
   PluginFsWalkOptions,
@@ -74,6 +76,7 @@ export type PluginHostCallMethod =
   | "agents.interrupt"
   | "agents.sendKeys"
   | "agents.submit"
+  | "remoteHosts.list"
   | "terminals.readScreen"
   | "sendToAgent"
   | "runRecipe"
@@ -309,6 +312,8 @@ export type PluginHostToWorkerMessage =
       kind: "action";
       namespacedId: string;
       args: unknown;
+      /** The host-built dispatch context (#16751); the worker re-freezes it. */
+      context: PluginActionContext;
     }
   /**
    * Import (once, lazily) a manifest-declared command's handler module and call
@@ -324,6 +329,8 @@ export type PluginHostToWorkerMessage =
       namespacedId: string;
       resolvedPath: string;
       args: unknown;
+      /** The host-built dispatch context (#16751); the worker re-freezes it. */
+      context: PluginActionContext;
     }
   | {
       type: "invoke";
@@ -858,18 +865,21 @@ export interface SendToActiveAgentParams {
 /** Params for `agents.interrupt` (`host-call`). */
 export interface AgentsInterruptParams {
   terminalId: string;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `agents.sendKeys` (`host-call`). */
 export interface AgentsSendKeysParams {
   terminalId: string;
   input: PluginAgentKeysInput;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `agents.submit` (`host-call`). */
 export interface AgentsSubmitParams {
   terminalId: string;
   text: string;
+  options?: PluginAgentInputOptions;
 }
 
 /** Params for `terminals.readScreen` (`host-call`). */

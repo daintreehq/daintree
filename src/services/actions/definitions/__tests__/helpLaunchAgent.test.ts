@@ -118,6 +118,7 @@ import {
   resetHelpPanelRuntimeGateForTests,
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePaletteStore } from "@/store/paletteStore";
 import { makePluginTourId } from "@shared/utils/tourIds";
@@ -183,6 +184,11 @@ describe("help.launchAgent", () => {
           },
           agentCapabilities: {
             getResolvedModelList: vi.fn().mockResolvedValue(null),
+          },
+          // No installed version reported: the assistant version gate lets the
+          // launch through, as it does for a CLI it can't probe.
+          system: {
+            getAgentVersion: vi.fn().mockResolvedValue(null),
           },
         },
       },
@@ -293,6 +299,197 @@ describe("help.launchAgent", () => {
     );
   });
 
+  describe("assistant version gate (#16814)", () => {
+    const agyVersion = (installedVersion: string) =>
+      vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+        agentId: "antigravity",
+        installedVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        lastChecked: null,
+      });
+
+    beforeEach(() => {
+      vi.mocked(window.electron.help.getFolderPath).mockResolvedValue("/mock/help");
+      mockGetCliAvailabilityState.mockReturnValue({
+        availability: allAvailability({ antigravity: "ready" }),
+        isInitialized: true,
+      });
+    });
+
+    it("refuses an Antigravity CLI older than the assistant needs before minting a session", async () => {
+      agyVersion("1.4.12");
+
+      await action.run({ agentId: "antigravity" }, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringMatching(/Antigravity.*1\.4\.12.*1\.5\.5/),
+        })
+      );
+      // Refused before any lane was claimed.
+      expect(claimedHelpLaneKeys.size).toBe(0);
+    });
+
+    it("passes over a kept Antigravity lane whose CLI is now too old, before claiming it", async () => {
+      // The conversation was kept across a restart; agy was downgraded since.
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([0]),
+        peekPendingHibernation: vi.fn(async () => ({
+          agentId: "antigravity",
+          agentSessionId: "s",
+          cwd: "/repo",
+        })),
+      });
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => ({
+        agentId,
+        installedVersion: agentId === "antigravity" ? "1.4.12" : null,
+        latestVersion: null,
+        updateAvailable: false,
+        lastChecked: null,
+      }));
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude", slot: 0 })
+      );
+    });
+
+    it("refuses a too-old agent a live sibling lane would hand an unnamed launch", async () => {
+      agyVersion("1.4.12");
+      useHelpPanelStore.getState().ensureSlot(1);
+      useHelpPanelStore.getState().setTerminal(1, "term-sibling", "antigravity", "sess-sibling");
+      mockGetCliAvailabilityState.mockReturnValue({
+        availability: allAvailability({ antigravity: "ready" }),
+        isInitialized: false,
+      });
+
+      await action.run({ slot: 0 }, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", message: expect.stringContaining("1.5.5") })
+      );
+      expect(claimedHelpLaneKeys.size).toBe(0);
+    });
+
+    it("gates the Claude fallback a cold start settles on", async () => {
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => ({
+        agentId,
+        installedVersion: agentId === "claude" ? "0.9.0" : null,
+        latestVersion: null,
+        updateAvailable: false,
+        lastChecked: null,
+      }));
+      mockGetCliAvailabilityState.mockReturnValue({ availability: {}, isInitialized: false });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", message: expect.stringMatching(/0\.9\.0/) })
+      );
+    });
+
+    it("probes an agent the panel comes to prefer while another probe is out", async () => {
+      mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
+      mockGetCliAvailabilityState.mockReturnValue({
+        availability: allAvailability({ antigravity: "ready", copilot: "ready" }),
+        isInitialized: true,
+      });
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([1]),
+        peekPendingHibernation: vi.fn(async () => ({
+          agentId: "antigravity",
+          agentSessionId: "s",
+          cwd: "/repo",
+        })),
+      });
+      vi.mocked(window.electron.system.getAgentVersion).mockImplementation(async (agentId) => {
+        // A preference synced from the host lands mid-probe, naming an agent
+        // whose CLI is below its floor.
+        if (agentId === "antigravity") useHelpPanelStore.setState({ preferredAgentId: "copilot" });
+        return {
+          agentId,
+          installedVersion: agentId === "copilot" ? "1.0.0" : "9.9.9",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        };
+      });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith(
+        "copilot",
+        expect.anything()
+      );
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+    });
+
+    it("refuses silently for a caller that asked for a vacant lane", async () => {
+      agyVersion("1.0.0");
+
+      const result = await action.run(
+        { agentId: "antigravity", slot: 1, vacantOnly: true },
+        stubCtx
+      );
+
+      expect(result).toBeUndefined();
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
+    });
+
+    it("reads the CLI afresh after a refusal, so an update is seen without a restart", async () => {
+      agyVersion("1.4.12");
+      await action.run({ agentId: "antigravity" }, stubCtx);
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+
+      agyVersion("1.5.5");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-agy" } });
+      await action.run({ agentId: "antigravity" }, stubCtx);
+
+      expect(vi.mocked(window.electron.system.getAgentVersion).mock.calls.at(-1)).toEqual([
+        "antigravity",
+        true,
+      ]);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+
+      // Once it passes, launches go back to the cached version.
+      await action.run({ agentId: "antigravity" }, stubCtx);
+      expect(vi.mocked(window.electron.system.getAgentVersion).mock.calls.at(-1)).toEqual([
+        "antigravity",
+        false,
+      ]);
+    });
+
+    it("launches and binds Antigravity once its CLI meets the floor", async () => {
+      agyVersion("1.5.5");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-agy" } });
+
+      const result = await action.run({ agentId: "antigravity", slot: 0 }, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "antigravity", slot: 0 })
+      );
+      expect(result).toMatchObject({
+        slot: 0,
+        terminalId: "term-agy",
+        sessionId: "sess-default",
+        agentId: "antigravity",
+      });
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+      expect(useHelpPanelStore.getState().sessions[0]?.agentId).toBe("antigravity");
+    });
+  });
+
   it("adds no launch flags for an explicit CLI default", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
@@ -322,6 +519,7 @@ describe("help.launchAgent", () => {
       idleHibernateMinutes: 5,
       loadGlobalHooksAndServers: false,
       daintreeConfirmations: "inherit",
+      daintreeConfirmationsExcept: [],
       acceptRemoteControl: true,
     });
 

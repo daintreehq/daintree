@@ -49,6 +49,7 @@ const STORED: HelpAssistantSettings = {
   idleHibernateMinutes: 5,
   loadGlobalHooksAndServers: false,
   daintreeConfirmations: "inherit",
+  daintreeConfirmationsExcept: [],
   acceptRemoteControl: true,
 };
 

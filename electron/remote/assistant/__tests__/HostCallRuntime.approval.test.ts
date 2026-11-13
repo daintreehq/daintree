@@ -58,7 +58,8 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   let duringCall: ((runtime: HostCallRuntime, callId: string) => Promise<unknown>) | undefined;
   let answers: RelayApproveAnswer[];
   // This Shell's own preference for the asking assistant (#15698), and what read it.
-  let skips: boolean | Error;
+  // A set stands for actions handed over one by one (#16752), by the id called.
+  let skips: boolean | Error | ReadonlySet<string>;
   let skipReads: string[];
   let skipNotes: number;
 
@@ -95,10 +96,10 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         asked.push(question);
         return decision;
       },
-      confirmationsSkipped: (helpSessionId) => {
+      confirmationsSkipped: (helpSessionId, calledActionId) => {
         skipReads.push(helpSessionId);
         if (skips instanceof Error) throw skips;
-        return skips;
+        return typeof skips === "boolean" ? skips : skips.has(calledActionId);
       },
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
     });
@@ -324,6 +325,22 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       expect(skipNotes).toBe(0);
     });
 
+    // The host asks about the plain delete an owned one stands in for, so the
+    // skip is settled on the tool the assistant called (#16752).
+    it("skips an owned delete handed over by the tool called, and still asks for a plain one", async () => {
+      skips = new Set(["worktree.deleteOwned"]);
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall("worktree.deleteOwned");
+      expect(asked).toEqual([]);
+      expect(answers.at(-1)?.decision).toBe("skip-preference");
+
+      await deleteCall();
+      expect(asked).toHaveLength(1);
+      expect(answers.at(-1)?.decision).toBe("approved");
+      expect(skipNotes).toBe(1);
+    });
+
     it("never turns a host's ask about some other call into a skip", async () => {
       skips = true;
       duringCall = async (r, callId) => {
@@ -371,6 +388,17 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
         expect(verdicts).toEqual([true]);
         expect(skipNotes).toBe(1);
+      });
+
+      it("skips a dispatch for an owned delete handed over, never for a plain delete (#16752)", async () => {
+        skips = new Set(["worktree.deleteOwned"]);
+        during((r, callId) => verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId))));
+        await deleteCall("worktree.deleteOwned");
+        expect(verdicts).toEqual([true]);
+
+        during((r, callId) => verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId))));
+        await deleteCall();
+        expect(verdicts).toEqual([false]);
       });
 
       it("skips once per call: a second dispatch of the same call asks", async () => {

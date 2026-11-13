@@ -1,5 +1,6 @@
 import { BrowserWindow, type WebContents } from "electron";
 import { viewWebContents } from "./activeViewFocus.js";
+import { isInOrEnteringNativeFullScreen } from "./fullScreenEntry.js";
 
 /**
  * Map a window without activating it, leaving the window the user is in on top.
@@ -10,7 +11,12 @@ import { viewWebContents } from "./activeViewFocus.js";
  *
  * macOS: `showInactive()` ends in `orderFrontRegardless`. `moveTop()` orders
  * the focused window back in front without touching the key window or its
- * first responder, so typing stays where it was.
+ * first responder, so typing stays where it was. Not when either window is in
+ * native full screen or on its way there: a native full-screen window is alone
+ * on its own Space, so there is nothing to bury, and the restack lands during
+ * the transition. It is the suspected cause of restored full-screen windows
+ * whose title bar no longer slid down on hover, traffic lights gone until the
+ * window left full screen and came back (v0.50.0, not reproduced in CI).
  *
  * X11: window managers stack a newly mapped window on top whether or not it
  * gets focus (xfwm4 raises every window it frames). A restack request can't
@@ -27,8 +33,10 @@ export function showWindowInactive(win: BrowserWindow): void {
   const focused = restack ? BrowserWindow.getFocusedWindow() : null;
   win.showInactive();
   if (!focused || focused === win || focused.isDestroyed()) return;
-  if (restack === "restack") focused.moveTop();
-  else reactivate(focused);
+  if (restack === "reactivate") reactivate(focused);
+  else if (!isInOrEnteringNativeFullScreen(win) && !isInOrEnteringNativeFullScreen(focused)) {
+    focused.moveTop();
+  }
 }
 
 function stackingRestore(): "restack" | "reactivate" | null {

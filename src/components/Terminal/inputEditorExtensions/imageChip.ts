@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { EditorState, Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
 import { createChipRemoveControl, formatChipLabel, removeChipRange } from "./base";
 import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
@@ -10,6 +10,7 @@ interface ImageChipEntry {
   from: number;
   to: number;
   filePath: string;
+  /** Empty while the chip has no preview: it still attaches the image. */
   thumbnailUrl: string;
 }
 
@@ -23,7 +24,11 @@ class ImageChipWidget extends WidgetType {
   }
 
   eq(other: ImageChipWidget) {
-    return this.filePath === other.filePath && this.isSelected === other.isSelected;
+    return (
+      this.filePath === other.filePath &&
+      this.thumbnailUrl === other.thumbnailUrl &&
+      this.isSelected === other.isSelected
+    );
   }
 
   toDOM(view: EditorView) {
@@ -32,11 +37,13 @@ class ImageChipWidget extends WidgetType {
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", chipAriaLabel(`Image: ${this.filePath}`, this.isSelected));
 
-    const img = document.createElement("img");
-    img.src = this.thumbnailUrl;
-    img.alt = "";
-    img.setAttribute("aria-hidden", "true");
-    span.appendChild(img);
+    if (this.thumbnailUrl !== "") {
+      const img = document.createElement("img");
+      img.src = this.thumbnailUrl;
+      img.alt = "";
+      img.setAttribute("aria-hidden", "true");
+      span.appendChild(img);
+    }
 
     const label = document.createElement("span");
     label.className = "cm-chip-label";
@@ -73,6 +80,9 @@ class ImageChipWidget extends WidgetType {
 
 export const addImageChip = StateEffect.define<ImageChipEntry>({ map: mapChipEntry });
 
+/** A preview arrived for `filePath`: every chip of it still without one shows it. */
+export const setImageChipPreview = StateEffect.define<{ filePath: string; thumbnailUrl: string }>();
+
 export const imageChipField = StateField.define<ImageChipEntry[]>({
   create() {
     return [];
@@ -95,6 +105,11 @@ export const imageChipField = StateField.define<ImageChipEntry[]>({
     for (const effect of tr.effects) {
       if (effect.is(addImageChip)) {
         entries = [...entries, effect.value];
+      } else if (effect.is(setImageChipPreview)) {
+        const { filePath, thumbnailUrl } = effect.value;
+        entries = entries.map((e) =>
+          e.filePath === filePath && e.thumbnailUrl === "" ? { ...e, thumbnailUrl } : e
+        );
       }
     }
     return entries;
@@ -138,6 +153,27 @@ export function readImageChipPaths(view: EditorView | null | undefined): string[
     .map((entry) => entry.filePath);
 }
 
+/**
+ * Chips for `images`, previewless, wherever `state`'s text still spells the
+ * path and no chip already sits: a draft that changed on its way to the
+ * editor gets no chip on text that isn't the image's.
+ */
+export function restoredImageChipEffects(
+  state: EditorState,
+  images: readonly { from: number; to: number; filePath: string }[]
+): StateEffect<ImageChipEntry>[] {
+  const entries = state.field(imageChipField, false);
+  if (!entries) return [];
+  return images
+    .filter(
+      ({ from, to, filePath }) =>
+        to <= state.doc.length &&
+        state.doc.sliceString(from, to) === filePath &&
+        !entries.some((e) => e.from < to && e.to > from)
+    )
+    .map(({ from, to, filePath }) => addImageChip.of({ from, to, filePath, thumbnailUrl: "" }));
+}
+
 export function createImageChipTooltip() {
   return chipHoverTooltip((view, pos) => {
     const entries = view.state.field(imageChipField, false);
@@ -147,11 +183,12 @@ export function createImageChipTooltip() {
     if (!entry) return null;
 
     return chipTooltip(entry, ".cm-image-chip", () => {
+      const path = chipCardPath(entry.filePath);
+      if (entry.thumbnailUrl === "") return [path];
       const img = document.createElement("img");
       img.src = entry.thumbnailUrl;
-      img.alt = "Screenshot preview";
+      img.alt = "Image preview";
       img.className = "block max-h-[180px] max-w-[240px] rounded-[var(--radius-sm)] object-contain";
-      const path = chipCardPath(entry.filePath);
       path.classList.add("mt-1.5");
       return [img, path];
     });

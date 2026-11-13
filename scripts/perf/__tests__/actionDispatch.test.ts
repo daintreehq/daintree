@@ -134,7 +134,12 @@ describe("action dispatch perf bundle", () => {
         expect(mods.buildToolInputSchema(entry)["type"]).toBe("object");
       }
 
-      const surface = mods.buildSurfaceManifest(manifest, "external", "0.0.0-test");
+      const surface = mods.buildSurfaceManifest(
+        manifest,
+        "external",
+        "external-client",
+        "0.0.0-test"
+      );
       expect(surface.tools.length).toBe(exposed.length);
       expect(surface.hash).toMatch(/^[0-9a-f]{64}$/);
     },

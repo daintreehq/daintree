@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -41,8 +42,10 @@ import { FleetHostComposer } from "./FleetHostComposer";
 import { FLEET_EXIT_COMBO } from "./fleetKeys";
 import { FleetFailureBanner } from "./FleetFailureBanner";
 import { SavedFleetsSection } from "./SavedFleetsSection";
-import { SaveFleetDialog } from "./SaveFleetDialog";
-import { SavedFleetsDialog } from "./SavedFleetsDialog";
+import type { SaveFleetRule } from "./SaveFleetDialog";
+import { useRetainedDialog } from "./useRetainedDialog";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
 import {
@@ -87,6 +90,23 @@ import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+
+// The ribbon is on screen in every project view, so its dialogs stay out of
+// first paint: each loads once the selection menu that offers it opens.
+const LazySaveFleetDialog = lazyWithPreload(
+  () => import("./SaveFleetDialog"),
+  (m) => m.SaveFleetDialog
+);
+const LazySavedFleetsDialog = lazyWithPreload(
+  () => import("./SavedFleetsDialog"),
+  (m) => m.SavedFleetsDialog
+);
+
+function preloadFleetDialogs(): void {
+  // A failed load is reported by the dialog's boundary if it is opened.
+  LazySaveFleetDialog.preload().catch(() => {});
+  LazySavedFleetsDialog.preload().catch(() => {});
+}
 
 interface RunCountSegment {
   label: string;
@@ -322,8 +342,13 @@ export function FleetArmingRibbon(): ReactElement | null {
   // can close it before the dialog opens — keeping the modal dropdown layer
   // from colliding with the dialog's focus trap (#8023, lesson #2828).
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
-  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const saveDialog = useRetainedDialog();
+  const manageDialog = useRetainedDialog();
+  const saveDialogOpen = saveDialog.isOpen;
+  const manageDialogOpen = manageDialog.isOpen;
+  const openSaveDialog = saveDialog.open;
+  const openManageDialog = manageDialog.open;
+  const [saveRule, setSaveRule] = useState<SaveFleetRule | undefined>(undefined);
   // Set when the menu closes to hand off to one of the fleet dialogs. The
   // menu's focus restore to its trigger runs after the exit animation — after
   // the dialog has already focused its first field — and would pull focus back
@@ -435,14 +460,24 @@ export function FleetArmingRibbon(): ReactElement | null {
     // dialog mounts; React 19 batches both state updates.
     dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
-    setSaveDialogOpen(true);
-  }, []);
+    openSaveDialog();
+  }, [openSaveDialog]);
+
+  // A fleet dialog that failed to load or render closes. It never took focus,
+  // or took it down with it, and the menu skipped its restore for the
+  // hand-off, so focus goes back to the menu's trigger if nothing holds it.
+  const failFleetDialog = (reset: () => void) => {
+    reset();
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    selectionTriggerRef.current?.focus({ preventScroll: true });
+  };
 
   const handleRequestManageFleets = useCallback(() => {
     dialogHandoffRef.current = true;
     setSelectionMenuOpen(false);
-    setManageDialogOpen(true);
-  }, []);
+    openManageDialog();
+  }, [openManageDialog]);
 
   const setPreviewArmedIds = useFleetArmingStore((s) => s.setPreviewArmedIds);
   const clearPreviewArmedIds = useFleetArmingStore((s) => s.clearPreviewArmedIds);
@@ -550,19 +585,49 @@ export function FleetArmingRibbon(): ReactElement | null {
   // itself is gone: a pane closing while someone names a fleet must not take
   // the dialog and the typed name with it. The dialog explains when a
   // snapshot can no longer be saved.
+  // Each is mounted only while open or closing: a closed dialog left mounted
+  // re-ran its panel-store selectors on every status flush in every view.
+  // A dialog that can't load closes (failFleetDialog), so Escape isn't left
+  // held by a dialog that never appeared.
   const fleetDialogs = (
     <>
-      <SaveFleetDialog
-        isOpen={saveDialogOpen}
-        onClose={() => setSaveDialogOpen(false)}
-        armedCount={localArmedCount}
-        restoreFocusTo={selectionTriggerRef}
-      />
-      <SavedFleetsDialog
-        isOpen={manageDialogOpen}
-        onClose={() => setManageDialogOpen(false)}
-        restoreFocusTo={selectionTriggerRef}
-      />
+      <ErrorBoundary
+        variant="component"
+        componentName="SaveFleetDialog"
+        resetKeys={[Number(saveDialog.isMounted)]}
+        onError={() => failFleetDialog(saveDialog.reset)}
+      >
+        {saveDialog.isMounted && (
+          <Suspense fallback={null}>
+            <LazySaveFleetDialog
+              isOpen={saveDialog.isOpen}
+              onClose={saveDialog.close}
+              onCloseComplete={saveDialog.onCloseComplete}
+              armedCount={localArmedCount}
+              restoreFocusTo={selectionTriggerRef}
+              initialRule={saveRule}
+              onRuleChange={setSaveRule}
+            />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+      <ErrorBoundary
+        variant="component"
+        componentName="SavedFleetsDialog"
+        resetKeys={[Number(manageDialog.isMounted)]}
+        onError={() => failFleetDialog(manageDialog.reset)}
+      >
+        {manageDialog.isMounted && (
+          <Suspense fallback={null}>
+            <LazySavedFleetsDialog
+              isOpen={manageDialog.isOpen}
+              onClose={manageDialog.close}
+              onCloseComplete={manageDialog.onCloseComplete}
+              restoreFocusTo={selectionTriggerRef}
+            />
+          </Suspense>
+        )}
+      </ErrorBoundary>
     </>
   );
 
@@ -868,8 +933,13 @@ export function FleetArmingRibbon(): ReactElement | null {
               <DropdownMenu
                 open={selectionMenuOpen}
                 onOpenChange={(open) => {
-                  // A hand-off only ever covers the close it was requested for.
-                  if (open) dialogHandoffRef.current = false;
+                  if (open) {
+                    // A hand-off only ever covers the close it was requested for.
+                    dialogHandoffRef.current = false;
+                    // Loaded now, either dialog opens in the frame it's asked
+                    // for instead of suspending behind React's fallback throttle.
+                    preloadFleetDialogs();
+                  }
                   setSelectionMenuOpen(open);
                   if (!open) clearPreviewArmedIds();
                 }}

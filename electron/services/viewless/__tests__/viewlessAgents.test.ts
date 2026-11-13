@@ -460,6 +460,40 @@ describe("agent.launch with no frontend", () => {
     expect(snapshot?.agentModelId).toBe("devstral-small");
   });
 
+  it("titles the pane with a model only the host's catalog lists (#16783)", async () => {
+    const { deps, invoke, store } = launchDeps();
+    const answer = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) =>
+      channel === CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST
+        ? {
+            agentId: args[0],
+            models: [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }],
+            contextWindow: null,
+            source: "remote",
+          }
+        : answer(projectId, channel, args)
+    );
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "codex",
+        worktreeId: "/repo-wt/feature",
+        model: "gpt-5.5",
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    expect(invoke).toHaveBeenCalledWith(
+      PROJECT.id,
+      CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+      ["codex"]
+    );
+    expect(spawned(invoke)).toMatchObject({ agentModelId: "gpt-5.5", title: "Codex (GPT-5.5)" });
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot?.title).toBe("Codex (GPT-5.5)");
+  });
+
   it("records the prompt as the caller wrote it, without the handback instruction (#14592)", async () => {
     const { deps, invoke, store } = launchDeps();
 
@@ -605,6 +639,44 @@ describe("a schedule's Assistant spawned with no frontend (#16169)", () => {
     expect(payload).not.toHaveProperty("scheduledRun");
     expect(payload).not.toHaveProperty("handbackCode");
     expect(String(payload.command)).not.toContain("DAINTREE-");
+  });
+});
+
+describe("an Assistant reopening one exact conversation with no frontend (#16753)", () => {
+  const spec = {
+    terminalId: "terminal-assistant",
+    agentId: "claude",
+    cwd: "/help-sessions/abc",
+    env: { DAINTREE_MCP_TOKEN: "bearer" },
+    prompt: "",
+    agentLaunchFlags: [],
+  };
+
+  it("asks the spawn to refuse rather than open an empty conversation under the id", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await expect(
+      spawnHostAssistant(
+        PROJECT,
+        { ...spec, resumeAgentSessionId: "conv-7", exactResume: true },
+        deps
+      )
+    ).resolves.toBe(true);
+
+    const payload = spawned(invoke);
+    expect(payload).toMatchObject({ agentSessionId: "conv-7", exactResume: true });
+    expect(String(payload.command)).toContain("conv-7");
+  });
+
+  it("leaves a resume that didn't ask for it as it was", async () => {
+    const { deps, invoke } = launchDeps();
+
+    await spawnHostAssistant(PROJECT, { ...spec, resumeAgentSessionId: "conv-8" }, deps);
+
+    const payload = spawned(invoke);
+    expect(payload).not.toHaveProperty("exactResume");
+    expect(payload.agentSessionId).toBe("conv-8");
+    expect(String(payload.command)).toContain("conv-8");
   });
 });
 

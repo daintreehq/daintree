@@ -79,7 +79,7 @@ Eighteen things an agent gets wrong on the first attempt, grouped by how the fai
 
 **Loads, and does the wrong thing.**
 
-10. **A `registerHandler` callback receives the IPC context first and your payload second: `(ctx, args)`.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`, plus `origin` when the call came from a window on another machine. Read the payload from the first parameter and every argument-taking channel receives that object instead, while the argument-less channels keep working, so the panel looks healthy and the buttons do nothing. This is the single most common bug in a first plugin. `registerAction` handlers are different: they receive `(args)` only.
+10. **A `registerHandler` callback receives the IPC context first and your payload second: `(ctx, args)`.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`, plus `origin` when the call came from a window on another machine. Read the payload from the first parameter and every argument-taking channel receives that object instead, while the argument-less channels keep working, so the panel looks healthy and the buttons do nothing. This is the single most common bug in a first plugin. `registerAction` handlers are different: they receive `(args, context)`, payload first, then the frozen dispatch context `{ dispatchSource, origin?, approval? }`.
 11. **Your runtime id is the instance key, not your manifest name.** `host.pluginId` and `PanelViewProps.pluginId` are `project__{projectId}__{manifestId}`. Manifest `actionId`s in `toolbarButtons`, `keybindings`, `contextMenus` and a panel's `menu` and `toolbar` are written as `{manifestId}.{id}` and rewritten to the instance namespace at load, so the manifest stays portable. Your panel kind registers as `project:{projectId}/{manifestId}/{kindId}`, and that is the string `panel.openPluginPanel` wants — get it from `host.panelKindId("main")` rather than assembling it. `host.pluginInfo` is your identity as data: `{ instanceId, manifestId, origin, projectId, projectRoot }`, where `projectRoot` is the project's main checkout. Never split `host.pluginId` by hand.
 12. **A high-risk capability puts a confirm dialog on every command.** Declaring any of `shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:input`, `agent:invoke` or `agent:register` raises every command the plugin registers to confirm — so a data app that writes files confirms its own Open command. So does a read capability (`fs:*-read`, `git:read`, `agent:read`, `terminal:read`) paired with `network:fetch` that declares no `scopes.network.allowedUrls`. Narrow each command with `"requires": []` (or the capabilities it actually uses), on the `contributes.commands` entry _and_ on the `registerAction` descriptor, which replaces the manifest entry once registered. An "open the panel" command should never confirm.
 13. **Give each setting the scope its value belongs in.** `project` scope is committed to the repository (`.daintree/plugin-settings/<manifestId>.json`): team defaults, never a machine path. `local` is per project and per machine and never committed — an interpreter path, a reviewer name. For a project plugin `user` scope stays on this machine too, keyed by your instance, so it does not share a value across projects; say `local` when that is what you mean. A `secret` is never committed whatever its scope, and cannot declare a `default`. Mark what the plugin cannot run without `required: true` — its panels then show a "needs setup" strip and `host.settings.missingRequired()` lists it — and send users to `host.settings.open(key)` rather than building a settings screen. Settings are the user's: the data contract you give agents never includes the settings files. See [Patterns → Gate on setup](./patterns.md#gate-on-setup).
@@ -415,7 +415,7 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 **Radii**
 
-`rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
+`rounded-3xs` `rounded-2xs` `rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
 **Shadows**
 
@@ -423,7 +423,7 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 **Type scale below Tailwind's floor**
 
-`text-2xs` `text-3xs` `text-4xs`
+`text-2xs` `text-3xs` `text-4xs` `text-5xs` `text-6xs` `text-7xs`
 
 **Fonts**
 

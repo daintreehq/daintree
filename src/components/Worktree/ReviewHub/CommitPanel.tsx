@@ -29,6 +29,7 @@ import { pluralize } from "@/lib/pluralize";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { PathTail } from "@/components/ui/PathTail";
 import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
+import type { CommitPushTarget } from "./reviewHubUtils";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -159,7 +160,8 @@ interface CommitPanelProps {
    * job: only it can tell whether the draft is still the one committed.
    */
   onCommit: (message: string) => Promise<void>;
-  onCommitAndPush: (message: string) => Promise<void>;
+  /** `target` is what the push is pinned to once the commit lands (#16790). */
+  onCommitAndPush: (message: string, target: CommitPushTarget) => Promise<void>;
   onFocusBlocker?: (blocker: "conflicts" | "staged-files") => void;
   isPushing: boolean;
   pushProgress: Map<string, PushProgressEvent>;
@@ -222,6 +224,16 @@ export function CommitPanel({
     ? `${pushDestination.remote}/${pushDestination.branch}`
     : null;
   const [dontAskChecked, setDontAskChecked] = useState(false);
+  // A review pane moved to another worktree keeps this composer mounted
+  // (#16793). The confirm holds the message copied when it opened, the old
+  // worktree's draft, and its "don't ask again" choice, so confirming after the
+  // move would commit that draft into the new worktree and set its opt-out.
+  const [confirmForPath, setConfirmForPath] = useState(worktreePath);
+  if (confirmForPath !== worktreePath) {
+    setConfirmForPath(worktreePath);
+    setPushConfirmOpen(false);
+    setDontAskChecked(false);
+  }
   // The commits already on this branch that the push will publish alongside
   // the new one, read for the open confirm from the same range main measures
   // for every other push preview. The push can't be approved until it lands
@@ -420,14 +432,14 @@ export function CommitPanel({
   }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
   const handleCommitAndPush = useCallback(
-    async (message: string) => {
+    async (message: string, target: CommitPushTarget) => {
       if (!canCommit || actionsBusy) return;
       if (actionInFlightRef.current) return;
       actionInFlightRef.current = true;
       setPendingCount(stagedCount);
       setPendingAction("commit-push");
       try {
-        await onCommitAndPush(message);
+        await onCommitAndPush(message, target);
       } catch {
         // Error is handled by the parent via setActionError
       } finally {
@@ -451,14 +463,21 @@ export function CommitPanel({
       //
       // The opt-out is overridden when no destination resolved (#11746): the
       // push will be refused by the handler, and silently attempting it would
-      // leave the user with a failed write and no explanation.
-      if (!skipPushConfirm || pushDestination === null) {
+      // leave the user with a failed write and no explanation. So it is with no
+      // branch to pin the push to; the confirm then waits for one.
+      if (!skipPushConfirm || pushDestination === null || !currentBranch) {
         setPushConfirmMessage(commitMessage);
         setOutgoingAttempt((n) => n + 1);
         setPushConfirmOpen(true);
         return;
       }
-      void handleCommitAndPush(commitMessage);
+      // Nothing was previewed, so there is no tip to hold the commit to; the
+      // push is still pinned to the commit itself.
+      void handleCommitAndPush(commitMessage, {
+        branch: currentBranch,
+        destination: pushDestination,
+        reviewedHeadOid: null,
+      });
     } else {
       void handleCommit();
     }
@@ -467,6 +486,7 @@ export function CommitPanel({
     actionsBusy,
     hasRemote,
     pushDestination,
+    currentBranch,
     skipPushConfirm,
     commitMessage,
     focusBlocker,
@@ -475,7 +495,7 @@ export function CommitPanel({
   ]);
 
   const handleConfirmPush = useCallback(() => {
-    if (!canConfirmPush) return;
+    if (outgoingRange === null || !currentBranch) return;
     // The opt-out is persisted on confirm regardless of whether the
     // subsequent push succeeds — the user expressed a preference about the
     // confirm dialog, which is orthogonal to network/rejection failure.
@@ -483,10 +503,16 @@ export function CommitPanel({
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     // What the dialog previewed is what gets pushed, even if a history recall
-    // landed in the composer behind it while it was open.
-    void handleCommitAndPush(pushConfirmMessage);
+    // landed in the composer behind it while it was open: its message, and the
+    // tip and destination its outgoing list was measured from.
+    void handleCommitAndPush(pushConfirmMessage, {
+      branch: currentBranch,
+      destination: outgoingRange.destination,
+      reviewedHeadOid: outgoingRange.headOid,
+    });
   }, [
-    canConfirmPush,
+    currentBranch,
+    outgoingRange,
     dontAskChecked,
     onSetSkipPushConfirm,
     handleCommitAndPush,

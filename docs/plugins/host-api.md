@@ -27,7 +27,7 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 
 | You register | Your function receives | Notes |
 | --- | --- | --- |
-| `registerAction(descriptor, handler)` | `(args)` | The dispatched args payload only. No `host`, no context; close over `host` from `activate()` if the handler needs it. |
+| `registerAction(descriptor, handler)` | `(args, context)` | **Args first.** The dispatched args payload, then the frozen [dispatch context](#the-dispatch-context) `{ dispatchSource, origin?, approval? }`, which is not the IPC context a channel handler gets. No `host`; close over `host` from `activate()` if the handler needs it. A manifest command's handler module gets the same two arguments. |
 | `registerHandler(channel, handler, options?)` (untyped) | `(ctx, ...args)` | **Context first.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId, origin? }` (`origin` only when the call reached this host over a link, as from a window on another machine; see [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine)); the arguments the view passed to `invoke(pluginId, channel, ...args)` follow it. Read the payload from the first parameter and you get the context object instead. |
 | `registerHandler(channel, schema, handler, options?)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. `options.timeoutMs` sets the invoke deadline for either overload ([Deadlines and size limits](#deadlines-and-size-limits)). |
 | `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a view. |
@@ -37,7 +37,7 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | `onDidChangeListeners(channel, cb)` | `(hasListeners)` | A boolean. Returns its disposer synchronously. |
 | `db` handle `onDidChange(cb)` | `({ origin })` | Frozen, and at most one per 50 ms window. Returns its disposer synchronously, not a Promise. |
 | `fs.watch(paths, cb, options?)` | `(changedPath)` | The absolute path that changed. |
-| Filesystem-convention command, `src/{id}.js` | `(args)` | Installed plugins only; a project plugin registers from `activate()` instead. |
+| Filesystem-convention command, `src/{id}.js` | `(args, context)` | Installed plugins only; a project plugin registers from `activate()` instead. `context` is the same [dispatch context](#the-dispatch-context) `registerAction` handlers get. |
 | A command named by a manifest [`eventRoutes`](./manifest.md#eventroutes) entry | `(wake)` | A `PluginEventRouteWake`: `{ event, ... }` carrying what the matching subscription above delivers. Runs without a live subscription, so the plugin's worker can still be disposed while idle. |
 
 An argument-less handler ignores both parameters and works whichever way it was written, which is why the bug in an argument-taking one hides: the panel looks healthy and only the buttons that pass something do nothing. If a handler's first parameter has a `webContentsId`, it is reading the context.
@@ -485,7 +485,7 @@ host.registerAction(
     danger: "confirm",
     keywords: ["linear", "plan"],
   },
-  async (args) => {
+  async (args, context) => {
     // handler body
     return { ok: true };
   }
@@ -508,9 +508,32 @@ registerAction(
 - `descriptor.danger` is required and accepts `"safe"` or `"confirm"`. `"restricted"` is reserved for Daintree's internal use and rejected. The host raises `"safe"` to `"confirm"`, never the reverse, when the plugin holds a high-risk capability or a risky pair of them ([trust model](./trust-model.md)).
 - `requires`, when given, is the capabilities this action exercises and must be a subset of `manifest.capabilities` — an undeclared one throws `PERMISSION_REQUIRED`. It narrows which capabilities the danger elevation consults (`[]` means none) and grants nothing; omitted, the whole manifest counts.
 - `resultSchema`, when given, is the JSON Schema the action's result must match, with `type: "object"` at its root. It is JSON Schema 2020-12 unless its `$schema` names draft-07, every `$ref` must resolve inside it, and `$async` is refused; a schema that can't be enforced as written throws at registration. Each result is checked in its JSON form, and that copy is what the caller receives (a `Date` arrives as its ISO string, a key holding `undefined` is dropped); nothing is coerced, defaulted or stripped to make it fit (use `additionalProperties: false` to refuse extra keys), and one that does not match fails the dispatch with `RESULT_VALIDATION_ERROR`, whose message names only the action; the reason goes to the main log. The schema is published as the action's `outputSchema` in [`actions`](#actions--built-in-action-catalog) and to agents as the MCP tool's.
-- Calling `registerAction` with a previously-registered ID replaces the existing registration. A call already running keeps the `resultSchema` it started under.
+- `assistantReach: "confirm-only"`, when given, puts the action on the project Assistant's Daintree MCP tools. It needs `danger: "confirm"` on the same descriptor; any other value, or the opt-in on a `"safe"` action, throws. See [Actions the Assistant can run](#actions-the-assistant-can-run).
+- Calling `registerAction` with a previously-registered ID replaces the existing registration, opt-ins included: a replacement without `assistantReach` takes the action off the Assistant's tools. A call already running keeps the `resultSchema` it started under.
 
 Unregistered automatically on plugin unload.
+
+### The dispatch context
+
+The second argument says what the host knows about this dispatch. The host builds it for each call and freezes it, and nothing in the action's args can set or change it. It is optional in the `ActionHandler` type only so your tests can call a handler with its args alone; the host always passes it. Read it as `context?.approval`, so a missing context counts as no approval.
+
+```ts
+interface PluginActionContext {
+  readonly dispatchSource: "user" | "keybinding" | "menu" | "context-menu" | "agent" | "plugin";
+  readonly origin?: "assistant";
+  readonly approval?: "person";
+}
+```
+
+- `dispatchSource` is the surface that dispatched the action. `"user"` is the command palette, and `"agent"` is a Daintree MCP session. `"plugin"` covers what no host surface attested: a `host.dispatch`, a panel calling `invoke(pluginId, actionId)` itself, and an [event route](./contribution-points.md).
+- `origin: "assistant"` means the person's Daintree Assistant made the MCP call. Like [`caller.consumer`](#mcpregistertools), it is provenance: the Assistant acts on what its pane is sent, and other agents' replies are sent there.
+- `approval: "person"` means someone answered Daintree's confirm dialog for this very dispatch, either the palette's dialog for your `"confirm"` action or the MCP dialog the Assistant's call raised. A standing answer never sets it: an automation grant, "Allow for this session", and the Assistant's **Never ask** let the call through with no dialog, so it runs with `origin` and no `approval`.
+
+Read `approval` for a decision only the person should make, such as lifting a stop they placed. Whether the Assistant may make that decision unattended is then your own setting, read in the handler: the host has no signal that tells a person's standing permission apart from a process that read the Assistant's credential, so it doesn't offer one.
+
+### Actions the Assistant can run
+
+An action declared `danger: "confirm"` with `assistantReach: "confirm-only"` is listed to the project's Daintree Assistant at both of its tool sets, `core` and `full`. Each call goes through the ordinary MCP confirm dialog, the Assistant's Never ask setting and the MCP audit log, and the handler's context reports what happened. Agent panes, api-key clients, another machine's assistant and the global Assistant never reach it, and a call from one is refused as `TIER_NOT_PERMITTED`. Reach is read when each call arrives, so unloading the plugin, or registering the action again without the opt-in, takes it away at once.
 
 ## `registerHandler` and `broadcastToRenderer`
 
@@ -1255,7 +1278,7 @@ In a worker plugin — every installed and project plugin — only the revoked-h
 **What `execute` receives.**
 
 - `args` — the arguments the agent sent, already checked against `inputSchema`. Nothing is coerced, defaulted or stripped: a call that does not match is answered with a tool error naming the failure (`MCP error -32602: Input validation error: …`) and never reaches `execute`. What a schema cannot express stays yours to check — path containment, ownership of the resource named, destructive intent. `pattern` regexes run in Daintree's main process against strings the agent chooses, so keep them simple and bound string lengths with `maxLength`.
-- `caller` — frozen **provenance**, not identity. The credential was issued for one terminal launch in one project: `projectId` is that project, `terminalId` that terminal, `credentialId` a stable correlation id for the credential (never the credential itself, so it is safe to log), and `launchAgentIdHint` what the terminal was launched as. Any process that read the credential can present it, so treat `launchAgentIdHint` as a hint, not proof of what is calling. `consumer` is `"assistant"` when the host issued the credential to the project's Daintree Assistant, and absent for every other launch, including a pane another agent launched over the Daintree MCP; a host too old to know the field leaves it off too. It is fixed when the credential is issued and nothing a client sends can set it, so a pane an agent launches can't claim it. It is still provenance: a call carrying it shows only that a credential issued to the Assistant was presented. Any process that reads that credential can present it, so it doesn't stop a local process set on passing as the Assistant. Nor does it show that a person asked, even when the Assistant did make the call, because other agents' replies are submitted into the Assistant's pane. Keep a decision only the person should make on a control in your own panel. An installed plugin serves every project that enabled it from one instance, so scope its data by `caller.projectId`; a project plugin's `caller.projectId` is always its own project.
+- `caller` — frozen **provenance**, not identity. The credential was issued for one terminal launch in one project: `projectId` is that project, `terminalId` that terminal, `credentialId` a stable correlation id for the credential (never the credential itself, so it is safe to log), and `launchAgentIdHint` what the terminal was launched as. Any process that read the credential can present it, so treat `launchAgentIdHint` as a hint, not proof of what is calling. `consumer` is `"assistant"` when the host issued the credential to the project's Daintree Assistant, and absent for every other launch, including a pane another agent launched over the Daintree MCP; a host too old to know the field leaves it off too. It is fixed when the credential is issued and nothing a client sends can set it, so a pane an agent launches can't claim it. It is still provenance: a call carrying it shows only that a credential issued to the Assistant was presented. Any process that reads that credential can present it, so it doesn't stop a local process set on passing as the Assistant. Nor does it show that a person asked, even when the Assistant did make the call, because other agents' replies are submitted into the Assistant's pane. Keep a decision only the person should make on a control in your own panel, or on a `"confirm"` action the Assistant can run, whose handler is told whether a person answered its dialog ([the dispatch context](#the-dispatch-context)). An installed plugin serves every project that enabled it from one instance, so scope its data by `caller.projectId`; a project plugin's `caller.projectId` is always its own project.
 - `signal` — aborted when the call times out (60 seconds, counted from the request, activation included), when the agent cancels, when the session closes or the credential is revoked, and when the endpoint's roster is replaced or dropped. Once it aborts the host stops waiting: the agent is answered with a tool error (or its session is closed), and your eventual result is discarded. Nothing stops an `execute` that ignores the signal — it runs on until it returns.
 
 **What the agent receives.** The return value is `JSON.stringify`-ed — `undefined` becomes `null`, and `toJSON` is honoured — and sent as the tool's text content. A worker plugin's result is serialized in the worker, before it crosses to main. A result over 256 KiB serialized, or one that cannot be serialized, becomes a tool error. With an `outputSchema`, the result must also serialize to a JSON object that matches the schema, which is sent as `structuredContent` as well; anything else is a tool error. A thrown error becomes a tool error carrying its message, truncated past 2,000 characters. A session may have at most 16 calls in flight; past that the agent gets a tool error asking it to retry.
@@ -1573,6 +1596,30 @@ await host.dispatch(
 The plugin must declare `project:dispatch`, and the user must turn on **Allow project targeting** in the plugin's Permissions tab. It is off by default and never prompts, so an unattended plugin fails fast: without the declaration or the switch the call rejects with `PERMISSION_REQUIRED` naming what is missing, and nothing is dispatched. With both, the action runs in that project's view without switching to it, and each targeted dispatch is recorded in the plugin audit log (target and action id, with an args hash, never the args). A backgrounded project still counts, and its view is woken for the call if it was frozen; a project with no open view rejects with `PROJECT_VIEW_UNAVAILABLE` — nothing opens it for you, so `project.switch` first if you need one. The one exception is an installed plugin's `terminal.close` with an explicit `terminalId`: Daintree closes the panel itself, sending its process to the trash and dropping it from the project's saved layout, and answers with the same `{ closedIds }` a view would, so a plugin can close finished panels in projects nobody has open. An empty or non-string `projectId` is refused rather than read as "no target". A project plugin may pass only its own project's id; any other is refused whatever the user has granted. The switch changes where an action runs, not which actions a plugin can dispatch.
 
 A dispatch that times out is not cancelled: the action can still run after `dispatch` resolved with the timeout, so don't blindly retry a launch.
+
+### Targeting a Remote Host
+
+An installed plugin that coordinates work across machines can run actions in projects on the Remote Hosts this machine drives (#16767). `host.remoteHosts.list()` names them, never this machine itself, with each connected host's projects; a host whose link went idle is dialled first, and one the user disconnected is left alone. Pass both ids to `dispatch`:
+
+```ts
+const [studio] = await host.remoteHosts.list();
+const project = studio.projects?.find((p) => p.name === "beads");
+const launched = await host.dispatch(
+  "agent.launch",
+  { agentId: "claude", prompt },
+  { hostId: studio.hostId, projectId: project.projectId }
+);
+if (launched.ok) {
+  const { terminalId } = launched.result as { terminalId: string };
+  await host.agents.interrupt(terminalId, { hostId: studio.hostId });
+}
+```
+
+The plugin must declare `host:dispatch`, and the user must turn on **Allow host targeting** in its Permissions tab: off by default, no prompt, one switch for every host, offered back with the other switches after an update. Without either, `list()` and any call naming a `hostId` reject with `PERMISSION_REQUIRED` naming what is missing. A project plugin never can. `hostId` needs `projectId` beside it; `project:dispatch` is not needed, and `"local"` is refused, since this machine's projects are reached with `projectId` alone.
+
+The host takes the call as this plugin from this machine, never as an assistant, and holds it to the rules a plugin's dispatch gets there: built-in actions only (never one a plugin installed on the host contributes), nothing `RESTRICTED` or closed to plugins, and nothing confirm-gated, which answers `CONFIRMATION_REQUIRED` with no dialog anywhere. It also needs the host's own **Accept tools run for other machines' assistants** setting, or the call answers `HOST_REFUSED`, as it does from a host on an older Daintree. A change runs in the project's view when the view that drives it is on this machine, in the host itself when nobody drives it (the actions an orchestrator needs with no window open: launching and reading agents, terminals, worktrees and the forge), and answers `DRIVEN_ELSEWHERE` while another machine, or a window on the host, drives it; reads answer either way. `HOST_UNREACHABLE` means nothing was sent. Each call is recorded in the host's plugin audit log under the plugin's id, with this machine's name beside it.
+
+An agent the plugin launches on a host is recorded there as that plugin's from this machine, so `host.agents.interrupt`, `sendKeys` and `submit` with `{ hostId }` reach it and nothing else: another plugin's, one the user started, or one launched before the plugin was last disabled or uninstalled answers `not-found` (a reload keeps them, as it does for agents on this machine), and so does every one after this machine restarts. They also need `agent:input` as on this machine, and reject with `DRIVEN_ELSEWHERE:` while another screen drives that project.
 
 ## `actions` — built-in action catalog
 

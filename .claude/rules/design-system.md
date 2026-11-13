@@ -31,7 +31,7 @@ Type and spacing are Tailwind's stock scales. Radius is `--radius-*`: `rounded-f
 
 `cva()` only for a closed set of named variants callers pick between; otherwise `cn()`.
 
-Five `component-contract/*` ESLint rules enforce the vocabulary, text alpha, type and radius scales, and focus suppression (warn + ratchet). The primitive and CVA rules are convention. Full contract: `docs/themes/component-contract.md`.
+Six `component-contract/*` ESLint rules enforce the vocabulary, text alpha, type, radius and shadow scales, and focus suppression. All are errors except focus suppression (warn + ratchet). The primitive and CVA rules are convention. Full contract: `docs/themes/component-contract.md`.
 
 ## Motion
 

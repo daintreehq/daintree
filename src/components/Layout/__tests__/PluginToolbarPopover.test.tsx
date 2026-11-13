@@ -71,6 +71,7 @@ vi.mock("@/components/Plugin/PluginHostedView", () => ({
 const { PluginToolbarButton, PluginTrayButton } = await import("../PluginTrayButton");
 const { usePluginToolbarPopoverStore } = await import("@/store/pluginToolbarPopoverStore");
 const { closePluginToolbarPopoverIfHidden } = await import("../PluginToolbarPopover");
+const { preloadPluginHostedView } = await import("@/components/Plugin/LazyPluginHostedView");
 const { isTooltipSuppressedForElement } = await import("@/lib/tooltipFocusSuppression");
 const { usePluginToolbarStateStore, _resetPluginToolbarStateStoreForTest } =
   await import("@/store/pluginToolbarStateStore");
@@ -150,6 +151,10 @@ async function openTrayRow(trayButton: HTMLElement, rowName: string) {
 
 beforeAll(async () => {
   await primeRadix();
+  // The hosted-view chunk loads on the first opening (#16802), which the
+  // coldLoad suite covers; loaded up front here, every opening draws its view
+  // in the commit that opens it.
+  await preloadPluginHostedView();
 });
 
 beforeEach(() => {

@@ -18,8 +18,8 @@
 //   npm run theme:text-ramp -- --check  fail if the tree and manifest disagree
 //
 // Report-only and deliberately outside `npm run check`. The permanent guards are
-// the two ESLint rules (`no-text-color-slash-alpha`, `no-legacy-daintree-utilities`)
-// with their ratchet baselines, plus the manifest-membership contract test in
+// the two ESLint rules (`no-text-color-slash-alpha`, `no-legacy-daintree-utilities`),
+// both errors, plus the manifest-membership contract test in
 // `src/config/__tests__/colorSystem.contract.test.ts`.
 
 import fs from "fs";

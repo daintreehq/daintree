@@ -12,6 +12,8 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 
 interface PanelOptions {
   agentPresetId?: string;
+  title?: string;
+  agentModelId?: string;
   env?: Record<string, string>;
   worktreeId?: string;
   cwd?: string;
@@ -408,6 +410,74 @@ describe("useAgentLauncher — a plugin launch on an approved preset (#16324)", 
     const approval = approvalFor([MINE]);
     saveChoices({ customPresets: [] });
     await expect(launchApproved(approval)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("useAgentLauncher — a model only the runtime catalog lists (#16783)", () => {
+  const getResolvedModelList = vi.fn<(agentId: string) => Promise<unknown>>();
+
+  beforeEach(() => {
+    addPanel.mockReset().mockResolvedValue("terminal-1");
+    getResolvedModelList.mockReset().mockResolvedValue({
+      agentId: "codex",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5 (Codex)", shortLabel: "GPT-5.5" }],
+      contextWindow: null,
+      source: "remote",
+    });
+    Reflect.set(window, "electron", { agentCapabilities: { getResolvedModelList } });
+    useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: true });
+    useProjectPresetsStore.setState({ presetsByAgent: {}, hydratedProjectId: null });
+    useAgentSettingsStore.setState({ settings: { agents: {} } });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.set(window, "electron", undefined);
+  });
+
+  it("titles the pane with the model the host's catalog names", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("codex", { force: true, modelId: "gpt-5.5" });
+    });
+
+    expect(getResolvedModelList).toHaveBeenCalledWith("codex");
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
+      title: "Codex (GPT-5.5)",
+      agentModelId: "gpt-5.5",
+    });
+  });
+
+  it("goes quiet when the launcher unmounts while the catalog is read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let answer: (value: unknown) => void = () => {};
+    let started: () => void = () => {};
+    const readStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    getResolvedModelList.mockImplementation(() => {
+      started();
+      return new Promise((resolve) => {
+        answer = resolve;
+      });
+    });
+    const onDecline = vi.fn();
+    const { result, unmount } = renderHook(() => useAgentLauncher());
+
+    let launch: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      launch = result.current.launchAgent("codex", { force: true, modelId: "gpt-5.5", onDecline });
+      await readStarted;
+    });
+    unmount();
+    await act(async () => {
+      answer(null);
+      await launch;
+    });
+
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({ reason: "unavailable", panelLimit: null });
     expect(addPanel).not.toHaveBeenCalled();
   });
 });

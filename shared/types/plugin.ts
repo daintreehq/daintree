@@ -30,6 +30,7 @@ import type { NotificationType } from "./notification.js";
 import type {
   ActionDispatchResult,
   ActionId,
+  ActionSource,
   PluginActionManifestEntry,
   PluginCanDispatchResult,
 } from "./actions.js";
@@ -1013,6 +1014,13 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // Not confirm-triggering — it changes where a dispatch lands, not which
   // actions a plugin can reach.
   "project:dispatch",
+  // Name a Remote Host on `host.dispatch(actionId, args, { hostId, projectId })`
+  // and list the hosts this Shell reaches (`host.remoteHosts`, #16767).
+  // Declaring it enables nothing: targeting stays off until the user turns on
+  // "Allow host targeting" for this plugin in the Plugin Manager, and only an
+  // installed plugin may. Not confirm-triggering, like `project:dispatch`: the
+  // host holds the call to the rules a plugin dispatch gets there.
+  "host:dispatch",
   // Observe which kind of panel has focus (`host.onDidChangeFocusedPanel`,
   // #13221): the kind, an agent flag and the worktree id, never a panel's id,
   // title, URL or content. Disclosure-only and not confirm-triggering.
@@ -1061,6 +1069,55 @@ export interface PluginDispatchOptions {
    * come from `host.dispatch("project.getAll")`.
    */
   projectId?: string;
+  /**
+   * Run the action in `projectId` on this Remote Host (#16767), as this plugin
+   * from this machine. Needs the `host:dispatch` capability and the user's
+   * "Allow host targeting" switch, and `projectId` alongside it. Ids come from
+   * {@link PluginRemoteHostsApi.list}.
+   */
+  hostId?: string;
+}
+
+/**
+ * Last argument to the {@link PluginAgentsApi} input methods (#16767): which
+ * Remote Host the agent runs on. Absent, the agent is one on this machine.
+ */
+export interface PluginAgentInputOptions {
+  hostId?: string;
+}
+
+/** One project on a Remote Host, as {@link PluginRemoteHostsApi.list} names it. */
+export interface PluginRemoteHostProject {
+  readonly projectId: string;
+  readonly name: string;
+}
+
+/**
+ * One Remote Host this machine drives, as observed when listed. `projects` is
+ * null when they couldn't be read: the host isn't connected, or didn't answer
+ * in time.
+ */
+export interface PluginRemoteHost {
+  readonly hostId: string;
+  readonly name: string;
+  readonly connection: "connected" | "connecting" | "disconnected";
+  readonly projects: readonly PluginRemoteHostProject[] | null;
+}
+
+/** `host.remoteHosts` — the Remote Hosts this machine drives (#16767). */
+export interface PluginRemoteHostsApi {
+  /**
+   * The Remote Hosts this machine drives, never this machine itself, with each
+   * connected host's projects: the `hostId` and `projectId` that
+   * `host.dispatch` takes. A host whose link went idle is dialled first, as a
+   * dispatch to it would be, and one the user disconnected is left alone.
+   * Resolves `[]` once the plugin is unloaded or when no host is set up.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `host:dispatch`, the user hasn't turned on "Allow host targeting", or
+   *   it is a project plugin.
+   */
+  list(): Promise<PluginRemoteHost[]>;
 }
 
 export interface MenuItemContribution {
@@ -4002,20 +4059,62 @@ export interface PluginDatabaseApi {
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
 
 /**
+ * A community catalog release a plugin was installed from (#16779): the
+ * entry's `id`, `version` and `repo`, read by main from a catalog it fetched
+ * itself, never named by the renderer.
+ */
+export interface PluginCatalogProvenance {
+  id: string;
+  version: string;
+  /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
+  repo: string;
+}
+
+/**
+ * Why a recognised `daintree://plugin/install` link was refused before
+ * anything was fetched (#16779). Each one is shown, never retried as a
+ * different, unbound kind of install.
+ *
+ * - `malformed-url` — a pinned link whose `url` is missing or not a web URL
+ * - `insecure-url` — a pinned link whose `url` isn't `https:`
+ * - `malformed-sha256` — `sha256` isn't 64 hex digits
+ * - `malformed-id` — `id` isn't a community plugin id (`publisher.name`, outside `daintree.*`)
+ * - `malformed-version` — `version` isn't a semver version
+ * - `conflicting-params` — parameters that don't belong together, or repeat
+ */
+export type PluginDeepLinkRefusal =
+  | "malformed-url"
+  | "insecure-url"
+  | "malformed-sha256"
+  | "malformed-id"
+  | "malformed-version"
+  | "conflicting-params";
+
+/**
  * Parsed intent of a `daintree://` deep link (#9559). The OS hands the raw URI
  * to the main process via `open-url` (macOS) or `second-instance` / `process.argv`
  * (Windows/Linux); `parseDaintreeUrl` validates and narrows it to one of these
- * shapes before it crosses to the renderer.
+ * shapes before it crosses to the renderer. No install link installs without
+ * the user confirming the archive's preview.
  *
- * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`: opens
- *   the Plugin Manager with the URL pre-filled in the install dialog. The user
- *   still presses install, so the existing HTTP-warning and security gates fire;
- *   a deep link never installs silently.
+ * - `install` — `daintree://plugin/install?url=<https-or-http-archive-url>`:
+ *   opens the Plugin Manager with the URL pre-filled in the install dialog; the
+ *   user presses install, so the HTTP warning fires before the preview. With
+ *   `&sha256=<64 hex>` (https only) the archive is previewed straight away and
+ *   only an archive with that digest can be previewed or installed.
+ * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=]`:
+ *   resolves the release from a freshly fetched community catalog (the newest
+ *   one when no version is named), previews it, and installs only its digest.
+ * - `install-refused` — a recognised install link that is malformed; the
+ *   Plugin Manager says why.
  * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
  *   Manager scrolled to the named plugin.
  */
 export type PluginDeepLinkIntent =
-  { action: "install"; url: string } | { action: "open"; pluginId: string };
+  | { action: "install"; url: string; sha256?: string }
+  | { action: "install-catalog"; pluginId: string; version?: string }
+  | { action: "install-refused"; reason: PluginDeepLinkRefusal }
+  | { action: "open"; pluginId: string };
 
 /**
  * Manifest identity shown in the sideload confirmation dialog (#11280). A
@@ -4082,25 +4181,131 @@ export interface PluginArchiveInstallIntent {
 }
 
 /**
- * Discriminant for {@link PluginCheckUpdateResult}. A manual update check
- * (`plugin:check-for-update`) re-fetches the plugin's `originalUrl`, hashes the
- * archive, and compares it against the installed `archiveHash` — the check is
- * purely informational and never installs. Manual reinstall (preserving
- * settings, never auto) is the user's follow-up action.
- *
- * - `up-to-date` — the re-fetched archive hashes identically to the installed one
- * - `available` — the hashes differ; the result carries the new manifest preview
- * - `invalid-id` — no installed record, or the record has no `originalUrl`
- *   (sideload/builtin); the UI gate makes the no-URL case unreachable in practice
- * - `fetch-failed` — network error, non-2xx response, bad content-type, or an
- *   archive that exceeds the size cap / fails to parse; carries a `message`
+ * A URL install's archive, downloaded and read before anything is written
+ * (#16776), with the same disclosure as an archive opened from the operating
+ * system. The download is deleted once it has been read, so the confirm fetches
+ * `url` again and passes `archiveHash` back as its
+ * {@link PluginInstallExpectation}: the installer refuses any other bytes.
  */
-export type PluginUpdateCheckStatus = "available" | "up-to-date" | "invalid-id" | "fetch-failed";
+export interface PluginUrlInstallPreview {
+  /** The URL as fetched, trimmed; the confirm installs from this exact string. */
+  url: string;
+  /** SHA-256 of the archive the preview was read from. */
+  archiveHash: string;
+  /**
+   * Whether the installer would find this plugin already installed: its folder
+   * exists, whether or not it loaded. `plugin.list()` holds only plugins that
+   * loaded or were skipped, so an install whose manifest no longer validates
+   * shows here and nowhere else.
+   */
+  installedOnDisk: boolean;
+  manifest: PluginArchiveManifestPreview;
+  /**
+   * Set when the archive is a community catalog release (#16779). Its confirm
+   * goes through `plugin.installFromCatalog`, which resolves the release again
+   * rather than trusting `url`.
+   */
+  catalog?: PluginCatalogProvenance;
+}
 
 /**
- * Outcome of a manual update check. Returned as plain data (never thrown) so the
- * structured result survives Electron's structured-clone IPC boundary (#3769) —
- * domain failures (`fetch-failed`) come back as data, not as a rejected promise.
+ * A catalog release to preview (#16779): `version` omitted means the newest
+ * one the catalog lists.
+ */
+export interface PluginCatalogPreviewRequest {
+  pluginId: string;
+  version?: string;
+}
+
+/**
+ * The confirm of a catalog release's preview. Main looks the release up in a
+ * fresh catalog again and refuses unless it still lists this `version` from
+ * this `repo` with the digest in `expected`, which must name `pluginId`.
+ */
+export interface PluginCatalogInstallRequest {
+  pluginId: string;
+  version: string;
+  repo: string;
+  expected: PluginInstallExpectation;
+}
+
+/**
+ * Why no catalog could be fetched: `not-published` is a 404 (expected until
+ * the catalog repository exists), `unreachable` covers the network, a timeout
+ * and any other HTTP status, and `invalid` a body that isn't a valid catalog.
+ */
+export type PluginCatalogFailure = "not-published" | "unreachable" | "invalid";
+
+/**
+ * One catalog entry as Browse lists it (#16782): its newest reviewed release,
+ * chosen the way an install link that names no version chooses it. The
+ * download URL and digest stay in main, which resolves them again on install.
+ */
+export interface PluginCatalogListing {
+  id: string;
+  version: string;
+  /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
+  repo: string;
+  /** The manifest's list at review time. Display only: it grants nothing. */
+  capabilities: string[];
+}
+
+/**
+ * Outcome of `plugin.browseCatalog`. Browsing may answer from a copy cached in
+ * the last 15 minutes, or from an older one marked `stale` when it can't be
+ * refreshed; `unavailable` means no copy exists at all.
+ */
+export type PluginCatalogBrowseResult =
+  | {
+      status: "available";
+      listings: PluginCatalogListing[];
+      fetchedAt: number;
+      stale: false;
+    }
+  | {
+      status: "available";
+      listings: PluginCatalogListing[];
+      fetchedAt: number;
+      stale: true;
+      failure: PluginCatalogFailure;
+    }
+  | { status: "unavailable"; failure: PluginCatalogFailure };
+
+/**
+ * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
+ * carry the same shapes and error codes as {@link PluginInstallResult}, so one
+ * message table covers both.
+ */
+export type PluginUrlInstallPreviewResult =
+  | { status: "preview"; preview: PluginUrlInstallPreview }
+  | { status: "failed"; errors: PluginInstallError[] }
+  | { status: "cancelled" }
+  | { status: "invalid-url" };
+
+/**
+ * Outcome of a manual update check (`plugin:check-for-update`). Returned as
+ * plain data (never thrown) so the structured result survives Electron's
+ * structured-clone IPC boundary (#3769). The check is purely informational and
+ * never installs; the user's follow-up is a reinstall held to the previewed
+ * digest.
+ *
+ * A URL install re-fetches its `originalUrl` and compares digests. A catalog
+ * install reads a freshly fetched catalog instead (#16781), since its URL pins
+ * one reviewed release:
+ *
+ * - `up-to-date` — the URL serves the installed bytes, or the catalog still
+ *   lists the installed release and nothing newer
+ * - `available` — a different archive, with its manifest preview; for a catalog
+ *   install, the newest reviewed release above the installed version
+ * - `delisted` — catalog installs only: the catalog lists nothing newer, and no
+ *   longer lists the plugin (`scope: "plugin"`) or the installed release
+ *   (`scope: "release"`). The installed copy keeps running.
+ * - `catalog-unavailable` — catalog installs only: no fresh catalog could be
+ *   read, so nothing is offered. `stale` means an older copy exists but isn't
+ *   used for updates.
+ * - `invalid-id` — no installed record, or no source to check
+ * - `fetch-failed` — the archive couldn't be downloaded or read, or wasn't the
+ *   one expected; carries a `message`
  */
 export type PluginCheckUpdateResult =
   | { status: "up-to-date" }
@@ -4122,9 +4327,28 @@ export type PluginCheckUpdateResult =
        * install refuses any bytes other than the ones the user reviewed (#12612).
        */
       archiveHash: string;
+      /**
+       * The catalog release offered to a catalog install (#16781). Its confirm
+       * installs this release by name, never the URL the plugin came from.
+       */
+      catalog?: PluginCatalogProvenance;
+      /**
+       * The repository the installed release was listed from, present only when
+       * the offered release is listed from a different one.
+       */
+      previousRepo?: string;
+    }
+  | { status: "delisted"; scope: "plugin" | "release"; version: string }
+  | {
+      status: "catalog-unavailable";
+      catalog: "stale" | "unavailable";
+      failure: PluginCatalogFailure;
     }
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
+
+/** Discriminant for {@link PluginCheckUpdateResult}. */
+export type PluginUpdateCheckStatus = PluginCheckUpdateResult["status"];
 
 /**
  * One URL-installed plugin found to have an update available by the opt-in
@@ -4220,6 +4444,13 @@ export interface PluginUpdateAvailable {
  */
 export interface InstalledPluginRecord {
   source: PluginInstallSource;
+  /**
+   * The catalog release a `"catalog"` install came from (#16779). Every install
+   * writes it, `null` when the install wasn't from the catalog, so a URL or file
+   * install over a catalog one doesn't keep its listing. Absent on records
+   * written before it existed.
+   */
+  catalog?: PluginCatalogProvenance | null;
   installedAt: number;
   /**
    * When the plugin was last reinstalled over an existing install (the #9292
@@ -4249,9 +4480,11 @@ export interface InstalledPluginRecord {
  * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
  * - `archive_mismatch` — the install carried an {@link PluginInstallExpectation} (a
- *   reviewed update) and the archive's digest or `manifest.name` differs from it;
- *   refused before extraction (digest) or before the swap (name), so nothing runs
- *   or is replaced
+ *   reviewed update or a digest-bound fresh install) and the archive's digest or
+ *   `manifest.name` differs from it, the binding was malformed, or the plugin's
+ *   installed state no longer fits it (an update for a plugin since uninstalled, a
+ *   fresh install for one already installed); refused before extraction (digest)
+ *   or before the swap (name, installed state), so nothing runs or is replaced
  * - `instance_mode_changed` — the update switches `instanceMode` between a singleton
  *   and per-project instances; refused before the swap because nothing carries
  *   settings, grants or enablements across, so the user uninstalls first
@@ -4269,6 +4502,16 @@ export interface InstalledPluginRecord {
  * - `extraction_timeout` — extraction ran past `PLUGIN_ARCHIVE_TOTAL_DEADLINE_MS` (#11302), distinct
  *   from `archive_invalid`: the archive may be fine and the source merely too slow, so the
  *   actionable advice is "try again", not "check the file"
+ *
+ * Pinned and catalog previews (#16779), produced before the installer runs:
+ * - `digest_invalid` — the digest a preview was asked to hold the download to is malformed
+ * - `digest_mismatch` — the download's SHA-256 isn't the pinned or catalog-reviewed one
+ * - `catalog_unavailable` — no catalog could be fetched (not published, unreachable, or invalid)
+ * - `catalog_stale` — only a cached catalog exists, and installs never use one
+ * - `catalog_not_listed` — the fresh catalog doesn't list the plugin, or that version of it
+ * - `catalog_mismatch` — the archive or the listing no longer matches the release that was
+ *   reviewed: its manifest names another plugin or version, or the confirm found the entry's
+ *   digest or repository changed since the preview
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
@@ -4287,7 +4530,13 @@ export type PluginInstallErrorCode =
   | "fetch_failed"
   | "fetch_timeout"
   | "size_exceeded"
-  | "content_type_rejected";
+  | "content_type_rejected"
+  | "digest_invalid"
+  | "digest_mismatch"
+  | "catalog_unavailable"
+  | "catalog_stale"
+  | "catalog_not_listed"
+  | "catalog_mismatch";
 
 /**
  * Structured install validation error. `path` is the JSON pointer segments
@@ -4338,15 +4587,23 @@ export interface PluginInstallOptions {
   /** Original download URL for catalog/url installs. Never logged. */
   originalUrl?: string | null;
   /**
+   * The catalog release a `"catalog"` install came from, recorded as
+   * {@link InstalledPluginRecord.catalog}. Main-only: set by the catalog install
+   * route from a catalog it fetched itself, and refused from the generic
+   * install IPC.
+   */
+  catalog?: PluginCatalogProvenance;
+  /**
    * Correlation id for progress reporting and cancellation (#11302). Minted by
    * the caller that wants feedback; omitting it installs exactly as before, just
    * without progress events or a cancel target. Not persisted.
    */
   jobId?: string;
   /**
-   * The archive a user approved from an update preview. When set, the install
-   * is refused unless the archive's SHA-256 and `manifest.name` both match it.
-   * Transient: checked, never persisted.
+   * The archive the install is held to: an update a user approved from its
+   * preview, or a fresh install pinned to a reviewed digest. The install is
+   * refused unless the archive's SHA-256 (and `manifest.name`, when the binding
+   * names one) match it. Transient: checked, never persisted.
    */
   expected?: PluginInstallExpectation;
 }
@@ -4356,12 +4613,31 @@ export interface PluginInstallOptions {
  * The confirm re-downloads the URL, so without this the server could answer the
  * check with one archive and the install with another. Both fields come from the
  * `available` {@link PluginCheckUpdateResult}: `pluginId` is the installed
- * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest.
+ * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest. It only
+ * replaces an installed plugin. `kind` is optional so a binding without one stays
+ * an update, the stricter reading.
  */
-export interface PluginInstallExpectation {
+export interface PluginUpdateExpectation {
+  kind?: "update";
   pluginId: string;
   archiveHash: string;
 }
+
+/**
+ * Binds a fresh install to a digest reviewed somewhere else, such as a catalog
+ * entry or a release's published checksum (#16342). It never replaces an
+ * installed plugin: moving an installed plugin to new bytes is an update, with
+ * its own preview. `pluginId`, when given, must also match `manifest.name`; a
+ * bare digest already pins the bytes, so a URL carrying only its `sha256` can be
+ * held to it.
+ */
+export interface PluginFreshInstallExpectation {
+  kind: "install";
+  pluginId?: string;
+  archiveHash: string;
+}
+
+export type PluginInstallExpectation = PluginUpdateExpectation | PluginFreshInstallExpectation;
 
 /**
  * Coarse stage of an in-flight install (#11302). Deliberately a small fixed
@@ -4440,6 +4716,11 @@ export interface LoadedPluginInfo {
   archiveHash: string | null;
   /** Original install URL. `null` for builtins and sideloads. Never logged to console. */
   originalUrl: string | null;
+  /**
+   * The community catalog release this plugin was installed from (#16779), or
+   * `null`/absent for every other install.
+   */
+  catalog?: PluginCatalogProvenance | null;
   /** Most recent activation error, or `null` if the last load succeeded. */
   loadError: PluginLoadError | null;
   /** Per-plugin disable state for non-builtins. Builtins use `disabledBuiltins` instead. */
@@ -5309,8 +5590,19 @@ export interface PluginAgentsApi {
    *   doesn't drive the agent's project.
    * @throws {Error} If `terminalId` is not a non-empty string of at most 512
    *   characters.
+   *
+   * `options.hostId` reaches an agent this plugin launched on that Remote Host
+   * through `host.dispatch(..., { hostId, projectId })` (#16767): the host
+   * answers from its own record of what this plugin launched there from this
+   * machine. It also needs `host:dispatch` and "Allow host targeting", and
+   * `not-found` covers an agent this plugin didn't launch there, launched
+   * before it was last disabled or uninstalled, or launched before this
+   * machine restarted.
    */
-  interrupt(terminalId: string): Promise<PluginAgentInterruptResult>;
+  interrupt(
+    terminalId: string,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentInterruptResult>;
   /**
    * Press keys in an agent this plugin launched — most often to answer its
    * CLI's own dialog (a trust or permission prompt, a list). Keys go one at a
@@ -5322,7 +5614,11 @@ export interface PluginAgentsApi {
    * @throws {Error} If `input` does not hold exactly one of `keys` (1 to 16
    *   names) or `choose` (1 to 200 characters).
    */
-  sendKeys(terminalId: string, input: PluginAgentKeysInput): Promise<PluginAgentKeysResult>;
+  sendKeys(
+    terminalId: string,
+    input: PluginAgentKeysInput,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentKeysResult>;
   /**
    * Submit `text` to an agent this plugin launched, as one submission with one
    * Enter: the agent takes it as its next prompt, or a slash command such as
@@ -5333,7 +5629,11 @@ export interface PluginAgentsApi {
    *   {@link interrupt}.
    * @throws {Error} If `text` is blank.
    */
-  submit(terminalId: string, text: string): Promise<PluginAgentInputResult>;
+  submit(
+    terminalId: string,
+    text: string,
+    options?: PluginAgentInputOptions
+  ): Promise<PluginAgentInputResult>;
 }
 
 /** Options for {@link PluginTerminalsApi.readScreen}. */
@@ -5762,15 +6062,56 @@ export interface PluginConfirmOptions {
 }
 
 /**
- * Runtime handler bound to a plugin-registered action via
- * {@link PluginHostApi.registerAction}. Receives the dispatch args payload
- * (the renderer-side synthetic action forwards a single args object) and
- * returns the action's result. Unlike {@link PluginIpcHandler} it does NOT
- * receive an IPC context — action handlers are addressed by action id, not by
- * a per-invocation channel context. The closure lives only in main and never
- * crosses the IPC boundary.
+ * What the host knows about one dispatch of a plugin action, handed to its
+ * {@link ActionHandler} as the second argument. Built by the host for each
+ * dispatch and frozen; nothing in the action's args can set or change it.
+ *
+ * - `dispatchSource` is the surface that dispatched the action: `"user"` for
+ *   the command palette, `"keybinding"`, `"menu"`, `"context-menu"`, `"agent"`
+ *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
+ *   a call from a panel through `plugin.invoke`, or an event route).
+ * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
+ *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
+ *   and that includes other agents' replies.
+ * - `approval: "person"` means someone answered the host's confirm dialog for
+ *   this very dispatch. It is never set by a standing answer: an automation
+ *   grant, "Allow for this session", or the Assistant's Never ask leave it
+ *   absent, so an action they let through runs with `origin` and no approval.
+ *
+ * Distinct from {@link PluginIpcContext}, which channel handlers receive.
  */
-export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
+export interface PluginActionContext {
+  readonly dispatchSource: ActionSource;
+  readonly origin?: "assistant";
+  readonly approval?: "person";
+}
+
+/**
+ * What the app's synthetic plugin action gets back from main: whatever the
+ * action's handler returned, after the host's size and result-schema checks.
+ * Spelled out as every value rather than `unknown`, which the IPC codegen
+ * refuses as a handler result.
+ */
+export type PluginActionInvokeResult = object | string | number | boolean | null | undefined;
+
+/**
+ * Runtime handler bound to a plugin-registered action via
+ * {@link PluginHostApi.registerAction} or a manifest command's handler module.
+ * Receives the dispatch args payload (the renderer-side synthetic action
+ * forwards a single args object) and the host-built
+ * {@link PluginActionContext}, and returns the action's result. The context is
+ * not the {@link PluginIpcContext} a channel handler receives: action handlers
+ * are addressed by action id, not by a per-invocation channel context. The
+ * closure never crosses the IPC boundary.
+ *
+ * The host passes the context on every dispatch. It is optional in the type so
+ * a plugin's own tests can still call a handler with its args alone; read it as
+ * `context?.approval`, so a missing one counts as no approval.
+ */
+export type ActionHandler = (
+  args: unknown,
+  context?: PluginActionContext
+) => unknown | Promise<unknown>;
 
 /**
  * Execution backend for a managed process (#11300, #11871).
@@ -7571,6 +7912,13 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   readonly agents: PluginAgentsApi;
   /**
+   * The Remote Hosts this machine drives and their projects, for
+   * `host.dispatch(actionId, args, { hostId, projectId })` (#16767). Gated on
+   * `host:dispatch` and the user's "Allow host targeting" switch, and only for
+   * installed plugins. See {@link PluginRemoteHostsApi}.
+   */
+  readonly remoteHosts: PluginRemoteHostsApi;
+  /**
    * Read what a terminal's screen shows, as plain text. Gated on
    * `terminal:read`. See {@link PluginTerminalsApi}.
    */
@@ -7985,6 +8333,16 @@ export interface PluginHostApi extends PluginActivationApi {
    * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project —
    * except an installed plugin's targeted `terminal.close`, which Daintree
    * runs itself and answers with `{ closedIds }` (#13507).
+   *
+   * `options.hostId` with `options.projectId` runs the action in that project on
+   * a Remote Host (#16767). An installed plugin must declare `host:dispatch`
+   * and the user must turn on "Allow host targeting", or the call rejects with
+   * `PERMISSION_REQUIRED`; a project plugin never can. The host admits the call
+   * as this plugin from this machine and holds it to a plugin dispatch's rules
+   * there: only built-in actions, no `RESTRICTED` or confirm-gated ones, its
+   * own "Accept tools run for other machines" setting, and its drive lease. A
+   * change runs in the view that drives the project only when that view is on
+   * this machine, and in the host itself when nobody drives it.
    */
   dispatch(
     actionId: ActionId,
@@ -8229,6 +8587,16 @@ export interface PluginActionContribution {
   category: string;
   kind: "command" | "query";
   danger: "safe" | "confirm";
+  /**
+   * `"confirm-only"` puts the action on the project Assistant's Daintree MCP
+   * tools, at both tiers. Requires `danger: "confirm"` as declared, so every
+   * call the Assistant makes goes through the host's confirm dialog unless the
+   * person has told Daintree not to ask (an automation grant, or the
+   * Assistant's Never ask). The handler's {@link PluginActionContext} then says
+   * which: `approval: "person"` only when the dialog was answered. Agent panes
+   * and the global Assistant never reach it.
+   */
+  assistantReach?: "confirm-only";
   keywords?: string[];
   inputSchema?: Record<string, unknown>;
   /**

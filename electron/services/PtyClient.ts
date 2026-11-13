@@ -878,7 +878,12 @@ export class PtyClient extends EventEmitter {
         terminalPids: this.terminalPids,
       },
       callbacks: {
-        onReady: () => this.recovery.handleShardReady(shard),
+        onReady: () => {
+          this.recovery.handleShardReady(shard);
+          // A restart drops the owners of preserved entries that died with the
+          // old process, which can leave the shard holding nothing (#16811).
+          this.scheduleIdleSweep();
+        },
         onPong: () => shard.watchdog.recordPong(),
         onTerminalRemovedFromTrash: (id) => getTrashedPidTracker().removeTrashed(id),
         // #13176: every PTY joins the crash-safe tier (Job Object / POSIX
@@ -915,6 +920,19 @@ export class PtyClient extends EventEmitter {
           if (spawnedAt !== undefined) fact.spawnedAt = spawnedAt;
           if (stopped) fact.stopped = true;
           this.emit("incarnation-exit", fact);
+        },
+        // A preserved exit leaves its entry on this shard: reads of its final
+        // screen and the pane's eventual kill must still reach it there, and
+        // the shard must outlive it, until the host reports it removed (#16811).
+        onCurrentExit: (id, preserved) => {
+          // Only the owning shard's exit speaks for the owner: another shard's
+          // is an incarnation the id has already moved away from.
+          if (preserved || this.terminalOwners.get(id) !== shard.key) return;
+          this.releaseTerminalOwner(id);
+        },
+        onTerminalRemoved: (id) => {
+          if (this.terminalOwners.get(id) !== shard.key) return;
+          if (this.releaseTerminalOwner(id)) this.scheduleIdleSweep();
         },
         // Per-terminal captures streamed while a graceful kill is still
         // running (#12180). Recorded only while a call for that project is in
@@ -957,20 +975,24 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Owner entries live until neither an incarnation of the id nor an entry the
+   * host kept for a preserved exit remains: a kill followed by a same-id
+   * respawn keeps the entry (retargeted by spawn). True when this released it.
+   */
+  private releaseTerminalOwner(id: string): boolean {
+    if (this.pendingSpawns.has(id) || this.pendingKillCount.has(id)) return false;
+    return this.terminalOwners.delete(id);
+  }
+
+  /**
    * Every event the per-shard router would emit funnels through here so the
    * fabric can do cross-shard bookkeeping before forwarding on the public
-   * emitter: terminal-owner cleanup on final exits, idle-shard sweeps, and
-   * OR-aggregation of the process-scoped host signals.
+   * emitter: idle-shard sweeps after final exits (whose owner release the
+   * router's `onCurrentExit` already ran), and OR-aggregation of the
+   * process-scoped host signals.
    */
   private emitFromShard(shard: PtyShard, event: string, args: unknown[]): boolean {
     if (event === "exit") {
-      const id = args[0] as string;
-      // Owner entries live until no incarnation of the id remains: a kill
-      // followed by a same-id respawn keeps the entry (retargeted by spawn),
-      // while the final exit releases it.
-      if (!this.pendingSpawns.has(id) && !this.pendingKillCount.has(id)) {
-        this.terminalOwners.delete(id);
-      }
       const emitted = this.emit(event, ...args);
       this.scheduleIdleSweep();
       return emitted;
@@ -978,10 +1000,7 @@ export class PtyClient extends EventEmitter {
     if (event === "spawn-result") {
       const result = args[1] as SpawnResult;
       if (!result.success) {
-        const id = args[0] as string;
-        if (!this.pendingSpawns.has(id) && !this.pendingKillCount.has(id)) {
-          this.terminalOwners.delete(id);
-        }
+        this.releaseTerminalOwner(args[0] as string);
         const emitted = this.emit(event, ...args);
         this.scheduleIdleSweep();
         return emitted;
@@ -1575,6 +1594,8 @@ export class PtyClient extends EventEmitter {
     // pinned by cap overflow / crash migration). Ownership is recorded before
     // the send so events and per-terminal requests route consistently.
     const shard = this.ensureShardForProject(resolvedProjectId);
+    const previousOwner = this.terminalOwners.get(id);
+    const replacesPreserved = previousOwner !== undefined && !this.pendingSpawns.has(id);
     this.terminalOwners.set(id, shard.key);
     // A duplicate still awaiting its answer keeps the entry it displaced — that
     // is the terminal actually running, not the attempt queued behind it.
@@ -1586,6 +1607,8 @@ export class PtyClient extends EventEmitter {
     }
     this.pendingSpawns.set(id, resolvedOptions);
     this.recovery.sendSpawnWithPostInput(shard, id, resolvedOptions);
+    // The preserved entry left on another shard no longer holds it (#16811).
+    if (replacesPreserved && previousOwner !== shard.key) this.scheduleIdleSweep();
   }
 
   /**
@@ -1899,6 +1922,9 @@ export class PtyClient extends EventEmitter {
       reason,
       escalationDelayMs: options?.escalationDelayMs,
     });
+    // An entry kept for a preserved exit has no exit left to come, and this
+    // kill removes it, so it stops holding its shard here (#16811).
+    if (this.releaseTerminalOwner(id)) this.scheduleIdleSweep();
   }
 
   /** Check if a terminal exists (based on local tracking) */

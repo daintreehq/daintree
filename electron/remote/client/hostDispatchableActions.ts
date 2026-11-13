@@ -75,7 +75,11 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.deletePreset",
   "agent.readQuota",
   "agent.resumeOwned",
+  // The journal `agent.resumeOwned` reopens, read in this view through a host
+  // channel, so what it lists is the host's own sessions (#16764).
+  "agentSessionHistory.list",
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "browser.captureScreenshot",
   "file.view",

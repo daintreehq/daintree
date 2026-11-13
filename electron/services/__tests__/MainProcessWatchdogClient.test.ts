@@ -36,12 +36,14 @@ vi.mock("../TelemetryService.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   createLogger: () => ({
-    debug: vi.fn(),
+    debug: (message: string, context?: unknown) =>
+      shared.loggerCalls.push({ level: "debug", message, context }),
     info: (message: string, context?: unknown) =>
       shared.loggerCalls.push({ level: "info", message, context }),
     warn: (message: string, context?: unknown) =>
       shared.loggerCalls.push({ level: "warn", message, context }),
-    error: vi.fn(),
+    error: (message: string, error?: unknown, context?: unknown) =>
+      shared.loggerCalls.push({ level: "error", message, context: { error, context } }),
   }),
 }));
 
@@ -366,6 +368,43 @@ describe("MainProcessWatchdogClient", () => {
     expect(exit?.level).toBe("warn");
     expect(exit?.context).toMatchObject({ pid: 31337, exitCode: 1 });
     expect(shared.loggerCalls.some((c) => c.message.includes("Restarting watchdog in"))).toBe(true);
+  });
+
+  it("logs a fatal V8 error without throwing and leaves the restart to the exit that follows (#16807)", () => {
+    shared.loggerCalls.length = 0;
+    const client = new WatchdogClient({ mainPid: 4242 });
+    const disabled = vi.fn();
+    client.onDisabled(disabled);
+    mockChild.pid = 31337;
+    mockChild.emit("spawn");
+
+    // UtilityProcess is an EventEmitter: an "error" nobody listens for throws in Main.
+    expect(() =>
+      mockChild.emit("error", "FatalError", "Reached heap limit", "diagnostic-report-16807")
+    ).not.toThrow();
+
+    const fatal = shared.loggerCalls.filter((c) => c.message.includes("fatal error"));
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0].level).toBe("warn");
+    expect(fatal[0].context).toEqual({
+      pid: 31337,
+      type: "FatalError",
+      location: "Reached heap limit",
+    });
+
+    vi.advanceTimersByTime(6_000);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+
+    shared.forkMock.mockReturnValue(createMockChild());
+    mockChild.emit("exit", 134);
+    vi.advanceTimersByTime(6_000);
+
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+    const restarts = shared.loggerCalls.filter((c) => c.message.includes("Restarting watchdog in"));
+    expect(restarts).toHaveLength(1);
+    expect(restarts[0].message).toContain("(1/");
+    expect(disabled).not.toHaveBeenCalled();
+    expect(JSON.stringify(shared.loggerCalls)).not.toContain("diagnostic-report-16807");
   });
 
   it("does not restart a watchdog that exits while the app is shutting down", () => {

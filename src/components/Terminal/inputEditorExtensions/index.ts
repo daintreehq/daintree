@@ -50,6 +50,8 @@ export {
   addImageChip,
   imageChipField,
   readImageChipPaths,
+  restoredImageChipEffects,
+  setImageChipPreview,
   createImageChipTooltip,
   createImagePasteHandler,
 } from "./imageChip";

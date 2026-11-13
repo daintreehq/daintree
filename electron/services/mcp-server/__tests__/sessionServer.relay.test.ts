@@ -78,6 +78,7 @@ async function relayed(
   store.sessionWorkspaceMap.set(sessionId, projectId);
   const deps: SessionServerDeps = {
     sessionStore: store,
+    sessionRole: "relay",
     workspaceBinding: { workspaceId: projectId },
     requestManifest: vi.fn().mockResolvedValue(MANIFEST),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: { ran: true } } }),
@@ -132,6 +133,77 @@ function errorCode(result: { content: unknown }): string {
   const [first] = result.content as Array<{ text: string }>;
   return (JSON.parse(first!.text) as { code: string }).code;
 }
+
+describe("telling a relayed assistant which tier an action needs (#16764)", () => {
+  const SCHEMA_MANIFEST = [...MANIFEST, entry("actions.getSchema")];
+  const GLOBAL_RELAY = {
+    shellName: "greg-mbp",
+    global: true as const,
+    refuseWrite: vi.fn(() => null),
+  };
+
+  /** A relay whose view answers `actions.getSchema` with `target`, as the renderer does. */
+  function schemaRead(target: ActionManifestEntry): Partial<SessionServerDeps> {
+    return {
+      requestManifest: vi.fn().mockResolvedValue(SCHEMA_MANIFEST),
+      getCachedManifest: vi.fn(() => SCHEMA_MANIFEST),
+      dispatchAction: vi.fn().mockResolvedValue({
+        result: { ok: true, result: { ok: true, entry: target, policy: null, error: null } },
+      }),
+    };
+  }
+
+  async function readSchema(relay: Harness, actionId: string) {
+    const result = await relay.client.callTool({
+      name: "actions.getSchema",
+      arguments: { actionId },
+    });
+    const [first] = result.content as Array<{ text: string }>;
+    return JSON.parse(first!.text) as {
+      ok: boolean;
+      entry: unknown;
+      unavailable?: { id: string; minimumTier: string; callable: boolean };
+      error: { code: string } | null;
+    };
+  }
+
+  it("names the full tier to the global Assistant's core relay", async () => {
+    const relay = await relayed("core", {
+      ...schemaRead(entry("recipe.run", "command", "confirm")),
+      relay: GLOBAL_RELAY,
+    });
+
+    const body = await readSchema(relay, "recipe.run");
+
+    expect(body.ok).toBe(false);
+    expect(body.entry).toBeNull();
+    expect(body.error?.code).toBe("TIER_NOT_PERMITTED");
+    expect(body.unavailable).toEqual(
+      expect.objectContaining({ id: "recipe.run", minimumTier: "full", callable: false })
+    );
+  });
+
+  it("keeps the unknown-id denial for what the global Assistant never sends", async () => {
+    const relay = await relayed("core", {
+      ...schemaRead(entry("agentSessionHistory.resume", "command")),
+      relay: GLOBAL_RELAY,
+    });
+
+    const body = await readSchema(relay, "agentSessionHistory.resume");
+
+    expect(body.error?.code).toBe("NOT_FOUND");
+    expect(body.unavailable).toBeUndefined();
+  });
+
+  it("names the full tier to a project assistant's relay for the same id", async () => {
+    const relay = await relayed("core", schemaRead(entry("agentSessionHistory.resume", "command")));
+
+    const body = await readSchema(relay, "agentSessionHistory.resume");
+
+    expect(body.error?.code).toBe("TIER_NOT_PERMITTED");
+    expect(body.unavailable?.minimumTier).toBe("full");
+  });
+});
 
 describe("waiting on a relayed close (#15728)", () => {
   // One Shell assistant's sessions on this host share a relay principal, one
@@ -514,6 +586,21 @@ describe("a relayed session (#13493)", () => {
       expect(globalAssistantMayRelay("agentSessionHistory.resume")).toBe(false);
     });
 
+    it("reaches the global Assistant's relay at the core tier (#16764)", async () => {
+      const relay = await relayed("core", {
+        handleAgentResumeOwned: answered("launched"),
+        relay: { shellName: "greg-mbp", global: true, refuseWrite: vi.fn(() => null) },
+      });
+
+      const listed = (await relay.client.listTools()).tools.map((tool) => tool.name);
+      expect(listed).toContain("agent.resumeOwned");
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ status: "launched" });
+    });
+
     it("holds a session in a view to the view's drive rule", async () => {
       const refuseViewWrite = vi.fn(() => ({
         code: "DRIVEN_ELSEWHERE",
@@ -689,6 +776,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     }));
     const server = createSessionServer(sessionId, {
       sessionStore: store,
+      sessionRole: "relay",
       requestManifest: vi.fn().mockResolvedValue(MANIFEST),
       dispatchAction: vi.fn(),
       handleWaitUntilIdle: vi.fn(),
@@ -759,6 +847,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const appendAuditRecord = vi.fn();
     const server = createSessionServer(sessionId, {
       sessionStore: store,
+      sessionRole: "relay",
       requestManifest: vi.fn().mockResolvedValue(MANIFEST),
       dispatchAction: vi.fn(),
       handleWaitUntilIdle: vi.fn(),
@@ -803,6 +892,77 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const [skipped, asked] = appendAuditRecord.mock.calls.map(([record]) => record);
     expect(skipped).toMatchObject({ toolId: "host.call", authorization: "skip-preference" });
     expect(asked).toMatchObject({ toolId: "host.call" });
+    expect(asked).not.toHaveProperty("authorization");
+  });
+
+  it("records a host.settings apply the person handed over as the skip preference (#16752)", async () => {
+    const store = new SessionStore(() => {});
+    const sessionId = "help-settings";
+    store.sessionTierMap.set(sessionId, "full");
+    store.sessionOriginMap.set(sessionId, "help");
+    store.sessionHelpIdMap.set(sessionId, "help-1");
+    let skipOnCall = true;
+    const run = vi.fn(async (_tool: string, _args: unknown, context?: HostCallContext) => {
+      if (skipOnCall) context?.noteSkipPreference?.();
+      return {
+        ok: true as const,
+        value: {
+          outcome: "ok" as const,
+          detail: null,
+          retryAfterMs: null,
+          ticket: null,
+          hosts: [],
+        },
+      };
+    });
+    const appendAuditRecord = vi.fn();
+    const manifest = [...MANIFEST, entry("host.settings", "command")];
+    const server = createSessionServer(sessionId, {
+      sessionStore: store,
+      sessionRole: "relay",
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      dispatchAction: vi.fn(),
+      handleWaitUntilIdle: vi.fn(),
+      handleWaitUntilIdleBatch: vi.fn(),
+      handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      handleSkillsLoad: vi.fn(),
+      handleProjectRunCheck: vi.fn(),
+      handleProjectRunCommand: vi.fn(),
+      handleAgentResumeOwned: vi.fn(),
+      handleTerminalGetStatusViewless: vi.fn(),
+      handleTerminalReadLastMessageOwned: vi.fn(),
+      isTerminalIdInUse: vi.fn(() => false),
+      appendAuditRecord,
+      getCachedManifest: vi.fn(() => manifest),
+      hostControl: { isCallReachable: () => true, run },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    open.push({
+      client,
+      store,
+      deps: {} as SessionServerDeps,
+      close: async () => {
+        await client.close();
+        store.drain();
+        store.grantCache.dispose();
+      },
+    });
+
+    const args = { operation: "apply", ticket: "t-1" };
+    await client.callTool({ name: "host.settings", arguments: args });
+    skipOnCall = false;
+    await client.callTool({ name: "host.settings", arguments: args });
+
+    expect(run).toHaveBeenCalledWith("host.settings", args, {
+      tier: "full",
+      noteSkipPreference: expect.any(Function),
+    });
+    const [skipped, asked] = appendAuditRecord.mock.calls.map(([record]) => record);
+    expect(skipped).toMatchObject({ toolId: "host.settings", authorization: "skip-preference" });
+    expect(asked).toMatchObject({ toolId: "host.settings" });
     expect(asked).not.toHaveProperty("authorization");
   });
 });

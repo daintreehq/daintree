@@ -39,7 +39,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * work for one hears when it comes back (#14463), and `host.bringBack` names
  * one to wake or start where the person set that up (#16170). `host.status`
  * reads `terminal.getStatus` in many projects on many hosts at once, each as
- * `host.call` would read it there (#16191).
+ * `host.call` would read it there (#16191). `mcp.surface` reports its own
+ * session, `role` included, so it can tell when the `daintree` server it
+ * reached took it for something other than the global assistant (#16765).
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -48,6 +50,7 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_WATCH_TOOL,
   HOST_BRING_BACK_TOOL,
   HOST_STATUS_TOOL,
+  "mcp.surface",
 ]);
 
 /**
@@ -102,6 +105,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "agent.resumeOwned",
   "agentSessionHistory.list",
   "assistant.list",
+  "assistant.resume",
   "assistant.start",
   "terminal.list",
   "terminal.getStatus",

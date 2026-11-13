@@ -624,6 +624,10 @@ function CanopyInbox({
     shownAssistants,
     bandAssistants,
     listedAssistants,
+    assistantsExpanded,
+    setAssistantsExpanded,
+    assistantsOpen,
+    sectionAssistants,
     showWork,
     inWork,
     shownInbox,
@@ -677,6 +681,7 @@ function CanopyInbox({
     revealReading === undefined
       ? fleet !== null
       : revealReading.fleet !== null || revealReading.error !== null;
+  const assistantsBarRef = useRef<HTMLButtonElement>(null);
   const {
     searchRef,
     refreshRef,
@@ -726,6 +731,7 @@ function CanopyInbox({
     roleFilter,
     seeAssistantHandback,
     pluginViewIds: pluginViews.map((view) => view.id),
+    assistantsBarRef,
   });
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
@@ -1009,9 +1015,21 @@ function CanopyInbox({
     bar.focus();
     return true;
   };
-  // Up off the Trash bar: the Archived bar when it is shut, else the inbox's last row, else the search.
+  // So is a shut Assistants bar, between the inbox and the rows below it: the
+  // asks it still lists, else the Archived section, else the Trash.
+  const focusAssistantsBar = () => {
+    const bar = assistantsBarRef.current;
+    if (!bar || assistantsExpanded) return false;
+    bar.focus();
+    return true;
+  };
+  // Nothing drawn between the Assistants bar and the bar below it.
+  const assistantsBarLast = (rowsAbove: number) =>
+    rowsAbove === projection.sectionStart && focusAssistantsBar();
+  // Up off the Trash bar: the Archived bar when it is shut, else the last row,
+  // else a shut Assistants bar with nothing under it, else the search.
   const leaveTrashUp = () => {
-    if (focusArchivedBar()) return;
+    if (focusArchivedBar() || assistantsBarLast(projection.navigation.length)) return;
     focusEntryOrSearch(projection.navigation[projection.navigation.length - 1]);
   };
   // Up off the Archived bar, shut or open: the row above it. Archived rows sit
@@ -1020,7 +1038,20 @@ function CanopyInbox({
     const above = projection.navigation.filter(
       (entry) => entry.role === "assistant" || !itemArchived(entry.item)
     );
+    if (assistantsBarLast(above.length)) return;
     focusEntryOrSearch(above[above.length - 1]);
+  };
+  // Up off the Assistants bar: the inbox's last row above it, else the search.
+  const leaveAssistantsUp = () =>
+    focusEntryOrSearch(projection.navigation[projection.sectionStart - 1]);
+  // Down off it: its first row, or past it to the archived rows, the Archived bar or the Trash.
+  const leaveAssistantsDown = () => {
+    const below = projection.navigation[projection.sectionStart];
+    if (below) {
+      focusEntryOrSearch(below);
+      return true;
+    }
+    return focusArchivedBar() || (trashRef.current?.focusHeader() ?? false);
   };
 
   const {
@@ -1052,6 +1083,7 @@ function CanopyInbox({
     markAllRead,
     onSelectAll: bulkTrashable ? openBulkTrash : undefined,
     onPastEnd: () => focusArchivedBar() || (trashRef.current?.focusHeader() ?? false),
+    sectionStop: { before: projection.sectionStart, focus: focusAssistantsBar },
   });
   // The keys the open card names are the ones that act from where the keyboard is.
   const keyboardAt = useCanopyKeyboardPlace(isOpen);
@@ -1524,10 +1556,17 @@ function CanopyInbox({
         ref={bodyRef}
         className="canopy-frame flex min-h-0 flex-1 flex-col"
         onKeyDownCapture={(event) => {
+          // React carries a keydown up the component tree through a portal, so
+          // a dialog, popover or menu drawn into the page from a card, the
+          // reply's expanded editor included, reaches this box without being in
+          // it. Its keys are its own: stepping the agent would re-key the card
+          // and unmount the overlay mid-edit.
+          if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) {
+            return;
+          }
           // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
           // from the search, the list and the docked global assistant:
-          // anywhere else they are the view's, its dialogs and menus too,
-          // which sit outside this box.
+          // anywhere else they are the view's.
           if (
             shownPluginView !== null &&
             !(
@@ -1737,7 +1776,7 @@ function CanopyInbox({
                   aria-controls={
                     [
                       listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
-                      listedAssistants.length > 0 ? "canopy-assistants" : null,
+                      sectionAssistants.length > 0 ? "canopy-assistants" : null,
                       archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
                     ]
                       .filter((id) => id !== null)
@@ -1746,7 +1785,9 @@ function CanopyInbox({
                   aria-autocomplete="list"
                   aria-activedescendant={
                     selectedAssistant !== null
-                      ? canopyAssistantDomId(selectedAssistant.id)
+                      ? projection.navigation.some((entry) => entry.key === selectedAssistant.id)
+                        ? canopyAssistantDomId(selectedAssistant.id)
+                        : undefined
                       : focusedItem && visible.includes(focusedItem)
                         ? canopyCardDomId(focusedItem.runId)
                         : undefined
@@ -2018,17 +2059,33 @@ function CanopyInbox({
                         label="Assistants"
                         count={listedAssistants.length > 0 ? listedAssistants.length : undefined}
                         countNoun="assistant"
+                        // A search shows its matching assistants open; the fold is the user's again after.
+                        fold={
+                          searching
+                            ? undefined
+                            : {
+                                expanded: assistantsExpanded,
+                                controls: "canopy-assistants",
+                                onToggle: () => setAssistantsExpanded(!assistantsExpanded),
+                                onEnter: () => {
+                                  leaveAssistantsDown();
+                                },
+                                onLeaveUp: leaveAssistantsUp,
+                                onLeaveDown: leaveAssistantsDown,
+                                buttonRef: assistantsBarRef,
+                              }
+                        }
                       />
-                      {everyHost && !assistantsEmptyShown && (
+                      {assistantsOpen && everyHost && !assistantsEmptyShown && (
                         <p className="px-3 pb-2 text-xs text-text-secondary">{ownAssistantsOnly}</p>
                       )}
-                      {listedAssistants.length > 0 ? (
+                      {sectionAssistants.length > 0 ? (
                         <div
                           id="canopy-assistants"
                           role="listbox"
                           aria-labelledby="canopy-assistants-label"
                         >
-                          {listedAssistants.map((item, index) => (
+                          {sectionAssistants.map((item, index) => (
                             <CanopyAssistantRow
                               key={item.id}
                               item={item}
@@ -2046,6 +2103,7 @@ function CanopyInbox({
                           ))}
                         </div>
                       ) : (
+                        assistantsOpen &&
                         assistantsEmptyShown && (
                           <CanopyEmptyLine note={everyHost ? ownAssistantsOnly : undefined}>
                             {assistantsEmpty}
@@ -2252,7 +2310,14 @@ function CanopyInbox({
                     />
                   ) : (
                     <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                      {!workersShown ? (
+                      {!workersShown && !assistantsOpen && listedAssistants.length > 0 ? (
+                        <>
+                          <p className="text-sm text-text-primary">No assistant selected</p>
+                          <p className="text-xs text-text-secondary">
+                            Open the Assistants section to choose one.
+                          </p>
+                        </>
+                      ) : !workersShown ? (
                         <>
                           <p className="text-sm text-text-primary">No assistant to show</p>
                           <p className="text-xs text-text-secondary">

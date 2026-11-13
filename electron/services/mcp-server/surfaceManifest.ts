@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
-import type { McpSurfaceManifest, McpSurfaceTool } from "../../../shared/types/mcpSurface.js";
+import type {
+  McpSessionRole,
+  McpSurfaceManifest,
+  McpSurfaceTool,
+} from "../../../shared/types/mcpSurface.js";
 import { type McpTier, minimumPermittingTier } from "./shared.js";
 import {
   buildAnnotations,
   buildToolOutputSchema,
   callerGatedMinimumTier,
+  pluginActionMinimumTier,
   shouldExposeTool,
   UNBOUND_SESSION_SURFACE,
   type SessionSurfacePolicy,
@@ -34,12 +39,15 @@ export const MCP_SURFACE_TOOL_ID = "mcp.surface";
  * ones; `external` is unchanged. The hash algorithm is untouched — digests
  * moved only because the tier names are part of the preimage.
  *
+ * v4: `role` was added (#16765), and joined the hash preimage beside `tier`,
+ * so every v3 digest is stale by construction.
+ *
  * Lives here rather than beside the payload types in `shared/` on purpose: main
  * is the only process that stamps it, and keeping it out of the shared module
  * lets that module stay a type-only import from here, so its `zod` value import
  * never becomes an eager edge on the main-process boot path.
  */
-export const MCP_SURFACE_MANIFEST_VERSION = 3;
+export const MCP_SURFACE_MANIFEST_VERSION = 4;
 
 /**
  * The tier to report for one tool, from the CALLER'S OWN ladder.
@@ -71,7 +79,10 @@ function resolveToolTier(
 ): McpSurfaceTool["tier"] {
   if (tier === "external") return "external";
   return (
-    callerGatedMinimumTier(entry.id) ?? minimumPermittingTier(entry.id, rendererOwnedOrigin) ?? tier
+    callerGatedMinimumTier(entry.id) ??
+    minimumPermittingTier(entry.id, rendererOwnedOrigin) ??
+    pluginActionMinimumTier(entry.id, rendererOwnedOrigin) ??
+    tier
   );
 }
 
@@ -91,10 +102,14 @@ function resolveToolTier(
  * workspace binding (#11789) is the opposite — fixed at handshake for the life
  * of the session — so it belongs in the report, and omitting it would have this
  * tool advertise a `recipe.run` the same session's `tools/list` withholds.
+ *
+ * `role` is what the handshake took the session for (#16765), passed in rather
+ * than read off the tools, which can coincide across roles.
  */
 export function buildSurfaceManifest(
   manifest: readonly ActionManifestEntry[],
   tier: McpTier,
+  role: McpSessionRole,
   appVersion: string,
   session: SessionSurfacePolicy = UNBOUND_SESSION_SURFACE
 ): McpSurfaceManifest {
@@ -166,16 +181,20 @@ export function buildSurfaceManifest(
 
   // The tier is part of the preimage: two tiers of the same build advertise
   // different surfaces, and their hashes must say so even when one is a subset
-  // of the other. `manifestVersion` and `appVersion` are not — the hash answers
-  // "did the surface change", not "did the build change".
+  // of the other. So is the role, for the same reason: a client that stored the
+  // digest of its own surface sees it move when another kind of session
+  // answers, even one listing the same tools. `manifestVersion` and
+  // `appVersion` are not — the hash answers "did the surface change", not "did
+  // the build change".
   const hash = createHash("sha256")
-    .update(canonicalJson({ tier, tools: hashRows }))
+    .update(canonicalJson({ tier, role, tools: hashRows }))
     .digest("hex");
 
   return {
     manifestVersion: MCP_SURFACE_MANIFEST_VERSION,
     appVersion,
     tier,
+    role,
     hash,
     tools,
   };

@@ -234,9 +234,11 @@ export const theme: BuiltInThemeSource = {
     // ambient forge chrome in the toolbar and worktree cards sitting louder than
     // anything except the two signals. Re-cut into the quiet band with their hue
     // identity intact (green/purple/red/grey). A closed PR is information, not an
-    // error; only `status.danger` gets to look like one.
-    "pr-open": "#4E8156",
-    "pr-merged": "#80709D",
+    // error; only `status.danger` gets to look like one. Open and merged sit at
+    // the top of that band so the toolbar's issue and PR glyphs still clear 3:1
+    // on the stats capsule's armed and pressed fill (3.1-3.2:1; 4.6:1 at rest).
+    "pr-open": "#54885C",
+    "pr-merged": "#8676A4",
     "pr-closed": "#A9655A",
     "pr-draft": "#757A7E",
     // Solid so the field edge clears 3:1 on every surface a field sits on

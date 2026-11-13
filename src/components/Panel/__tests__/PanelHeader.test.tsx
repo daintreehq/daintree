@@ -2120,57 +2120,6 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("dangerous flags indicator", () => {
-    it("draws a different silhouette from the fleet-failure dot", () => {
-      // Two warnings beside one title must not share a shape: "launched with
-      // elevated permissions" is a property of the pane, "the last broadcast
-      // failed here" is an event to acknowledge. One is a glyph, the other a
-      // filled dot — whichever way round, they are told apart without colour.
-      useFleetFailureStore.getState().recordFailure("payload", ["test-panel"]);
-      render(
-        <PanelHeader {...makeProps({ agentLaunchFlags: ["--dangerously-skip-permissions"] })} />
-      );
-      const dangerous = screen.getByLabelText("Launched with dangerous permissions");
-      const failure = screen.getByTestId("panel-fleet-failure-dot");
-      const hasGlyph = (el: Element) => el.querySelector("svg") !== null;
-      const hasDot = (el: Element) =>
-        el.classList.contains("status-mark") || el.querySelector(".status-mark") !== null;
-      expect(hasGlyph(dangerous)).not.toBe(hasGlyph(failure));
-      expect(hasDot(dangerous)).not.toBe(hasDot(failure));
-      useFleetFailureStore.getState().clear();
-    });
-
-    it("shows the mark for all dangerous flag types", () => {
-      const dangerousFlags = [
-        ["--dangerously-skip-permissions"],
-        ["--yolo"],
-        ["--dangerously-bypass-approvals-and-sandbox"],
-        ["--force"],
-      ];
-
-      for (const flags of dangerousFlags) {
-        const { unmount } = render(<PanelHeader {...makeProps({ agentLaunchFlags: flags })} />);
-        const indicator = screen.getByLabelText("Launched with dangerous permissions");
-        expect(indicator).toBeDefined();
-        unmount();
-      }
-    });
-
-    it("does not show indicator when agentLaunchFlags does not contain dangerous flag", () => {
-      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--model", "claude-3-7"] })} />);
-
-      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
-      expect(indicator).toBeNull();
-    });
-
-    it("does not show indicator when agentLaunchFlags is undefined", () => {
-      render(<PanelHeader {...makeProps()} />);
-
-      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
-      expect(indicator).toBeNull();
-    });
-  });
-
   describe("rename input drag suppression", () => {
     // Drag-selecting text in the rename input used to travel past the sensor's
     // 8px activation distance and pick the whole panel up instead of selecting.
@@ -2597,9 +2546,7 @@ describe("PanelHeader", () => {
     it("keeps accent colour off membership and status marks", () => {
       mockStoreState = { ...mockStoreState, watchedPanels: new Set(["test-panel"]) };
       const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
-      render(
-        <PanelHeader {...makeProps({ chrome, agentId: "claude", agentLaunchFlags: ["--yolo"] })} />
-      );
+      render(<PanelHeader {...makeProps({ chrome, agentId: "claude" })} />);
       const header = document.querySelector("[data-pane-chrome]")!;
       // The watch bell is a membership state, and the marks are status; accent
       // is reserved for focus rings (the `focus-visible:` prefix) and nothing

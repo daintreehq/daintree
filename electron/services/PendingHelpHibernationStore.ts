@@ -7,6 +7,7 @@ import {
   DEFAULT_ASSISTANT_SLOT,
   assistantSlotKey,
   projectIdFromSlotKey,
+  slotFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
 import { isRetiredAgentId } from "../../shared/config/agentIds.js";
 
@@ -40,9 +41,23 @@ export interface PendingHelpHibernation {
 // Persisted shape excludes `panelWasOpen` — it is an in-memory-only field.
 type PersistedHelpHibernation = Omit<PendingHelpHibernation, "panelWasOpen">;
 
+/**
+ * The lanes a restart to install an update left running (#16753), each with
+ * the conversation it ran, for the next launch to resume. The entries alone
+ * can't say this: they also keep conversations that stopped long before the
+ * quit, which a restart must not bring back (#10815).
+ */
+export interface LaunchResume {
+  recordedAt: number;
+  /** `assistantSlotKey(projectId, slot)` → the lane's `agentSessionId`. */
+  lanes: Record<string, string>;
+}
+
 interface FileShape {
   version: number;
   entries: Record<string, PersistedHelpHibernation>;
+  // Optional, so a build that predates it reads the file and drops it on its next write.
+  resumeAtLaunch?: LaunchResume;
 }
 
 /**
@@ -57,7 +72,12 @@ interface FileShape {
  */
 export class PendingHelpHibernationStore {
   private entries = new Map<string, PendingHelpHibernation>();
-  private loaded = false;
+  // Shared, so a caller arriving mid-load waits for the entries instead of reading none.
+  private loading: Promise<void> | null = null;
+  // What the last update shutdown recorded, until it is persisted.
+  private resumeAtLaunch: LaunchResume | null = null;
+  // What this launch read back, handed out once by `takeResumeAtLaunch`.
+  private loadedResumeAtLaunch: LaunchResume | null = null;
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
@@ -66,9 +86,12 @@ export class PendingHelpHibernationStore {
     this.filePath = filePath ?? path.join(app.getPath("userData"), FILE_NAME);
   }
 
-  async load(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
+  load(): Promise<void> {
+    this.loading ??= this.readFromDisk();
+    return this.loading;
+  }
+
+  private async readFromDisk(): Promise<void> {
     try {
       const raw = await fs.readFile(this.filePath, "utf-8");
       const parsed = JSON.parse(raw) as Partial<FileShape>;
@@ -92,6 +115,13 @@ export class PendingHelpHibernationStore {
         const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
         this.entries.set(key, safeEntry);
       }
+      if (parsed.resumeAtLaunch !== undefined) {
+        // Off disk before anything can resume from it: a crash during this
+        // launch must bring back nothing on the next one (#10815). A launch that
+        // can't take it off resumes nothing either.
+        const resume = legacyUnslotted ? null : this.readResumeAtLaunch(parsed.resumeAtLaunch);
+        if (await this.write()) this.loadedResumeAtLaunch = resume;
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
       console.warn("[PendingHelpHibernationStore] Failed to load:", err);
@@ -106,6 +136,23 @@ export class PendingHelpHibernationStore {
   set(slotKey: string, entry: PendingHelpHibernation): Promise<void> {
     this.entries.set(slotKey, entry);
     return this.persist();
+  }
+
+  /**
+   * Records the lanes an update shutdown is leaving running (#16753), replacing
+   * any earlier record. An empty record writes nothing new.
+   */
+  recordResumeAtLaunch(lanes: Record<string, string>, recordedAt = Date.now()): Promise<void> {
+    if (Object.keys(lanes).length === 0) return Promise.resolve();
+    this.resumeAtLaunch = { recordedAt, lanes: { ...lanes } };
+    return this.persist();
+  }
+
+  /** What the previous run's update shutdown recorded, once per launch; null after. */
+  takeResumeAtLaunch(): LaunchResume | null {
+    const taken = this.loadedResumeAtLaunch;
+    this.loadedResumeAtLaunch = null;
+    return taken;
   }
 
   /** Resolves once every queued write has landed. */
@@ -165,7 +212,27 @@ export class PendingHelpHibernationStore {
     );
   }
 
+  private readResumeAtLaunch(value: unknown): LaunchResume | null {
+    if (!value || typeof value !== "object") return null;
+    const { recordedAt, lanes } = value as Record<string, unknown>;
+    if (typeof recordedAt !== "number" || !Number.isFinite(recordedAt)) return null;
+    if (recordedAt > Date.now()) return null;
+    if (!lanes || typeof lanes !== "object") return null;
+    const valid: Record<string, string> = {};
+    for (const [slotKey, agentSessionId] of Object.entries(lanes)) {
+      if (!projectIdFromSlotKey(slotKey) || slotFromSlotKey(slotKey) === null) continue;
+      if (typeof agentSessionId !== "string" || agentSessionId === "") continue;
+      valid[slotKey] = agentSessionId;
+    }
+    return Object.keys(valid).length > 0 ? { recordedAt, lanes: valid } : null;
+  }
+
   private persist(): Promise<void> {
+    return this.write().then(() => undefined);
+  }
+
+  /** Queues a write of everything held now; resolves whether it landed. */
+  private write(): Promise<boolean> {
     // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
     // are treated as prior-session tokens that never auto-resume.
     const persistedEntries: Record<string, PersistedHelpHibernation> = {};
@@ -176,17 +243,22 @@ export class PendingHelpHibernationStore {
     const snapshot: FileShape = {
       version: FILE_VERSION,
       entries: persistedEntries,
+      ...(this.resumeAtLaunch ? { resumeAtLaunch: this.resumeAtLaunch } : {}),
     };
     const work = this.writeChain
       .catch(() => undefined)
       .then(() =>
         resilientAtomicWriteFile(this.filePath, JSON.stringify(snapshot, null, 2) + "\n", "utf-8", {
           mode: 0o600,
-        }).catch((err) => {
-          console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
-        })
+        }).then(
+          () => true,
+          (err: unknown) => {
+            console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
+            return false;
+          }
+        )
       );
-    this.writeChain = work;
+    this.writeChain = work.then(() => undefined);
     return work;
   }
 }

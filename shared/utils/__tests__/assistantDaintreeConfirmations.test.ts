@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  assistantPolicySkips,
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
+  resolveAssistantConfirmationPolicy,
 } from "../assistantDaintreeConfirmations.js";
+import { HOST_SETTINGS_TOOL } from "../../types/hostControl.js";
 
 describe("assistantSkipsDaintreeConfirmations (#12874, #12989)", () => {
   it("follows the agent's skip setting while inheriting", () => {
@@ -28,6 +31,53 @@ describe("assistantSkipsDaintreeConfirmations (#12874, #12989)", () => {
     const unknown = "skip" as unknown as "inherit";
     expect(assistantSkipsDaintreeConfirmations(unknown, false)).toBe(false);
     expect(assistantSkipsDaintreeConfirmations(unknown, true)).toBe(true);
+  });
+});
+
+describe("assistantPolicySkips (#16752)", () => {
+  it("asks for everything under ask-except but the delegable ids ticked", () => {
+    const policy = resolveAssistantConfirmationPolicy(
+      "ask-except",
+      ["worktree.deleteOwned", "worktree.delete", 7],
+      true
+    );
+    expect(assistantPolicySkips(policy, "worktree.deleteOwned")).toBe(true);
+    expect(assistantPolicySkips(policy, "worktree.delete")).toBe(false);
+    expect(assistantPolicySkips(policy, "terminal.closeAll")).toBe(false);
+  });
+
+  it("ignores the list in every other mode", () => {
+    for (const mode of ["inherit", "always-ask", "never-ask", undefined] as const) {
+      const policy = resolveAssistantConfirmationPolicy(mode, ["worktree.deleteOwned"], false);
+      expect(policy.delegated.size).toBe(0);
+      expect(assistantPolicySkips(policy, "worktree.deleteOwned")).toBe(mode === "never-ask");
+    }
+  });
+
+  it("skips a host settings change only on its own tick, never under never-ask", () => {
+    expect(
+      assistantPolicySkips(
+        resolveAssistantConfirmationPolicy("never-ask", [], true),
+        HOST_SETTINGS_TOOL
+      )
+    ).toBe(false);
+    expect(
+      assistantPolicySkips(
+        resolveAssistantConfirmationPolicy("inherit", [], true),
+        HOST_SETTINGS_TOOL
+      )
+    ).toBe(false);
+    expect(
+      assistantPolicySkips(
+        resolveAssistantConfirmationPolicy("ask-except", [HOST_SETTINGS_TOOL], false),
+        HOST_SETTINGS_TOOL
+      )
+    ).toBe(true);
+  });
+
+  it("reads ask-except as a valid mode that skips nothing on its own", () => {
+    expect(isHelpAssistantDaintreeConfirmations("ask-except")).toBe(true);
+    expect(assistantSkipsDaintreeConfirmations("ask-except", true)).toBe(false);
   });
 });
 

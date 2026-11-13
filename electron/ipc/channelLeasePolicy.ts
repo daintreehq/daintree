@@ -454,6 +454,7 @@ export const CHANNEL_LEASE_POLICY = {
   // Grants or revokes a plugin's agent tools for the caller's project, or as
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
+  "plugin-capability:get-host-targeting": "free",
   "plugin-capability:get-os-notifications": "free",
   "plugin-capability:get-panel-attention": "free",
   "plugin-capability:get-project-targeting": "free",
@@ -462,6 +463,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin-capability:list-preset-grants": "free",
   // Only ever takes a preset grant away, as the switches above may.
   "plugin-capability:revoke-preset-grant": "free",
+  "plugin-capability:set-host-targeting": "free",
   "plugin-capability:set-os-notifications": "free",
   "plugin-capability:set-panel-attention": "free",
   "plugin-capability:set-project-targeting": "free",
@@ -477,6 +479,9 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin-mcp:set-config": "free",
   "plugin-process:list": "free",
   "plugin:actions-get": "free",
+  // The action form of `plugin:invoke`, with the dispatch context beside the
+  // args: its handler checks the lease the same way (#16751).
+  "plugin:actions-invoke": "handler",
   "plugin:actions-register": "free",
   "plugin:actions-unregister": "free",
   "plugin:activate-for-view": "free",
@@ -484,6 +489,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:bg-update-check-latest": "free",
   "plugin:bg-update-check-settings-get": "free",
   "plugin:bg-update-check-settings-set": "free",
+  "plugin:browse-catalog": "free",
   "plugin:cancel-install": "free",
   "plugin:check-for-update": "free",
   "plugin:clear-audit-log": "free",
@@ -497,6 +503,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:get-diagnostics-snapshot": "free",
   "plugin:icons-get": "free",
   "plugin:install": "free",
+  "plugin:install-from-catalog": "free",
   "plugin:install-from-file": "free",
   "plugin:install-from-path": "free",
   "plugin:install-from-url": "free",
@@ -510,6 +517,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:perf-snapshots-get": "free",
   "plugin:perf-snapshots-subscribe": "free",
   "plugin:perf-snapshots-unsubscribe": "free",
+  "plugin:preview-from-catalog": "free",
+  "plugin:preview-from-url": "free",
   "plugin:report-focused-panel": "free",
   "plugin:project-presence-changed": "free",
   "plugin:project-presence-get": "free",

@@ -22,10 +22,12 @@ import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { HelpAdoptResult } from "../../shared/types/ipc/help.js";
 import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/api.js";
 import {
-  assistantSkipsDaintreeConfirmations,
+  ASKS_FOR_EVERYTHING,
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
+  resolveAssistantConfirmationPolicy,
 } from "../../shared/utils/assistantDaintreeConfirmations.js";
+import { sanitizeDelegatedConfirmations } from "../../shared/config/assistantConfirmationDelegation.js";
 import {
   DEFAULT_HELP_ASSISTANT_TIER,
   normalizeHelpAssistantTier,
@@ -56,6 +58,7 @@ import {
   assistantSlotKey,
   isAssistantSessionDirName,
   isValidAssistantSlot,
+  projectIdFromSlotKey,
 } from "../../shared/config/assistantSlots.js";
 
 export { codexTrustArgs, projectRuleRoots } from "./AssistantSessionFiles.js";
@@ -103,6 +106,7 @@ const DEFAULT_BYPASS_PERMISSIONS = false;
 const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
+  if (startedBy.kind === "update-restart") return true;
   const parts =
     startedBy.kind === "relay"
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
@@ -158,6 +162,18 @@ interface ProvisionInput {
    */
   vacantOnly?: boolean;
   /**
+   * Refuse with `LANE_KEPT` a lane that keeps a stopped conversation, or one
+   * claimed for a resume (#16763): a start never takes the person's
+   * conversation over, so it can't replace the lane's pointer at its spawn.
+   */
+  refuseKept?: true;
+  /**
+   * The claim a main-side resume holds on the lane (`claimLaneResume`): the
+   * one provision a lane being resumed admits, and only while the claim still
+   * holds, so a discard meanwhile refuses it.
+   */
+  resumeClaimId?: string;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -191,7 +207,38 @@ export type HelpSessionStartedBy =
   | { kind: "local"; askingHelpSessionId: string }
   | { kind: "relay"; senderId: string; linkSessionId: string; askingHelpSessionId: string }
   /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
-  | { kind: "schedule"; scheduleId: string; runId: string };
+  | { kind: "schedule"; scheduleId: string; runId: string }
+  /** A lane a restart to install an update stopped, resumed by the next launch (#16753). */
+  | { kind: "update-restart" };
+
+/** A stopped lane's kept conversation, as its pointer holds it (#16763). */
+export interface KeptLane {
+  slot: number;
+  agentId: string;
+  /** Empty when the lane never learned its conversation's id. */
+  agentSessionId: string;
+  capturedAt: number;
+}
+
+/** What `claimLaneResume` got: the lane's pointer, or why there is none to take. */
+export type LaneResumeClaim =
+  | {
+      status: "claimed";
+      agentId: string;
+      agentSessionId: string;
+      cwd: string;
+      claimId: string;
+      /** Whether the claim still holds the pointer: a discard drops it. */
+      holds(): boolean;
+      /** Hands an unspent claim back and ends the resume's mark; runs once. */
+      release(): Promise<void>;
+    }
+  /** No conversation kept in the lane. */
+  | { status: "none" }
+  /** An assistant runs in the lane, or is starting there. */
+  | { status: "occupied" }
+  /** Another resume of the lane is under way, main's or a view's. */
+  | { status: "resuming" };
 
 export interface ProvisionResult {
   sessionId: string;
@@ -311,6 +358,11 @@ interface HelpSessionRecord {
   /** Who asked for it, when the host started it with no view (#13511). */
   startedBy?: HelpSessionStartedBy;
   /**
+   * Provisioned to reopen its lane's kept conversation from main (#16753,
+   * #16763): until it spawns, a discard of the lane revokes it.
+   */
+  resumingLane?: true;
+  /**
    * Whether the assistant panel was open when the view went, frozen at that
    * moment: the next view mounts with its panel closed and reports so before
    * it asks, and that report must not cost the user the reopen (#10815).
@@ -343,6 +395,8 @@ interface HelpSessionRecord {
   laneMcpConfigPath?: string;
   /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
   claudeLaunchArgs?: string[];
+  /** Computed at provision for antigravity sessions; consumed by lifecycle.ts. */
+  antigravityLaunchArgs?: string[];
   /**
    * The MCP server names the user's assistant folder handed this session, so
    * no plugin server is handed over under one of them.
@@ -371,6 +425,14 @@ const SAFE_AGENT_DIR_KEY = new RegExp(`^${ASSISTANT_AGENT_DIR_KEY_PATTERN}$`);
 const DIGEST_AGENT_DIR_KEY = new RegExp(`^[0-9a-f]{${PROJECT_HASH_LEN}}$`);
 
 /**
+ * Agents whose lanes can't share a directory. Antigravity reads its MCP
+ * servers only from `<cwd>/.agents/mcp_config.json` and expands no env vars
+ * there, so a lane's literal bearer has to sit in that one fixed file, and two
+ * lanes in one cwd would overwrite each other's credentials.
+ */
+const PER_LANE_DIR_AGENT_IDS: ReadonlySet<string> = new Set(["antigravity"]);
+
+/**
  * What qualifies an agent's session directory: null for Claude, which keeps
  * the bare project hash (see `shared/config/assistantSlots.ts`); the id itself
  * for an id that is already a safe, bounded directory name (every built-in);
@@ -391,8 +453,12 @@ export function assistantAgentDirKey(agentId: string): string | null {
   return createHash("sha256").update(agentId).digest("hex").slice(0, PROJECT_HASH_LEN);
 }
 
-function agentSessionDirName(pathHash: string, agentId: string): string {
-  return assistantSessionDirName(pathHash, assistantAgentDirKey(agentId));
+function agentSessionDirName(pathHash: string, agentId: string, slot: number): string {
+  return assistantSessionDirName(
+    pathHash,
+    assistantAgentDirKey(agentId),
+    PER_LANE_DIR_AGENT_IDS.has(agentId) ? slot : null
+  );
 }
 
 export class HelpSessionService {
@@ -489,6 +555,9 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
+  // Lanes main is resuming with no view (#16753, #16763), from the claim to
+  // its release by `claimLaneResume`.
+  private readonly resumingSlotKeys = new Set<string>();
   private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
@@ -1013,13 +1082,16 @@ export class HelpSessionService {
    * Claude Code's per-folder workspace-trust prompt only fires once per
    * project; the .mcp.json bearer is rotated on every provision.
    *
-   * One directory serves every lane of the project on that agent. On every call:
+   * One directory serves every lane of the project on that agent, except for
+   * Antigravity, whose lanes each get one. On every call:
    *   1. Copy the bundled assistant/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
    *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
    *      file under `.lanes/` carrying the fresh literal bearer, with the
    *      shared `.mcp.json` left empty; for Copilot, the shared `.mcp.json`
-   *      with an env placeholder; nothing on disk for Codex.
+   *      with an env placeholder; nothing on disk for Codex; for Antigravity,
+   *      the lane's `.agents/mcp_config.json` with its literal bearer and a
+   *      `--settings` file trusting the folder.
    *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
    *   4. Stamp meta.json with the project identity for GC.
    */
@@ -1105,8 +1177,9 @@ export class HelpSessionService {
     // a per-lane file below. Lanes on another agent get their own directory,
     // because the files here are agent-shaped: the user-content mirror retires
     // whatever the current agent doesn't use, a non-Claude provision strips the
-    // Claude hooks, and Claude empties the `.mcp.json` Copilot reads.
-    const sessionDirName = agentSessionDirName(pathHash, input.agentId);
+    // Claude hooks, and Claude empties the `.mcp.json` Copilot reads. An agent
+    // with no per-lane file to put its bearer in gets a directory per lane.
+    const sessionDirName = agentSessionDirName(pathHash, input.agentId, slot);
     const sessionPath = path.join(sessionsRoot, sessionDirName);
 
     if (settings.daintreeControl) {
@@ -1126,18 +1199,38 @@ export class HelpSessionService {
       }
     }
 
+    // A lane main is resuming (#16753, #16763) is the resume's until it
+    // settles: a view's launch that missed it at adoption would otherwise start
+    // a fresh conversation over the one being resumed. The resume itself is
+    // admitted only while its claim holds, so a discard meanwhile refuses it.
+    const slotKey = assistantSlotKey(input.projectId, slot);
+    const resuming =
+      input.resumeClaimId !== undefined &&
+      this.claimsBySlotKey.get(slotKey)?.claimId === input.resumeClaimId;
+    if (input.resumeClaimId !== undefined ? !resuming : this.resumingSlotKeys.has(slotKey)) {
+      throw new HelpSessionError(
+        "LANE_OCCUPIED",
+        `Assistant ${slot + 1} of this project is being resumed; try again in a moment.`
+      );
+    }
+
     // Checked inside the lane lock, so nothing can take the lane between this
     // and the provision below.
     if (input.vacantOnly) {
-      const occupant = [...this.sessionsByToken.values()].find(
-        (record) => !record.revoked && record.projectId === input.projectId && record.slot === slot
-      );
+      const occupant = this.laneOccupant(input.projectId, slot);
       if (occupant) {
         throw new HelpSessionError(
           "LANE_OCCUPIED",
           `Assistant ${slot + 1} of this project is already in use; it was left running.`
         );
       }
+    }
+
+    if (input.refuseKept && this.laneKeepsConversation(slotKey)) {
+      throw new HelpSessionError(
+        "LANE_KEPT",
+        `Assistant ${slot + 1} of this project keeps a stopped conversation; it was left for resuming.`
+      );
     }
 
     // Single-backend invariant (#7509): displace any prior unrevoked record
@@ -1155,10 +1248,16 @@ export class HelpSessionService {
     // for plugins to start, doesn't serialize sibling lanes behind it. Neither
     // throws. Plugin knowledge describes plugin tools, which reach the
     // Assistant through Daintree's MCP server, so with that off there is none.
+    // The launch hands them over in the agent's own `launchMcp` dialect, so an
+    // agent without one (Antigravity) is never given them, nor their knowledge.
     const { mcpServerService } = await this.loadMcpServerModule();
+    const takesPluginTools =
+      getEffectiveAgentConfig(input.agentId)?.capabilities?.launchMcp !== undefined;
     const [projectFacts, pluginKnowledge, hostInventory] = await Promise.all([
       this.readProjectFacts(input.projectId, input.projectPath),
-      agentSupportsAssistantContent(input.agentId) && mcpServerService.isEnabled()
+      agentSupportsAssistantContent(input.agentId) &&
+      takesPluginTools &&
+      mcpServerService.isEnabled()
         ? resolveAssistantPluginKnowledge({
             projectId: input.projectId,
             projectPath: input.projectPath,
@@ -1188,12 +1287,14 @@ export class HelpSessionService {
       tier,
       settings,
       runCheckpointKey: runCheckpointKeyFor(input.projectId),
-      confirmationsSkipped: () =>
-        settings.daintreeControl &&
-        assistantSkipsDaintreeConfirmations(
-          settings.daintreeConfirmations,
-          resolveAssistantAgentSkip(input.agentId, store.get("agentSettings")).skips
-        ),
+      confirmations: () =>
+        settings.daintreeControl
+          ? resolveAssistantConfirmationPolicy(
+              settings.daintreeConfirmations,
+              settings.daintreeConfirmationsExcept,
+              resolveAssistantAgentSkip(input.agentId, store.get("agentSettings")).skips
+            )
+          : ASKS_FOR_EVERYTHING,
       projectFacts,
       pluginKnowledge,
       hostInventory,
@@ -1221,6 +1322,7 @@ export class HelpSessionService {
       codexLaunchArgs,
       copilotLaunchArgs,
       claudeLaunchArgs,
+      antigravityLaunchArgs,
     } = prepared;
     for (const warning of prepared.warnings) {
       console.warn("[HelpSessionService] Assistant folder:", warning);
@@ -1242,6 +1344,7 @@ export class HelpSessionService {
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
+      ...(resuming ? { resumingLane: true as const } : {}),
       ...(input.startedBy
         ? {
             startedBy: { ...input.startedBy },
@@ -1256,6 +1359,7 @@ export class HelpSessionService {
       copilotLaunchArgs,
       laneMcpConfigPath,
       claudeLaunchArgs,
+      antigravityLaunchArgs,
       userMcpServerNames: prepared.userMcpServerNames,
       scratchPath,
       runCheckpointPath,
@@ -1283,10 +1387,11 @@ export class HelpSessionService {
             input.global ? { readinessTool: GLOBAL_ASSISTANT_READINESS_TOOL } : undefined
           );
         } else {
-          // Codex and Copilot both speak Streamable HTTP at /mcp. Codex
-          // reads the bearer from `DAINTREE_MCP_TOKEN` PTY env via
-          // `bearer_token_env_var`. Copilot reads the bearer from PTY env
-          // via `${DAINTREE_MCP_TOKEN}` substitution in its settings file.
+          // Everyone else speaks Streamable HTTP at /mcp. Codex reads the
+          // bearer from `DAINTREE_MCP_TOKEN` PTY env via
+          // `bearer_token_env_var`, Copilot through `$DAINTREE_MCP_TOKEN`
+          // substitution in its `.mcp.json`, and Antigravity from the literal
+          // bearer in its lane's `.agents/mcp_config.json`.
           await probeMcpServer(port, token);
         }
       } catch (err) {
@@ -1311,6 +1416,9 @@ export class HelpSessionService {
           // proved dead; a failed provision must not leave it behind.
           await this.sessionFiles.removeLaneMcpConfig(laneMcpConfigPath);
         }
+        if (input.agentId === "antigravity") {
+          await this.sessionFiles.stripAntigravityDaintreeEntry(sessionPath, token);
+        }
         const reason = formatErrorMessage(err, "assistant MCP session isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
         throw new HelpSessionError(
@@ -1330,8 +1438,7 @@ export class HelpSessionService {
     port: number | null
   ): string | null {
     if (!daintreeControl || !port) return null;
-    // Claude reads SSE at /sse with a literal bearer; everyone else speaks
-    // Streamable HTTP at /mcp with env-var substitution.
+    // Claude reads SSE at /sse; everyone else speaks Streamable HTTP at /mcp.
     if (agentId === "claude") return `http://127.0.0.1:${port}/sse`;
     return `http://127.0.0.1:${port}/mcp`;
   }
@@ -1362,6 +1469,20 @@ export class HelpSessionService {
     if (!record || record.revoked) return null;
     if (record.agentId !== "copilot") return null;
     return record.copilotLaunchArgs ?? [];
+  }
+
+  /**
+   * Returns the cached `--settings` flag for an Antigravity help session,
+   * naming the lane's session-only settings file (folder trust and the
+   * Daintree MCP allow rules). Same null contract as the Codex and Copilot
+   * getters: unknown, revoked or another agent's token answers null.
+   */
+  getAntigravityLaunchArgs(token: string): string[] | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    if (record.agentId !== "antigravity") return null;
+    return record.antigravityLaunchArgs ?? [];
   }
 
   /**
@@ -1685,6 +1806,12 @@ export class HelpSessionService {
     if (record.agentId === "claude" || record.agentId === "copilot") {
       await this.sessionFiles.stripStaleDaintreeMcpEntry(record.sessionPath);
     }
+    // Antigravity's literal bearer sits in its lane's `.agents/mcp_config.json`.
+    // Only this session's own bearer is removed: a same-lane re-provision may
+    // already have written its successor's there.
+    if (record.agentId === "antigravity") {
+      await this.sessionFiles.stripAntigravityDaintreeEntry(record.sessionPath, record.token);
+    }
   }
 
   /**
@@ -1908,6 +2035,116 @@ export class HelpSessionService {
     });
   }
 
+  /**
+   * Records which lanes a restart to install an update is leaving running
+   * (#16753), after shutdown's captures have landed, so the next launch resumes
+   * exactly those conversations. A lane counts only while it still points where
+   * it did at the snapshot, at a conversation it can be resumed into by id: a
+   * discard or relaunch during the kill, or a Codex lane whose id never came
+   * back, is left to the ordinary restart rule (#10815).
+   */
+  recordLanesToResumeAtLaunch(lanes: Iterable<AssistantLaneSnapshot>): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store) return Promise.resolve();
+    const resume: Record<string, string> = {};
+    for (const lane of lanes) {
+      if (isGlobalAssistantId(projectIdFromSlotKey(lane.slotKey))) continue;
+      const entry = store.get(lane.slotKey);
+      if (!entry?.agentSessionId) continue;
+      if ((this.laneRevisionBySlotKey.get(lane.slotKey) ?? 0) !== lane.revision) continue;
+      if (!getEffectiveAgentConfig(entry.agentId)?.resume) continue;
+      resume[lane.slotKey] = entry.agentSessionId;
+    }
+    return store.recordResumeAtLaunch(resume);
+  }
+
+  /**
+   * Claims a stopped lane's kept conversation for main to resume with no view
+   * (#16753, #16763), the way a view's resume claims it, and marks the lane as
+   * being resumed until `release` runs: a view's own launch stands down, and
+   * only a provision quoting `claimId` is admitted. One resume at a time per
+   * lane, whoever asks: a second main resume, or a lane a view is resuming, is
+   * refused rather than handed the same claim. `release` hands an unspent
+   * claim back; once the resumed spawn has spent it, it only lifts the mark.
+   */
+  async claimLaneResume(projectId: string, slot: number): Promise<LaneResumeClaim> {
+    const slotKey = assistantSlotKey(projectId, slot);
+    // Marked before the first await, so two calls can't both get past it.
+    if (this.resumingSlotKeys.has(slotKey)) return { status: "resuming" };
+    this.resumingSlotKeys.add(slotKey);
+    let released = false;
+    const release = async (claimId: string | null): Promise<void> => {
+      if (released) return;
+      released = true;
+      try {
+        if (claimId !== null) await this.restorePendingHibernation(projectId, slot, claimId);
+      } finally {
+        this.resumingSlotKeys.delete(slotKey);
+      }
+    };
+    try {
+      // Under the lane lock, so a provision already under way has registered
+      // the session it would run before the lane is read as stopped.
+      const outcome = await this.withLaneLock(slotKey, async (): Promise<LaneResumeClaim> => {
+        if (this.laneOccupant(projectId, slot)) return { status: "occupied" };
+        if (this.claimsBySlotKey.has(slotKey)) return { status: "resuming" };
+        const claim = await this.takePendingHibernation(projectId, slot);
+        if (!claim) return { status: "none" };
+        return {
+          status: "claimed",
+          ...claim,
+          holds: () => this.holdsPendingHibernationClaim(projectId, slot, claim.claimId),
+          release: () => release(claim.claimId),
+        };
+      });
+      if (outcome.status !== "claimed") await release(null);
+      return outcome;
+    } catch (err) {
+      await release(null);
+      throw err;
+    }
+  }
+
+  /**
+   * Every stopped lane of `projectId` keeping a conversation (#16763), with
+   * what its pointer holds, in slot order. A lane an assistant runs in still
+   * has its pointer, so callers leave running lanes out themselves.
+   */
+  listKeptLanes(projectId: string): KeptLane[] {
+    const store = this.pendingHibernationStore;
+    if (!projectId || !store) return [];
+    return ASSISTANT_SLOTS.flatMap((slot) => {
+      const entry = store.get(assistantSlotKey(projectId, slot));
+      return entry
+        ? [
+            {
+              slot,
+              agentId: entry.agentId,
+              agentSessionId: entry.agentSessionId,
+              capturedAt: entry.capturedAt,
+            },
+          ]
+        : [];
+    });
+  }
+
+  /** Whether a lane keeps a conversation, or a view has claimed it to resume, so a start mustn't take it. */
+  private laneKeepsConversation(slotKey: string): boolean {
+    return this.pendingHibernationStore?.get(slotKey) != null || this.claimsBySlotKey.has(slotKey);
+  }
+
+  /** The unrevoked session in the lane, running or still provisioned. */
+  private laneOccupant(projectId: string, slot: number): HelpSessionRecord | undefined {
+    return [...this.sessionsByToken.values()].find(
+      (record) => !record.revoked && record.projectId === projectId && record.slot === slot
+    );
+  }
+
+  /** Whether `claimId` still holds the lane's pointer; a discard drops it. */
+  holdsPendingHibernationClaim(projectId: string, slot: number, claimId: string): boolean {
+    return this.claimsBySlotKey.get(assistantSlotKey(projectId, slot))?.claimId === claimId;
+  }
+
   private bumpLaneRevision(slotKey: string): void {
     this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
   }
@@ -1927,8 +2164,21 @@ export class HelpSessionService {
         this.emitSessionEnded(record, "discarded");
       }
     }
-    if (!this.pendingHibernationStore) return;
     const slotKey = assistantSlotKey(projectId, slot);
+    // A resume still on its way to its spawn (#16753, #16763) would bring the
+    // discarded conversation back: its revoked bearer is refused at the spawn instead.
+    if (this.resumingSlotKeys.has(slotKey)) {
+      const unspawned = [...this.sessionsById.values()].filter(
+        (record) =>
+          record.projectId === projectId &&
+          record.slot === slot &&
+          !record.revoked &&
+          record.resumingLane === true &&
+          !this.terminalBySessionId.has(record.sessionId)
+      );
+      await Promise.all(unspawned.map((record) => this.revokeSession(record.sessionId)));
+    }
+    if (!this.pendingHibernationStore) return;
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
     this.bumpLaneRevision(slotKey);
@@ -2244,9 +2494,14 @@ export class HelpSessionService {
     }
     const claimableBy = (record: HelpSessionRecord): boolean =>
       record.detachedAt !== undefined || record.projectViewWebContentsId === webContentsId;
-    return this.withLaneLock(assistantSlotKey(projectId, slot), async () => {
+    const slotKey = assistantSlotKey(projectId, slot);
+    return this.withLaneLock(slotKey, async () => {
       const record = this.findLaneBackend(projectId, slot);
-      if (!record) return { status: "absent" };
+      // Coming back on its own: a launch that only restores or starts itself
+      // stands down rather than start a fresh conversation over it.
+      if (!record) {
+        return this.resumingSlotKeys.has(slotKey) ? { status: "occupied" } : { status: "absent" };
+      }
       if (!claimableBy(record)) return { status: "occupied" };
       const terminalId = this.terminalBySessionId.get(record.sessionId)!;
 
@@ -2428,6 +2683,7 @@ export class HelpSessionService {
         if (this.isProjectHashDirName(entry)) {
           await this.sessionFiles.stripStaleDaintreeMcpEntry(entryPath);
           await this.sessionFiles.sweepStaleLaneConfigs(entryPath);
+          await this.sessionFiles.stripAntigravityDaintreeEntry(entryPath);
           return;
         }
         // Everything else goes: per-launch UUID directories from the oldest
@@ -2650,6 +2906,7 @@ export class HelpSessionService {
     bypassPermissions: boolean;
     loadGlobalHooksAndServers: boolean;
     daintreeConfirmations: HelpAssistantDaintreeConfirmations;
+    daintreeConfirmationsExcept: string[];
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -2682,6 +2939,9 @@ export class HelpSessionService {
       daintreeConfirmations: isHelpAssistantDaintreeConfirmations(stored.daintreeConfirmations)
         ? stored.daintreeConfirmations
         : "inherit",
+      daintreeConfirmationsExcept: sanitizeDelegatedConfirmations(
+        stored.daintreeConfirmationsExcept
+      ),
     };
   }
 
@@ -2728,12 +2988,12 @@ export class HelpSessionService {
    * The directory `agentId`'s assistant lanes of `projectPath` run in — the
    * same path `provisionSession` derives — so a reader can find the
    * transcripts that agent filed under it (#13206). Pure: never creates the
-   * directory.
+   * directory. An agent with a directory per lane answers for `slot`.
    */
-  getSessionPathForProject(projectPath: string, agentId: string): string {
+  getSessionPathForProject(projectPath: string, agentId: string, slot = 0): string {
     return path.join(
       this.getSessionsRoot(),
-      agentSessionDirName(projectPathHash(projectPath), agentId)
+      agentSessionDirName(projectPathHash(projectPath), agentId, slot)
     );
   }
 

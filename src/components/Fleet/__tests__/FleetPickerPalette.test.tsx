@@ -31,6 +31,22 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 
+// Live manage dialogs: mounted, it holds its panel-store subscriptions.
+const liveManageDialogs = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../SavedFleetsDialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../SavedFleetsDialog")>();
+  function SavedFleetsDialog(props: React.ComponentProps<typeof actual.SavedFleetsDialog>) {
+    React.useEffect(() => {
+      liveManageDialogs.count++;
+      return () => {
+        liveManageDialogs.count--;
+      };
+    }, []);
+    return <actual.SavedFleetsDialog {...props} />;
+  }
+  return { ...actual, SavedFleetsDialog };
+});
+
 import { FleetPickerPalette } from "../FleetPickerPalette";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -818,9 +834,11 @@ describe("FleetPickerPalette", () => {
       });
       const onClose = vi.fn();
       renderPalette([], true, onClose);
+      expect(liveManageDialogs.count).toBe(0);
       await act(async () => {
         fireEvent.click(screen.getByTestId("fleet-picker-saved-manage"));
       });
+      expect(liveManageDialogs.count).toBe(1);
       expect(onClose).toHaveBeenCalledTimes(1);
       // Otherwise the palette's exit-animation restore pulls focus back out of
       // the dialog that just opened.

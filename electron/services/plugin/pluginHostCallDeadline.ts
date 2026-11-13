@@ -44,6 +44,8 @@ const HOST_CALL_DEADLINES = {
   "agents.interrupt": INTERACTIVE,
   "agents.sendKeys": INTERACTIVE,
   "agents.submit": INTERACTIVE,
+  // May dial a host whose link went idle (8 s) and then read its projects (5 s).
+  "remoteHosts.list": INTERACTIVE,
   "terminals.readScreen": INTERACTIVE,
   // Without a target the host opens a picker and waits on the person; with one
   // it is a consent check followed by an immediate draft.
@@ -59,8 +61,13 @@ const HOST_CALL_DEADLINES = {
   // the dialog's own five minutes plus delivery, then the dispatch itself.
   dispatch: (params) => {
     const call = params as DispatchParams | undefined;
-    return call !== undefined && pluginPresetLaunchRequest(call.actionId, call.args) !== null
-      ? INTERACTIVE
+    if (call !== undefined && pluginPresetLaunchRequest(call.actionId, call.args) !== null) {
+      return INTERACTIVE;
+    }
+    // A Remote Host's project (#16767): dialling the host, then the call there.
+    const target = call?.options as { hostId?: unknown } | null | undefined;
+    return target !== null && typeof target === "object" && target.hostId !== undefined
+      ? SLOW
       : DEFAULT;
   },
   reloadPanel: DEFAULT,

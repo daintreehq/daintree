@@ -3,6 +3,7 @@ import {
   DAINTREE_RUNBOOKS_MCP_URL,
   RUNBOOKS_MCP_URL_ENV_VAR,
   buildConfirmationsAddendum,
+  buildDelegatedConfirmationsAddendum,
   buildRunbooksAddendum,
   buildRunbooksHeaders,
   resolveRunbooksMcpUrl,
@@ -98,6 +99,9 @@ describe("buildRunbooksAddendum", () => {
         expect(name).toMatch(/Owned$/);
       }
       expect(global).toContain("`actions.search` through `host.call`");
+      // #16765 — what a role other than its own asks of it.
+      expect(global).toContain("With `host.list` missing, call `mcp.surface`");
+      expect(global).toContain("tell the person the `role` you got and use none of its tools");
       expect(global).not.toContain("yours is");
       expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
     });
@@ -138,5 +142,16 @@ describe("buildConfirmationsAddendum (#12874)", () => {
     expect(note).toContain("closing panels in bulk");
     expect(note).toContain("close and remove only what the user asked for");
     expect(note).toContain("a tool outside your tool set");
+  });
+});
+
+describe("buildDelegatedConfirmationsAddendum (#16752)", () => {
+  it("names only the calls handed over, and says everything else still waits", () => {
+    const note = buildDelegatedConfirmationsAddendum(["worktree.deleteOwned"]);
+    expect(note).toContain("## Daintree Confirmations");
+    expect(note).toContain("`worktree.deleteOwned`");
+    expect(note).not.toContain("`worktree.retireOwned`");
+    expect(note).not.toContain("`host.settings`");
+    expect(note).toContain("Every other confirm-gated Daintree action still waits");
   });
 });

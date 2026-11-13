@@ -1,6 +1,7 @@
 import { terminalClient } from "@/clients";
 import { composerHoldClient } from "@/clients/composerHoldClient";
 import { getTerminalInputBlock } from "@/services/terminal/inputGate";
+import { claimComposerSendSeq, noteLastComposerSend } from "@/store/lastComposerSendStore";
 import { logWarn } from "@/utils/logger";
 import { isImageAttachmentPath, MAX_SUBMIT_IMAGE_PATHS } from "@shared/utils/imageAttachmentInput";
 import type { ComposerHoldResult, HeldComposerSend } from "@shared/types/ipc/composerHold";
@@ -52,6 +53,11 @@ export interface PaneComposerHold {
   onRefused: () => void;
 }
 
+/** The images of a send that go as attachments, as `submitWithImages` picks them. */
+export function attachableImagePaths(imagePaths: readonly string[] | undefined): string[] {
+  return (imagePaths ?? []).filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
+}
+
 /**
  * Asks main to hold the send. Null when input is blocked: it is never held,
  * and is refused the way it always was. A hold main couldn't take, or a
@@ -65,9 +71,7 @@ async function requestComposerHold(
 ): Promise<ComposerHoldResult | null> {
   if (getTerminalInputBlock()) return null;
   // As `submitWithImages` sends them: a path that can't be an attachment stays text.
-  const attachable = (imagePaths ?? [])
-    .filter(isImageAttachmentPath)
-    .slice(0, MAX_SUBMIT_IMAGE_PATHS);
+  const attachable = attachableImagePaths(imagePaths);
   try {
     return await composerHoldClient.hold(id, text, attachable.length > 0 ? attachable : undefined);
   } catch (err) {
@@ -81,7 +85,8 @@ async function requestComposerHold(
  * the text goes, not at the press: a `@diff` fetch awaited in between can
  * outlast a lock or a restart. Only a send the terminal took counts as the
  * user's input to it. A send held for the agent's next prompt counts as taken
- * by the composer, though nothing reached the terminal yet.
+ * by the composer, though nothing reached the terminal yet. Either way it is
+ * the pane's last message (#16746), as it went, to send again.
  */
 export async function submitPaneComposerText(
   id: string,
@@ -96,6 +101,7 @@ export async function submitPaneComposerText(
   submissionToken?: string
 ): Promise<boolean> {
   if (!pane.canTakeInput()) return false;
+  const seq = claimComposerSendSeq();
   const { hold } = pane;
   if (hold !== undefined) {
     if (hold.isHolding()) {
@@ -106,6 +112,7 @@ export async function submitPaneComposerText(
       const answer = await requestComposerHold(id, text, imagePaths);
       if (answer?.held === true) {
         hold.onHeld(answer.send);
+        noteLastComposerSend(id, answer.send.text, answer.send.imagePaths, seq);
         return true;
       }
       if (answer?.reason === "already-held") {
@@ -123,6 +130,9 @@ export async function submitPaneComposerText(
     imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined,
     submissionToken
   );
-  if (accepted) pane.onAccepted();
+  if (accepted) {
+    noteLastComposerSend(id, text, attachableImagePaths(imagePaths), seq);
+    pane.onAccepted();
+  }
   return accepted;
 }

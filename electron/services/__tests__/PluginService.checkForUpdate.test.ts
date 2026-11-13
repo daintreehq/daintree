@@ -9,11 +9,11 @@ import os from "os";
  * `PluginService.checkForUpdate` re-fetches the plugin's `originalUrl`, streams
  * the archive to a temp file (capped at `MAX_DNTR_BYTES`), hashes it, and
  * compares against the installed `archiveHash`. It returns a structured result
- * for every domain outcome and never throws. `net.fetch` is the only mocked
+ * for every domain outcome and never throws. The fetch is the only mocked
  * collaborator; the real pack/hash/manifest-read logic runs unmocked.
  *
- * Mocks mirror `PluginService.install.test.ts`, plus `net` on the electron mock
- * (the service lazy-imports it via `await import("electron")`).
+ * Mocks mirror `PluginService.install.test.ts`, plus the manual-redirect fetch
+ * the download goes through, routed to `netMock.fetch`.
  */
 
 const appMock = vi.hoisted(() => ({
@@ -40,8 +40,28 @@ const capConsentMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   app: appMock,
-  net: netMock,
+  // Electron's own net.fetch rejects every manual-mode redirect (#16855), so a
+  // download wired back to it fails here instead of reaching the scripted stub.
+  net: {
+    fetch: vi.fn(async () => {
+      throw new Error("Redirect was cancelled");
+    }),
+  },
   ipcMain: { on: vi.fn(), removeListener: vi.fn() },
+}));
+vi.mock("../../utils/netManualRedirectFetch.js", () => ({
+  createManualRedirectFetch: () => (url: string, init?: RequestInit) => netMock.fetch(url, init),
+}));
+// The catalog client is real, fed by a fake catalog fetch per test, so a check
+// reads the catalog the way it does in the app (#16781).
+const catalogRef = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("../plugin/PluginCatalogService.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin/PluginCatalogService.js")>();
+  return { ...actual, getPluginCatalogService: () => catalogRef.current };
+});
+// Catalog releases live on github.com; resolve it without the network.
+vi.mock("node:dns/promises", () => ({
+  default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
 }));
 vi.mock("../../window/windowRef.js", () => ({
   getWindowRegistry: vi.fn(() => null),
@@ -115,6 +135,7 @@ import { packPluginArchive } from "../PluginArchive.js";
 // extracted, not merely never swapped in.
 import * as PluginArchive from "../PluginArchive.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
+import { PluginCatalogService } from "../plugin/PluginCatalogService.js";
 
 const storeState = storeMock._state;
 
@@ -675,6 +696,298 @@ describe("checkForUpdate → install binding (#12612)", () => {
     expect(recordedHash(TARGET)).toBe(expected.archiveHash);
     expect(await readManifestVersion(VICTIM)).toBe("1.0.0");
 
+    service.dispose();
+  });
+});
+
+describe("checkForUpdate — catalog installs (#16781)", () => {
+  const ID = "acme.session";
+  const REPO = "https://github.com/acme/plugin-session";
+  const OTHER_REPO = "https://github.com/someone-else/plugin-session";
+
+  function releaseUrl(version: string, repo = REPO): string {
+    return `${repo}/releases/download/v${version}/${ID}-${version}.dntr`;
+  }
+
+  function entry(version: string, sha256: string, repo = REPO) {
+    return { id: ID, repo, version, url: releaseUrl(version, repo), sha256, capabilities: [] };
+  }
+
+  function sha(bytes: Buffer): string {
+    return createHash("sha256").update(bytes).digest("hex");
+  }
+
+  /**
+   * The catalog answers each fetch with the next document, or fails: offline,
+   * not published (404), or with a body that isn't a catalog.
+   */
+  function catalogServes(
+    ...documents: Array<{ entries: unknown[] } | "offline" | "not-found" | "invalid">
+  ) {
+    const queue = [...documents];
+    const fetchImpl = vi.fn(async () => {
+      const next = queue.shift();
+      if (next === undefined) throw new Error("unexpected catalog fetch");
+      if (next === "offline") throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+      if (next === "not-found") return new Response("Not Found", { status: 404 });
+      return new Response(next === "invalid" ? "{ not json" : JSON.stringify(next), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    catalogRef.current = new PluginCatalogService({ cachePath: null, fetchImpl });
+    return fetchImpl;
+  }
+
+  async function installFromCatalog(
+    service: PluginService,
+    version = "0.1.0",
+    catalog: unknown = { id: ID, version, repo: REPO }
+  ): Promise<string> {
+    const archive = await makeArchive({ name: ID, version });
+    const res = await service.installPlugin(archive, {
+      source: "catalog",
+      originalUrl: releaseUrl(version),
+      catalog: catalog as { id: string; version: string; repo: string },
+    });
+    expect(res.status).toBe("installed");
+    return sha(await fs.readFile(archive));
+  }
+
+  function installedRecord(pluginId: string): Record<string, unknown> | undefined {
+    return (storeState.get("plugins") as { installed: Record<string, Record<string, unknown>> })
+      .installed[pluginId];
+  }
+
+  it("offers 0.1.1 to an install of 0.1.0, downloading only the entry's URL", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const next = await readArchiveBytes({
+      name: ID,
+      version: "0.1.1",
+      displayName: "Session",
+      capabilities: ["mcp:expose"],
+    });
+    catalogServes({ entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))] });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+    const recordBefore = structuredClone(installedRecord(ID));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result).toEqual({
+      status: "available",
+      name: ID,
+      version: "0.1.1",
+      displayName: "Session",
+      capabilities: ["mcp:expose"],
+      permissionBypassAgents: [],
+      archiveHash: sha(next),
+      catalog: { id: ID, version: "0.1.1", repo: REPO },
+    });
+    expect(netMock.fetch).toHaveBeenCalledTimes(1);
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1"));
+    // A check installs nothing.
+    expect(installedRecord(ID)).toEqual(recordBefore);
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("names the repository an update moved away from as a different source", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const next = await readArchiveBytes({ name: ID, version: "0.1.1" });
+    catalogServes({
+      entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next), OTHER_REPO)],
+    });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result).toMatchObject({
+      status: "available",
+      version: "0.1.1",
+      catalog: { id: ID, version: "0.1.1", repo: OTHER_REPO },
+      previousRepo: REPO,
+    });
+    expect(netMock.fetch.mock.calls[0]?.[0]).toBe(releaseUrl("0.1.1", OTHER_REPO));
+    service.dispose();
+  });
+
+  it("says up to date while the installed release is the newest listed, downloading nothing", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    catalogServes({ entries: [entry("0.1.0", installedHash)] });
+
+    expect(await service.checkForUpdate(ID)).toEqual({ status: "up-to-date" });
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("reports a delisted plugin as delisted and leaves the installed copy alone", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installFromCatalog(service);
+    catalogServes({ entries: [] });
+    const recordBefore = structuredClone(installedRecord(ID));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result).toEqual({ status: "delisted", scope: "plugin", version: "0.1.0" });
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    expect(installedRecord(ID)).toEqual(recordBefore);
+    expect(service.listPlugins().map((p) => p.manifest.name)).toContain(ID);
+    service.dispose();
+  });
+
+  it("reports a delisted release when nothing newer replaced it", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installFromCatalog(service, "0.1.1");
+    catalogServes({ entries: [entry("0.1.0", "a".repeat(64))] });
+
+    expect(await service.checkForUpdate(ID)).toEqual({
+      status: "delisted",
+      scope: "release",
+      version: "0.1.1",
+    });
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it.each([
+    ["offline", "unreachable"],
+    ["not-found", "not-published"],
+    ["invalid", "invalid"],
+  ] as const)(
+    "reports an unavailable catalog (%s) as such and offers nothing",
+    async (served, failure) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await installFromCatalog(service);
+      catalogServes(served);
+
+      expect(await service.checkForUpdate(ID)).toEqual({
+        status: "catalog-unavailable",
+        catalog: "unavailable",
+        failure,
+      });
+      expect(netMock.fetch).not.toHaveBeenCalled();
+      service.dispose();
+    }
+  );
+
+  it.each([
+    ["offline", "unreachable"],
+    ["not-found", "not-published"],
+  ] as const)(
+    "reports a stale catalog (%s) when only an older copy is left, offering nothing from it",
+    async (served, failure) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      const installedHash = await installFromCatalog(service);
+      const next = await readArchiveBytes({ name: ID, version: "0.1.1" });
+      const listing = { entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(next))] };
+      catalogServes(listing, served);
+      netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+      expect(await service.checkForUpdate(ID)).toMatchObject({ status: "available" });
+
+      // The cached copy still lists 0.1.1, but an update never reads a cache.
+      expect(await service.checkForUpdate(ID)).toEqual({
+        status: "catalog-unavailable",
+        catalog: "stale",
+        failure,
+      });
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+      service.dispose();
+    }
+  );
+
+  it("refuses bytes that aren't the entry's digest, before reading their manifest", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const next = await readArchiveBytes({ name: ID, version: "0.1.1" });
+    catalogServes({ entries: [entry("0.1.0", installedHash), entry("0.1.1", "f".repeat(64))] });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(next)]));
+    const readSpy = vi.spyOn(PluginArchive, "readArchiveManifest");
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("isn't the one the plugin catalog reviewed");
+    }
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(await leftoverTempDirs()).toHaveLength(0);
+    readSpy.mockRestore();
+    service.dispose();
+  });
+
+  it("refuses an archive for another plugin, even at the entry's version and digest", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const stranger = await readArchiveBytes({ name: "acme.stranger", version: "0.1.1" });
+    catalogServes({ entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(stranger))] });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(stranger)]));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("isn't the release it names");
+    }
+    service.dispose();
+  });
+
+  it("refuses an archive that names another version than its entry", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service);
+    const wrong = await readArchiveBytes({ name: ID, version: "0.1.2" });
+    catalogServes({ entries: [entry("0.1.0", installedHash), entry("0.1.1", sha(wrong))] });
+    netMock.fetch.mockResolvedValueOnce(fakeResponse([new Uint8Array(wrong)]));
+
+    const result = await service.checkForUpdate(ID);
+
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("isn't the release it names");
+    }
+    service.dispose();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["for another plugin", { id: "acme.other", version: "0.1.0", repo: REPO }],
+    ["with a malformed version", { id: ID, version: "latest", repo: REPO }],
+    // Canonical in spelling, but beyond what semver can compare.
+    ["with an uncomparable version", { id: ID, version: "9007199254740992.0.0", repo: REPO }],
+  ])(
+    "fails closed on provenance %s, never falling back to the install URL",
+    async (_label, catalog) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await installFromCatalog(service, "0.1.0", catalog);
+      const plugins = storeState.get("plugins") as {
+        installed: Record<string, Record<string, unknown>>;
+      };
+      // An install without provenance records `null`; simulate a record that
+      // carries the given shape instead.
+      plugins.installed[ID].catalog = catalog ?? null;
+      const catalogFetch = catalogServes({ entries: [] });
+
+      const result = await service.checkForUpdate(ID);
+
+      expect(result.status).toBe("fetch-failed");
+      expect(catalogFetch).not.toHaveBeenCalled();
+      expect(netMock.fetch).not.toHaveBeenCalled();
+      service.dispose();
+    }
+  );
+
+  it("keeps checking a URL install against its URL, never the catalog", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const manifest = { name: "acme.byurl", version: "1.0.0" };
+    await installUrlPlugin(service, manifest);
+    const catalogFetch = catalogServes({ entries: [] });
+    netMock.fetch.mockResolvedValueOnce(
+      fakeResponse([new Uint8Array(await readArchiveBytes(manifest))])
+    );
+
+    expect(await service.checkForUpdate("acme.byurl")).toEqual({ status: "up-to-date" });
+    expect(catalogFetch).not.toHaveBeenCalled();
     service.dispose();
   });
 });

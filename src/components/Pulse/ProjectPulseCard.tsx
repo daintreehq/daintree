@@ -85,7 +85,7 @@ function PulseSkeleton({ className }: { className?: string }) {
             <div
               key={index}
               data-skeleton-bone=""
-              className="rounded-[2px] pulse-skeleton-shimmer shrink-0"
+              className="rounded-2xs pulse-skeleton-shimmer shrink-0"
               style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
             />
           ))}
@@ -177,7 +177,7 @@ function PulseHeatmapLegend({ descriptionId }: { descriptionId: string }) {
         {LEGEND_LEVELS.map((level) => (
           <span
             key={level}
-            className="pulse-heat-cell relative overflow-hidden rounded-[2px] shrink-0"
+            className="pulse-heat-cell relative overflow-hidden rounded-2xs shrink-0"
             data-heat-level={level > 0 ? level : undefined}
             style={{
               width: 10,

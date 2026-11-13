@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
-import { REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
+import { REPO_OPEN_COUNTS_QUERY, REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { rateLimitMessage } from "./GitHubErrors.js";
 import { parseGitHubError } from "./GitHubErrors.js";
@@ -23,6 +23,14 @@ import {
   invalidateRepoListCachesForCountChange,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import {
+  heldCountsDisagree,
+  holdObservedCount,
+  holdRestCounts,
+  issueReadStamp,
+  restDisagreements,
+  withHeldCounts,
+} from "./GitHubCountLedger.js";
 import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
 import type { RepoContext, RepoStats, RestCountsSnapshot } from "./types.js";
 import type {
@@ -59,6 +67,12 @@ export interface RepoStatsAndPageResult {
   nextPollIntervalMs?: number;
   error?: string;
 }
+
+/**
+ * A REST count reading, with when its requests were issued: every caller that
+ * joins the same in-flight read gets that time, not its own.
+ */
+export type RestCountsReading = RepoStats & { readAt: number };
 
 /** Default `X-Poll-Interval` floor (ms) when the events feed hasn't advertised one. */
 const DEFAULT_EVENTS_POLL_INTERVAL_MS = 60_000;
@@ -237,7 +251,7 @@ export async function fetchRestCounts(
   token: string,
   owner: string,
   repo: string
-): Promise<RepoStats | null> {
+): Promise<RestCountsReading | null> {
   // Per-repo singleflight: concurrent polls (multi-window — each
   // `WebContentsView` runs its own poll loop) must not interleave. Two
   // overlapping fetches read the same `prior` baseline, so the slower one can
@@ -256,16 +270,17 @@ export async function fetchRestCounts(
   return promise;
 }
 
-const restCountsInflight = new Map<string, Promise<RepoStats | null>>();
+const restCountsInflight = new Map<string, Promise<RestCountsReading | null>>();
 
 async function fetchRestCountsImpl(
   token: string,
   owner: string,
   repo: string,
   cacheKey: string
-): Promise<RepoStats | null> {
+): Promise<RestCountsReading | null> {
   const block = gitHubRateLimitService.shouldBlockRequest("core");
   if (block.blocked) return null;
+  const readAt = issueReadStamp();
 
   const prior = restCountsCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
@@ -377,10 +392,73 @@ async function fetchRestCountsImpl(
       lastUpdated,
       issueCountRefreshedAt: lastUpdated,
       prCountRefreshedAt: lastUpdated,
+      readAt,
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Both open totals straight from GraphQL, or null when GraphQL is blocked or
+ * the read fails. One point: no nodes, just the two counts.
+ */
+async function fetchOpenCounts(
+  context: RepoContext
+): Promise<{ issueCount: number; prCount: number; readAt: number } | null> {
+  const client = GitHubAuth.createClient();
+  if (!client || gitHubRateLimitService.shouldBlockRequest("graphql").blocked) return null;
+  const readAt = issueReadStamp();
+  try {
+    const result = (await client(REPO_OPEN_COUNTS_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+    gitHubRateLimitService.updateFromGraphQL(result, "REPO_OPEN_COUNTS_QUERY");
+    const issueCount: unknown = result?.repository?.issues?.totalCount;
+    const prCount: unknown = result?.repository?.pullRequests?.totalCount;
+    if (!isOpenCount(issueCount) || !isOpenCount(prCount)) return null;
+    return { issueCount, prCount, readAt };
+  } catch {
+    return null;
+  }
+}
+
+function isOpenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Hold what a REST reading can say on its own, and ask GraphQL about any count
+ * it disagrees with (#16866). Both REST endpoints can trail a close, and the
+ * issue count is the difference of the two, so a pull request closing can read
+ * as an issue opening: a REST reading never moves a held count by itself.
+ * `unsettled` when GraphQL couldn't answer (the held counts stand meanwhile);
+ * `superseded` when a cache clear landed mid-read, so nothing it saw is kept.
+ */
+async function settleRestCounts(
+  context: RepoContext,
+  cacheKey: string,
+  reading: RestCountsReading,
+  versionAtStart: number
+): Promise<"settled" | "unsettled" | "superseded"> {
+  let settled = true;
+  if (restDisagreements(cacheKey, reading).length > 0) {
+    const confirmed = await fetchOpenCounts(context);
+    // A clear (token change, manual refresh) during the confirm dropped the
+    // held counts this read was settling against; nothing it saw may refill them.
+    if (getETagCacheVersion() !== versionAtStart) return "superseded";
+    if (confirmed) {
+      holdObservedCount(cacheKey, "issue", confirmed.issueCount, confirmed.readAt);
+      holdObservedCount(cacheKey, "pr", confirmed.prCount, confirmed.readAt);
+    } else {
+      settled = false;
+    }
+  }
+  if (getETagCacheVersion() !== versionAtStart) return "superseded";
+  holdRestCounts(cacheKey, reading, reading.readAt, reading.lastUpdated ?? Date.now());
+  return settled ? "settled" : "unsettled";
 }
 
 export interface RepoStatsForContextOptions {
@@ -450,25 +528,34 @@ export async function getRepoStatsAndPageForContext(
     };
   }
 
+  // The counts don't wait on the first pages: a list query writes its total
+  // here without filling the legacy page caches, and the dropdown's follow-up
+  // refresh must read that total back rather than re-polling a count endpoint
+  // that may still trail the change the list just saw (#16866).
   if (!bypassCache) {
     const cachedStats = repoStatsCache.get(cacheKey);
-    const cachedIssues = issueListCache.get(issuesListCacheKey);
-    const cachedPRs = prListCache.get(prsListCacheKey);
-    if (cachedStats && cachedIssues && cachedPRs) {
+    if (cachedStats) {
+      const cachedIssues = issueListCache.get(issuesListCacheKey);
+      const cachedPRs = prListCache.get(prsListCacheKey);
+      const withPages = cachedIssues !== undefined && cachedPRs !== undefined;
       return {
         stats: cachedStats,
-        issues: {
-          items: cachedIssues.items,
-          endCursor: cachedIssues.pageInfo.endCursor,
-          hasNextPage: cachedIssues.pageInfo.hasNextPage,
-          totalCount: cachedStats.issueCount,
-        },
-        prs: {
-          items: cachedPRs.items,
-          endCursor: cachedPRs.pageInfo.endCursor,
-          hasNextPage: cachedPRs.pageInfo.hasNextPage,
-          totalCount: cachedStats.prCount,
-        },
+        issues: withPages
+          ? {
+              items: cachedIssues.items,
+              endCursor: cachedIssues.pageInfo.endCursor,
+              hasNextPage: cachedIssues.pageInfo.hasNextPage,
+              totalCount: cachedStats.issueCount,
+            }
+          : null,
+        prs: withPages
+          ? {
+              items: cachedPRs.items,
+              endCursor: cachedPRs.pageInfo.endCursor,
+              hasNextPage: cachedPRs.pageInfo.hasNextPage,
+              totalCount: cachedStats.prCount,
+            }
+          : null,
         source: "memory-cache",
         nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
       };
@@ -517,8 +604,14 @@ export async function getRepoStatsAndPageForContext(
       // snapshot mid-probe. Serving a pre-await capture would resurrect the
       // just-invalidated counts or re-warm the list caches from pages the bust
       // already removed.
-      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      let snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
       const restCounts = restCountsCache.get(cacheKey);
+      // A held count read after this snapshot disproves its first pages along
+      // with its counts, so it can't stand in for an unchanged repository.
+      if (snapshot && heldCountsDisagree(cacheKey, snapshot.stats)) {
+        repoStatsAndPageSnapshotCache.invalidate(cacheKey);
+        snapshot = undefined;
+      }
 
       if (probe.status === "changed") {
         pendingEventsEtag = probe.etag;
@@ -538,7 +631,7 @@ export async function getRepoStatsAndPageForContext(
         // a stale cached count outrank a fresher dropdown-observed total in
         // the renderer's recency arbitration (and permanently suppress the
         // dropdown-open force refresh).
-        const freshStats: RepoStats = restCountsFresher
+        const replayed: RepoStats = restCountsFresher
           ? {
               issueCount: restCounts.combinedCount - restCounts.prCount,
               prCount: restCounts.prCount,
@@ -553,6 +646,8 @@ export async function getRepoStatsAndPageForContext(
                 snapshot.stats.issueCountRefreshedAt ?? snapshot.stats.lastUpdated,
               prCountRefreshedAt: snapshot.stats.prCountRefreshedAt ?? snapshot.stats.lastUpdated,
             };
+        // A held count outranks the REST pair it was read after (#16866).
+        const freshStats = withHeldCounts(cacheKey, replayed);
         repoStatsCache.set(cacheKey, freshStats);
         issueListCache.set(issuesListCacheKey, {
           items: snapshot.issues.items,
@@ -597,13 +692,13 @@ export async function getRepoStatsAndPageForContext(
       // idle repo costs one conditional `/events` GET per cadence window, not
       // a probe plus two count requests.
       if (probe.status === "unchanged" && !snapshot && restCounts) {
-        const freshStats: RepoStats = {
+        const freshStats = withHeldCounts(cacheKey, {
           issueCount: restCounts.combinedCount - restCounts.prCount,
           prCount: restCounts.prCount,
           lastUpdated: Date.now(),
           issueCountRefreshedAt: restCounts.lastUpdated,
           prCountRefreshedAt: restCounts.lastUpdated,
-        };
+        });
         repoStatsCache.set(cacheKey, freshStats);
         persistentCache.set(cacheKey, freshStats, projectPath);
         return {
@@ -628,15 +723,22 @@ export async function getRepoStatsAndPageForContext(
   // transient REST error.
   if (!bypassCache) {
     const token = GitHubAuth.getToken();
-    const restStats = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
-    if (restStats) {
+    const versionAtStart = getETagCacheVersion();
+    const restReading = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
+    const settleOutcome = restReading
+      ? await settleRestCounts(context, cacheKey, restReading, versionAtStart)
+      : "superseded";
+    if (restReading && settleOutcome !== "superseded") {
+      const { readAt: _readAt, ...reading } = restReading;
+      const restStats = withHeldCounts(cacheKey, reading);
       repoStatsCache.set(cacheKey, restStats);
       persistentCache.set(cacheKey, restStats, projectPath);
       // Commit the changed-probe's events ETag in lockstep with the counts it
       // describes — same deferred-commit discipline as the GraphQL path: a
       // failed count fetch leaves the old ETag so the next probe re-detects
-      // the change instead of masking it behind a 304.
-      if (pendingEventsEtag !== undefined) {
+      // the change instead of masking it behind a 304. A disagreement GraphQL
+      // couldn't settle counts as a failed fetch here.
+      if (settleOutcome === "settled" && pendingEventsEtag !== undefined) {
         if (pendingEventsEtag) {
           repoEventsETagCache.set(cacheKey, pendingEventsEtag);
         } else {
@@ -702,6 +804,7 @@ export async function getRepoStatsAndPageForContext(
   // refetches); the response is still returned and broadcast for display.
   const issueEpochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
   const prEpochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+  const readAt = issueReadStamp();
 
   try {
     const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
@@ -757,8 +860,14 @@ export async function getRepoStatsAndPageForContext(
       prCountRefreshedAt: fetchedAt,
     };
 
-    repoStatsCache.set(cacheKey, stats);
-    persistentCache.set(cacheKey, stats, projectPath);
+    // A list issued after this query that already landed holds the later
+    // count; the reported stats follow it. The snapshot below keeps this
+    // query's own counts beside its own pages, and the next replay drops it.
+    holdObservedCount(cacheKey, "issue", issueCount, readAt, fetchedAt);
+    holdObservedCount(cacheKey, "pr", prCount, readAt, fetchedAt);
+    const reportedStats = withHeldCounts(cacheKey, stats);
+    repoStatsCache.set(cacheKey, reportedStats);
+    persistentCache.set(cacheKey, reportedStats, projectPath);
 
     const parsedIssues = (issuesData?.nodes ?? []).filter(Boolean).map(parseIssueNode);
     const parsedPRs = (prsData?.nodes ?? []).filter(Boolean).map(parsePRNode);
@@ -823,7 +932,7 @@ export async function getRepoStatsAndPageForContext(
     }
 
     return {
-      stats,
+      stats: reportedStats,
       issues: issuesPage,
       prs: prsPage,
       source: "network",

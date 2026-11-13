@@ -37,7 +37,7 @@ beforeEach(() => {
       plugin: {
         getActions: getActionsMock,
         onActionsChanged: onActionsChangedMock,
-        invoke: invokeMock,
+        invokeAction: invokeMock,
       },
     },
   });
@@ -64,10 +64,18 @@ describe("usePluginActions", () => {
     expect(entry?.pluginId).toBe("acme.my-plugin");
     expect(entry?.title).toBe("Do Thing");
 
-    // dispatching routes through window.electron.plugin.invoke(pluginId, id, args)
+    // dispatching routes through window.electron.plugin.invokeAction(pluginId,
+    // id, args, context), the context beside the args rather than in them
     invokeMock.mockResolvedValue({ ok: true });
     await actionService.dispatch(action.id, { x: 1 });
-    expect(invokeMock).toHaveBeenCalledWith("acme.my-plugin", action.id, { x: 1 });
+    expect(invokeMock).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      action.id,
+      { x: 1 },
+      {
+        dispatchSource: "user",
+      }
+    );
   });
 
   it("publishes what it registered for the panel menus, and withdraws it on unmount", async () => {
@@ -348,7 +356,16 @@ describe("usePluginActions", () => {
     await waitFor(() => expect(usePluginConfirmStore.getState().current).not.toBeNull());
     act(() => usePluginConfirmStore.getState().resolveCurrent("approved"));
     await approved;
-    expect(invokeMock).toHaveBeenCalledWith("acme.my-plugin", action.id, { x: 2 });
+    // The person answered this dialog for this dispatch (#16751).
+    expect(invokeMock).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      action.id,
+      { x: 2 },
+      {
+        dispatchSource: "user",
+        approval: "person",
+      }
+    );
   });
 
   it("skips the confirm dialog for agent-sourced dispatch (MCP bridge already confirmed)", async () => {
@@ -365,7 +382,78 @@ describe("usePluginActions", () => {
 
     await actionService.dispatch(action.id, { y: 1 }, { source: "agent", confirmed: true });
     expect(usePluginConfirmStore.getState().current).toBeNull();
-    expect(invokeMock).toHaveBeenCalledWith("acme.my-plugin", action.id, { y: 1 });
+    // Confirmed by the host (a grant, or Never ask) with no dialog anyone
+    // answered: no approval, and no origin main didn't name (#16751).
+    expect(invokeMock).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      action.id,
+      { y: 1 },
+      {
+        dispatchSource: "agent",
+      }
+    );
+  });
+
+  it("passes the Assistant origin and a person's MCP approval to the handler (#16751)", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+    const { usePluginConfirmStore } = await import("@/store/pluginConfirmStore");
+
+    const action = descriptor({ danger: "confirm", effectiveDanger: "confirm" });
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockResolvedValue({ ok: true });
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    await actionService.dispatch(
+      action.id,
+      { y: 2 },
+      {
+        source: "agent",
+        confirmed: true,
+        hostCallerOrigin: "assistant",
+        hostPersonApproved: true,
+      }
+    );
+    expect(usePluginConfirmStore.getState().current).toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith(
+      "acme.my-plugin",
+      action.id,
+      { y: 2 },
+      {
+        dispatchSource: "agent",
+        origin: "assistant",
+        approval: "person",
+      }
+    );
+  });
+
+  it("never reports a person's approval or an Assistant origin it wasn't given (#16751)", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+
+    const action = descriptor();
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockResolvedValue({ ok: true });
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+
+    // A safe action asks no one, whatever the source or the context claims.
+    await actionService.dispatch(
+      action.id,
+      {},
+      {
+        source: "keybinding",
+        contextOverride: { hostPersonApproved: true, hostCallerOrigin: "assistant" },
+      }
+    );
+    await actionService.dispatch(action.id, {}, { source: "plugin" });
+    expect(invokeMock.mock.calls.map((call) => call[3])).toEqual([
+      { dispatchSource: "keybinding" },
+      { dispatchSource: "plugin" },
+    ]);
   });
 
   it("returns CONFIRMATION_REQUIRED and never invokes for agent dispatch without confirmed:true", async () => {

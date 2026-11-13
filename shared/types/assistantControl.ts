@@ -20,6 +20,11 @@ import {
 export const ASSISTANT_LIST_TOOL = "assistant.list";
 export const ASSISTANT_START_TOOL = "assistant.start";
 /**
+ * Reopens the conversation a stopped assistant lane keeps (#16763), in its own
+ * slot, on its own agent and in its own folder, or refuses: never a fresh one.
+ */
+export const ASSISTANT_RESUME_TOOL = "assistant.resume";
+/**
  * This machine's agent quota as an ordinary tool, so `host.call` reads a
  * host's: the Codex account's own reading and the Claude Code usage messages
  * its panes showed (#15727).
@@ -30,6 +35,7 @@ export const AGENT_READ_QUOTA_TOOL = "agent.readQuota";
 export const ASSISTANT_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   ASSISTANT_LIST_TOOL,
   ASSISTANT_START_TOOL,
+  ASSISTANT_RESUME_TOOL,
   AGENT_READ_QUOTA_TOOL,
 ]);
 
@@ -73,10 +79,24 @@ export const GlobalAssistantEntrySchema = z.object({
 });
 export type GlobalAssistantEntry = z.infer<typeof GlobalAssistantEntrySchema>;
 
+/**
+ * A stopped lane whose conversation the project keeps for the person (#16763):
+ * what `assistant.resume` reopens, and a slot no start takes.
+ */
+export const KeptAssistantSlotSchema = z.object({
+  slot: z.number(),
+  agentId: z.string(),
+  capturedAt: z.number().describe("When its conversation was last recorded, epoch ms."),
+});
+export type KeptAssistantSlot = z.infer<typeof KeptAssistantSlotSchema>;
+
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
   assistants: z.array(AssistantEntrySchema),
   vacantSlots: z.array(z.number()).describe("Slots a start may use."),
+  keptSlots: z
+    .array(KeptAssistantSlotSchema)
+    .describe("Stopped slots keeping a conversation: resume one, never start there."),
   global: GlobalAssistantEntrySchema.nullable().describe(
     "This machine's global Assistant: send and status only. Null if none runs."
   ),
@@ -84,15 +104,22 @@ export const AssistantListResultSchema = z.object({
 export type AssistantListResult = z.infer<typeof AssistantListResultSchema>;
 
 export const AssistantStartArgsSchema = z.object({
-  slot: slotSchema.optional().describe("A vacant slot. Omit for the lowest vacant one."),
+  slot: slotSchema
+    .optional()
+    .describe("A vacant slot, not a kept one. Omit for the lowest vacant one."),
   agentId: z
     .string()
     .min(1)
     .max(64)
     .optional()
-    .describe("claude, codex or copilot. Omit for this machine's default."),
+    .describe("claude, codex, copilot or antigravity. Omit for this machine's default."),
 });
 export type AssistantStartArgs = z.infer<typeof AssistantStartArgsSchema>;
+
+export const AssistantResumeArgsSchema = z.object({
+  slot: slotSchema.describe("A slot the assistant listing names as kept."),
+});
+export type AssistantResumeArgs = z.infer<typeof AssistantResumeArgsSchema>;
 
 export const ASSISTANT_NOT_READY_REASONS = ["timed-out", "agent-error"] as const;
 
@@ -160,8 +187,10 @@ export const ASSISTANT_TARGET_REFUSALS = {
   busy: "ASSISTANT_BUSY",
   /** Only an assistant this caller started may be closed by it. */
   notStarter: "ASSISTANT_NOT_STARTED_BY_YOU",
-  /** Starting one was refused: no project, no vacant slot, or it could not launch. */
+  /** Starting one was refused: no project, no vacant slot, a kept slot, or it could not launch. */
   startRefused: "ASSISTANT_START_REFUSED",
+  /** Reopening a kept conversation was refused (#16763): nothing started, fresh or otherwise. */
+  resumeRefused: "ASSISTANT_RESUME_REFUSED",
   /** The global Assistant takes a project assistant's send or status read, nothing else (#16410). */
   globalSendOnly: "ASSISTANT_GLOBAL_SEND_ONLY",
 } as const;

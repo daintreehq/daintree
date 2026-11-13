@@ -96,7 +96,6 @@ export function buildPanelProps({
     }),
     agentPresetId: pty?.agentPresetId,
     presetColor: pty?.agentPresetColor,
-    agentLaunchFlags: pty?.agentLaunchFlags,
     cwd: pty?.cwd ?? devPreview?.cwd,
     agentState: pty?.agentState,
     activity: getStableActivity(

@@ -547,6 +547,43 @@ describe("Review Hub review marks (#14585)", () => {
     await waitFor(() => expect(screen.queryByTestId("review-hub-review-mark")).toBeNull());
   });
 
+  // Both confirms act on the shown mark, so carried across a move they would
+  // clear or replace the next worktree's mark under the previous one's (#16793).
+  it.each([
+    ["clear", () => screen.findByTestId("review-hub-review-mark-clear")],
+    ["update", markButtonReady],
+  ] as const)(
+    "drops a %s confirm opened for the previous worktree when the hub moves",
+    async (_kind, findTrigger) => {
+      const other = "/home/user/other-wt";
+      worktreeStoreData.current.set(other, {
+        id: other,
+        path: other,
+        name: "other",
+        branch: "feature/other",
+        isCurrent: false,
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+      });
+      useReviewMarksStore.setState({
+        marks: { [WT]: summary(2), [other]: summary(4) },
+        revision: 4,
+        loaded: true,
+      });
+      const view = renderHub();
+      fireEvent.click(await findTrigger());
+      await screen.findByTestId("confirm-dialog-confirm");
+
+      view.rerender(
+        <ReviewHubContent isOpen={true} worktreePath={other} panelId="review-1" onClose={vi.fn()} />
+      );
+      await markButtonReady();
+      expect(screen.queryByTestId("confirm-dialog-confirm")).toBeNull();
+      expect(bridge.clear).not.toHaveBeenCalled();
+      expect(bridge.markCaptured).not.toHaveBeenCalled();
+    }
+  );
+
   it("reads status twice on open: once straight away, once after the capture", async () => {
     renderHub();
     await markButtonReady();
@@ -761,6 +798,69 @@ describe("Review Hub review marks (#14585)", () => {
       ).toEqual(["since-review:src/own.ts", "since-review:src/base.ts"]);
       open.mockRestore();
       push.mockRestore();
+    });
+
+    // The selection is the hub's record of the open diff; a move resets it, and
+    // dropping it closes the diff the previous worktree opened (#16793).
+    it("closes a since-review diff opened for the previous worktree when the hub moves", async () => {
+      const other = "/home/user/other-wt";
+      worktreeStoreData.current.set(other, {
+        id: other,
+        path: other,
+        name: "other",
+        branch: "feature/other",
+        isCurrent: false,
+        worktreeChanges: null,
+        lastActivityTimestamp: null,
+      });
+      useReviewMarksStore.setState({
+        marks: { [WT]: summary(2), [other]: summary(4) },
+        revision: 4,
+        loaded: true,
+      });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable(["src/own.ts"]),
+      });
+      const initial = usePanelDialogStore.getState();
+      const openDiff = vi.fn(async () => {
+        usePanelDialogStore.setState({ dialogStack: ["diff-panel"] });
+        return "diff-panel";
+      });
+      const closeById = vi.fn((id: string) => {
+        if (usePanelDialogStore.getState().dialogStack.includes(id)) {
+          usePanelDialogStore.setState({ dialogStack: [] });
+        }
+      });
+      usePanelDialogStore.setState({
+        openPanelDialog: openDiff,
+        pushPanelDialog: openDiff,
+        closePanelDialogById: closeById,
+      });
+      try {
+        const view = renderHub();
+        fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+        fireEvent.click((await screen.findAllByTestId("since-review-file-row"))[0]!);
+        await waitFor(() =>
+          expect(usePanelDialogStore.getState().dialogStack).toEqual(["diff-panel"])
+        );
+
+        view.rerender(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={other}
+            panelId="review-1"
+            onClose={vi.fn()}
+          />
+        );
+        await waitFor(() => expect(closeById).toHaveBeenCalledWith("diff-panel"));
+        expect(openDiff).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => {
+          usePanelDialogStore.setState(initial, true);
+        });
+      }
     });
 
     it("says nothing changed only for a complete comparison", async () => {

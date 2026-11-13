@@ -131,6 +131,11 @@ export const CAPABILITY_META = {
     description: "Send actions to a project you're not looking at, once you turn it on",
     severity: "warning",
   },
+  "host:dispatch": {
+    label: "Run actions on your Remote Hosts",
+    description: "Send actions to projects on the hosts this computer drives, once you turn it on",
+    severity: "warning",
+  },
   "panel:focus-read": {
     label: "See which panel you're using",
     description:
@@ -215,7 +220,7 @@ export function CapabilityRow({
         <AlertTriangle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${SEVERITY_TEXT_CLASS.warning}`} />
       ) : (
         <span
-          className="w-1.5 h-1.5 rounded-full bg-daintree-text/30 shrink-0 mt-[7px]"
+          className="w-1.5 h-1.5 rounded-full bg-text-primary/30 shrink-0 mt-[7px]"
           aria-hidden
         />
       )}

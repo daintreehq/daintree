@@ -5,6 +5,8 @@ const electron = vi.hoisted(() => ({
 }));
 vi.mock("electron", () => electron);
 
+import { EventEmitter } from "node:events";
+import { markEnteringFullScreen } from "../fullScreenEntry.js";
 import { showWindowInactive } from "../showWindowInactive.js";
 
 const originalPlatform = process.platform;
@@ -27,13 +29,15 @@ function windowMock(
   name: string,
   children: Array<{ webContents?: unknown }> = []
 ) {
-  return {
+  return Object.assign(new EventEmitter(), {
     showInactive: vi.fn(() => order.push(`${name}.showInactive`)),
     focus: vi.fn(() => order.push(`${name}.focus`)),
     moveTop: vi.fn(() => order.push(`${name}.moveTop`)),
     isDestroyed: vi.fn(() => false),
+    isFullScreen: vi.fn(() => false),
+    isSimpleFullScreen: vi.fn(() => false),
     contentView: { children },
-  };
+  });
 }
 
 afterEach(() => {
@@ -116,6 +120,59 @@ describe("showWindowInactive", () => {
     expect(order).toEqual(["background.showInactive", "focused.moveTop"]);
     expect(focused.focus).not.toHaveBeenCalled();
     expect(terminalView.focus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the revealed window is going full screen", "revealed", "entering"],
+    ["the revealed window is full screen", "revealed", "native"],
+    ["the focused window is going full screen", "focused", "entering"],
+    ["the focused window is full screen", "focused", "native"],
+  ] as const)("on macOS restacks nothing when %s", (_case, which, mode) => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    const focused = windowMock(order, "focused");
+    const background = windowMock(order, "background");
+    const target = which === "revealed" ? background : focused;
+    if (mode === "entering") markEnteringFullScreen(target as never);
+    else target.isFullScreen.mockReturnValue(true);
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(focused);
+
+    showWindowInactive(background as never);
+
+    // A native full-screen window is alone on its Space; a restack there only
+    // lands during the transition.
+    expect(order).toEqual(["background.showInactive"]);
+  });
+
+  it("on macOS still restacks a window in simple full screen, which shares its Space", () => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    const focused = windowMock(order, "focused");
+    focused.isSimpleFullScreen.mockReturnValue(true);
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(focused);
+
+    showWindowInactive(windowMock(order, "background") as never);
+
+    expect(order).toEqual(["background.showInactive", "focused.moveTop"]);
+  });
+
+  it("on macOS restacks a window again once it has left full screen", () => {
+    setPlatform("darwin");
+    const order: string[] = [];
+    const focused = windowMock(order, "focused");
+    electron.BrowserWindow.getFocusedWindow.mockReturnValue(focused);
+    markEnteringFullScreen(focused as never);
+    focused.isFullScreen.mockReturnValue(true);
+    focused.emit("enter-full-screen");
+
+    showWindowInactive(windowMock(order, "first") as never);
+    expect(order).toEqual(["first.showInactive"]);
+
+    focused.isFullScreen.mockReturnValue(false);
+    focused.emit("leave-full-screen");
+    showWindowInactive(windowMock(order, "second") as never);
+
+    expect(order).toEqual(["first.showInactive", "second.showInactive", "focused.moveTop"]);
   });
 
   it("on macOS restacks nothing when no Daintree window has focus, or the revealed one does", () => {

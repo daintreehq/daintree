@@ -63,7 +63,14 @@ import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
+import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
+import {
+  describeCatalogRepo,
+  describePluginInstallSource,
+} from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
+import { PluginCommunityBrowse } from "./PluginCommunityBrowse";
+import { Store } from "@/components/icons";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
 import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
@@ -420,6 +427,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     [pm.plugins, projectPlugins]
   );
 
+  // The community catalog in the wide pane (#16782). A selection takes the pane
+  // over without leaving Browse, so clearing it comes back here. Closing the
+  // manager leaves Browse, so reopening it reads no catalog until asked.
+  const [browsing, setBrowsing] = useState(false);
+  const showingBrowse = browsing && selectedPlugin === null && selectedProjectPlugin === null;
+  // Installed copies by id, for Browse's markers. Project plugins are a
+  // project's own folder, not installs, so they never mark a listing.
+  const installedVersions = useMemo(
+    () => new Map(pm.plugins.map((p) => [p.manifest.name, p.manifest.version])),
+    [pm.plugins]
+  );
+
   // Row elements keyed by plugin name, so a `daintree://plugin/open` (#9559) can
   // scroll its target into view.
   const rowRefs = useRef<Map<string, HTMLLIElement>>(new Map());
@@ -532,7 +551,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // 10-item visibility threshold from #9557 went with the marketplace
   // redesign), so there's no threshold edge to reset on anymore.
   useEffect(() => {
-    if (!isOpen) setQuery("");
+    if (!isOpen) {
+      setQuery("");
+      setBrowsing(false);
+    }
   }, [isOpen]);
 
   // The install outcome, as a status message (WCAG 4.1.3). Emptied the moment
@@ -661,7 +683,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
    */
   const hiddenBySearch = (plugin: LoadedPluginInfo): boolean =>
     isQueryActive(parsePluginQuery(query)) && filterPlugins([plugin], query).length === 0;
-  const revealPlugin = useEffectEvent((plugin: LoadedPluginInfo): boolean => {
+  const showPlugin = (plugin: LoadedPluginInfo): boolean => {
     const id = plugin.manifest.name;
     const hidden = hiddenBySearch(plugin);
     if (hidden) setQuery("");
@@ -671,7 +693,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     setSelectedPluginId(id);
     setRevealTargetId(id);
     return hidden;
-  });
+  };
+  const revealPlugin = useEffectEvent(showPlugin);
 
   // Scroll a revealed row into view once it has rendered.
   useEffect(() => {
@@ -887,6 +910,24 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             and pushed the installed list — the thing most visits come for —
             below the fold. */}
         <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            pressed={showingBrowse}
+            onClick={() => {
+              if (showingBrowse) {
+                setBrowsing(false);
+                return;
+              }
+              setSelectedPluginId(null);
+              setSelectedProjectPluginId(null);
+              setBrowsing(true);
+            }}
+            className="app-no-drag"
+          >
+            <Store />
+            Browse
+          </Button>
           {pm.hasUpdatablePlugins && (
             <Button
               variant="ghost"
@@ -991,7 +1032,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         onDrop={pm.handleDrop}
       >
         {pm.isDragOverFiles && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-border-default pointer-events-none">
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-surface-canvas/80 border-2 border-dashed border-border-default pointer-events-none">
             <Download className="w-6 h-6 text-text-secondary" aria-hidden="true" />
             <p className="text-sm font-medium text-text-primary">Drop a .dntr file to install</p>
           </div>
@@ -1068,6 +1109,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             {pm.notice && (
               <Callout severity={pm.noticeTone} size="compact">
                 <p>{pm.notice}</p>
+              </Callout>
+            )}
+            {pm.checkNotice && (
+              <Callout severity="warning" size="compact" role="status">
+                <p>{pm.checkNotice}</p>
               </Callout>
             )}
             {/* Suppressed while a dialog is showing the same error inside
@@ -1214,7 +1260,11 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         <ScrollShadow
           key={
             selectedPlugin?.manifest.name ??
-            (selectedProjectPlugin ? `project:${selectedProjectPlugin.id}` : "catalog")
+            (selectedProjectPlugin
+              ? `project:${selectedProjectPlugin.id}`
+              : showingBrowse
+                ? "browse"
+                : "catalog")
           }
           className="flex-1 min-h-0"
           // A named landmark for whatever is selected, so assistive technology
@@ -1227,7 +1277,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               ? `Details for ${pluginLabel(selectedPlugin)}`
               : selectedProjectPlugin
                 ? `Details for ${selectedProjectPlugin.displayName}`
-                : "Installed plugins"
+                : showingBrowse
+                  ? "Community plugins"
+                  : "Installed plugins"
           }
           // The readable-width caps are left-pinned, which is right for the
           // detail content and the catalog grid but would push the centered
@@ -1235,10 +1287,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           // drops the cap. The catalog gets the wider cap; cards auto-fill it.
           scrollClassName={cn(
             "p-6",
-            selectedPlugin || selectedProjectPlugin ? "max-w-3xl" : hasAnyPlugins && "max-w-4xl"
+            selectedPlugin || selectedProjectPlugin
+              ? "max-w-3xl"
+              : (showingBrowse || hasAnyPlugins) && "max-w-4xl"
           )}
         >
-          {selectedProjectPlugin ? (
+          {showingBrowse ? (
+            <PluginCommunityBrowse
+              installedVersions={installedVersions}
+              installDisabled={pm.isInstalling || pm.urlReview !== null}
+              onInstall={pm.previewCatalogListing}
+              onViewInstalled={(pluginId) => {
+                const plugin = pm.plugins.find((p) => p.manifest.name === pluginId);
+                if (plugin) showPlugin(plugin);
+              }}
+            />
+          ) : selectedProjectPlugin ? (
             <ProjectPluginDetailPane
               plugin={selectedProjectPlugin}
               worksWithPeers={worksWithPeers}
@@ -1346,6 +1410,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         {...batchControls}
       >
         <UnsavedPanelsCallout verb="Updating" panels={pm.updatePanels} className="mt-3" />
+        {/* A catalog release listed from another repository than the installed
+            one is a different source, said before the user confirms (#16781). */}
+        {pm.pendingUpdate?.result.catalog && pm.pendingUpdate.result.previousRepo !== undefined && (
+          <Callout severity="warning" className="mt-3" data-testid="plugin-update-source-changed">
+            <p>
+              This update comes from a different repository:{" "}
+              <span className="font-mono break-all">
+                {describeCatalogRepo(pm.pendingUpdate.result.catalog.repo)}
+              </span>
+              . The installed version came from{" "}
+              <span className="font-mono break-all">
+                {describeCatalogRepo(pm.pendingUpdate.result.previousRepo)}
+              </span>
+              .
+            </p>
+          </Callout>
+        )}
         {pm.pendingUpdate && (
           <div className="mt-3 space-y-1.5 text-xs text-text-secondary">
             <div>
@@ -1361,6 +1442,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   </span>
                 )}
             </div>
+            {pm.pendingUpdate.result.catalog && (
+              <div>
+                <span className="text-text-secondary">Listed from</span>{" "}
+                <span className="font-mono text-text-primary break-all select-text">
+                  {describeCatalogRepo(pm.pendingUpdate.result.catalog.repo)}
+                </span>
+              </div>
+            )}
             {pm.pendingUpdate.result.capabilities.length > 0 && (
               <div className="space-y-1.5">
                 <span className="text-text-secondary">Capabilities</span>
@@ -1440,15 +1529,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         </AppDialog.Header>
         <AppDialog.Body className="space-y-3">
           <AppDialog.Description>
-            Enter the URL of a Daintree plugin archive (.dntr). It&rsquo;s downloaded, validated,
-            and installed.
+            Enter the URL of a Daintree plugin archive (.dntr). It&rsquo;s downloaded first, and you
+            see what it can do before anything is installed.
           </AppDialog.Description>
           {/* The security note is the reason to hesitate, so it stops sharing a
               paragraph — and a weight — with the mechanics of the field above. */}
           <Callout severity="warning">
             <p>
-              Plugins run with full Node.js privileges — no sandbox, no signature check, and no
-              capability prompt before install. Only install from sources you trust.
+              Plugins run with full Node.js privileges — no sandbox and no signature check. Only
+              install from sources you trust.
             </p>
           </Callout>
           {/* A correctable failure keeps this dialog open, but the only error
@@ -1489,6 +1578,34 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           }}
         />
       </AppDialog>
+
+      {/* A URL install's review (#16776): the downloaded archive's identity
+          and permissions, the same disclosure an archive opened from the
+          operating system gets, before anything is installed. */}
+      <PluginInstallConfirmDialog
+        request={
+          pm.urlReview === null
+            ? null
+            : {
+                key: pm.urlReview.key,
+                manifest: pm.urlReview.manifest,
+                source:
+                  pm.urlReview.catalog === undefined
+                    ? {
+                        kind: "url",
+                        label: describePluginInstallSource(pm.urlReview.url),
+                        installedOnDisk: pm.urlReview.installedOnDisk,
+                      }
+                    : {
+                        kind: "catalog",
+                        repoLabel: describeCatalogRepo(pm.urlReview.catalog.repo),
+                        installedOnDisk: pm.urlReview.installedOnDisk,
+                      },
+              }
+        }
+        onConfirm={(approval) => void pm.confirmUrlReview(approval)}
+        onClose={pm.cancelUrlReview}
+      />
 
       <ConfirmDialog
         isOpen={isRestartConfirmOpen}
