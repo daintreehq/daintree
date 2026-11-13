@@ -6,6 +6,7 @@ import type {
   DeleteScratchTarget,
   SearchableProject,
   SearchableScratch,
+  UseProjectSwitcherPaletteReturn,
 } from "@/hooks/useProjectSwitcherPalette";
 import { Callout } from "@/components/ui/Callout";
 import { pluralize } from "@/lib/pluralize";
@@ -433,5 +434,69 @@ export function ProjectSwitcherConfirmDialogs({
         </ConfirmDialog>
       )}
     </>
+  );
+}
+
+export type ProjectSwitcherConfirmSource = Pick<
+  UseProjectSwitcherPaletteReturn,
+  | "removeConfirmProject"
+  | "setRemoveConfirmProject"
+  | "confirmRemoveProject"
+  | "isRemovingProject"
+  | "sleepConfirmProject"
+  | "setSleepConfirmProject"
+  | "confirmSleep"
+  | "isSleepingProject"
+  | "deleteScratchConfirm"
+  | "dismissDeleteScratchConfirm"
+  | "confirmDeleteScratch"
+  | "isDeletingScratch"
+  | "deleteAllScratchesConfirm"
+  | "dismissDeleteAllScratchesConfirm"
+  | "confirmDeleteAllScratches"
+  | "isDeletingAllScratches"
+  | "saveAsProjectConfirm"
+  | "dismissSaveAsProjectConfirm"
+  | "openSavedProject"
+>;
+
+/**
+ * The one place a view renders the switcher's confirmations (#16919). The
+ * switcher is drawn by the ⌘P modal and the toolbar dropdown, and Close is also
+ * requested from the action palette and the toolbar pill with neither open, so
+ * the confirms can't live in a copy of the switcher: before any copy had
+ * mounted they rendered nowhere, and once both had they rendered twice.
+ */
+export function ProjectSwitcherConfirmHost({
+  projectSwitcher,
+  paletteInputRef,
+}: {
+  projectSwitcher: ProjectSwitcherConfirmSource;
+  /** The ⌘P palette's search box, a focus successor while the palette is open. */
+  paletteInputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <ProjectSwitcherConfirmDialogs
+      removeConfirmProject={projectSwitcher.removeConfirmProject}
+      onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+      onConfirmRemove={() => void projectSwitcher.confirmRemoveProject()}
+      isRemovingProject={projectSwitcher.isRemovingProject}
+      sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+      onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+      onConfirmSleep={() => void projectSwitcher.confirmSleep()}
+      isSleepingProject={projectSwitcher.isSleepingProject}
+      deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+      onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+      onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+      isDeletingScratch={projectSwitcher.isDeletingScratch}
+      deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+      onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+      onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+      isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+      saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+      onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+      onOpenSavedProject={projectSwitcher.openSavedProject}
+      paletteInputRef={paletteInputRef}
+    />
   );
 }

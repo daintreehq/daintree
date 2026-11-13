@@ -476,7 +476,6 @@ export function Toolbar({
     handleRestartProject,
     handleLocateProject,
     handleMoveOrRenameProject,
-    handleRemoveConfirmClose,
     handleSelectNewWindow,
     isDropdownOpen,
     shouldMountProjectSwitcherDropdown,
@@ -1842,41 +1841,18 @@ export function Toolbar({
                         }
                         onSelectNewWindow={handleSelectNewWindow}
                         dropdownAlign="center"
-                        removeConfirmProject={projectSwitcher.removeConfirmProject}
-                        onRemoveConfirmClose={handleRemoveConfirmClose}
-                        onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                        isRemovingProject={projectSwitcher.isRemovingProject}
-                        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-                        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-                        onConfirmSleep={projectSwitcher.confirmSleep}
-                        isSleepingProject={projectSwitcher.isSleepingProject}
                         rankedSearch={projectSwitcher.isRankedSearch}
                         scratchResults={projectSwitcher.scratchResults}
                         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                         onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
                         onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
-                        deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
-                        onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
-                        onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
-                        isDeletingScratch={projectSwitcher.isDeletingScratch}
                         onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
-                        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
-                        onDismissDeleteAllScratchesConfirm={
-                          projectSwitcher.dismissDeleteAllScratchesConfirm
-                        }
-                        onConfirmDeleteAllScratches={() =>
-                          void projectSwitcher.confirmDeleteAllScratches()
-                        }
-                        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
                         onRenameScratch={(scratchId, name) =>
                           void projectSwitcher.renameScratch(scratchId, name)
                         }
                         onSaveAsProject={(scratchId) =>
                           void projectSwitcher.saveAsProject(scratchId)
                         }
-                        saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                        onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                        onOpenSavedProject={projectSwitcher.openSavedProject}
                       >
                         {projectSwitcherTrigger}
                       </LazyProjectSwitcherPalette>

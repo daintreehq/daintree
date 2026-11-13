@@ -247,7 +247,6 @@ const dropdownProps = {
   mode: "dropdown" as const,
   onOpenProjectSettings: vi.fn(),
   onAddProject: vi.fn(),
-  onCreateFolder: vi.fn(),
   onTogglePinProject: vi.fn(),
   onCloseProject: vi.fn(),
   onStopProject: vi.fn(),
@@ -1105,7 +1104,6 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Project settings…")).toBeNull();
     expect(screen.queryByText("Open project…")).toBeNull();
     expect(screen.queryByText("Clone repository…")).toBeNull();
-    expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
   it("shows the section-keys hint but not Remove shortcut in modal mode browse footer", () => {

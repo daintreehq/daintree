@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useRef } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
@@ -23,6 +23,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
+import { ProjectSwitcherConfirmHost } from "./components/Project/ProjectSwitcherConfirmDialogs";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
@@ -299,6 +300,9 @@ export function ModalHostLayer({
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
+  // The ⌘P palette's search box, shared with the confirm host so a confirm
+  // whose opener row is gone hands focus back to it while the palette is open.
+  const projectSwitcherInputRef = useRef<HTMLInputElement>(null);
   const isCanopyOfferShown = useCanopyOfferShown();
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
@@ -523,14 +527,6 @@ export function ModalHostLayer({
                 void projectSwitcherPalette.togglePinProject(projectId)
               }
               onCopyPath={projectSwitcherPalette.copyPath}
-              removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-              onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
-              onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-              isRemovingProject={projectSwitcherPalette.isRemovingProject}
-              sleepConfirmProject={projectSwitcherPalette.sleepConfirmProject}
-              onSleepConfirmClose={() => projectSwitcherPalette.setSleepConfirmProject(null)}
-              onConfirmSleep={projectSwitcherPalette.confirmSleep}
-              isSleepingProject={projectSwitcherPalette.isSleepingProject}
               onSelectNewWindow={(project) => {
                 projectSwitcherPalette.close();
                 void actionService.dispatch(
@@ -544,26 +540,12 @@ export function ModalHostLayer({
               onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
               onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
-              deleteScratchConfirm={projectSwitcherPalette.deleteScratchConfirm}
-              onDismissDeleteScratchConfirm={projectSwitcherPalette.dismissDeleteScratchConfirm}
-              onConfirmDeleteScratch={() => void projectSwitcherPalette.confirmDeleteScratch()}
-              isDeletingScratch={projectSwitcherPalette.isDeletingScratch}
               onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
-              deleteAllScratchesConfirm={projectSwitcherPalette.deleteAllScratchesConfirm}
-              onDismissDeleteAllScratchesConfirm={
-                projectSwitcherPalette.dismissDeleteAllScratchesConfirm
-              }
-              onConfirmDeleteAllScratches={() =>
-                void projectSwitcherPalette.confirmDeleteAllScratches()
-              }
-              isDeletingAllScratches={projectSwitcherPalette.isDeletingAllScratches}
               onRenameScratch={(scratchId, name) =>
                 void projectSwitcherPalette.renameScratch(scratchId, name)
               }
               onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
-              saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
-              onDismissSaveAsProjectConfirm={projectSwitcherPalette.dismissSaveAsProjectConfirm}
-              onOpenSavedProject={projectSwitcherPalette.openSavedProject}
+              paletteInputRef={projectSwitcherInputRef}
             />
           </Suspense>
         )}
@@ -584,6 +566,17 @@ export function ModalHostLayer({
         onClose={() => projectSwitcherPalette.setStopConfirmProjectId(null)}
         onConfirm={projectSwitcherPalette.confirmStopProject}
       />
+      {/*
+        Eager, not lazy: a confirm has to own focus the commit its request lands,
+        and the switcher copies that ask for it come and go. After the ⌘P palette
+        so its Escape registers above the palette's.
+      */}
+      <ErrorBoundary variant="component" componentName="ProjectSwitcherConfirmDialogs">
+        <ProjectSwitcherConfirmHost
+          projectSwitcher={projectSwitcherPalette}
+          paletteInputRef={projectSwitcherInputRef}
+        />
+      </ErrorBoundary>
 
       <ErrorBoundary
         variant="component"
