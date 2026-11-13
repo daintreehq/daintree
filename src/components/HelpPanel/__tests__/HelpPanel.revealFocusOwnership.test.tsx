@@ -64,6 +64,7 @@ const { focusMock, helpPanelState, panelStoreState, terminalInputState, hybridHa
         string,
         { agentState?: string; cwd?: string; spawnStatus?: string; isInputLocked?: boolean }
       >,
+      focusedId: null as string | null,
       removePanel: vi.fn(),
       addPanel: vi.fn().mockResolvedValue(""),
     },
@@ -225,7 +226,6 @@ vi.mock("@shared/config/agentIds", () => ({
     typeof v === "string" && ["claude", "codex", "claude-code"].includes(v),
 }));
 vi.mock("../../../shared/utils/agentAvailability", () => ({ isAgentInstalled: () => true }));
-vi.mock("@/lib/accessibility", () => ({ TABBABLE_SELECTOR: "button" }));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(), getContext: () => ({}) },
 }));
@@ -313,8 +313,14 @@ vi.mock("@/store/macroFocusStore", () => {
   let assistantRoot: HTMLElement | null = null;
   const state = {
     focusedRegion: null as string | null,
+    refs: new Map<string, HTMLElement>(),
     setRegionRef: vi.fn((region: string, el: HTMLElement | null) => {
       if (region === "assistant") assistantRoot = el;
+      if (el) state.refs.set(region, el);
+      else state.refs.delete(region);
+    }),
+    clearFocus: vi.fn(() => {
+      state.focusedRegion = null;
     }),
   };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
@@ -340,6 +346,8 @@ import {
 } from "@/lib/tooltipDismissRegistry";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 
 // The service mock never evaluates the real module, so nothing builds it.
 await loadTerminalService();
@@ -444,6 +452,7 @@ beforeEach(() => {
   helpPanelState.dictationFocusRequest = null;
   terminalInputState.hybridInputAutoFocus = true;
   setPanel("t-1");
+  panelStoreState.focusedId = null;
 
   foreignEditor = document.createElement("textarea");
   foreignEditor.className = "cm-editor";
@@ -896,6 +905,79 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       opener.remove();
     });
 
+    it("hands focus to the focused panel when the opener can no longer take it", () => {
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      opener.focus();
+      const paneInput = document.createElement("textarea");
+      document.body.appendChild(paneInput);
+      panelStoreState.focusedId = "pane-1";
+      const unregister = registerPanelFocusHandler("pane-1", () => {
+        paneInput.focus();
+        return document.activeElement === paneInput;
+      });
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      // Still connected, but a `.focus()` on it is a silent no-op.
+      opener.disabled = true;
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(paneInput);
+      unregister();
+      paneInput.remove();
+      opener.remove();
+    });
+
+    it("lands on the grid's region when it opened from nowhere and no panel is focused", () => {
+      const grid = document.createElement("div");
+      grid.tabIndex = -1;
+      document.body.appendChild(grid);
+      useMacroFocusStore.getState().setRegionRef("grid", grid);
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+      expect(document.activeElement).not.toBe(document.body);
+
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(grid);
+      useMacroFocusStore.getState().setRegionRef("grid", null);
+      grid.remove();
+    });
+
+    it("moves nothing when the panel mounts closed", () => {
+      const grid = document.createElement("div");
+      grid.tabIndex = -1;
+      document.body.appendChild(grid);
+      useMacroFocusStore.getState().setRegionRef("grid", grid);
+      (document.activeElement as HTMLElement | null)?.blur();
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      // A structural re-run while closed is not a close either.
+      helpPanelState.terminalId = "t-2";
+      setPanel("t-2");
+      rerender(<HelpPanel width={380} />);
+
+      expect(document.activeElement).toBe(document.body);
+      useMacroFocusStore.getState().setRegionRef("grid", null);
+      grid.remove();
+    });
+
     it("leaves tooltips alone when it declines to restore focus", () => {
       // Guards against hoisting the call out of the restore predicate: no focus
       // moves here, so there is nothing to suppress but plenty to swallow.
@@ -938,6 +1020,23 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
 
       expect(anyFocusWriterCalled()).toBe(false);
+    });
+
+    it("passes over a hidden control when no terminal can take focus", () => {
+      helpPanelState.isOpen = false;
+      const { container, rerender } = render(<HelpPanel width={380} />);
+      const aside = container.querySelector<HTMLElement>("#daintree-assistant-panel")!;
+      const hidden = document.createElement("button");
+      hidden.hidden = true;
+      const shown = document.createElement("button");
+      aside.prepend(hidden, shown);
+
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      setPanel("t-1", "failed");
+      act(() => flushFrame());
+
+      expect(document.activeElement).toBe(shown);
     });
 
     it.each(["failed", "missing-cli"])(
