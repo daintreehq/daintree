@@ -202,10 +202,50 @@ describe("PortalManager", () => {
     });
   });
 
+  describe("context-menu wording", () => {
+    it("labels every row in sentence case and names the external browser", async () => {
+      const { Menu } = await import("electron");
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-wording", "https://page.example.com");
+      const handler = createdWebContents[0]!.on.mock.calls.find(
+        ([event]) => event === "context-menu"
+      )![1] as (event: unknown, params: unknown) => void;
+      handler(
+        {},
+        {
+          isEditable: true,
+          editFlags: { canCopy: true, canCut: true, canPaste: true },
+          linkURL: "https://linked.example.com",
+          pageURL: "https://page.example.com",
+          x: 0,
+          y: 0,
+        }
+      );
+      const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)![0];
+      const labels = template.flatMap((entry) =>
+        typeof entry.label === "string" ? [entry.label] : []
+      );
+
+      // Acronyms ("URL") keep their capitals; any other capitalised word after
+      // the first is Title Case.
+      const titleCase = labels.filter((label) =>
+        label
+          .split(" ")
+          .slice(1)
+          .some((word) => /^[A-Z][a-z]/.test(word))
+      );
+      expect(labels.length).toBeGreaterThan(0);
+      expect(titleCase).toEqual([]);
+      const browserRows = labels.filter((label) => /\bbrowser\b/i.test(label));
+      expect(browserRows.length).toBeGreaterThan(0);
+      expect(browserRows.filter((label) => !/\bexternal browser\b/.test(label))).toEqual([]);
+    });
+  });
+
   describe("context-menu clipboard actions", () => {
     it.each([
-      ["Copy Link Address", "https://linked.example.com", "link"],
-      ["Copy Page URL", "https://page.example.com", "page"],
+      ["Copy link address", "https://linked.example.com", "link"],
+      ["Copy page URL", "https://page.example.com", "page"],
     ])("handles an asynchronous write failure for %s", async (label, url, kind) => {
       const { clipboard, Menu } = await import("electron");
       const failure = new Error("clipboard unavailable");

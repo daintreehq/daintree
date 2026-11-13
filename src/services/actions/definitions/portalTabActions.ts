@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { usePortalStore } from "@/store/portalStore";
 import { usePortalPendingCloseStore } from "@/store/portalPendingCloseStore";
 import { deriveEffectiveTier } from "../deriveEffectiveTier";
@@ -168,7 +169,7 @@ export function registerPortalTabActions(
       if (!targetId) return;
       const tab = state.tabs.find((t) => t.id === targetId);
       if (!tab?.url) return;
-      await navigator.clipboard.writeText(tab.url);
+      await writeMainClipboard(tab.url);
     },
   }));
 
@@ -230,7 +231,7 @@ export function registerPortalTabActions(
       if (!targetId) return;
       const tab = state.tabs.find((t) => t.id === targetId);
       if (tab?.url) {
-        await navigator.clipboard.writeText(tab.url);
+        await writeMainClipboard(tab.url);
       }
     },
   }));

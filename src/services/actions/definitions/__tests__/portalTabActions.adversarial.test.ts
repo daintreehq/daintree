@@ -53,10 +53,18 @@ function setTabs(count: number, activeTabId: string) {
   });
 }
 
+const mainClipboardWriteMock = vi.fn<(text: string) => Promise<void>>();
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mainClipboardWriteMock.mockResolvedValue(undefined);
   Object.defineProperty(globalThis, "window", {
-    value: { electron: { portal: { hide: vi.fn().mockResolvedValue(undefined) } } },
+    value: {
+      electron: {
+        portal: { hide: vi.fn().mockResolvedValue(undefined) },
+        clipboard: { writeText: mainClipboardWriteMock },
+      },
+    },
     configurable: true,
   });
 });
@@ -112,5 +120,43 @@ describe("portal.closeToRight escalation", () => {
 
     expect(pendingRequestMock).not.toHaveBeenCalled();
     expect(closeTabsAfterMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("portal URL copies while the page holds focus", () => {
+  // A shortcut pressed inside the page reaches the action with the shell
+  // document unfocused, where the renderer clipboard refuses every write.
+  const rendererClipboardWrite = vi.fn(() =>
+    Promise.reject(new DOMException("Document is not focused.", "NotAllowedError"))
+  );
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: rendererClipboardWrite },
+      configurable: true,
+    });
+  });
+
+  it.each([
+    ["portal.copyUrl", undefined, "https://x/1"],
+    ["portal.copyUrl", { tabId: "t2" }, "https://x/2"],
+    ["portal.copyTabUrl", { tabId: "t0" }, "https://x/0"],
+    ["portal.copyTabUrl", {}, "https://x/1"],
+  ])("%s %j writes through the main process", async (id, args, url) => {
+    setTabs(3, "t1");
+    const run = setupActions();
+
+    await expect(run(id, args)).resolves.toBeUndefined();
+
+    expect(mainClipboardWriteMock).toHaveBeenCalledWith(url);
+    expect(rendererClipboardWrite).not.toHaveBeenCalled();
+  });
+
+  it("fails the copy when the main process refuses the write", async () => {
+    setTabs(2, "t0");
+    mainClipboardWriteMock.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    const run = setupActions();
+
+    await expect(run("portal.copyUrl")).rejects.toThrow("clipboard unavailable");
   });
 });
