@@ -446,6 +446,28 @@ export function WorktreeOverviewModal({
   const closeSessionsIdsRef = useRef<readonly string[]>([]);
   const [closeSessionsCount, setCloseSessionsCount] = useState(0);
 
+  // The panels the action would remove, counted the way `bulkCloseByWorktree`
+  // picks them: a selection that owns none has nothing for the button to do.
+  const selectedPanelCount = usePanelStore((state) => {
+    let count = 0;
+    for (const id of selectedIds) {
+      for (const panelId of state.panelIdsByWorktreeId[id] ?? []) {
+        const panel = state.panelsById[panelId];
+        if (panel && panel.location !== "dialog") count++;
+      }
+    }
+    return count;
+  });
+  // The main worktree is never a delete target, so a selection of only it (or of
+  // rows that have since gone) leaves "Delete worktrees" nothing to open on.
+  const hasDeletableSelection = useMemo(() => {
+    for (const id of selectedIds) {
+      const worktree = worktreeMap.get(id);
+      if (worktree && worktree.isMainWorktree !== true) return true;
+    }
+    return false;
+  }, [selectedIds, worktreeMap]);
+
   const handleCloseSessionsClick = useCallback(() => {
     const snapshot = Array.from(selectedIds);
     closeSessionsIdsRef.current = snapshot;
@@ -772,7 +794,9 @@ export function WorktreeOverviewModal({
             {/* The sidebar's own quick-state bar, full-bleed under the field
                 like the agent overview's, so the header's rule closes the
                 narrowing block. */}
-            {hasNonMainWorktrees && (
+            {/* Kept while a quick filter is set even with no non-main worktree
+                left, so a filter stranded by a removal can still be cleared here. */}
+            {(hasNonMainWorktrees || quickStateFilter !== "all") && (
               <div className="-mx-3 -mb-2 mt-2 border-t border-divider">
                 <QuickStateFilterBar
                   className="border-b-0"
@@ -814,7 +838,12 @@ export function WorktreeOverviewModal({
                   : // `filterLabel` is what puts the empty state in its narrowed
                     // branch; without it a filter-only miss read "No items
                     // available" and lost its recovery button.
-                    { filterLabel: "filters", noMatchMessage: "No worktrees match these filters" })}
+                    {
+                      filterLabel: "filters",
+                      noMatchMessage: hasNonMainWorktrees
+                        ? "No worktrees match these filters"
+                        : "No other worktrees to match these filters",
+                    })}
                 noMatchContent={
                   <Button variant="subtle" size="sm" onClick={handleClearAllFilters}>
                     Clear all filters
@@ -888,6 +917,7 @@ export function WorktreeOverviewModal({
                     variant="subtle"
                     size="sm"
                     onClick={handleCloseSessionsClick}
+                    disabled={selectedPanelCount === 0}
                     data-testid="worktree-bulk-close-sessions"
                   >
                     Remove panels
@@ -896,7 +926,7 @@ export function WorktreeOverviewModal({
                     variant="ghost-danger"
                     size="sm"
                     onClick={bulkRemove.handleRemoveClick}
-                    disabled={bulkRemove.isExecuting}
+                    disabled={bulkRemove.isExecuting || !hasDeletableSelection}
                     data-testid="worktree-bulk-remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -932,7 +962,7 @@ export function WorktreeOverviewModal({
         description="Every panel for the selected worktrees is removed for good, wherever it is. Running terminals stop and their scrollback is lost."
         confirmLabel="Remove panels"
         cancelLabel="Cancel"
-        variant="default"
+        variant="destructive"
         zIndex="nested"
         onConfirm={handleCloseSessionsConfirm}
       />
