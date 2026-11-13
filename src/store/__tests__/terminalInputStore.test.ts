@@ -6,7 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
-import { keepComposerSnapshot, takeComposerSnapshot } from "@/lib/composerRemount";
+import {
+  _resetComposerSnapshotsForTesting,
+  keepComposerSnapshot,
+  takeComposerSnapshot,
+} from "@/lib/composerRemount";
 import { getViewWorkspaceId } from "../viewWorkspaceId";
 import { VOICE_RECENT_PROMPT_MAX_CHARS } from "@shared/config/voiceCorrection";
 
@@ -29,6 +33,7 @@ describe("terminalInputStore", () => {
       lastTypedAgentTarget: null,
     });
     vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+    _resetComposerSnapshotsForTesting();
   });
 
   describe("fleet draft holds (#14949)", () => {

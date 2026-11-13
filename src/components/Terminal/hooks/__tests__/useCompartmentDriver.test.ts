@@ -284,7 +284,6 @@ function mount(initial: Partial<LiveProps> = {}) {
         draftKeyRef,
         editorHostRef,
         editorViewRef,
-        value: "",
         disabled,
         placeholder,
         effectiveTheme: THEME,

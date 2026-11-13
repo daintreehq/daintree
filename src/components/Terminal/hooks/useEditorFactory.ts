@@ -58,6 +58,7 @@ import {
   restoreComposerRemount,
 } from "../inputEditorExtensions/composerRemount";
 import { takeComposerSnapshot } from "@/lib/composerRemount";
+import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
@@ -265,7 +266,11 @@ export function useEditorFactory({
     });
 
     return () => {
-      keepComposerRemount(view, draftKey, readDraft());
+      // A panel closed to the trash keeps its draft for an undone close, but
+      // not what its composer held: the close lets that go.
+      if (usePanelStore.getState().panelsById[terminalId]?.location !== "trash") {
+        keepComposerRemount(view, draftKey, readDraft());
+      }
       view.destroy();
       editorViewRef.current = null;
     };

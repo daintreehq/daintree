@@ -132,6 +132,7 @@ import {
   composerUploadSurface,
   isComposerSendHeld,
   isolatedComposerUploadSurface,
+  takeHeldBackAttachments,
   type PreparedAttachment,
 } from "./uploads/pendingUploads";
 import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
@@ -810,6 +811,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
+    // A pane's composer keeps what was held back for it through a remount, and
+    // its panel's close lets it go. An isolated one's terminal may never close
+    // as a panel here, so what was held back for it goes with it.
+    useEffect(() => {
+      if (!isolated) return;
+      return () => void takeHeldBackAttachments(uploadSurface);
+    }, [isolated, uploadSurface]);
     const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
       const view = editorViewRef.current;
       if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
