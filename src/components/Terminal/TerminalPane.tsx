@@ -31,6 +31,8 @@ import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 
 import { TerminalSearchBar } from "./TerminalSearchBar";
+import { focusPaneSearchInput } from "./paneSearchFocus";
+import { targetOwnsCopy } from "./terminalCopyKey";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
 import { useGridScrollRoot } from "./GridScrollRootContext";
@@ -994,9 +996,7 @@ function TerminalPaneComponent({
         searchReturnRef.current = { paneId: id, surface: paneSurfaceHoldingFocus(id) };
       }
       setIsSearchOpen(true);
-      requestAnimationFrame(() => {
-        document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
-      });
+      requestAnimationFrame(() => focusPaneSearchInput(containerRef.current));
     };
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
@@ -1010,16 +1010,14 @@ function TerminalPaneComponent({
 
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.
     // This is needed because agent terminals focus the hybrid input bar, so
-    // xterm's built-in copy handler never receives the copy event.
-    if (e.metaKey && e.key === "c") {
+    // xterm's built-in copy handler never receives the copy event. Text the
+    // user selected in a field or the composer copies itself instead.
+    if (e.metaKey && e.key === "c" && !targetOwnsCopy(e.target)) {
       const managed = peekTerminalService()?.get(id) ?? null;
       if (managed?.terminal.hasSelection()) {
-        const nativeSelection = window.getSelection()?.toString() ?? "";
-        if (nativeSelection.length === 0) {
-          e.preventDefault();
-          void navigator.clipboard.writeText(managed.terminal.getSelection());
-          return;
-        }
+        e.preventDefault();
+        void navigator.clipboard.writeText(managed.terminal.getSelection());
+        return;
       }
     }
 
