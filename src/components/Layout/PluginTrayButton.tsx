@@ -780,7 +780,6 @@ export function PluginTrayButton({
   // and from a dialog opened via a menu item closing much later. Hold the
   // suppression until the next genuine pointer hover (see #5153).
   const isRestoringFocusRef = useRef(false);
-  const wasPointerCloseRef = useRef(false);
   const lastPinActionAt = useRef(0);
   const trayButtonRef = useRef<HTMLButtonElement>(null);
   const openPopover = usePluginToolbarPopoverStore((s) => s.open);
@@ -940,9 +939,6 @@ export function PluginTrayButton({
           align="end"
           sideOffset={4}
           className="min-w-[16rem] max-w-[22rem]"
-          onPointerDownOutside={() => {
-            wasPointerCloseRef.current = true;
-          }}
           onCloseAutoFocus={(e) => {
             setTooltipOpen(false);
             isRestoringFocusRef.current = true;
@@ -951,7 +947,6 @@ export function PluginTrayButton({
               // The popover takes focus into itself; returning it to this button
               // first would only flash a ring on the way.
               e.preventDefault();
-              wasPointerCloseRef.current = false;
               const tray = trayButtonRef.current;
               if (tray === null || !isHiddenToolbarControl(tray)) {
                 openPopover(pendingPopover, "tray");
@@ -962,14 +957,6 @@ export function PluginTrayButton({
               // command lives now instead.
               const target = pluginCommandFocusTarget(pendingPopover);
               if (target !== null) focusToolbarControl(target);
-              return;
-            }
-            // Skip focus restoration for pointer dismissals so the trigger
-            // doesn't keep a focus-visible ring the user never asked for;
-            // keyboard close still returns focus for WAI-ARIA.
-            if (wasPointerCloseRef.current) {
-              e.preventDefault();
-              wasPointerCloseRef.current = false;
             }
           }}
         >

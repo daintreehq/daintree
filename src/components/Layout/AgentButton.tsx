@@ -4,6 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -249,6 +250,58 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   );
 }
 
+// D on a highlighted row is the keyboard twin of a gutter click, mirroring the
+// plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
+// Modified presses pass through so app shortcuts still reach their handlers.
+function setDefaultOnKey(e: ReactKeyboardEvent, setDefault: () => void) {
+  if (e.key !== "d" && e.key !== "D") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setDefault();
+}
+
+interface PresetLaunchRowProps {
+  onSetDefault: () => void;
+  onLaunch: () => void;
+  children: ReactNode;
+}
+
+// Each preset row carries two click zones. The left gutter (data-zone
+// "gutter") sets the worktree-scoped default without launching and keeps the
+// menu open; the rest of the row (the label) launches immediately with that
+// preset and closes the menu. onSelect is preventDefault'd so Radix never
+// auto-dismisses — the label zone owns closing — and the zones live inside a
+// single menuitem (no nested interactive element) so the row stays
+// ARIA-valid. Keyboard activation lands on the row itself, which launches;
+// D sets the default instead (setDefaultOnKey). See issue #10720.
+//
+// A launch hands focus to the panel it opens, so the close is a handoff rather
+// than a pick whose focus comes back to the chevron. A component of its own
+// because only something under the DropdownMenu root can reach its focus policy.
+function PresetLaunchRow({ onSetDefault, onLaunch, children }: PresetLaunchRowProps) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <DropdownMenuItem
+      className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
+      onSelect={(e) => e.preventDefault()}
+      onKeyDown={(e) => setDefaultOnKey(e, onSetDefault)}
+      onClick={(e) => {
+        // Element (not HTMLElement) so a click landing on the gutter's SVG
+        // icon — an SVGElement — still resolves; closest() lives on Element.
+        if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
+          onSetDefault();
+          return;
+        }
+        focusRestore?.expectHandoff();
+        onLaunch();
+      }}
+    >
+      {children}
+    </DropdownMenuItem>
+  );
+}
+
 export function AgentButton({
   type,
   availability,
@@ -296,11 +349,6 @@ export function AgentButton({
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
   const panesOnAccountNotice = useAccountSwitchPaneIds(accountNotice);
   const isRestoringFocusRef = useRef(false);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
-  // preventDefault() the focus restoration only for pointer dismissals so the
-  // chevron doesn't keep its accent focus-visible ring; keyboard close
-  // (Escape/Enter) still gets default focus return for WAI-ARIA.
-  const wasPointerCloseRef = useRef(false);
 
   const handlePrimaryTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
@@ -602,17 +650,6 @@ export function AgentButton({
   // worktree inheriting it (#15054). Settings owns the agent-level preset.
   const pickAgentDefault = () => persistWorktreePick(null);
 
-  // D on a highlighted row is the keyboard twin of a gutter click, mirroring the
-  // plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
-  // Modified presses pass through so app shortcuts still reach their handlers.
-  const setDefaultOnKey = (e: ReactKeyboardEvent, setDefault: () => void) => {
-    if (e.key !== "d" && e.key !== "D") return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDefault();
-  };
-
   // Screen readers get the row's default state or the D instruction as part of
   // its name. Sighted keyboard users get the same instruction in the trailing
   // column, shown only on :focus-visible — pointer hover never matches, so it
@@ -646,25 +683,14 @@ export function AgentButton({
 
   // Launch from a dropdown row's label zone. Unlike the primary button, the
   // row names an explicit preset, so we forward it directly rather than
-  // deferring to the launcher's resolveEffectivePresetId path. Set
-  // wasPointerCloseRef before closing so the controlled dismiss runs the same
-  // focus-restore suppression as a Radix pointer dismiss — otherwise the
-  // chevron tooltip reopens over the freshly-launched terminal (issue #5171).
+  // deferring to the launcher's resolveEffectivePresetId path. The row has
+  // already marked the close as a focus handoff (PresetLaunchRow).
   const launchWithPreset = (presetId: string | null) => {
-    wasPointerCloseRef.current = true;
     setDropdownOpen(false);
     dismissSwitchNotices();
     void actionService.dispatch("agent.launch", { agentId: type, presetId }, { source: "user" });
   };
 
-  // Each preset row carries two click zones. The left gutter (data-zone
-  // "gutter") sets the worktree-scoped default without launching and keeps the
-  // menu open; the rest of the row (the label) launches immediately with that
-  // preset and closes the menu. onSelect is preventDefault'd so Radix never
-  // auto-dismisses — the label zone owns closing — and the zones live inside a
-  // single menuitem (no nested interactive element) so the row stays
-  // ARIA-valid. Keyboard activation lands on the row itself, which launches;
-  // D sets the default instead (setDefaultOnKey). See issue #10720.
   const renderPresetRow = (preset: {
     id: string;
     name: string;
@@ -674,20 +700,10 @@ export function AgentButton({
     const isDefault = savedPresetId === preset.id;
     const presetColor = preset.color ?? getBrandColorHex(type);
     return (
-      <DropdownMenuItem
+      <PresetLaunchRow
         key={preset.id}
-        className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
-        onSelect={(e) => e.preventDefault()}
-        onKeyDown={(e) => setDefaultOnKey(e, () => persistWorktreePick(preset.id))}
-        onClick={(e) => {
-          // Element (not HTMLElement) so a click landing on the gutter's SVG
-          // icon — an SVGElement — still resolves; closest() lives on Element.
-          if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-            persistWorktreePick(preset.id);
-            return;
-          }
-          launchWithPreset(preset.id);
-        }}
+        onSetDefault={() => persistWorktreePick(preset.id)}
+        onLaunch={() => launchWithPreset(preset.id)}
       >
         <RowControlTooltip
           label={isDefault ? "Current default" : "Set as default"}
@@ -727,7 +743,7 @@ export function AgentButton({
           {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
         </span>
         {renderDefaultHint(isDefault)}
-      </DropdownMenuItem>
+      </PresetLaunchRow>
     );
   };
 
@@ -799,16 +815,7 @@ export function AgentButton({
         </ContextMenuTrigger>
         <ContextMenuContent
           className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-          onPointerDownOutside={() => {
-            wasPointerCloseRef.current = true;
-          }}
-          onCloseAutoFocus={(e) => {
-            suppressTooltipsDuringFocusRestore();
-            if (wasPointerCloseRef.current) {
-              e.preventDefault();
-              wasPointerCloseRef.current = false;
-            }
-          }}
+          onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
         >
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
             {agentMenuMark}
@@ -963,30 +970,11 @@ export function AgentButton({
                 align="start"
                 sideOffset={4}
                 className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-                onPointerDownOutside={() => {
-                  wasPointerCloseRef.current = true;
-                }}
-                onCloseAutoFocus={(e) => {
-                  suppressTooltipsDuringFocusRestore();
-                  if (wasPointerCloseRef.current) {
-                    e.preventDefault();
-                    wasPointerCloseRef.current = false;
-                  }
-                }}
+                onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
               >
-                <DropdownMenuItem
-                  className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
-                  onSelect={(e) => e.preventDefault()}
-                  onKeyDown={(e) => setDefaultOnKey(e, pickAgentDefault)}
-                  onClick={(e) => {
-                    // Element (not HTMLElement) so a gutter SVG-icon click still
-                    // resolves; closest() lives on Element.
-                    if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                      pickAgentDefault();
-                      return;
-                    }
-                    launchWithPreset(null);
-                  }}
+                <PresetLaunchRow
+                  onSetDefault={pickAgentDefault}
+                  onLaunch={() => launchWithPreset(null)}
                 >
                   <RowControlTooltip
                     label={!savedPresetId ? "Current default" : "Set as default"}
@@ -1026,7 +1014,7 @@ export function AgentButton({
                     Agent default
                   </span>
                   {renderDefaultHint(!savedPresetId)}
-                </DropdownMenuItem>
+                </PresetLaunchRow>
                 {ccrPresetGroup.length > 0 && (
                   <>
                     {hasMultiplePresetGroups && <DropdownMenuSeparator />}
@@ -1153,16 +1141,7 @@ export function AgentButton({
         </ContextMenuTrigger>
         <ContextMenuContent
           className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-          onPointerDownOutside={() => {
-            wasPointerCloseRef.current = true;
-          }}
-          onCloseAutoFocus={(e) => {
-            suppressTooltipsDuringFocusRestore();
-            if (wasPointerCloseRef.current) {
-              e.preventDefault();
-              wasPointerCloseRef.current = false;
-            }
-          }}
+          onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
         >
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
             {agentMenuMark}

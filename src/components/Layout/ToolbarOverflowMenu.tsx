@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { CircleDot, Ellipsis, GitCommit, GitPullRequest, TriangleAlert } from "lucide-react";
@@ -235,13 +235,6 @@ export function OverflowMenu({
     if (!isEmpty) return;
     closePluginToolbarPopoverIfHidden((opening) => opening.origin === popoverOrigin);
   }, [isEmpty, popoverOrigin]);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
-  // restoration for pointer dismissals so the ellipsis button doesn't keep its
-  // accent focus-visible ring; keyboard close (Escape/Enter) still gets default
-  // focus return for WAI-ARIA. Local to this component so react-compiler doesn't
-  // flag mutating a ref passed in as a prop.
-  const overflowMenuPointerCloseRef = useRef(false);
-
   // Keep the accessible name stable and terse: a comma-enumerated list of
   // the hidden buttons re-announces the full set on every focus pass and goes
   // stale as resize-driven overflow changes. The count is always a count of
@@ -677,16 +670,12 @@ export function OverflowMenu({
         <DropdownMenuContent
           align={side === "left" ? "start" : "end"}
           sideOffset={4}
-          onPointerDownOutside={() => {
-            overflowMenuPointerCloseRef.current = true;
-          }}
           onCloseAutoFocus={(e) => {
             const pendingPopover = takeDeferredPopover(popoverOrigin);
             if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to the button
               // first would only flash a ring on the way.
               e.preventDefault();
-              overflowMenuPointerCloseRef.current = false;
               if (!isEmpty) {
                 openPopover(pendingPopover, popoverOrigin);
                 return;
@@ -696,11 +685,6 @@ export function OverflowMenu({
               // row's command is back on the toolbar.
               const target = pluginCommandFocusTarget(pendingPopover);
               if (target !== null) focusToolbarControl(target);
-              return;
-            }
-            if (overflowMenuPointerCloseRef.current) {
-              e.preventDefault();
-              overflowMenuPointerCloseRef.current = false;
             }
           }}
         >
