@@ -11,6 +11,7 @@ import {
   AGENT_REPORT_EVIDENCE,
   type PilotRowContext,
 } from "../pilotRows";
+import { formatWakeTime } from "@/lib/projectRowStatus";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 
@@ -829,6 +830,45 @@ describe("countPilotBands", () => {
 
     expect(countPilotBands(built)["needs-you"]).toBe(2);
     expect(countPilotBands(filterPilotGroups(built, "auth"))["needs-you"]).toBe(1);
+  });
+});
+
+describe("snoozed rows", () => {
+  it("names the wake time instead of a bare age", () => {
+    const until = NOW + 3_600_000;
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 60_000,
+          snooze: { snoozedAt: NOW - 120_000, snoozedUntil: until },
+        }),
+      ],
+      ctx()
+    );
+    const row = group!.rows[0]!;
+
+    expect(row.band).toBe("snoozed");
+    expect(row.ageLabel).toBe("Snoozed until");
+    expect(row.agePhrase).toBe(`Snoozed until ${row.age}`);
+    expect(row.age).toBe(formatWakeTime(until));
+  });
+
+  it("says plainly that an open-ended snooze is snoozed", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 60_000,
+          snooze: { snoozedAt: NOW - 120_000 },
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.agePhrase).toBe("Snoozed");
   });
 });
 

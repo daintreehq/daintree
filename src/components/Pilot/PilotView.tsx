@@ -615,7 +615,7 @@ function RunRow({
           data-testid="pilot-row-age"
           className={cn(
             "shrink-0 text-right text-2xs leading-none tabular-nums",
-            row.ageLabel === null ? "min-w-[3.5rem] text-text-secondary" : "text-state-waiting"
+            row.ageLabel === "quiet" ? "text-state-waiting" : "min-w-[3.5rem] text-text-secondary"
           )}
         >
           {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`}
@@ -1546,6 +1546,14 @@ export function PilotView() {
       // would collect a note and then bounce it.
       if (snapshot === null || snapshot.degraded) return false;
       event.preventDefault();
+      // A snoozed run is woken, not parked, matching Canopy's snoozed row.
+      if (selectedRow.item.band === "snoozed") {
+        const runId = selectedRow.item.run.runId;
+        safeFireAndForget(window.electron.fleet.unsnoozeRun(runId), {
+          context: "PilotView unsnoozeRun",
+        });
+        return true;
+      }
       setParkTargetId(selectedRow.item.run.runId);
       return true;
     },
@@ -1873,7 +1881,9 @@ export function PilotView() {
           ? null
           : selectedRow.item.band === "parked"
             ? "to edit park"
-            : "to park";
+            : selectedRow.item.band === "snoozed"
+              ? "to wake now"
+              : "to park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
   // other two, and disappears with the target itself — a hint naming a chord

@@ -1823,6 +1823,31 @@ describe("PilotView", () => {
       expect(screen.getByTestId("pilot-park-hint").textContent).toContain("to edit park");
     });
 
+    it("wakes a snoozed row on Alt+Enter instead of opening the park editor", () => {
+      const unsnoozeRunMock = vi.fn().mockResolvedValue(true);
+      window.electron = {
+        fleet: { parkRun: parkRunMock, unparkRun: unparkRunMock, unsnoozeRun: unsnoozeRunMock },
+      } as unknown as typeof window.electron;
+      seed([
+        run({
+          runId: "snoozed-run",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+          snooze: { snoozedAt: NOW - 30_000, snoozedUntil: NOW + 3_600_000 },
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("to wake now");
+      altEnter();
+
+      expect(unsnoozeRunMock).toHaveBeenCalledWith("snoozed-run");
+      expect(parkRunMock).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("pilot-park-note")).toBeNull();
+    });
+
     it("shows the park note on the row itself", () => {
       seed([
         run({
