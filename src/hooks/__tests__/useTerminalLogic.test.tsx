@@ -113,8 +113,14 @@ describe("useTerminalLogic", () => {
     rerender({ id: "tab-b", restartKey: 0 });
     act(() => exitOnA(1));
     expect(seen.filter((r) => r.id === "tab-b").some((r) => r.isExited)).toBe(false);
+    act(() => result.current.handleExit(2));
+    expect(result.current.isExited).toBe(true);
+    expect(result.current.exitCode).toBe(2);
 
     rerender({ id: "tab-a", restartKey: 1 });
     expect(seen.filter((r) => r.restartKey === 1).some((r) => r.isExited)).toBe(false);
+    act(() => result.current.handleExit(3));
+    expect(result.current.isExited).toBe(true);
+    expect(result.current.exitCode).toBe(3);
   });
 });

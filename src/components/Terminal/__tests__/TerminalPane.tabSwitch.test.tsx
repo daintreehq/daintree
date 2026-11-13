@@ -191,20 +191,20 @@ describe("TerminalPane reused across a tab group's tabs (#16878)", () => {
 
   describe("auto-restart", () => {
     const restartTerminal = vi.fn();
+    const realRestartTerminal = usePanelStore.getState().restartTerminal;
 
     beforeEach(() => {
       vi.useFakeTimers();
       restartTerminal.mockClear();
       seedPanels({ exitBehavior: "restart" });
-      usePanelStore.setState({
-        restartTerminal,
-      } as unknown as Partial<ReturnType<typeof usePanelStore.getState>>);
+      usePanelStore.setState({ restartTerminal });
       exits.exited.add("a");
       exits.exited.add("b");
     });
 
     afterEach(() => {
       vi.useRealTimers();
+      usePanelStore.setState({ restartTerminal: realRestartTerminal });
     });
 
     it("restarts the tab the pane moved to, not the one it left", () => {
