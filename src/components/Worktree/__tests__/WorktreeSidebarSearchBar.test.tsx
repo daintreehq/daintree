@@ -300,22 +300,43 @@ describe("WorktreeSidebarSearchBar", () => {
     }
   });
 
-  it("clearing the last facet or quick-state filter leaves text awaiting its commit alone", () => {
+  it("clearing the last facet leaves text awaiting its commit alone", () => {
     vi.useFakeTimers();
     try {
       renderBar();
       act(() => {
         useWorktreeFilterStore.getState().toggleStatusFilter("active");
-        useWorktreeFilterStore.getState().setQuickStateFilter("working");
       });
       fireEvent.change(getInput(), { target: { value: "foo" } });
-      act(() => {
-        useWorktreeFilterStore.getState().clearQuickStateFilter();
-      });
-      expect(getInput().value).toBe("foo");
+      expect(useWorktreeFilterStore.getState().query).toBe("");
       act(() => {
         useWorktreeFilterStore.getState().clearStatusFilters();
       });
+      expect(useWorktreeFilterStore.getState().statusFilters.size).toBe(0);
+      expect(getInput().value).toBe("foo");
+      act(() => {
+        vi.advanceTimersByTime(550);
+      });
+      expect(useWorktreeFilterStore.getState().query).toBe("foo");
+      expect(getInput().value).toBe("foo");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clearing the last quick-state filter leaves text awaiting its commit alone", () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      act(() => {
+        useWorktreeFilterStore.getState().setQuickStateFilter("working");
+      });
+      fireEvent.change(getInput(), { target: { value: "foo" } });
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      act(() => {
+        useWorktreeFilterStore.getState().setQuickStateFilter("all");
+      });
+      expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
       expect(getInput().value).toBe("foo");
       act(() => {
         vi.advanceTimersByTime(550);

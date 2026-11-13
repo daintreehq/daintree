@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender, screen, cleanup, fireEvent, act } from "@testing-library/react";
@@ -117,6 +117,48 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     fireEvent.click(screen.getByText("Clear all filters"));
     expect(useWorktreeFilterStore.getState().query).toBe("");
     expect(useWorktreeFilterStore.getState().liveQuery).toBe("");
+  });
+
+  it("hands focus to the open popover before the footer unmounts, in both search ownerships", () => {
+    // Clearing the last filter unmounts the footer button that holds focus;
+    // without the handoff focus drops to <body> inside the open popover (#10315).
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    const hidden = openPopover();
+    const hiddenButton = screen.getByText("Clear all filters");
+    hiddenButton.focus();
+    fireEvent.click(hiddenButton);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("worktree-filter-popover"));
+    hidden.unmount();
+
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+    const ownedButton = screen.getByText("Clear all filters");
+    ownedButton.focus();
+    fireEvent.click(ownedButton);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("worktree-filter-popover"));
+  });
+
+  it("drops text still awaiting its commit when the popover owns the search input", () => {
+    vi.useFakeTimers();
+    try {
+      useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+      render(<WorktreeFilterPopover appearance="field" open onOpenChange={() => {}} />);
+      const input = screen.getByRole<HTMLInputElement>("textbox", { name: "Search worktrees" });
+      fireEvent.change(input, { target: { value: "foo" } });
+      // The owned field's own debounce is still pending; nothing is committed.
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+      fireEvent.click(screen.getByText("Clear all filters"));
+      expect(input.value).toBe("");
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(input.value).toBe("");
+      expect(useWorktreeFilterStore.getState().query).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers no bulk clear when nothing is filtered", () => {
