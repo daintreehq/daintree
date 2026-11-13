@@ -1335,21 +1335,19 @@ export function useDockLaunchModel(options: {
 
 /**
  * First-run discovery cue: route into recipes instead of hiding the section, so
- * users who have never made one can find their way in. With an active worktree,
- * open the editor scoped to it; without one (the common first-run case), fall
- * back to the manager — the editor's event handler hard-requires a string
- * worktreeId and silently no-ops on undefined, so dispatching the editor here
- * would do nothing. Both actions are danger:"safe" and MRU-eligible.
+ * users who have never made one can find their way in. The draft is scoped to
+ * the active worktree, or to the whole project when there is none (a folder
+ * without git, #16906).
  */
 export function activateCreateRecipeCue(
   activeWorktreeId: string | null,
   source: ActionSource
 ): void {
-  if (activeWorktreeId) {
-    void actionService.dispatch("recipe.editor.open", { worktreeId: activeWorktreeId }, { source });
-  } else {
-    void actionService.dispatch("recipe.manager.open", {}, { source });
-  }
+  void actionService.dispatch(
+    "recipe.editor.open",
+    activeWorktreeId ? { worktreeId: activeWorktreeId } : {},
+    { source }
+  );
 }
 
 /**

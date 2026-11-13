@@ -6,6 +6,7 @@ import type { RunCommand } from "@/types";
 
 interface RecipeRunnerEmptyProps {
   onCreate: () => void;
+  createButtonRef?: React.Ref<HTMLButtonElement>;
   suggestions: RunCommand[];
   onRunSuggestion: (suggestion: RunCommand) => void;
   disabled?: boolean;
@@ -13,6 +14,7 @@ interface RecipeRunnerEmptyProps {
 
 export function RecipeRunnerEmpty({
   onCreate,
+  createButtonRef,
   suggestions,
   onRunSuggestion,
   disabled,
@@ -20,6 +22,7 @@ export function RecipeRunnerEmpty({
   const hasSuggestions = suggestions.length > 0;
   const createButton = (
     <Button
+      ref={createButtonRef}
       variant="ghost"
       size="sm"
       onClick={onCreate}

@@ -281,11 +281,11 @@ describe("DockLaunchMenuItems", () => {
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 
-  it("routes the create-recipe cue to the manager when no worktree is active", () => {
+  it("opens a project-wide draft from the create-recipe cue when no worktree is active", () => {
     const { getByText } = renderItems();
 
     fireEvent.click(getByText("Create a recipe"));
-    expect(actionDispatchMock).toHaveBeenCalledWith("recipe.manager.open", {}, { source: "menu" });
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
   });
 
   it("scopes the create-recipe cue to the active worktree when there is one", () => {

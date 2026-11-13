@@ -1311,6 +1311,162 @@ describe("useRecipeRunner — delete confirm flow", () => {
     );
   });
 
+  it("keeps naming the recipe it was asked about, through its exit (#16906)", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    const { result, rerender } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    // A rename while the confirm is open doesn't change the question asked.
+    recipeStoreState.recipes = [makeRecipe({ id: "r1", name: "Renamed" })];
+    rerender();
+    expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
+
+    // The store drops the recipe as the delete lands; the closing dialog must
+    // not fall back to a generic title.
+    dispatchMock.mockImplementationOnce(async () => {
+      recipeStoreState.recipes = [];
+      return { ok: true, result: undefined };
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+
+    expect(result.current.recipes).toEqual([]);
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
+  });
+
+  it("keeps a failure's error through a cancel's exit and clears it for the next request", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    });
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+    act(() => {
+      result.current.cancelDelete();
+    });
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteError).toBeTruthy();
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    expect(result.current.deleteError).toBeNull();
+  });
+
+  it("leaves a later confirm alone when a delete settles after a worktree switch", async () => {
+    recipes.push(
+      makeRecipe({ id: "r1", name: "Dev server" }),
+      makeRecipe({ id: "r2", name: "Docs" })
+    );
+    let settle: (value: Awaited<ReturnType<typeof actionService.dispatch>>) => void = () => {};
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ worktreeId }) => useRecipeRunner({ activeWorktreeId: worktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { worktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    rerender({ worktreeId: "wt-2" });
+    act(() => {
+      result.current.handleDelete("r2");
+    });
+    await act(async () => {
+      settle({ ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(result.current.pendingDeleteId).toBe("r2");
+    expect(result.current.deleteError).toBeNull();
+    expect(result.current.isDeleting).toBe(false);
+  });
+
+  it("is busy while the delete runs, and a cancel then is ignored", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    let settle: (value: { ok: true; result: undefined }) => void = () => {};
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    expect(result.current.isDeleting).toBe(true);
+
+    act(() => {
+      result.current.cancelDelete();
+    });
+    expect(result.current.pendingDeleteId).toBe("r1");
+
+    await act(async () => {
+      settle({ ok: true, result: undefined });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(result.current.isDeleting).toBe(false);
+    expect(result.current.pendingDeleteId).toBeNull();
+  });
+
+  it("closes the confirm for another worktree and names the next request afresh", () => {
+    recipes.push(
+      makeRecipe({ id: "r1", name: "Dev server" }),
+      makeRecipe({ id: "r2", name: "Docs" })
+    );
+    const { result, rerender } = renderHook(
+      ({ worktreeId }) => useRecipeRunner({ activeWorktreeId: worktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { worktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    rerender({ worktreeId: "wt-2" });
+    expect(result.current.pendingDeleteId).toBeNull();
+
+    act(() => {
+      result.current.handleDelete("r2");
+    });
+    expect(result.current.pendingDeleteId).toBe("r2");
+    expect(result.current.deleteTarget).toEqual({ id: "r2", name: "Docs" });
+  });
+
   it("cancelDelete clears the pending id without dispatching", () => {
     const { result } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
@@ -1573,5 +1729,36 @@ describe("useRecipeRunner — a live query never hides recipes behind a vanished
     recipeStoreState.recipes = recipes.slice(3);
     rerender();
     expect(result.current.focusedIndex).toBeLessThan(result.current.totalItems);
+  });
+});
+
+describe("useRecipeRunner — create (#16906)", () => {
+  it("asks for a project draft without a worktree when the folder has none", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: null, defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleCreate();
+    });
+
+    // A null id fails the action's optional-string argument, so nothing opens.
+    expect(dispatchMock).toHaveBeenCalledWith("recipe.editor.open", {}, { source: "user" });
+  });
+
+  it("scopes the draft to the active worktree when there is one", () => {
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleCreate();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "recipe.editor.open",
+      { worktreeId: "wt-1" },
+      { source: "user" }
+    );
   });
 });

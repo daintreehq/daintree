@@ -74,7 +74,11 @@ export interface UseRecipeRunnerResult {
   handlePin: (recipeId: string) => void;
   handleUnpin: (recipeId: string) => void;
   handleDelete: (recipeId: string) => void;
+  /** The recipe the delete confirm is open for; null once it closes. */
   pendingDeleteId: string | null;
+  /** The recipe the delete confirm last asked about, kept through its exit. */
+  deleteTarget: { id: string; name: string } | null;
+  isDeleting: boolean;
   deleteError: string | null;
   confirmDelete: () => void;
   cancelDelete: () => void;
@@ -123,12 +127,20 @@ export function useRecipeRunner({
   const [spawnFailureSummary, setSpawnFailureSummary] = useState<SpawnFailureSummary | null>(null);
   const [unresolvedVars, setUnresolvedVars] = useState<string[]>([]);
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // Kept after the confirm closes, so its title still names the recipe through
+  // the exit: by then a deleted recipe has already left the store.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const pendingDeleteId = isDeleteOpen ? (deleteTarget?.id ?? null) : null;
 
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
   const isConfirmingDeleteRef = useRef(false);
+  // Bumped by every delete request and worktree switch: a delete that settles
+  // after either has no confirm left to answer.
+  const deleteRequestRef = useRef(0);
   const lastRunRecipeIdRef = useRef<string | null>(null);
   // The run waiting on the missing-variables confirm, so a worktree switch or
   // unmount can withdraw a question about a target that's no longer here.
@@ -204,8 +216,8 @@ export function useRecipeRunner({
     // Drop any in-flight delete confirmation — a pending recipe id belongs to
     // the previous worktree's filtered list; confirming it after the switch
     // would delete a recipe out of its original context.
-    setPendingDeleteId(null);
-    setDeleteError(null);
+    deleteRequestRef.current += 1;
+    setIsDeleteOpen(false);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
     return () => pendingConfirmRef.current?.abort();
@@ -505,10 +517,15 @@ export function useRecipeRunner({
   // Route deletes through the `recipe.delete` action (danger:"confirm") behind
   // a ConfirmDialog rendered in RecipeRunner.tsx, matching RecipeManager and
   // RecipesTab — never call the store's deleteRecipe directly (Tier D1 gate).
-  const handleDelete = useCallback((recipeId: string) => {
-    setDeleteError(null);
-    setPendingDeleteId(recipeId);
-  }, []);
+  const handleDelete = useCallback(
+    (recipeId: string) => {
+      deleteRequestRef.current += 1;
+      setDeleteError(null);
+      setDeleteTarget({ id: recipeId, name: getRecipeById(recipeId)?.name ?? "recipe" });
+      setIsDeleteOpen(true);
+    },
+    [getRecipeById]
+  );
 
   const confirmDelete = useCallback(() => {
     const recipeId = pendingDeleteId;
@@ -518,6 +535,8 @@ export function useRecipeRunner({
     // "already gone" error.
     if (isConfirmingDeleteRef.current) return;
     isConfirmingDeleteRef.current = true;
+    setIsDeleting(true);
+    const request = deleteRequestRef.current;
     void (async () => {
       setDeleteError(null);
       try {
@@ -526,8 +545,9 @@ export function useRecipeRunner({
           { recipeId },
           { source: "user", confirmed: true }
         );
+        if (request !== deleteRequestRef.current) return;
         if (result.ok) {
-          setPendingDeleteId(null);
+          setIsDeleteOpen(false);
         } else {
           // Keep the dialog open with retry copy rather than closing on a silent
           // failure (the action surface is the user's only recovery path here).
@@ -536,19 +556,23 @@ export function useRecipeRunner({
         }
       } finally {
         isConfirmingDeleteRef.current = false;
+        setIsDeleting(false);
       }
     })();
   }, [pendingDeleteId]);
 
+  // The error stays with the closing confirm, like its title; the next request
+  // clears it.
   const cancelDelete = useCallback(() => {
-    setPendingDeleteId(null);
-    setDeleteError(null);
+    if (isConfirmingDeleteRef.current) return;
+    setIsDeleteOpen(false);
   }, []);
 
   const handleCreate = useCallback(() => {
+    // A folder without git has no worktree; the draft is then project-wide.
     void actionService.dispatch(
       "recipe.editor.open",
-      { worktreeId: activeWorktreeId },
+      activeWorktreeId ? { worktreeId: activeWorktreeId } : {},
       { source: "user" }
     );
   }, [activeWorktreeId]);
@@ -648,6 +672,8 @@ export function useRecipeRunner({
     handleUnpin,
     handleDelete,
     pendingDeleteId,
+    deleteTarget,
+    isDeleting,
     deleteError,
     confirmDelete,
     cancelDelete,

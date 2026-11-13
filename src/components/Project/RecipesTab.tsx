@@ -120,9 +120,10 @@ export function RecipesTab({
     setIsRecipeEditorOpen(true);
   };
 
+  // The recipe stays through the editor's exit so its title doesn't flip to
+  // "Create recipe" on the way out; each opening sets it afresh.
   const handleRecipeEditorClose = () => {
     setIsRecipeEditorOpen(false);
-    setEditingRecipe(undefined);
   };
 
   const requestDelete = (recipeId: string) => {

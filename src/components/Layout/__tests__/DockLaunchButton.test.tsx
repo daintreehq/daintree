@@ -1338,20 +1338,14 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("falls back to the recipe manager from the cue when no worktree is active", () => {
-    // recipe.editor.open's handler hard-requires a string worktreeId and
-    // silently no-ops on undefined — the common first-run case has no active
-    // worktree, so the cue must route to the manager instead of dead-ending.
+  it("opens a project-wide draft from the cue when no worktree is active (#16906)", () => {
+    // The common first-run case, and every folder without git, has no active
+    // worktree; the editor then drafts a project recipe.
     mockRecipes = [];
     const { getByText } = renderButton();
 
     fireEvent.click(getByText("Create a recipe"));
-    expect(actionDispatchMock).toHaveBeenCalledWith("recipe.manager.open", {}, { source: "menu" });
-    expect(actionDispatchMock).not.toHaveBeenCalledWith(
-      "recipe.editor.open",
-      expect.anything(),
-      expect.anything()
-    );
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
   });
 
   it("fills the first column past a short agent list instead of leaving it empty", () => {
