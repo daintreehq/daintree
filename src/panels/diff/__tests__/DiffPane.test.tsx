@@ -63,31 +63,40 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 // Set by a test that needs an overlay the pane opened: a React child of the
 // pane portalled out of its DOM, the way a menu or popover is.
-const { viewerOverlay } = vi.hoisted(() => ({ viewerOverlay: { open: false } }));
+const { viewerOverlay, viewerDraftSessions } = vi.hoisted(() => ({
+  viewerOverlay: { open: false },
+  // Every note-draft session a mounted viewer was handed.
+  viewerDraftSessions: new Set<unknown>(),
+}));
 vi.mock("@/components/Worktree/DiffViewer", async () => {
   const { createPortal } = await import("react-dom");
+  const { use } = await import("react");
+  const { DiffNoteDraftContext } = await import("@/components/Worktree/diffNoteDrafts");
   return {
     // Surfaces `wrapLines` so the auto/override resolution is observable from the
     // prop the viewer actually receives, not just from the toolbar's pressed state.
     // `diff` rides along so a test can prove the viewer received the patch it
     // names, not merely that something mounted.
-    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => (
-      <div
-        data-testid="diff-viewer-mock"
-        data-wrap-lines={String(props.wrapLines)}
-        data-diff={props.diff}
-      >
-        {viewerOverlay.open &&
-          createPortal(
-            <div role="menu" aria-label="Viewer overlay">
-              <button type="button" role="menuitem">
-                Overlay item
-              </button>
-            </div>,
-            document.body
-          )}
-      </div>
-    ),
+    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => {
+      viewerDraftSessions.add(use(DiffNoteDraftContext));
+      return (
+        <div
+          data-testid="diff-viewer-mock"
+          data-wrap-lines={String(props.wrapLines)}
+          data-diff={props.diff}
+        >
+          {viewerOverlay.open &&
+            createPortal(
+              <div role="menu" aria-label="Viewer overlay">
+                <button type="button" role="menuitem">
+                  Overlay item
+                </button>
+              </div>,
+              document.body
+            )}
+        </div>
+      );
+    },
     FULL_FILE_MAX_LINES: 5000,
   };
 });
@@ -240,6 +249,13 @@ function sourceEnabledCalls(): boolean[] {
 }
 
 import { DiffPane } from "../DiffPane";
+import { useDiffNotesStore } from "@/store/diffNotesStore";
+import {
+  diffNoteFileKey,
+  editDraftBodyKey,
+  fileDraftBodyKey,
+  type DiffNoteDraftSession,
+} from "@/components/Worktree/diffNoteDrafts";
 import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
 import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -297,6 +313,7 @@ beforeEach(() => {
   });
   viewedKeys.clear();
   viewerOverlay.open = false;
+  viewerDraftSessions.clear();
   sidebarRowViewed.mockReset();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
@@ -315,6 +332,89 @@ beforeEach(() => {
 afterEach(() => {
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   sidebarSelect.mockReset();
+});
+
+describe("DiffPane — unsaved note drafts (#16899)", () => {
+  function viewerSession(): DiffNoteDraftSession {
+    expect(viewerDraftSessions.size).toBe(1);
+    return [...viewerDraftSessions][0] as DiffNoteDraftSession;
+  }
+
+  afterEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+  });
+
+  it("keeps the drafts it holds through a refresh that unmounts the viewer", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified" });
+    const { rerender } = renderPane();
+    const session = viewerSession();
+    const fileKey = diffNoteFileKey(WORKTREE_PATH, "a.ts");
+    act(() => {
+      session.openFile(fileKey);
+      session.writeBody(fileDraftBodyKey(fileKey), "Half a thought");
+      session.openEdit("note-1");
+    });
+    expect(useDiffNotesStore.getState().editingIds["note-1"]).toBe(1);
+
+    // A refresh drops the diff while it refetches: the skeleton takes the viewer's place.
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+    rerender(paneElement());
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(useDiffNotesStore.getState().editingIds["note-1"]).toBe(1);
+
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/a.ts b/a.ts",
+      stale: false,
+      retry: vi.fn(),
+    });
+    rerender(paneElement());
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+
+    expect(viewerSession()).toBe(session);
+    expect(session.getState().files[fileKey]).toBe(true);
+    expect(session.readBody(fileDraftBodyKey(fileKey))).toBe("Half a thought");
+    expect(session.getState().edits["note-1"]).toBe(true);
+  });
+
+  it("lists open drafts in the rendered layout, and carries what's typed there back", async () => {
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const note = useDiffNotesStore.getState().addNote({
+      worktreePath: WORKTREE_PATH,
+      filePath: "docs/guide.md",
+      anchor: { kind: "file" },
+      body: "Saved words",
+    })!;
+    const { rerender } = renderPane();
+    const session = viewerSession();
+    const fileKey = diffNoteFileKey(WORKTREE_PATH, "docs/guide.md");
+    act(() => {
+      session.openFile(fileKey);
+      session.writeBody(fileDraftBodyKey(fileKey), "Half a thought");
+      session.openEdit(note.id);
+      session.writeBody(editDraftBodyKey(note.id), "Rewritten");
+    });
+
+    preferences.diffMarkdownRendered = true;
+    rerender(paneElement());
+    expect(await screen.findByTestId("rendered-markdown-mock")).toBeTruthy();
+
+    const list = screen.getByTestId("diff-pending-file-notes");
+    const draft = within(list).getByLabelText("New file note");
+    const edit = within(list).getByLabelText("Edit file note");
+    expect(draft instanceof HTMLTextAreaElement && draft.value).toBe("Half a thought");
+    expect(edit instanceof HTMLTextAreaElement && edit.value).toBe("Rewritten");
+    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(1);
+    fireEvent.change(draft, { target: { value: "Finished in the rendered view" } });
+
+    preferences.diffMarkdownRendered = false;
+    rerender(paneElement());
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("diff-pending-file-notes")).toBeNull();
+    expect(viewerSession()).toBe(session);
+    expect(session.readBody(fileDraftBodyKey(fileKey))).toBe("Finished in the rendered view");
+    expect(useDiffNotesStore.getState().editingIds[note.id]).toBe(1);
+  });
 });
 
 describe("DiffPane — current-file resolution", () => {

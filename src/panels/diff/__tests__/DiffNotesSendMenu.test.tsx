@@ -2,17 +2,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
 
-const { notifyMock } = vi.hoisted(() => ({ notifyMock: vi.fn() }));
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import type { DiffNoteTarget } from "@/hooks/useDiffNoteDelivery";
+
+const { notifyMock, targetsMock } = vi.hoisted(() => ({
+  notifyMock: vi.fn(),
+  targetsMock: { current: [] as DiffNoteTarget[] },
+}));
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/hooks/useDiffNoteDelivery", () => ({
   deliverDiffNotes: vi.fn(),
-  useDiffNoteTargets: () => [],
+  useDiffNoteTargets: () => targetsMock.current,
 }));
 vi.mock("@/components/Terminal/TerminalIcon", () => ({ TerminalIcon: () => null }));
 
-import { offerSentNotesUndo } from "../DiffNotesSendMenu";
+import { DiffNotesSendMenu, offerSentNotesUndo } from "../DiffNotesSendMenu";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
+import { deliverDiffNotes } from "@/hooks/useDiffNoteDelivery";
 
 function add(filePath: string, body = "Fix this"): DiffNote {
   return useDiffNotesStore.getState().addNote({
@@ -78,5 +85,128 @@ describe("offerSentNotesUndo", () => {
 
     newer.undo();
     expect(useDiffNotesStore.getState().notes[note.id]?.body).toBe("Second words");
+  });
+});
+
+function agent(overrides: Partial<DiffNoteTarget> = {}): DiffNoteTarget {
+  return {
+    id: "agent-1",
+    title: "Claude",
+    isInputLocked: false,
+    kind: "terminal",
+    chrome: {} as DiffNoteTarget["chrome"],
+    worktreeId: "wt",
+    worktreeName: "feature",
+    ...overrides,
+  };
+}
+
+function menu(filePath: string) {
+  return (
+    <DiffNotesSendMenu
+      worktreePath="/repo"
+      worktreeId="wt"
+      filePath={filePath}
+      onResult={() => undefined}
+    />
+  );
+}
+
+function reopen() {
+  fireEvent.pointerDown(screen.getByTestId("diff-notes-send"), { button: 0, ctrlKey: false });
+  return screen.getByRole("menu");
+}
+
+function openMenu(filePath: string) {
+  const result = render(menu(filePath));
+  reopen();
+  return result;
+}
+
+function close() {
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+}
+
+function sentIds(): string[] {
+  const calls = vi.mocked(deliverDiffNotes).mock.calls;
+  return (calls.at(-1)?.[1] ?? []).map((note) => note.id).sort();
+}
+
+function checkedScope(): string | undefined {
+  return screen
+    .getAllByRole("menuitemradio")
+    .find((row) => row.getAttribute("aria-checked") === "true")
+    ?.getAttribute("aria-label")
+    ?.split(",")[0];
+}
+
+describe("DiffNotesSendMenu", () => {
+  beforeEach(() => {
+    useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+    targetsMock.current = [agent()];
+    vi.mocked(deliverDiffNotes).mockReset();
+    vi.mocked(deliverDiffNotes).mockReturnValue({
+      ok: true,
+      sent: 0,
+      kept: 0,
+      targetTitle: "Claude",
+      cleared: [],
+    });
+  });
+
+  it("aims at the file on screen when it has notes of its own, and sends only those", () => {
+    const own = add("src/a.ts");
+    add("src/b.ts");
+    openMenu("src/a.ts");
+
+    expect(checkedScope()).toBe("This file");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude, feature" }));
+    expect(sentIds()).toEqual([own.id]);
+  });
+
+  it("opens on every file's notes when the file on screen has none, and sends them all", () => {
+    const notes = [add("src/b.ts"), add("src/c.ts")];
+    openMenu("src/a.ts");
+
+    expect(checkedScope()).toBe("All files");
+    expect(screen.getByText("Paste 2 notes into")).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude, feature" }));
+    expect(sentIds()).toEqual(notes.map((note) => note.id).sort());
+  });
+
+  it("chooses the scope afresh on every opening", () => {
+    add("src/a.ts");
+    add("src/b.ts");
+    const { rerender } = openMenu("src/a.ts");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^All files/ }));
+    expect(checkedScope()).toBe("All files");
+    close();
+
+    reopen();
+    expect(checkedScope()).toBe("This file");
+    close();
+
+    rerender(menu("src/empty.ts"));
+    reopen();
+    expect(checkedScope()).toBe("All files");
+    close();
+
+    act(() => {
+      add("src/empty.ts");
+    });
+    reopen();
+    expect(checkedScope()).toBe("This file");
+  });
+
+  it("says why an agent with locked input can't take the notes", () => {
+    add("src/a.ts");
+    targetsMock.current = [agent({ isInputLocked: true })];
+    openMenu("src/a.ts");
+
+    const row = screen.getByRole("menuitem", { name: "Claude, Input locked" });
+    expect(row.dataset.disabled).toBe("");
+    expect(row.textContent).toContain("Input locked");
+    expect(row.textContent).not.toContain("feature");
   });
 });

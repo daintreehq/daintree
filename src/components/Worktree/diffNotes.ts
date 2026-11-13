@@ -146,7 +146,14 @@ export type DiffNotePlacement =
  * sits at those numbers.
  */
 export function placeDiffNote(note: DiffNote, index: DiffLineIndex): DiffNotePlacement {
-  const { anchor } = note;
+  return placeDiffNoteAnchor(note.anchor, index);
+}
+
+/** `placeDiffNote` for an anchor with no note yet — a draft still being written. */
+export function placeDiffNoteAnchor(
+  anchor: DiffNoteAnchor,
+  index: DiffLineIndex
+): DiffNotePlacement {
   if (anchor.kind === "file") return { status: "file" };
   const hash = hashLineRange(index, anchor.side, anchor.startLine, anchor.endLine);
   if (hash === null) return { status: "unplaced" };
