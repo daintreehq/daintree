@@ -92,6 +92,22 @@ export function captureCopyFlash(): CopyFlashTicket {
 }
 
 /**
+ * Snapshot a named element as the origin instead of where the user is acting,
+ * for a surface that knows the input's own position is about to be covered
+ * (a menu over a native page view, which comes back over it once the menu
+ * closes). Falls back to the input position when the element can't be
+ * measured.
+ */
+export function captureCopyFlashAt(element: Element | null): CopyFlashTicket {
+  const rect = element?.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return captureCopyFlash();
+  return {
+    origin: { kind: "rect", left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+    generation,
+  };
+}
+
+/**
  * Show "Copied" near the ticket's origin, replacing any flash already up. A
  * ticket from an earlier view lifecycle, or a view nobody can see, draws
  * nothing — the confirmation belongs to the moment it was asked for.
