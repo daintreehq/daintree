@@ -2619,6 +2619,31 @@ describe("FilePane diff mode (#11274)", () => {
       expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Source" }));
     });
 
+    // Below the segments' width the mode control is a menu in a portal, outside
+    // the pane's DOM; focus in it is still this pane's.
+    it("hands focus back when it sat in the toolbar's portalled mode menu", async () => {
+      const narrow = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockReturnValue(new DOMRect(0, 0, 340, 30));
+      try {
+        const { rerender } = await renderDiff("/repo/src/index.ts", false);
+        const trigger = await screen.findByRole("button", { name: /^View mode: Diff$/ });
+        await act(async () => {
+          fireEvent.keyDown(trigger, { key: "Enter" });
+        });
+        const menu = await screen.findByRole("menu");
+        expect(menu.contains(document.activeElement)).toBe(true);
+
+        await goClean(rerender, false);
+
+        expect(screen.queryByRole("menu")).toBeNull();
+        expect(screen.queryByRole("button", { name: /^View mode/ })).toBeNull();
+        expect(document.activeElement?.hasAttribute("data-toolbar-path")).toBe(true);
+      } finally {
+        narrow.mockRestore();
+      }
+    });
+
     it("leaves focus alone in a pane it never entered", async () => {
       const { rerender } = await renderDiff("/repo/docs/spec.md", true);
       expect(document.activeElement).toBe(document.body);

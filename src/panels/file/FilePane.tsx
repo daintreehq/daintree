@@ -600,31 +600,30 @@ export function FilePane({
   // path pill, which names the file, takes focus instead.
   const toolbarPathRef = useRef<HTMLDivElement>(null);
   const previousModeRef = useRef(viewMode);
-  // Whether focus last landed in this pane's toolbar or body. Diff also
-  // vanishes under panes nobody is using, when a commit elsewhere leaves the
-  // file clean, so only the pane that held focus takes it back. Read off focus
-  // events rather than the panel store's selection, which a keyboard user tabs
-  // past without changing. A removed control fires no focusin, so the claim
-  // outlives the segment that held it; a press anywhere else drops it.
+  // Whether the user's last focus or press landed in this pane: its toolbar,
+  // its body, or a menu either one opened. Diff also vanishes under panes
+  // nobody is using, when a commit elsewhere leaves the file clean, so only the
+  // pane that held focus takes it back. Read off events rather than the panel
+  // store's selection, which a keyboard user tabs past without changing. A
+  // removed control fires no focusin, so the claim outlives the segment that
+  // held it. Document capture runs ahead of React's listeners, so every focus
+  // or press drops the claim first and the pane's own capture handlers, which
+  // React also routes portalled menus through, take it back.
   const focusWasHereRef = useRef(false);
   useEffect(() => {
-    const isHere = (target: EventTarget | null) =>
-      target instanceof Node &&
-      (heightHoldBodyRef.current?.contains(target) === true ||
-        toolbarPathRef.current?.closest('[role="toolbar"]')?.contains(target) === true);
-    const onFocusIn = (event: FocusEvent) => {
-      focusWasHereRef.current = isHere(event.target);
+    const release = () => {
+      focusWasHereRef.current = false;
     };
-    const onPointerDown = (event: PointerEvent) => {
-      if (!isHere(event.target)) focusWasHereRef.current = false;
-    };
-    document.addEventListener("focusin", onFocusIn, true);
-    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("focusin", release, true);
+    document.addEventListener("pointerdown", release, true);
     return () => {
-      document.removeEventListener("focusin", onFocusIn, true);
-      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("focusin", release, true);
+      document.removeEventListener("pointerdown", release, true);
     };
-  }, [heightHoldBodyRef]);
+  }, []);
+  const claimFocus = () => {
+    focusWasHereRef.current = true;
+  };
   // The HTML fallback's View source button unmounts with the view it leaves,
   // so it hands off the same way; ringed only when it was keyboard-activated.
   const sourceFocusRef = useRef<{ focusVisible: boolean } | null>(null);
@@ -687,50 +686,52 @@ export function FilePane({
 
   const copyableContents = loadState === "loaded" ? content : null;
   const toolbar = filePath ? (
-    <FilePaneToolbar
-      panelId={id}
-      filePath={filePath}
-      fileName={fileName}
-      displayPath={displayPath || ""}
-      isMarkdown={isMarkdown}
-      viewMode={viewMode}
-      toggleOptions={toggleOptions}
-      modeToggleRef={modeToggleRef}
-      pathRef={toolbarPathRef}
-      onViewModeChange={handleViewModeChange}
-      editorPicker={editorPicker}
-      pinnedEditor={pinnedEditor}
-      setEditorChoice={setEditorChoice}
-      effectiveDiffWrapLines={effectiveDiffWrapLines}
-      refreshing={refreshing}
-      onRefresh={handleToolbarRefresh}
-      copyableContents={copyableContents}
-      revealWorktreeId={revealWorktreeId}
-      reveal={reveal}
-      openTarget={openTarget}
-      savesCopyInstead={savesCopyInstead}
-      onRunOpenTarget={runOpenTarget}
-      externalOpen={externalOpen}
-      defaultNoticeSlot={
-        fileDefault !== null &&
-        fileDefault.choice === null &&
-        editOptions.includes(fileDefault.choiceId)
-          ? fileDefault.slot
-          : null
-      }
-      onDefaultAnswered={handleDefaultAnswered}
-      editorBannerContent={
-        location !== "dialog" &&
-        isInsideGovernedRoot &&
-        editLockedBy === null &&
-        viewMode !== "edit" &&
-        loadState === "loaded"
-          ? content
-          : null
-      }
-      showDiffStale={viewMode === "diff" && diffStale && diffContent !== undefined}
-      onRetryDiff={retryDiff}
-    />
+    <div className="contents" onFocusCapture={claimFocus} onPointerDownCapture={claimFocus}>
+      <FilePaneToolbar
+        panelId={id}
+        filePath={filePath}
+        fileName={fileName}
+        displayPath={displayPath || ""}
+        isMarkdown={isMarkdown}
+        viewMode={viewMode}
+        toggleOptions={toggleOptions}
+        modeToggleRef={modeToggleRef}
+        pathRef={toolbarPathRef}
+        onViewModeChange={handleViewModeChange}
+        editorPicker={editorPicker}
+        pinnedEditor={pinnedEditor}
+        setEditorChoice={setEditorChoice}
+        effectiveDiffWrapLines={effectiveDiffWrapLines}
+        refreshing={refreshing}
+        onRefresh={handleToolbarRefresh}
+        copyableContents={copyableContents}
+        revealWorktreeId={revealWorktreeId}
+        reveal={reveal}
+        openTarget={openTarget}
+        savesCopyInstead={savesCopyInstead}
+        onRunOpenTarget={runOpenTarget}
+        externalOpen={externalOpen}
+        defaultNoticeSlot={
+          fileDefault !== null &&
+          fileDefault.choice === null &&
+          editOptions.includes(fileDefault.choiceId)
+            ? fileDefault.slot
+            : null
+        }
+        onDefaultAnswered={handleDefaultAnswered}
+        editorBannerContent={
+          location !== "dialog" &&
+          isInsideGovernedRoot &&
+          editLockedBy === null &&
+          viewMode !== "edit" &&
+          loadState === "loaded"
+            ? content
+            : null
+        }
+        showDiffStale={viewMode === "diff" && diffStale && diffContent !== undefined}
+        onRetryDiff={retryDiff}
+      />
+    </div>
   ) : undefined;
 
   // The file's menu on its content (#13423) — the shared file-row core, scoped
@@ -818,6 +819,8 @@ export function FilePane({
           }`}
           // The diff's own size preference, shared with the diff panel.
           style={viewMode === "diff" ? diffFontStyle(diffFontSize) : undefined}
+          onFocusCapture={claimFocus}
+          onPointerDownCapture={claimFocus}
           data-testid="file-pane-body"
         >
           {/* Ahead of every load-state branch on purpose: a deleted file fails
