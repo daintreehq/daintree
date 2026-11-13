@@ -1455,7 +1455,9 @@ describe("useWorktreeBulkRemove — a held run says so (#16892)", () => {
 });
 
 describe("useWorktreeBulkRemove — a target's panels close before its delete (#16892)", () => {
-  const snapshot = (id: string) => [{ id: `term-${id}`, worktreeId: id, location: "grid" as const }];
+  const snapshot = (id: string) => [
+    { id: `term-${id}`, worktreeId: id, location: "grid" as const },
+  ];
 
   async function confirm(hook: BulkRemoveHook) {
     await act(async () => {
@@ -1635,18 +1637,13 @@ describe("useWorktreeBulkRemove — a target's panels close before its delete (#
     );
     const { hook } = setup(
       ["parent", "child"],
-      [
-        wt("parent", { path: "/repo/parent" }),
-        wt("child", { path: "/repo/parent/child" }),
-      ]
+      [wt("parent", { path: "/repo/parent" }), wt("child", { path: "/repo/parent/child" })]
     );
     await openAndSettle(hook);
 
     await confirm(hook);
 
-    expect(panelCloseMock.closeTerminalsForWorktree.mock.calls.map((c) => c[0])).toEqual([
-      "child",
-    ]);
+    expect(panelCloseMock.closeTerminalsForWorktree.mock.calls.map((c) => c[0])).toEqual(["child"]);
   });
 });
 

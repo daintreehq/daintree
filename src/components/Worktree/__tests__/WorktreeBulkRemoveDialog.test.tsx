@@ -849,9 +849,9 @@ describe("WorktreeBulkRemoveDialog — each row names the panels it closes (#168
   }
 
   const panelLine = (row = 0) =>
-    document.querySelectorAll('[data-testid="bulk-remove-target"]')[row]?.querySelector(
-      '[data-testid="bulk-remove-panels"]'
-    )?.textContent ?? null;
+    document
+      .querySelectorAll('[data-testid="bulk-remove-target"]')
+      [row]?.querySelector('[data-testid="bulk-remove-panels"]')?.textContent ?? null;
 
   it("names a clean row's terminals and other panels, and the agents among them", () => {
     seedPanels([
