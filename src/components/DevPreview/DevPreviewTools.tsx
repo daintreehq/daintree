@@ -162,7 +162,11 @@ function ownsEscape(target: Element): boolean {
  * Focus that was in the tool stays in the tool, on its first control.
  */
 function keepFocusInTool(tag: string, from: Element): void {
-  if (from.closest("[data-dev-preview-tool-surface]")?.getAttribute("data-dev-preview-tool-surface") !== tag) {
+  if (
+    from
+      .closest("[data-dev-preview-tool-surface]")
+      ?.getAttribute("data-dev-preview-tool-surface") !== tag
+  ) {
     return;
   }
   const keyboard = focusVisible(from);

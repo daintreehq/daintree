@@ -509,9 +509,7 @@ export function setupWebviewCSP(): void {
         // Escape peels one layer. Otherwise the page keeps it. A composing
         // Escape stays the IME's either way.
         const findOwnsEscape =
-          embedder !== null &&
-          !input.isComposing &&
-          dialogService.isFindOpen(embedder.id, panelId);
+          embedder !== null && !input.isComposing && dialogService.isFindOpen(embedder.id, panelId);
         const sent = sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, {
           panelId,
           shortcut,

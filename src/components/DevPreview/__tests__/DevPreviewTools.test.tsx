@@ -514,7 +514,11 @@ describe("Escape from the dev preview's chrome", () => {
     escapeFrom(screen.getByRole("textbox", { name: "Address" }));
     escapeFrom(strip, { repeat: true });
     escapeFrom(screen.getByRole("button", { name: "Elsewhere" }));
-    const claimed = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    const claimed = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
     claimed.preventDefault();
     act(() => {
       strip.dispatchEvent(claimed);
