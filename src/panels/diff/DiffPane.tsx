@@ -455,8 +455,7 @@ export function DiffPane({
   const anchor = anchorState?.cursorKey === cursorKey ? anchorState.anchor : null;
 
   const navigation = useMemo(
-    () =>
-      resolveDiffFileNavigation(changeSet ?? [], fullOrder, visibleOrder, currentIndex, anchor),
+    () => resolveDiffFileNavigation(changeSet ?? [], fullOrder, visibleOrder, currentIndex, anchor),
     [changeSet, fullOrder, visibleOrder, currentIndex, anchor]
   );
 
@@ -480,8 +479,7 @@ export function DiffPane({
   );
 
   // Warms the next file's diff so forward stepping renders from cache.
-  const nextEntry =
-    navigation.nextIndex === null ? undefined : changeSet?.[navigation.nextIndex];
+  const nextEntry = navigation.nextIndex === null ? undefined : changeSet?.[navigation.nextIndex];
   const nextPath = nextEntry?.path;
   const nextStatus = nextEntry?.status;
   const nextSide = nextEntry?.side;
