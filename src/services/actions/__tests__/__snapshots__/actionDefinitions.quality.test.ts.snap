@@ -1430,7 +1430,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Element Picker",
+    "title": "Toggle element picker",
   },
   {
     "category": "devServer",
@@ -8025,7 +8025,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Teardown resource",
+    "title": "Tear down resource",
   },
   {
     "category": "worktree",
