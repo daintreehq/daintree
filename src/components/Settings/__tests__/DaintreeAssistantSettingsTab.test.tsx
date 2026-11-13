@@ -18,6 +18,11 @@ vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
   isRemoteHostSupported: () => remoteHostSupport.supported,
 }));
+const remoteWindow = vi.hoisted(() => ({ hostName: null as string | null }));
+vi.mock("@/hooks/useSettingsOwner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useSettingsOwner")>()),
+  useRemoteHostName: () => remoteWindow.hostName,
+}));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -145,6 +150,7 @@ vi.mock("../SettingsInput", () => ({
 
 const helpPanelState = {
   preferredAgentId: null as string | null,
+  hostAssistantAgentId: null as string | null,
   droppedPreferredAgentId: null as string | null,
   // The one lane on screen, flattened: `selectActiveSlot` projects the state as it.
   activeSlot: 0,
@@ -347,6 +353,7 @@ function installApi(
 const initialCliAvailability = {
   availability: useCliAvailabilityStore.getState().availability,
   hasRealData: useCliAvailabilityStore.getState().hasRealData,
+  lastCheckedAt: useCliAvailabilityStore.getState().lastCheckedAt,
 };
 
 describe("DaintreeAssistantSettingsTab", () => {
@@ -354,8 +361,10 @@ describe("DaintreeAssistantSettingsTab", () => {
     vi.clearAllMocks();
     useCliAvailabilityStore.setState(initialCliAvailability);
     helpPanelState.preferredAgentId = null;
+    helpPanelState.hostAssistantAgentId = null;
     helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
+    remoteWindow.hostName = null;
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
@@ -948,11 +957,17 @@ describe("DaintreeAssistantSettingsTab", () => {
     const SOLE_COPY = "Using Claude Code, the only installed agent the assistant supports";
     const BLOCKER_COPY = "The assistant can't start until you choose one";
 
-    function setCliAvailability(availability: Record<string, string>, hasRealData = true) {
+    // `probed: false` with real data is the startup cache before this view's own probe.
+    function setCliAvailability(
+      availability: Record<string, string>,
+      hasRealData = true,
+      probed = hasRealData
+    ) {
       act(() => {
         useCliAvailabilityStore.setState({
           availability: availability as never,
           hasRealData,
+          lastCheckedAt: probed ? 1 : null,
         });
       });
     }
@@ -1112,6 +1127,16 @@ describe("DaintreeAssistantSettingsTab", () => {
         expect(agentOptionMarks(container)).toEqual({ claude: null, codex: null });
       });
 
+      it("marks nothing from the startup cache alone", async () => {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        setCliAvailability({ claude: "ready", codex: "missing" }, true, false);
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect(agentOptionMarks(container)).toEqual({ claude: null, codex: null });
+      });
+
       it("re-reads the supported agents and their marks when availability reloads", async () => {
         setCliAvailability({ claude: "missing" });
 
@@ -1139,9 +1164,16 @@ describe("DaintreeAssistantSettingsTab", () => {
         expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex");
       });
 
+      // The store's shape once it has checked a saved built-in against availability.
+      function saveMissingBuiltIn(agentId: string) {
+        helpPanelState.hostAssistantAgentId = agentId;
+        helpPanelState.preferredAgentId = null;
+        helpPanelState.droppedPreferredAgentId = agentId;
+      }
+
       it("warns when the saved agent isn't installed and opens that agent's settings", async () => {
         mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-        helpPanelState.preferredAgentId = "codex";
+        saveMissingBuiltIn("codex");
         setCliAvailability({ claude: "ready", codex: "missing" });
         const dispatch = vi.spyOn(actionService, "dispatch");
 
@@ -1150,7 +1182,10 @@ describe("DaintreeAssistantSettingsTab", () => {
 
         const banner = await screen.findByTestId(BANNER);
         expect(banner.textContent).toContain("Codex isn't installed");
+        expect(banner.textContent).toContain("couldn't find its CLI on this machine");
         expect(banner.textContent).toContain("choose an installed agent above");
+        // It replaces the notice that would say Codex was removed.
+        expect(screen.queryByTestId("assistant-dropped-agent-banner")).toBeNull();
         fireEvent.click(within(banner).getByRole("button", { name: "Open agent settings" }));
 
         expect(dispatch).toHaveBeenCalledWith(
@@ -1160,8 +1195,70 @@ describe("DaintreeAssistantSettingsTab", () => {
         );
       });
 
+      it("stays after the dropped-agent notice was dismissed", async () => {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        saveMissingBuiltIn("codex");
+        helpPanelState.droppedPreferredAgentId = null;
+        setCliAvailability({ claude: "ready", codex: "missing" });
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect((await screen.findByTestId(BANNER)).textContent).toContain("Codex isn't installed");
+      });
+
+      it("warns about an agent just chosen, before the store checks it", async () => {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+        helpPanelState.hostAssistantAgentId = "codex";
+        helpPanelState.preferredAgentId = "codex";
+        setCliAvailability({ claude: "ready", codex: "missing" });
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect((await screen.findByTestId(BANNER)).textContent).toContain("Codex isn't installed");
+      });
+
+      it("warns about a saved user-defined agent the dock still launches", async () => {
+        mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "byoa"]);
+        helpPanelState.hostAssistantAgentId = "byoa";
+        helpPanelState.preferredAgentId = "byoa";
+        setCliAvailability({ claude: "ready", byoa: "missing" });
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect((await screen.findByTestId(BANNER)).textContent).toContain("BYOA isn't installed");
+      });
+
+      it("names the host the CLI is missing from", async () => {
+        remoteWindow.hostName = "studio";
+        saveMissingBuiltIn("claude");
+        setCliAvailability({ claude: "missing" });
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect((await screen.findByTestId(BANNER)).textContent).toContain(
+          "couldn't find its CLI on studio"
+        );
+      });
+
+      it("keeps the dropped-agent notice for a saved agent the assistant no longer supports", async () => {
+        saveMissingBuiltIn("gemini");
+        setCliAvailability({ claude: "ready", gemini: "missing" });
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect(screen.queryByTestId(BANNER)).toBeNull();
+        expect((await screen.findByTestId("assistant-dropped-agent-banner")).textContent).toContain(
+          "Gemini is no longer available"
+        );
+      });
+
       it("doesn't suggest another agent when none is installed", async () => {
-        helpPanelState.preferredAgentId = "claude";
+        saveMissingBuiltIn("claude");
         setCliAvailability({ claude: "missing" });
 
         const { container } = renderTab();
@@ -1173,6 +1270,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       });
 
       it("doesn't warn while the saved agent is installed", async () => {
+        helpPanelState.hostAssistantAgentId = "claude";
         helpPanelState.preferredAgentId = "claude";
         setCliAvailability({ claude: "blocked" });
 
@@ -1183,8 +1281,20 @@ describe("DaintreeAssistantSettingsTab", () => {
       });
 
       it("doesn't warn before CLI detection has real data", async () => {
+        helpPanelState.hostAssistantAgentId = "claude";
         helpPanelState.preferredAgentId = "claude";
         setCliAvailability({ claude: "missing" }, false);
+
+        const { container } = renderTab();
+        await waitForContent(container, "Search documentation");
+
+        expect(screen.queryByTestId(BANNER)).toBeNull();
+      });
+
+      it("doesn't warn from the startup cache alone", async () => {
+        helpPanelState.hostAssistantAgentId = "claude";
+        helpPanelState.preferredAgentId = "claude";
+        setCliAvailability({ claude: "missing" }, true, false);
 
         const { container } = renderTab();
         await waitForContent(container, "Search documentation");
@@ -1202,6 +1312,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       });
 
       it("clears the warning once availability reloads with the agent installed", async () => {
+        helpPanelState.hostAssistantAgentId = "claude";
         helpPanelState.preferredAgentId = "claude";
         setCliAvailability({ claude: "missing" });
 
@@ -2866,8 +2977,10 @@ describe("DaintreeAssistantSettingsTab letting other machines' assistants work h
   beforeEach(() => {
     vi.clearAllMocks();
     helpPanelState.preferredAgentId = null;
+    helpPanelState.hostAssistantAgentId = null;
     helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
+    remoteWindow.hostName = null;
     helpPanelState.setPreferredAgent = vi.fn();
     helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);

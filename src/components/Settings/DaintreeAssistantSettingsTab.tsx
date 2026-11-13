@@ -238,12 +238,19 @@ export function DaintreeAssistantSettingsTab() {
   const [showBlastRadius, setShowBlastRadius] = useState(false);
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
+  const savedAgentId = useHelpPanelStore((s) => s.hostAssistantAgentId);
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
 
   const cliAvailability = useCliAvailabilityStore((s) => s.availability);
   const cliAvailabilityKnown = useCliAvailabilityStore((s) => s.hasRealData);
+  // Only a probe in this view says a CLI is missing, as the store's own check of
+  // the saved agent requires: the startup cache is shared by every window on
+  // this machine, whichever host it came from.
+  const cliAvailabilityProbed = useCliAvailabilityStore(
+    (s) => s.hasRealData && s.lastCheckedAt !== null
+  );
   // The registry is read again whenever availability changes, as the dock's
   // choices hook does: Reload configuration can add or drop a user-defined
   // backend, and both sides must keep agreeing on which agent is the only one.
@@ -262,17 +269,20 @@ export function DaintreeAssistantSettingsTab() {
   // launch reads those for the agent it starts, not for the saved choice.
   const effectiveAgentId = resolveLaunchableAssistantAgentId(preferredAgentId, installedAgentIds);
 
-  const versionWarning = useAssistantVersionWarning(effectiveAgentId);
+  // The probe resets on a switch only once its effect runs, so a warning read for
+  // the previous agent is held back rather than shown under the new one.
+  const probedVersionWarning = useAssistantVersionWarning(effectiveAgentId);
+  const versionWarning =
+    probedVersionWarning?.agentId === effectiveAgentId ? probedVersionWarning : null;
 
   // Read again with availability, like `installedAgentIds`, so a backend that
-  // Reload configuration adds or drops reaches the list. An agent is marked only
-  // once detection has answered for it, by the same test that decides which
-  // agent is the only one installed. It stays choosable: the dock offers Run
-  // anyway for a CLI the probe missed, and the user may install it next.
+  // Reload configuration adds or drops reaches the list. It stays choosable when
+  // it isn't installed: the dock offers Run anyway for a CLI the probe missed,
+  // and the user may install it next.
   const agentOptions = useMemo(
     () =>
       getAssistantSupportedAgentIds().map((id) => {
-        const notInstalled = cliAvailabilityKnown && !installedAgentIds.includes(id);
+        const notInstalled = cliAvailabilityProbed && !installedAgentIds.includes(id);
         return {
           value: id,
           label: getAgentConfig(id)?.name ?? id,
@@ -280,15 +290,21 @@ export function DaintreeAssistantSettingsTab() {
           notInstalled,
         };
       }),
-    [cliAvailabilityKnown, installedAgentIds]
+    [cliAvailabilityProbed, installedAgentIds]
   );
-  // The saved agent the dock would stop on its missing-CLI gate. A saved agent the
-  // assistant no longer supports isn't listed, and has the dropped-agent notice.
-  const notInstalledPreferredAgentId =
-    preferredAgentId !== null &&
-    agentOptions.some((option) => option.value === preferredAgentId && option.notInstalled)
-      ? preferredAgentId
+  // The saved agent, while its CLI isn't installed. The store stops launching a
+  // built-in one and raises the dropped-agent notice, whose removed-or-unsupported
+  // wording is wrong for it and which can be dismissed; a user-defined one still
+  // launches into the dock's missing-CLI gate. This notice covers both, for as
+  // long as it's true. A saved agent the assistant doesn't support isn't listed,
+  // and keeps the dropped-agent notice.
+  const notInstalledSavedAgentId =
+    savedAgentId !== null &&
+    agentOptions.some((option) => option.value === savedAgentId && option.notInstalled)
+      ? savedAgentId
       : null;
+  const showDroppedAgentNotice =
+    droppedPreferredAgentId !== null && droppedPreferredAgentId !== notInstalledSavedAgentId;
   // The select tracks the persisted choice exactly. Showing the only installed
   // agent as selected would read as saved, and picking a value the select
   // already shows never fires onChange, so the user couldn't save it. The
@@ -607,7 +623,7 @@ export function DaintreeAssistantSettingsTab() {
             />
           )}
         </SettingsGroup>
-        {droppedPreferredAgentId && (
+        {showDroppedAgentNotice && droppedPreferredAgentId && (
           <AgentNotice
             testId="assistant-dropped-agent-banner"
             title={`${getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no longer available`}
@@ -619,20 +635,20 @@ export function DaintreeAssistantSettingsTab() {
             }
           />
         )}
-        {notInstalledPreferredAgentId && (
+        {notInstalledSavedAgentId && (
           <AgentNotice
             testId="assistant-agent-not-installed-banner"
-            title={`${getAgentConfig(notInstalledPreferredAgentId)?.name ?? notInstalledPreferredAgentId} isn't installed`}
-            body={
+            title={`${getAgentConfig(notInstalledSavedAgentId)?.name ?? notInstalledSavedAgentId} isn't installed`}
+            body={`Daintree couldn't find its CLI on ${remoteHostName ?? "this machine"}. ${
               installedAgentIds.length > 0
-                ? "The assistant can't start until its CLI is installed. Install it, or choose an installed agent above."
-                : "The assistant can't start until its CLI is installed."
-            }
+                ? "Install it, or choose an installed agent above."
+                : "Install it to use it as the assistant."
+            }`}
             action={
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => handleGoToAgentSettings(notInstalledPreferredAgentId)}
+                onClick={() => handleGoToAgentSettings(notInstalledSavedAgentId)}
               >
                 Open agent settings
               </Button>
