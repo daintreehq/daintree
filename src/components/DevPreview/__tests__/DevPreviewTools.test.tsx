@@ -528,8 +528,12 @@ describe("Escape from the dev preview's chrome", () => {
     const live = openTool();
     const strip = screen.getByRole("button", { name: "Close picker" });
 
-    escapeFrom(screen.getByRole("textbox", { name: "Address" }));
-    escapeFrom(screen.getByRole("button", { name: "Elsewhere" }));
+    const address = screen.getByRole("textbox", { name: "Address" });
+    expect(escapeFrom(address).defaultPrevented).toBe(false);
+    expect(escapeFrom(address, { repeat: true }).defaultPrevented).toBe(false);
+    expect(escapeFrom(screen.getByRole("button", { name: "Elsewhere" })).defaultPrevented).toBe(
+      false
+    );
     const claimed = new KeyboardEvent("keydown", {
       key: "Escape",
       bubbles: true,

@@ -177,6 +177,31 @@ describe("dev preview tool sessions", () => {
     expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("other");
   });
 
+  it("leaves the same tool switched on again alone when its old session asks to close", () => {
+    switchOn();
+    const first = live();
+    useDevPreviewToolStore.getState().setActive(PANEL, null);
+    switchOn();
+
+    first?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe(TOOL);
+  });
+
+  it("leaves the tool a live session's factory switched to alone", () => {
+    register(makeSession, "other");
+    register((context) => {
+      useDevPreviewToolStore.getState().setActive(PANEL, "other");
+      // Still building, not yet aborted: only the tool check stands in the way.
+      context.close();
+      return makeSession(context);
+    });
+
+    switchOn();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("other");
+  });
+
   it("switches the tool off and disposes when the preview is trashed", () => {
     switchOn();
     const session = live();
