@@ -32,14 +32,11 @@ interface UseReviewHubKeyboardArgs {
   >;
   selectedBaseBranchFile: CrossWorktreeFile | null;
   setSelectedBaseBranchFile: Dispatch<SetStateAction<CrossWorktreeFile | null>>;
+  selectedSinceReviewPath: string | null;
+  setSelectedSinceReviewPath: Dispatch<SetStateAction<string | null>>;
   fileListExpanded: boolean;
   diffMode: DiffMode;
-  openFileDiff: (
-    section: FileStageRowSection,
-    filePath: string,
-    fileStatus: GitStatus,
-    triggerEl: HTMLElement | null
-  ) => void;
+  openFileDiff: (section: FileStageRowSection, filePath: string, fileStatus: GitStatus) => void;
   handleToggleStaged: (filePath: string) => void;
   handleToggleUnstaged: (filePath: string) => void;
   handleViewedChange: (viewedKey: string, viewed: boolean) => void;
@@ -65,6 +62,8 @@ export function useReviewHubKeyboard({
   setSelectedFile,
   selectedBaseBranchFile,
   setSelectedBaseBranchFile,
+  selectedSinceReviewPath,
+  setSelectedSinceReviewPath,
   fileListExpanded,
   diffMode,
   openFileDiff,
@@ -80,13 +79,17 @@ export function useReviewHubKeyboard({
   const { selectedPaths, clearSelection } = selection;
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    // Each tab's open diff is the same overlay to the keyboard, whichever
+    // comparison it shows.
+    const diffOpen =
+      selectedFile !== null || selectedBaseBranchFile !== null || selectedSinceReviewPath !== null;
     if (e.key === "Escape") {
       // Backstop. The checks disclosure claims Escape for itself on a
       // window-capture listener, which runs ahead of this one — but this
       // listener closes the entire hub, so it stands aside on the trigger's own
       // open marker rather than relying on that ordering alone.
       if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
-      const nothingTransient = !selectedFile && !selectedBaseBranchFile && selectedPaths.size === 0;
+      const nothingTransient = !diffOpen && selectedPaths.size === 0;
       // A filter with text clears itself first (SearchField's own Escape);
       // only an empty one gives Escape over to leaving the field.
       if (nothingTransient && e.target instanceof HTMLInputElement && e.target.value !== "") {
@@ -98,6 +101,8 @@ export function useReviewHubKeyboard({
         setSelectedFile(null);
       } else if (selectedBaseBranchFile) {
         setSelectedBaseBranchFile(null);
+      } else if (selectedSinceReviewPath) {
+        setSelectedSinceReviewPath(null);
       } else if (selectedPaths.size > 0) {
         clearSelection();
       } else if (isTextWidget(e.target)) {
@@ -136,7 +141,7 @@ export function useReviewHubKeyboard({
       // (a portalled dialog, menu or popover) is another surface's, however the
       // listener is scoped; and a checks disclosure that is open from the hub's
       // own trigger is a layer over it even while focus still sits there.
-      if (selectedFile || selectedBaseBranchFile) return;
+      if (diffOpen) return;
       const root = rootRef.current;
       // The pane's own container counts as the hub: keyboard pane navigation
       // focuses it, not anything inside, and the chord is still on screen.
@@ -159,7 +164,7 @@ export function useReviewHubKeyboard({
     // before the group ever sees them.
     if (target?.closest('[role="radiogroup"]')) return;
     // A diff overlay owns the keyboard while open; don't move the list beneath it.
-    if (selectedFile || selectedBaseBranchFile) return;
+    if (diffOpen) return;
     // The file list is collapsed — no rows are visible, so don't let keys mutate
     // the index or fire stage/unstage/open-diff on rows the user can't see.
     if (!fileListExpanded) return;
@@ -232,17 +237,7 @@ export function useReviewHubKeyboard({
         if (!item) return;
         e.preventDefault();
         e.stopPropagation();
-        openFileDiff(
-          item.section,
-          item.file.path,
-          item.file.status,
-          // Falls back to the listbox, which the windowed list makes routine
-          // rather than exceptional: a cursor the user has scrolled past has no
-          // row node to hand the dialog back to, and the listbox is the element
-          // that owns focus anyway.
-          fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
-            fileListRef.current
-        );
+        openFileDiff(item.section, item.file.path, item.file.status);
         return;
       }
       case " ": {

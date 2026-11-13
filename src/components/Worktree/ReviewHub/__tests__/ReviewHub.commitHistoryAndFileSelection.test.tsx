@@ -284,6 +284,8 @@ import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { isHoldingUnrecoverableWork } from "@/services/plugin/panelRecoveryHold";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
+import type { DiffPanelData } from "@shared/types/panel";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { usePanelStore } from "@/store/panelStore";
@@ -1768,6 +1770,189 @@ describe("ReviewHub", () => {
       // now names a panel we don't own.
       expect(closePanelDialogMock).not.toHaveBeenCalled();
       expect(dialogStore.get()).toBe("some-other-surfaces-panel");
+    });
+
+    describe("while the panel steps through files on its own", () => {
+      // The real dialog store commits a panel record; this harness only models
+      // the stack, so the record the hub and DiffPane share is seeded here.
+      beforeEach(() => {
+        openPanelDialogMock.mockImplementation(async (options) => {
+          const record: DiffPanelData = {
+            id: HUB_PANEL_ID,
+            kind: "diff",
+            title: String(options.title),
+            location: "dialog",
+            filePath: String(options.filePath),
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the hub always passes a GitStatus
+            fileStatus: options.fileStatus as DiffPanelData["fileStatus"],
+            diffSource: "working-tree",
+            ...(typeof options.viewedKey === "string" && { viewedKey: options.viewedKey }),
+            ...((options.fileSide === "staged" || options.fileSide === "unstaged") && {
+              fileSide: options.fileSide,
+            }),
+          };
+          usePanelStore.setState((state) => ({
+            panelsById: { ...state.panelsById, [HUB_PANEL_ID]: record },
+          }));
+          dialogStore.set(HUB_PANEL_ID);
+          return HUB_PANEL_ID;
+        });
+      });
+
+      afterEach(() => {
+        usePanelStore.setState((state) => {
+          const { [HUB_PANEL_ID]: _removed, ...rest } = state.panelsById;
+          return { panelsById: rest };
+        });
+      });
+
+      const shownFile = () => {
+        const panel = usePanelStore.getState().panelsById[HUB_PANEL_ID];
+        if (panel?.kind !== "diff") throw new Error("expected the hub's diff panel");
+        return { filePath: panel.filePath, fileStatus: panel.fileStatus, fileSide: panel.fileSide };
+      };
+
+      const poll = async (status: StagingStatus) => {
+        getStagingStatusMock.mockResolvedValue(status);
+        await act(async () => {
+          capturedUpdateCallback!(makeWorktreeState());
+          await Promise.resolve();
+        });
+        await act(async () => {});
+      };
+
+      // What DiffPane's sidebar and stepper do.
+      const stepPanelTo = (
+        path: string,
+        side: "staged" | "unstaged",
+        status: "modified" | "added" = "modified"
+      ) =>
+        act(() =>
+          usePanelStore
+            .getState()
+            .setDiffPanelFile(HUB_PANEL_ID, path, status, workingTreeViewedKey(path), side)
+        );
+
+      it("keeps the file the user stepped to when a poll refreshes the hub's file", async () => {
+        await openDiffFor("index.ts");
+        stepPanelTo("src/app.ts", "unstaged");
+
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "added", insertions: 5, deletions: 2 }],
+          })
+        );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+
+        expect(shownFile()).toEqual({
+          filePath: "src/app.ts",
+          fileStatus: "modified",
+          fileSide: "unstaged",
+        });
+      });
+
+      it("keeps the file the user stepped to when the hub's file leaves the list", async () => {
+        await openDiffFor("index.ts");
+        // Moves the live status off the open-time snapshot first, so the file
+        // leaving the list falls back to a different status and re-runs the open.
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "added", insertions: 5, deletions: 2 }],
+          })
+        );
+        await waitFor(() => expect(shownFile().fileStatus).toBe("added"));
+        stepPanelTo("src/app.ts", "unstaged");
+
+        await poll(makeStatus({ staged: [] }));
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(3));
+
+        expect(shownFile()).toEqual({
+          filePath: "src/app.ts",
+          fileStatus: "modified",
+          fileSide: "unstaged",
+        });
+      });
+
+      it("keeps the other copy of a partially staged file the user stepped to", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            unstaged: [{ path: "src/index.ts", status: "modified", insertions: 1, deletions: 0 }],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getAllByText("index.ts"));
+        await act(async () => {
+          fireEvent.click(screen.getAllByText("index.ts")[0]!.closest("button")!);
+        });
+        await act(async () => {});
+        expect(shownFile().fileSide).toBe("staged");
+        stepPanelTo("src/index.ts", "unstaged");
+
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "added", insertions: 5, deletions: 2 }],
+            unstaged: [{ path: "src/index.ts", status: "modified", insertions: 1, deletions: 0 }],
+          })
+        );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+
+        expect(shownFile()).toEqual({
+          filePath: "src/index.ts",
+          fileStatus: "modified",
+          fileSide: "unstaged",
+        });
+      });
+
+      it("still follows its own file's live status while the panel shows it", async () => {
+        await openDiffFor("index.ts");
+
+        await poll(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/app.ts", status: "modified", insertions: 3, deletions: 1 },
+              { path: "src/index.ts", status: "deleted", insertions: 0, deletions: 7 },
+            ],
+          })
+        );
+
+        await waitFor(() =>
+          expect(shownFile()).toEqual({
+            filePath: "src/index.ts",
+            fileStatus: "deleted",
+            fileSide: "unstaged",
+          })
+        );
+      });
+
+      // Stepping away suspends following rather than ending it for good.
+      it("follows its own file again once the user steps back to it", async () => {
+        await openDiffFor("index.ts");
+        stepPanelTo("src/app.ts", "unstaged");
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "added", insertions: 5, deletions: 2 }],
+          })
+        );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+        expect(shownFile().filePath).toBe("src/app.ts");
+
+        // What DiffPane does from its sidebar: the entry's live status.
+        stepPanelTo("src/index.ts", "staged", "added");
+        await poll(
+          makeStatus({
+            staged: [{ path: "src/index.ts", status: "deleted", insertions: 0, deletions: 7 }],
+          })
+        );
+
+        await waitFor(() =>
+          expect(shownFile()).toEqual({
+            filePath: "src/index.ts",
+            fileStatus: "deleted",
+            fileSide: "staged",
+          })
+        );
+      });
     });
 
     it("reopens on a fresh row click after the dialog was closed", async () => {

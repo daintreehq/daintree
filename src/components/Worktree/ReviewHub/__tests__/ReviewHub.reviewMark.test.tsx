@@ -863,6 +863,56 @@ describe("Review Hub review marks (#14585)", () => {
       }
     });
 
+    // The diff layers over the hub, and the hub's capture listener still hears
+    // its keys: an open since-review diff has to read as the overlay it is, the
+    // way a working-tree or base-branch one does.
+    it("answers Escape under an open since-review diff by closing the diff, not the hub", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable(["src/own.ts"]),
+      });
+      const initial = usePanelDialogStore.getState();
+      const openDiff = vi.fn(async () => {
+        usePanelDialogStore.setState({ dialogStack: ["review-1", "diff-panel"] });
+        return "diff-panel";
+      });
+      const closeById = vi.fn((id: string) => {
+        const { dialogStack } = usePanelDialogStore.getState();
+        if (dialogStack.includes(id)) {
+          usePanelDialogStore.setState({ dialogStack: dialogStack.filter((d) => d !== id) });
+        }
+      });
+      usePanelDialogStore.setState({
+        dialogStack: ["review-1"],
+        openPanelDialog: openDiff,
+        pushPanelDialog: openDiff,
+        closePanelDialogById: closeById,
+      });
+      const onClose = vi.fn();
+      try {
+        render(
+          <ReviewHubContent isOpen={true} worktreePath={WT} panelId="review-1" onClose={onClose} />
+        );
+        fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+        fireEvent.click((await screen.findAllByTestId("since-review-file-row"))[0]!);
+        await waitFor(() =>
+          expect(usePanelDialogStore.getState().dialogStack).toEqual(["review-1", "diff-panel"])
+        );
+
+        fireEvent.keyDown(document.body, { key: "Escape" });
+
+        await waitFor(() => expect(closeById).toHaveBeenCalledWith("diff-panel"));
+        expect(onClose).not.toHaveBeenCalled();
+        expect(openDiff).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => {
+          usePanelDialogStore.setState(initial, true);
+        });
+      }
+    });
+
     it("says nothing changed only for a complete comparison", async () => {
       useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
       bridge.compare.mockResolvedValue({
