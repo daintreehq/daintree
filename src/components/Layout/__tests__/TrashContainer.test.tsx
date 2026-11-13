@@ -734,15 +734,20 @@ describe("TrashContainer", () => {
     const resolve = vi.fn((): HTMLElement | null => landmarkTarget);
     const landmark = { handoff, resolve };
 
+    const tree = (list: ReturnType<typeof makeTrashedItem>[]) => (
+      <DockFocusLandmarkContext.Provider value={landmark}>
+        <button type="button" data-testid="elsewhere" />
+        <TrashContainer trashedTerminals={list} />
+      </DockFocusLandmarkContext.Provider>
+    );
+
     function renderTrash(items: ReturnType<typeof makeTrashedItem>[]) {
-      const tree = (list: typeof items) => (
-        <DockFocusLandmarkContext.Provider value={landmark}>
-          <button type="button" data-testid="elsewhere" />
-          <TrashContainer trashedTerminals={list} />
-        </DockFocusLandmarkContext.Provider>
-      );
       const view = render(tree(items));
-      return { ...view, empty: () => view.rerender(tree([])) };
+      return {
+        ...view,
+        shrinkTo: (list: ReturnType<typeof makeTrashedItem>[]) => view.rerender(tree(list)),
+        empty: () => view.rerender(tree([])),
+      };
     }
 
     beforeEach(() => {
@@ -757,6 +762,18 @@ describe("TrashContainer", () => {
       empty();
 
       expect(handoff).toHaveBeenCalledTimes(1);
+      expect(handoff).toHaveBeenCalledWith({ focusVisible: expect.any(Boolean) });
+    });
+
+    it("keeps focus where it is while entries remain", () => {
+      const items = [makeTrashedItem("1"), makeTrashedItem("2")];
+      const { getByTestId, shrinkTo } = renderTrash(items);
+      act(() => getByTestId("trash-container").focus());
+
+      shrinkTo([items[0]!]);
+
+      expect(handoff).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(getByTestId("trash-container"));
     });
 
     it("leaves focus alone when it is somewhere else", () => {
@@ -794,23 +811,37 @@ describe("TrashContainer", () => {
       empty();
 
       expect(emptyTrashSpy).toHaveBeenCalledTimes(1);
+      expect(emptyTrashSpy).toHaveBeenCalledWith(["1", "2"]);
       expect(handoff).toHaveBeenCalledTimes(1);
     });
 
     it("restores the dialog's focus to the dock once the popover is gone with the trash", () => {
+      const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
+      act(() => getByTestId("empty-trash-button").click());
+      const restoreTarget = confirmDialogProps?.restoreFocusTo;
+      expect(restoreTarget).toBeDefined();
+
+      empty();
+
+      // The dialog is unmounted with the trash, and its cleanup asks this where
+      // to put focus: the dock's landmark, never the app shell.
+      expect(restoreTarget?.()).toBe(landmarkTarget);
+    });
+
+    it("prefers the popover only while it is open", () => {
       const { getByTestId } = renderTrash([makeTrashedItem("1")]);
       act(() => getByTestId("empty-trash-button").click());
       const restoreTarget = confirmDialogProps?.restoreFocusTo;
-
-      // No popover in the document: the trash is empty, so the dialog's restore
-      // has to agree with the handoff rather than fall back to the app shell.
-      expect(restoreTarget?.()).toBe(landmarkTarget);
-
       const popover = document.createElement("div");
       popover.id = "trash-container-popover";
+      popover.setAttribute("data-state", "open");
       document.body.appendChild(popover);
       try {
         expect(restoreTarget?.()).toBe(popover);
+
+        // Mid-exit, the popover is about to be removed from under the restore.
+        popover.setAttribute("data-state", "closed");
+        expect(restoreTarget?.()).toBe(landmarkTarget);
       } finally {
         popover.remove();
       }

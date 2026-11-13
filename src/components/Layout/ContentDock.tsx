@@ -35,6 +35,7 @@ import { DockLaunchButton } from "./DockLaunchButton";
 import { DockScrollChevron } from "./DockScrollChevron";
 import {
   DockFocusLandmarkContext,
+  type DockHandoffOptions,
   focusFirstAccepting,
   isFocusTargetVisible,
   releaseFocusOwner,
@@ -426,7 +427,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const dockLandmark = useMemo(
     () => ({
       resolve: () => dockLandmarkCandidates()[0] ?? null,
-      handoff: () => focusFirstAccepting(dockLandmarkCandidates()),
+      handoff: (options?: DockHandoffOptions) =>
+        focusFirstAccepting(dockLandmarkCandidates(), options),
     }),
     [dockLandmarkCandidates]
   );

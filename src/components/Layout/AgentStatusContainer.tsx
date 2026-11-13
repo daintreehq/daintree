@@ -44,7 +44,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
-import { useDockFocusLandmark, useDockPillHideHandoff } from "./dockFocusHandoff";
+import {
+  openPopoverContent,
+  useDockFocusLandmark,
+  useDockPillHideHandoff,
+} from "./dockFocusHandoff";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CirclePause } from "@/components/icons";
@@ -357,7 +361,7 @@ export function AgentStatusContainer({
   const hideHandoff = useDockPillHideHandoff(count);
   const { resolve: resolveLandmark } = useDockFocusLandmark();
   const restoreKillFocus = useCallback(
-    () => document.getElementById(popoverId) ?? resolveLandmark(),
+    () => openPopoverContent(popoverId) ?? resolveLandmark(),
     [popoverId, resolveLandmark]
   );
 

@@ -11,7 +11,16 @@ export interface DockFocusLandmark {
   /** The nearest visible control that takes focus, or null when the dock has none. */
   resolve: () => HTMLElement | null;
   /** Focus {@link resolve}'s answer, trying each fallback until one accepts. */
-  handoff: () => void;
+  handoff: (options?: DockHandoffOptions) => void;
+}
+
+export interface DockHandoffOptions {
+  /**
+   * Whether the control that held focus was showing a focus ring. `false` hands
+   * focus over ringless, so a pointer user is not given a ring, nor the chip
+   * its keyboard-arrival title tooltip, for a move they did not make.
+   */
+  focusVisible?: boolean;
 }
 
 const NO_LANDMARK: DockFocusLandmark = { resolve: () => null, handoff: () => {} };
@@ -37,6 +46,16 @@ export function isFocusTargetVisible(el: HTMLElement): boolean {
     : true;
 }
 
+/**
+ * A popover's content by id, unless it is already on its way out. Radix keeps a
+ * closed popover in the DOM until its exit animation ends, and a restore that
+ * lands there is dropped on <body> a moment later.
+ */
+export function openPopoverContent(id: string): HTMLElement | null {
+  const el = document.getElementById(id);
+  return el && el.getAttribute("data-state") !== "closed" ? el : null;
+}
+
 /** Every visible match under `root`, in document order. */
 export function visibleFocusables(root: ParentNode | null, selector: string): HTMLElement[] {
   if (!root) return [];
@@ -48,11 +67,16 @@ export function visibleFocusables(root: ParentNode | null, selector: string): HT
  * first because the target is a tooltip trigger and the move is not the
  * pointer's: without it the destination announces itself with a tooltip.
  */
-export function focusFirstAccepting(candidates: (HTMLElement | null | undefined)[]): void {
+export function focusFirstAccepting(
+  candidates: (HTMLElement | null | undefined)[],
+  { focusVisible }: DockHandoffOptions = {}
+): void {
   armTooltipFocusSuppression();
+  const options: FocusOptions =
+    focusVisible === false ? { preventScroll: true, focusVisible: false } : { preventScroll: true };
   for (const candidate of candidates) {
     if (!candidate || !isFocusTargetVisible(candidate)) continue;
-    candidate.focus({ preventScroll: true });
+    candidate.focus(options);
     if (document.activeElement === candidate) return;
   }
 }
@@ -69,7 +93,10 @@ export function focusFirstAccepting(candidates: (HTMLElement | null | undefined)
  * one has been acted on (layout effects run in the commit, before the
  * microtask).
  */
-export function releaseFocusOwner(event: React.FocusEvent, ref: { current: Element | null }): void {
+export function releaseFocusOwner(
+  event: Pick<React.FocusEvent, "target" | "relatedTarget">,
+  ref: { current: Element | null }
+): void {
   const target = event.target;
   if (event.relatedTarget) {
     if (ref.current === target) ref.current = null;
@@ -82,23 +109,35 @@ export function releaseFocusOwner(event: React.FocusEvent, ref: { current: Eleme
   });
 }
 
+function showsFocusRing(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
+
 /**
  * The element inside a control that holds focus right now, kept across the
  * control's own unmount so a removal can be told apart from the user leaving.
  * Events from portalled content (popovers, dialogs) bubble the React tree, so
- * attaching these to the control's root covers its overlays too.
+ * attaching these to the control's root covers its overlays too. Whether it
+ * was ringed is read as it takes focus: by the time it is removed the browser
+ * can no longer say.
  */
 export function useFocusOwner() {
   const ownerRef = useRef<Element | null>(null);
-  // Read-and-clear, so the ref never leaves the hook.
-  const takeOwner = useCallback((): Element | null => {
-    const owner = ownerRef.current;
+  const ringedRef = useRef(true);
+  // Read-and-clear, so the refs never leave the hook.
+  const takeOwner = useCallback((): { element: Element; focusVisible: boolean } | null => {
+    const element = ownerRef.current;
     ownerRef.current = null;
-    return owner;
+    return element ? { element, focusVisible: ringedRef.current } : null;
   }, []);
   const handlers = {
     onFocusCapture: (event: React.FocusEvent) => {
       ownerRef.current = event.target;
+      ringedRef.current = showsFocusRing(event.target);
     },
     onBlurCapture: (event: React.FocusEvent) => releaseFocusOwner(event, ownerRef),
   };
@@ -121,8 +160,8 @@ export function useDockPillHideHandoff(count: number) {
     if (!owner) return;
     // Focus that already moved somewhere real was moved on purpose.
     const active = document.activeElement;
-    if (active && active !== document.body && active !== owner) return;
-    handoff();
+    if (active && active !== document.body && active !== owner.element) return;
+    handoff({ focusVisible: owner.focusVisible });
   }, [count, handoff, takeOwner]);
   return handlers;
 }

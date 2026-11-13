@@ -29,7 +29,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
-import { useDockFocusLandmark, useDockPillHideHandoff } from "./dockFocusHandoff";
+import {
+  openPopoverContent,
+  useDockFocusLandmark,
+  useDockPillHideHandoff,
+} from "./dockFocusHandoff";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -341,7 +345,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   const hideHandoff = useDockPillHideHandoff(count);
   const { resolve: resolveLandmark } = useDockFocusLandmark();
   const restoreRemovalFocus = useCallback(
-    () => document.getElementById("background-container-popover") ?? resolveLandmark(),
+    () => openPopoverContent("background-container-popover") ?? resolveLandmark(),
     [resolveLandmark]
   );
   const triggerLabel =

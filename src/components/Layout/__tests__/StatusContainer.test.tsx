@@ -120,19 +120,25 @@ describe("StatusContainer", () => {
 
 describe("StatusContainer — focus when the pill hides (#16921)", () => {
   const handoff = vi.fn();
+  const landmarkEl = document.createElement("button");
   const withDock = (terminals: PtyPanelData[]) => (
-    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => null }}>
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => landmarkEl }}>
       <input data-testid="outside" />
       <StatusContainer config={config} terminals={terminals} />
     </DockFocusLandmarkContext.Provider>
   );
   const trigger = (container: HTMLElement) =>
     container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+  const insideControl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("button")).find(
+      (button) => button !== trigger(container)
+    )!;
+  const one = () => [makeTerminal("t1", "Local", "wt-1")];
 
   beforeEach(() => handoff.mockClear());
 
   it("hands focus to the dock when the last errored panel clears under a focused trigger", () => {
-    const view = render(withDock([makeTerminal("t1", "Local", "wt-1")]));
+    const view = render(withDock(one()));
     act(() => trigger(view.container).focus());
 
     view.rerender(withDock([]));
@@ -143,8 +149,27 @@ describe("StatusContainer — focus when the pill hides (#16921)", () => {
     expect(handoff).toHaveBeenCalledTimes(1);
   });
 
+  it("tracks focus on a row of the popover, not only on the trigger", () => {
+    const view = render(withDock(one()));
+    act(() => insideControl(view.container).focus());
+
+    view.rerender(withDock([]));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus while the count falls but the pill stays", () => {
+    const view = render(withDock([...one(), makeTerminal("t2", "Other", "wt-1")]));
+    act(() => trigger(view.container).focus());
+
+    view.rerender(withDock(one()));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger(view.container));
+  });
+
   it("leaves focus where the user put it", () => {
-    const view = render(withDock([makeTerminal("t1", "Local", "wt-1")]));
+    const view = render(withDock(one()));
     act(() => trigger(view.container).focus());
     act(() => screen.getByTestId("outside").focus());
 

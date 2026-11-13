@@ -34,7 +34,7 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
-import { useDockFocusLandmark, useFocusOwner } from "./dockFocusHandoff";
+import { openPopoverContent, useDockFocusLandmark, useFocusOwner } from "./dockFocusHandoff";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { pluralize } from "@/lib/pluralize";
 
@@ -166,7 +166,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   // agree with it, or it would move focus again on its way out.
   const { resolve: resolveLandmark } = landmark;
   const restorePopoverFocus = useCallback(
-    () => document.getElementById(TRASH_POPOVER_ID) ?? resolveLandmark(),
+    () => openPopoverContent(TRASH_POPOVER_ID) ?? resolveLandmark(),
     [resolveLandmark]
   );
 
@@ -401,11 +401,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       handedOffRef.current = false;
       return;
     }
-    if (!takeFocusOwner() || handedOffRef.current) return;
+    const owner = takeFocusOwner();
+    if (!owner || handedOffRef.current) return;
     focusedRowRef.current = null;
     handedOffRef.current = true;
     if (document.activeElement && document.activeElement !== document.body) return;
-    handOffToDock();
+    handOffToDock({ focusVisible: owner.focusVisible });
   }, [trashedTerminals.length, handOffToDock, takeFocusOwner]);
 
   // Hand focus on when the row holding it disappears. Only when focus actually
