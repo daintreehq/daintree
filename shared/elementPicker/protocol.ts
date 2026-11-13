@@ -20,7 +20,7 @@ import { ElementPickerProviderIdSchema, PickerIdSchema } from "./source.js";
  * Bumped whenever a guest-visible shape changes, so a runtime injected by an
  * older app version cannot talk to a newer host.
  */
-export const ELEMENT_PICKER_PROTOCOL_VERSION = 2;
+export const ELEMENT_PICKER_PROTOCOL_VERSION = 3;
 
 /** Hard ceiling on one envelope, measured in UTF-8 bytes on the raw string before parsing. */
 export const MAX_ELEMENT_PICKER_MESSAGE_BYTES = 256 * 1024;
@@ -107,6 +107,11 @@ export const ElementPickerEventSchema = z.discriminatedUnion("type", [
     framework: ElementPickerProviderIdSchema.optional(),
     detail: z.string().max(512),
   }),
+  /**
+   * Escape reached the picker with nothing selected to let go of. The host
+   * decides whether that closes the picker: a page can send it at will.
+   */
+  z.strictObject({ type: z.literal("dismissRequested") }),
 ]);
 export type ElementPickerEvent = z.infer<typeof ElementPickerEventSchema>;
 

@@ -402,6 +402,50 @@ describe("page verdicts", () => {
   });
 });
 
+describe("Escape", () => {
+  const pickerOn = () =>
+    useDevPreviewToolStore.getState().activeByPanel["preview-1"] === ELEMENT_PICKER_TOOL_ID;
+
+  it("turns the picker off when the page's Escape finds nothing selected, surfaces or not", async () => {
+    await mountBound();
+    // The surfaces can be loading, failed, or hidden with the dock tab; the
+    // page's Escape still has to get out.
+    cleanup();
+    expect(pickerOn()).toBe(true);
+
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(pickerOn()).toBe(false);
+  });
+
+  it("keeps the picker on for a request from another session, or from Browse", async () => {
+    await mountBound();
+    act(() => host.pushEvent({ type: "dismissRequested" }, undefined, "session-0"));
+    expect(pickerOn()).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Browse" }).getAttribute("aria-checked")).toBe(
+        "true"
+      )
+    );
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(pickerOn()).toBe(true);
+  });
+
+  it("lets go of the selection on the chrome's Escape, and leaves the next one to the host", async () => {
+    await mountSelected();
+
+    expect(session().handleEscape()).toBe(true);
+    await waitFor(() =>
+      expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" })
+    );
+    expect(session().getSnapshot().selection.status).toBe("none");
+    expect(session().handleEscape()).toBe(false);
+  });
+});
+
 describe("preview binding", () => {
   it("binds its own preview in Inspect mode, naming no runtime of its own", async () => {
     mount();

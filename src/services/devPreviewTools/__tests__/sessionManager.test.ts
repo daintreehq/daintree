@@ -155,6 +155,53 @@ describe("dev preview tool sessions", () => {
     expect(live()).toBeNull();
   });
 
+  it("lets a session turn its own tool off, as the toggle would", () => {
+    switchOn();
+    const session = live();
+
+    session?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBeUndefined();
+    expect(session?.disposals).toBe(1);
+  });
+
+  it("leaves a successor alone when a session that is over asks to close", () => {
+    register(makeSession, "other");
+    switchOn();
+    const first = live();
+    useDevPreviewToolStore.getState().setActive(PANEL, "other");
+    expect(live()).not.toBe(first);
+
+    first?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("other");
+  });
+
+  it("leaves the same tool switched on again alone when its old session asks to close", () => {
+    switchOn();
+    const first = live();
+    useDevPreviewToolStore.getState().setActive(PANEL, null);
+    switchOn();
+
+    first?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe(TOOL);
+  });
+
+  it("leaves the tool a live session's factory switched to alone", () => {
+    register(makeSession, "other");
+    register((context) => {
+      useDevPreviewToolStore.getState().setActive(PANEL, "other");
+      // Still building, not yet aborted: only the tool check stands in the way.
+      context.close();
+      return makeSession(context);
+    });
+
+    switchOn();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("other");
+  });
+
   it("switches the tool off and disposes when the preview is trashed", () => {
     switchOn();
     const session = live();

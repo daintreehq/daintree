@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The dev preview's own tools, swapped for fakes: these cases are about how
@@ -16,7 +17,10 @@ import {
   DevPreviewToolButtons,
   DevPreviewToolDrawer,
   DevPreviewToolToolbar,
+  useDevPreviewToolEscape,
 } from "../DevPreviewTools";
+import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
+import { _resetForTests as resetEscapeStack, registerEscapeFallback } from "@/lib/escapeStack";
 import type {
   DevPreviewToolButtonProps,
   DevPreviewToolDefinition,
@@ -394,5 +398,161 @@ describe("dev preview tool drawer chrome", () => {
     fireEvent.click(close);
     // Never `document.body`: the close control was inside what it closed.
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Picker" }));
+  });
+});
+
+describe("Escape from the dev preview's chrome", () => {
+  /** A session holding something Escape lets go of before the tool goes. */
+  interface HoldingSession extends FakeSession {
+    held: boolean;
+    handleEscape: () => boolean;
+  }
+
+  function makeHoldingSession(context: DevPreviewToolSessionContext): HoldingSession {
+    const live = makeSession(context) as HoldingSession;
+    live.held = true;
+    live.handleEscape = () => {
+      if (!live.held) return false;
+      live.held = false;
+      return true;
+    };
+    return live;
+  }
+
+  function Pane({ closeFind = null }: { closeFind?: (() => void) | null }) {
+    const paneRef = useRef<HTMLDivElement>(null);
+    useGlobalEscapeDispatcher();
+    useDevPreviewToolEscape(host.panelId, paneRef, closeFind);
+    return (
+      <div ref={paneRef} data-panel-id={host.panelId}>
+        <input aria-label="Address" />
+        <Preview />
+      </div>
+    );
+  }
+
+  beforeEach(() => {
+    resetEscapeStack();
+    register({
+      id: TOOL,
+      label: "Picker",
+      Button,
+      Toolbar,
+      Drawer,
+      createSession: makeHoldingSession,
+    });
+  });
+
+  function openTool(): HoldingSession {
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    return session() as HoldingSession;
+  }
+
+  function escapeFrom(target: Element, init: KeyboardEventInit = {}): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  const toolOn = () => useDevPreviewToolStore.getState().activeByPanel[host.panelId] === TOOL;
+
+  it("lets go of what the tool holds, then turns the tool off, one Escape each", () => {
+    render(<Pane />);
+    const live = openTool();
+    const strip = screen.getByRole("button", { name: "Close picker" });
+    strip.focus();
+
+    expect(escapeFrom(strip).defaultPrevented).toBe(true);
+    expect(live.held).toBe(false);
+    expect(toolOn()).toBe(true);
+
+    expect(escapeFrom(strip).defaultPrevented).toBe(true);
+    expect(toolOn()).toBe(false);
+    // The control it was on went with the tool; the toggle has the keyboard.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Picker" }));
+  });
+
+  it("closes the find bar first, leaving the tool and what it holds alone", () => {
+    const closeFind = vi.fn();
+    render(<Pane closeFind={closeFind} />);
+    const live = openTool();
+
+    escapeFrom(screen.getByRole("button", { name: "Close picker" }));
+
+    expect(closeFind).toHaveBeenCalledTimes(1);
+    expect(live.held).toBe(true);
+    expect(toolOn()).toBe(true);
+  });
+
+  it("turns the tool off from the preview's own toolbar when nothing is held", () => {
+    render(<Pane />);
+    const live = openTool();
+    live.held = false;
+
+    escapeFrom(screen.getByRole("button", { name: "Picker" }));
+
+    expect(toolOn()).toBe(false);
+  });
+
+  it("swallows a held key's repeats, so they never reach an older fallback", () => {
+    // Registered first, as dictation's is at startup: the pane's is newer.
+    const older = vi.fn(() => true);
+    registerEscapeFallback(older);
+    render(<Pane />);
+    const live = openTool();
+    const strip = screen.getByRole("button", { name: "Close picker" });
+
+    escapeFrom(strip);
+    expect(escapeFrom(strip, { repeat: true }).defaultPrevented).toBe(true);
+    expect(escapeFrom(strip, { repeat: true }).defaultPrevented).toBe(true);
+
+    expect(live.held).toBe(false);
+    expect(toolOn()).toBe(true);
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to a field, a layer that took it, and other panes", () => {
+    render(
+      <>
+        <Pane />
+        <button type="button">Elsewhere</button>
+      </>
+    );
+    const live = openTool();
+    const strip = screen.getByRole("button", { name: "Close picker" });
+
+    const address = screen.getByRole("textbox", { name: "Address" });
+    expect(escapeFrom(address).defaultPrevented).toBe(false);
+    expect(escapeFrom(address, { repeat: true }).defaultPrevented).toBe(false);
+    expect(escapeFrom(screen.getByRole("button", { name: "Elsewhere" })).defaultPrevented).toBe(
+      false
+    );
+    const claimed = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    claimed.preventDefault();
+    act(() => {
+      strip.dispatchEvent(claimed);
+    });
+
+    expect(live.held).toBe(true);
+    expect(toolOn()).toBe(true);
+  });
+
+  it("takes no Escape while no tool is on", () => {
+    render(<Pane />);
+
+    const event = escapeFrom(screen.getByRole("button", { name: "Picker" }));
+
+    expect(event.defaultPrevented).toBe(false);
   });
 });

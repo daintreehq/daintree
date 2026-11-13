@@ -1812,17 +1812,22 @@ export function createPicker(host: PickerHost): PickerHandle {
     return parent === null ? [] : childrenOf(parent);
   }
 
-  /** Arrows walk the rendered tree the way a browser inspector does; Escape lets go. */
+  /**
+   * Arrows walk the rendered tree the way a browser inspector does; Escape
+   * lets go of the selection, and with nothing selected asks the host to close
+   * the picker. A `<webview>` guest's keys never reach the host's DOM, so the
+   * picker has to say so itself.
+   */
   function onKeyDown(event: Event): void {
     const keyboard = event as KeyboardEvent;
     // Keys during composition belong to the IME, never to the picker.
     if (keyboard.isComposing === true || keyboard.keyCode === 229) return;
     if (keyboard.key === "Escape") {
-      // Swallowed only when there was a selection to clear; otherwise the host
-      // still owns Escape for leaving the picker.
-      if (selection.length === 0) return;
       suppress(event);
-      select(null, "user");
+      // A held key peels one layer, not the selection and the picker with it.
+      if (keyboard.repeat) return;
+      if (selection.length > 0) select(null, "user");
+      else host.post({ type: "dismissRequested" });
       return;
     }
     const current = primary();

@@ -5,13 +5,16 @@ import {
   useEffect,
   useState,
   type ComponentType,
+  type RefObject,
 } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { registerEscapeFallback } from "@/lib/escapeStack";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { DevPreviewToolDrawerChrome } from "./DevPreviewToolDrawerChrome";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
+  peekDevPreviewToolSession,
   publishDevPreviewToolContext,
   retainDevPreviewToolVisibility,
   useDevPreviewToolSessionHandle,
@@ -138,6 +141,82 @@ function focusVisible(element: Element | null | undefined): boolean {
     // close, which is what all but a handful of closes are.
     return false;
   }
+}
+
+/**
+ * Where keys are typed or a page has them: Escape there is the field's or the
+ * page's, never the preview's chrome.
+ */
+function ownsEscape(target: Element): boolean {
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  return (
+    target.closest(
+      'input, textarea, select, webview, iframe, [role="textbox"], [role="searchbox"], [role="combobox"]'
+    ) !== null
+  );
+}
+
+/**
+ * After a tool let go of what it held, the control focus was on can go with
+ * it — a drawer that empties, a strip button that only a selection shows.
+ * Focus that was in the tool stays in the tool, on its first control.
+ */
+function keepFocusInTool(tag: string, from: Element): void {
+  if (
+    from
+      .closest("[data-dev-preview-tool-surface]")
+      ?.getAttribute("data-dev-preview-tool-surface") !== tag
+  ) {
+    return;
+  }
+  const keyboard = focusVisible(from);
+  requestAnimationFrame(() => {
+    if (document.activeElement !== document.body) return;
+    const landing = document.querySelector(`[data-dev-preview-tool-surface="${tag}"] button`);
+    if (!(landing instanceof HTMLElement)) return;
+    armTooltipFocusSuppression();
+    landing.focus(keyboard ? undefined : { preventScroll: true, focusVisible: false });
+  });
+}
+
+/**
+ * Escape from the preview's own chrome while a tool is on peels one layer —
+ * the find bar, then what the tool holds, then the tool — once every menu,
+ * dialog and field has had its turn. A page's Escape never reaches the host's
+ * DOM; the tool hears that one from its page.
+ */
+export function useDevPreviewToolEscape(
+  panelId: string,
+  paneRef: RefObject<HTMLElement | null>,
+  /** Closes the preview's find bar; null while it is shut. */
+  closeFind: (() => void) | null
+): void {
+  const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
+  const setActive = useDevPreviewToolStore((s) => s.setActive);
+  useEffect(() => {
+    if (!activeId) return;
+    return registerEscapeFallback((event) => {
+      const pane = paneRef.current;
+      const target = event?.target;
+      if (!pane || !(target instanceof Element) || !pane.contains(target)) return false;
+      if (ownsEscape(target)) return false;
+      // A held key peels one layer, not all of them, and its repeats are still
+      // this chrome's: an older fallback (dictation) must not take them.
+      if (event?.repeat) return true;
+      if (closeFind) {
+        closeFind();
+        return true;
+      }
+      const tag = surfaceTag(panelId, activeId);
+      if (peekDevPreviewToolSession(panelId)?.handleEscape?.() === true) {
+        keepFocusInTool(tag, target);
+        return true;
+      }
+      returnFocusToToggle(tag);
+      setActive(panelId, null);
+      return true;
+    });
+  }, [panelId, paneRef, closeFind, activeId, setActive]);
 }
 
 /**

@@ -2182,6 +2182,9 @@ export interface GeneratedElectronAPI {
     setDeviceEmulation(
       ...args: IpcInvokeMap["webview:set-device-emulation"]["args"]
     ): Promise<IpcInvokeMap["webview:set-device-emulation"]["result"]>;
+    setFindOpen(
+      ...args: IpcInvokeMap["webview:set-find-open"]["args"]
+    ): Promise<IpcInvokeMap["webview:set-find-open"]["result"]>;
   };
   windowChrome: {
     setBannerSeverity(

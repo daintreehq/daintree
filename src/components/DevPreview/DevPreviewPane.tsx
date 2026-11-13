@@ -28,6 +28,7 @@ import {
   DevPreviewToolButtons,
   DevPreviewToolDrawer,
   DevPreviewToolToolbar,
+  useDevPreviewToolEscape,
 } from "./DevPreviewTools";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
@@ -871,6 +872,7 @@ export function DevPreviewPane({
     isFocused,
     paneRef
   );
+  useDevPreviewToolEscape(id, paneRef, findInPage.isOpen ? findInPage.close : null);
 
   // Activate the dev-preview keybinding scope while focused so Cmd/Ctrl+R maps
   // to devPreview.reloadPreview when the panel chrome (toolbar/header) has focus.

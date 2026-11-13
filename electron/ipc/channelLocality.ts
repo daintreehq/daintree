@@ -1376,6 +1376,7 @@ export const CHANNEL_LOCALITY = {
   "webview:reload-shortcut": "shell",
   "webview:responsive": "shell",
   "webview:set-device-emulation": "shell",
+  "webview:set-find-open": "shell",
   "webview:set-lifecycle-state": "shell",
   "webview:start-console-capture": "shell",
   "webview:stop-console-capture": "shell",

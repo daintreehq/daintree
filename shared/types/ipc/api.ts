@@ -1437,6 +1437,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /** Subscribe to dialog-dismiss events — guest navigated away or its renderer crashed */
     onDialogDismiss(callback: (payload: { panelId: string }) => void): () => void;
+    /**
+     * Tell main whether this view's find bar over a panel is open, so an
+     * Escape from that panel's guest closes the bar without the page also
+     * acting on it.
+     */
+    setFindOpen(panelId: string, open: boolean): Promise<void>;
     /** Subscribe to find-in-page shortcuts forwarded from focused webview guests */
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void

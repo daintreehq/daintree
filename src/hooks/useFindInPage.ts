@@ -18,6 +18,11 @@ export interface FindInPageState {
   toggleMatchCase: () => void;
 }
 
+function publishFindOpen(panelId: string, open: boolean): void {
+  // Best effort: missing it only costs the page seeing that one Escape too.
+  window.electron.webview.setFindOpen(panelId, open).catch(() => {});
+}
+
 export function useFindInPage(
   panelId: string,
   webviewElement: Electron.WebviewTag | null,
@@ -104,12 +109,15 @@ export function useFindInPage(
     setMatchCount(0);
     latestRequestIdRef.current = null;
     safeStopFind();
+    // Said now, not when the effect below catches up: the keyboard goes back to
+    // the page next, and its very next Escape must reach it.
+    publishFindOpen(panelId, false);
     // Unmounting the bar would leave the keyboard on `document.body`. A close
     // forwarded from the guest can land after the user has moved to another pane;
     // that keyboard stays where it went.
     if (pane && active && active !== document.body && !pane.contains(active)) return;
     if (!focusWebviewPage(webviewElement)) pane?.focus({ preventScroll: true });
-  }, [safeStopFind, webviewElement]);
+  }, [panelId, safeStopFind, webviewElement]);
 
   const setQuery = useCallback(
     (q: string) => {
@@ -235,6 +243,15 @@ export function useFindInPage(
     });
     return cleanup;
   }, [panelId, open, close, goNext, goPrev, isOpen, paneRef, webviewElement]);
+
+  // While the bar is open, main keeps the guest's Escape for it alone: the one
+  // that closes the bar must not also reach the page under it. Said only while
+  // open, and unsaid on close, unmount or a pane switch.
+  useEffect(() => {
+    if (!isOpen) return;
+    publishFindOpen(panelId, true);
+    return () => publishFindOpen(panelId, false);
+  }, [panelId, isOpen]);
 
   // Clean up on unmount, webview detach, or a pane switch that keeps the webview
   useEffect(() => {

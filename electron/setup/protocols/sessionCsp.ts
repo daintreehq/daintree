@@ -500,8 +500,25 @@ export function setupWebviewCSP(): void {
 
         if (shortcut !== "close") {
           event.preventDefault();
+          sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+          return;
         }
-        sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+
+        // An open find bar owns Escape: the page, and an Element Picker holding
+        // a selection in it, never see the one that closes the bar, so each
+        // Escape peels one layer. Otherwise the page keeps it. A composing
+        // Escape stays the IME's either way.
+        const findOwnsEscape =
+          embedder !== null && !input.isComposing && dialogService.isFindOpen(embedder.id, panelId);
+        const sent = sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, {
+          panelId,
+          shortcut,
+        });
+        if (findOwnsEscape && sent) {
+          event.preventDefault();
+          // The bar is closing; an Escape that beats the view's word on it is the page's.
+          dialogService.setFindOpen(embedder.id, panelId, false);
+        }
       });
     }
   });
