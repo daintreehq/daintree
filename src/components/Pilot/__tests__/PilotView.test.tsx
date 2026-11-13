@@ -1857,6 +1857,19 @@ describe("PilotView", () => {
       expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
     });
 
+    it("does not open the park editor on a held Alt+Enter", () => {
+      seed([run({ agentState: "waiting", waitingReason: "question", since: NOW - 60_000 })]);
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        repeat: true,
+      });
+
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+
     it("shows the park note on the row itself", () => {
       seed([
         run({

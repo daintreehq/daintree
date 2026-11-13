@@ -1547,13 +1547,18 @@ export function PilotView() {
         togglePluginShelf(selectedRow.item);
         return true;
       }
+      // A held chord is one gesture: consumed before the band is read, or the
+      // repeat after a wake would land on the now-unsnoozed row and open the
+      // park editor.
+      if (event.repeat) {
+        event.preventDefault();
+        return true;
+      }
       // Waking needs no healthy snapshot: Main lets a snooze be lifted while
-      // the fleet is unreadable. A held chord is consumed rather than acted on
-      // again, or the repeat after the wake would land on a now-unsnoozed row
-      // and open the park editor.
+      // the fleet is unreadable.
       if (selectedRow.item.band === "snoozed") {
         event.preventDefault();
-        if (!event.repeat) wakeRun(selectedRow.item.run.runId);
+        wakeRun(selectedRow.item.run.runId);
         return true;
       }
       // No parking from retained data: Main rejects a park it cannot validate
