@@ -20,6 +20,7 @@ import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCa
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import {
   validateStringField,
@@ -495,6 +496,10 @@ export function useActionPalette(): UseActionPaletteReturn {
       if (item.danger !== "confirm") {
         useActionMruStore.getState().recordActionMru(item.id);
       }
+      // The palette refocuses its opener after its exit animation, which would
+      // pull the keyboard out of a dialog or panel the command just opened.
+      // Restore only if nothing took it.
+      deferPaletteFocusRestore((restore) => restore());
       baseClose();
       // A redirect row runs its interactive sibling (e.g. a dialog-opener)
       // instead of the headless action the user searched for. MRU above still

@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { scoreWorktree } from "@/lib/worktreeFilters";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 export type UseWorktreePaletteReturn = UseSearchablePaletteReturn<WorktreeState> & {
   activeWorktreeId: string | null;
@@ -63,6 +64,9 @@ export function useWorktreePalette({
 
   const handleSelect = useCallback(
     (worktree: WorktreeState) => {
+      // The switch focuses the worktree's last panel; the palette's exit-time
+      // restore must not hand the keyboard back to the worktree just left.
+      deferPaletteFocusRestore((restore) => restore());
       selectWorktree(worktree.id);
       close();
     },
