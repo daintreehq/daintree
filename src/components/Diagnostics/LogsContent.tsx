@@ -96,6 +96,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   );
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const sourcesRef = useRef<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
@@ -313,6 +314,11 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     ? String(previousSessionEntry.context?.tail || "")
     : "";
   const previousSessionLines = previousSessionTail ? previousSessionTail.split("\n").length : 0;
+  const handleClearFilters = useCallback(() => {
+    clearFilters();
+    searchInputRef.current?.focus({ preventScroll: true });
+  }, [clearFilters]);
+
   const hasLiveLogs = logs.some((l) => l.id !== "previous-session-separator");
 
   return (
@@ -325,6 +331,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         levelCounts={levelCounts}
         sourceCounts={sourceCounts}
         resetSignal={filtersResetCount}
+        searchInputRef={searchInputRef}
       />
 
       {previousSessionEntry && previousSessionTail && !filters?.search && (
@@ -390,7 +397,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
                 scale="sidebar"
                 title="No logs match filters"
                 action={
-                  <Button variant="subtle" size="xs" onClick={clearFilters}>
+                  <Button variant="subtle" size="xs" onClick={handleClearFilters}>
                     Clear filters
                   </Button>
                 }

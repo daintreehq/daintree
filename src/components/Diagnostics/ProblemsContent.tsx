@@ -1,5 +1,6 @@
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore, type ErrorRecord, type RetryAction, RECURRENCE_THRESHOLD } from "@/store";
 import { ChevronRight, Lightbulb, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,7 @@ interface ErrorRowProps {
   error: ErrorRecord;
   isExpanded: boolean;
   onToggleExpand: () => void;
-  onDismiss: () => void;
+  onDismiss: (focusVisible: boolean) => void;
   onRetry?: () => void;
   onCancelRetry?: () => void;
 }
@@ -105,6 +106,7 @@ function ErrorRow({
         <td className="max-w-0 py-1.5 pl-2 pr-3">
           <button
             type="button"
+            data-error-toggle={error.id}
             onClick={onToggleExpand}
             className="flex w-full min-w-0 items-start gap-1.5 rounded-[var(--radius-sm)] text-left text-text-primary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-expanded={isExpanded}
@@ -181,7 +183,8 @@ function ErrorRow({
                   size="icon-xs"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onDismiss();
+                    // detail is 0 for a keyboard activation.
+                    onDismiss(e.detail === 0);
                   }}
                   aria-label="Dismiss problem"
                 >
@@ -244,10 +247,39 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
   const dismissError = useErrorStore((state) => state.dismissError);
 
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Dismissing unmounts the focused × with its row, which drops focus on <body>.
+  // The neighbouring row (or the tab bar when none is left) takes it instead.
+  const pendingFocusRef = useRef<{ nextId: string | null; focusVisible: boolean } | null>(null);
 
   const activeErrors = useMemo(() => {
     return errors.filter((e) => !e.dismissed);
   }, [errors]);
+
+  const handleDismiss = useCallback(
+    (id: string, focusVisible: boolean) => {
+      const index = activeErrors.findIndex((e) => e.id === id);
+      const neighbour = activeErrors[index + 1] ?? activeErrors[index - 1];
+      pendingFocusRef.current = { nextId: neighbour?.id ?? null, focusVisible };
+      dismissError(id);
+    },
+    [activeErrors, dismissError]
+  );
+
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const target = pending.nextId
+      ? Array.from(
+          rootRef.current?.querySelectorAll<HTMLElement>("[data-error-toggle]") ?? []
+        ).find((el) => el.dataset.errorToggle === pending.nextId)
+      : undefined;
+    if (target) target.focus({ preventScroll: true, focusVisible: pending.focusVisible });
+    else useDiagnosticsStore.getState().requestTabFocus(pending.focusVisible);
+  }, [activeErrors]);
 
   const handleToggleExpand = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -262,7 +294,7 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
   }, []);
 
   return (
-    <div className={cn("h-full overflow-auto", className)}>
+    <div ref={rootRef} className={cn("h-full overflow-auto", className)}>
       {activeErrors.length === 0 ? (
         <div className="flex h-full items-center justify-center">
           {errors.length > 0 ? (
@@ -291,7 +323,7 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
                 error={error}
                 isExpanded={expandedIds.has(error.id)}
                 onToggleExpand={() => handleToggleExpand(error.id)}
-                onDismiss={() => dismissError(error.id)}
+                onDismiss={(focusVisible) => handleDismiss(error.id, focusVisible)}
                 onRetry={
                   error.retryAction && onRetry
                     ? () => onRetry(error.id, error.retryAction!, error.retryArgs)

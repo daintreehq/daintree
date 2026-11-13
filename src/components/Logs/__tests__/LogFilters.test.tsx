@@ -85,6 +85,26 @@ describe("LogFilters accessibility", () => {
     expect(input.value).toBe("g");
   });
 
+  it("moves focus to the search box when Clear filters unmounts", () => {
+    const onClear = vi.fn();
+    render(<LogFilters {...baseProps} filters={{ levels: ["error"] }} onClear={onClear} />);
+    const button = screen.getByRole("button", { name: "Clear filters" });
+    button.focus();
+    fireEvent.click(button);
+
+    expect(onClear).toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Search logs" }));
+  });
+
+  it("keeps focus in the search box when its clear button is pressed", () => {
+    render(<LogFilters {...baseProps} filters={{ search: "foo" }} />);
+    const clear = screen.getByRole("button", { name: "Clear search" });
+    clear.focus();
+    fireEvent.click(clear);
+
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Search logs" }));
+  });
+
   it("drops an uncommitted draft when filters are cleared from outside the bar", async () => {
     const onFiltersChange = vi.fn();
     const { rerender } = render(

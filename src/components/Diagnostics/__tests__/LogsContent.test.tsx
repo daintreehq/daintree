@@ -6,7 +6,9 @@ import { LogsContent } from "../LogsContent";
 import { useLogsStore } from "@/store";
 
 vi.mock("../../Logs/LogFilters", () => ({
-  LogFilters: () => <div data-testid="log-filters" />,
+  LogFilters: ({ searchInputRef }: { searchInputRef?: React.Ref<HTMLInputElement> }) => (
+    <input data-testid="log-filters" aria-label="Search logs" ref={searchInputRef} />
+  ),
 }));
 
 type FollowOutput = (isAtBottom: boolean) => "smooth" | "auto" | false;
@@ -94,6 +96,20 @@ describe("LogsContent — filtered-empty recovery", () => {
     });
 
     expect(useLogsStore.getState().filters).toEqual({});
+  });
+
+  it("hands the keyboard to the search box when Clear filters removes itself", async () => {
+    mockGetAll.mockResolvedValue([makeLog("a", { level: "error" })]);
+    useLogsStore.setState({ filters: { levels: ["debug"] } });
+
+    const { findByText, getByTestId } = render(<LogsContent />);
+    const button = (await findByText("Clear filters")).closest("button")!;
+    button.focus();
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(document.activeElement).toBe(getByTestId("log-filters"));
   });
 
   it("does not show the filtered-empty action when there are no logs at all", async () => {

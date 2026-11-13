@@ -2,7 +2,8 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { EventsActions, LogsActions } from "../DiagnosticsActions";
+import { EventsActions, LogsActions, ProblemsActions } from "../DiagnosticsActions";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 type NotifyPayload = {
   type: string;
@@ -252,5 +253,40 @@ describe("EventsActions — ConfirmDialog", () => {
     // After dispatch resolves, dialog should close
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Clear events?")).toBeNull();
+  });
+});
+
+describe("ProblemsActions — Dismiss all", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
+    useDiagnosticsStore.setState({ tabFocusRequest: null });
+  });
+
+  it("asks the dock to take focus back once the button has nothing left to do", async () => {
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 1 });
+
+    await waitFor(() =>
+      expect(useDiagnosticsStore.getState().tabFocusRequest).toEqual({ focusVisible: false })
+    );
+  });
+
+  it("asks for a visible ring when activated from the keyboard", async () => {
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 0 });
+
+    await waitFor(() =>
+      expect(useDiagnosticsStore.getState().tabFocusRequest).toEqual({ focusVisible: true })
+    );
+  });
+
+  it("leaves focus alone when the dismissal fails", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "nope" } });
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 1 });
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
+    expect(useDiagnosticsStore.getState().tabFocusRequest).toBeNull();
   });
 });
