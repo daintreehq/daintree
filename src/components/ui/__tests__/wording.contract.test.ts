@@ -102,7 +102,11 @@ const THREE_DOT_ALLOWED = new Set([
 ]);
 
 const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;
-const IN_APP_BROWSER_MENUS = new Set(["src/components/Terminal/TerminalContextMenu.tsx"]);
+const IN_APP_BROWSER_MENUS = new Set([
+  "src/components/Terminal/TerminalContextMenu.tsx",
+  // The portal page's native right-click menu.
+  "electron/services/PortalManager.ts",
+]);
 
 describe("wording", () => {
   const ellipses: string[] = [];
@@ -126,7 +130,7 @@ describe("wording", () => {
       ) {
         ellipses.push(`${r}:${lineOf(source, n)}`);
       }
-      if (text !== null && inBrowserSurface && /\bOpen in browser\b/.test(text)) {
+      if (text !== null && inBrowserSurface && /\bopen (?:link |page )?in browser\b/i.test(text)) {
         ambiguousBrowser.push(`${r}:${lineOf(source, n)}`);
       }
 
@@ -217,7 +221,7 @@ describe("wording", () => {
     expect(titleCaseHeadings).toEqual([]);
   });
 
-  it('says "Open in external browser" inside the in-app browser and dev preview', () => {
+  it('says "Open in external browser" inside the in-app browser, dev preview and portal', () => {
     expect(ambiguousBrowser).toEqual([]);
   });
 });
