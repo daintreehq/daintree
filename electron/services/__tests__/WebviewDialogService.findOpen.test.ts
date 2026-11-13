@@ -71,8 +71,12 @@ describe("WebviewDialogService find bar state", () => {
     const service = await freshService();
 
     service.setFindOpen(10, "panel-a", true);
+    service.setFindOpen(20, "panel-b", true);
 
     expect(service.isFindOpen(20, "panel-a")).toBe(false);
+    expect(service.isFindOpen(10, "panel-b")).toBe(false);
+    service.setFindOpen(20, "panel-b", false);
+    expect(service.isFindOpen(10, "panel-a")).toBe(true);
   });
 
   it("forgets a view's bars when it reloads or goes away", async () => {
@@ -95,7 +99,10 @@ describe("WebviewDialogService find bar state", () => {
     for (let i = 0; i < 5; i++) {
       service.setFindOpen(10, "panel-a", true);
       service.setFindOpen(10, "panel-a", false);
+      view.emit("did-navigate");
     }
+    service.setFindOpen(10, "panel-a", true);
+    expect(service.isFindOpen(10, "panel-a")).toBe(true);
 
     expect(view.once).toHaveBeenCalledTimes(1);
     expect(view.on).toHaveBeenCalledTimes(1);

@@ -70,11 +70,22 @@ function fallbackContext(panelId: string): DevPreviewToolContext {
   };
 }
 
-function sessionContext(panelId: string, signal: AbortSignal): DevPreviewToolSessionContext {
+function sessionContext(
+  panelId: string,
+  toolId: string,
+  signal: AbortSignal
+): DevPreviewToolSessionContext {
   return {
     ...(contexts.get(panelId) ?? fallbackContext(panelId)),
     visible: (mountedSurfaces.get(panelId) ?? 0) > 0,
     signal,
+    close: () => {
+      // Only its own tool, and only while it is still the one running: a
+      // session asking late must not take down whatever replaced it.
+      if (signal.aborted) return;
+      const store = useDevPreviewToolStore.getState();
+      if (store.activeByPanel[panelId] === toolId) store.setActive(panelId, null);
+    },
   };
 }
 
@@ -97,7 +108,7 @@ function pushContext(panelId: string): void {
   const entry = entries.get(panelId);
   if (!entry?.session) return;
   try {
-    entry.session.update?.(sessionContext(panelId, entry.abort.signal));
+    entry.session.update?.(sessionContext(panelId, entry.toolId, entry.abort.signal));
   } catch (error) {
     logError(`Dev preview tool "${entry.toolId}" failed to take its context`, error);
   }
@@ -142,7 +153,7 @@ function createEntry(panelId: string, tool: DevPreviewToolDefinition): void {
   entries.set(panelId, entry);
   let created: DevPreviewToolSession | Promise<DevPreviewToolSession>;
   try {
-    created = createSession(sessionContext(panelId, abort.signal));
+    created = createSession(sessionContext(panelId, tool.id, abort.signal));
   } catch (error) {
     failEntry(panelId, entry, error);
     return;

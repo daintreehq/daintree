@@ -28,6 +28,12 @@ export interface DevPreviewToolSessionContext extends DevPreviewToolContext {
   visible: boolean;
   /** Aborted when the session is disposed. */
   signal: AbortSignal;
+  /**
+   * Turn the tool off for this preview, as its toggle would — for a session
+   * that hears the user leave from somewhere no surface can, such as the
+   * page's own keys. Does nothing once the session is over.
+   */
+  close: () => void;
 }
 
 /**

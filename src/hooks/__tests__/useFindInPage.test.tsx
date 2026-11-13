@@ -93,6 +93,22 @@ describe("useFindInPage", () => {
     expect(setFindOpenMock.mock.calls).toEqual([["panel-2", false]]);
   });
 
+  it("says the bar closed before handing the keyboard back to the page", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+    act(() => result.current.open());
+    setFindOpenMock.mockClear();
+
+    // Not left to an effect: the page's very next Escape must be its own.
+    act(() => result.current.close());
+
+    expect(setFindOpenMock.mock.calls[0]).toEqual(["panel-1", false]);
+    expect(focusWebviewPageMock).toHaveBeenCalled();
+    expect(setFindOpenMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      focusWebviewPageMock.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("opens and closes the find bar", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));

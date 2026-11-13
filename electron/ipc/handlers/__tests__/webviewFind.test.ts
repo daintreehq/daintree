@@ -29,10 +29,12 @@ describe("webview:set-find-open", () => {
     const handler = await setFindOpen();
 
     await handler(fromView(42), "panel-a", true);
+    await handler(fromView(7), "panel-b", true);
     await handler(fromView(42), "panel-a", false);
 
     expect(dialogService.setFindOpen.mock.calls).toEqual([
       [42, "panel-a", true],
+      [7, "panel-b", true],
       [42, "panel-a", false],
     ]);
   });

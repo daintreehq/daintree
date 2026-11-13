@@ -233,10 +233,6 @@ export function ElementPickerToolbar(props: DevPreviewToolSurfaceProps<Inspector
   const composerOccupied = useComposerOccupied(composerMemoryKey(props.panelId, props.worktreeId));
   const hasDetails = drawerHasDetails(state, composerOccupied);
   const selectCrumb = useSelectCrumb(controller, state, stripRef, stripLanding);
-  // The strip is on screen for as long as the picker is, so it is what turns
-  // the picker off when the page's Escape finds nothing left to let go of.
-  const onClose = props.onClose;
-  useEffect(() => controller?.onDismissRequest(onClose), [controller, onClose]);
   const close = (
     <DismissButton
       aria-label={`Close ${TOOL_NAME}`}

@@ -196,12 +196,13 @@ export function useDevPreviewToolEscape(
   useEffect(() => {
     if (!activeId) return;
     return registerEscapeFallback((event) => {
-      // A held key peels one layer, not all of them.
-      if (!event || event.repeat) return false;
       const pane = paneRef.current;
-      const target = event.target;
+      const target = event?.target;
       if (!pane || !(target instanceof Element) || !pane.contains(target)) return false;
       if (ownsEscape(target)) return false;
+      // A held key peels one layer, not all of them, and its repeats are still
+      // this chrome's: an older fallback (dictation) must not take them.
+      if (event?.repeat) return true;
       if (closeFind) {
         closeFind();
         return true;

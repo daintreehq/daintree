@@ -526,7 +526,8 @@ export class InspectorController implements DevPreviewToolSession {
   readonly panelId: string;
   private state: InspectorState = INITIAL_INSPECTOR_STATE;
   private readonly listeners = new Set<() => void>();
-  private readonly dismissListeners = new Set<() => void>();
+  /** Turns the picker off, as its toggle would; the host's, from the session context. */
+  private closeTool: () => void = () => {};
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
   // Undefined until the first context arrives: a preview that starts with no
@@ -592,18 +593,6 @@ export class InspectorController implements DevPreviewToolSession {
 
   getSnapshot = (): InspectorState => this.state;
 
-  /**
-   * The page's Escape found nothing selected: whoever turns the picker off
-   * hears it. A page's keys never reach the host's DOM, so this is the only
-   * way that Escape gets out.
-   */
-  onDismissRequest = (listener: () => void): (() => void) => {
-    this.dismissListeners.add(listener);
-    return () => {
-      this.dismissListeners.delete(listener);
-    };
-  };
-
   private patchState(patch: Partial<InspectorState>): void {
     if (this.disposed) return;
     this.state = { ...this.state, ...patch };
@@ -654,6 +643,7 @@ export class InspectorController implements DevPreviewToolSession {
    * want of a page gets its retry.
    */
   update(context: DevPreviewToolSessionContext): void {
+    this.closeTool = context.close;
     const pageReady = context.isWebviewReady && context.url.length > 0;
     if (context.url.length > 0) this.pageUrl = context.url;
     this.updateContext({
@@ -1226,10 +1216,13 @@ export class InspectorController implements DevPreviewToolSession {
       case "frameworksDetected":
         return;
       case "dismissRequested":
-        // Browse hands the page its own keys; a request still in flight from
-        // Inspect is not the user asking now.
+        // The page's Escape found nothing selected. Its keys never reach the
+        // host's DOM, so this is the only way that Escape gets out — heard by
+        // the session, not a surface, which may still be loading. Browse hands
+        // the page its own keys; a request in flight from Inspect is not the
+        // user asking now.
         if (this.state.mode !== "select" || this.state.modePending) return;
-        for (const listener of [...this.dismissListeners]) listener();
+        this.closeTool();
         return;
     }
   }
@@ -2220,7 +2213,6 @@ export class InspectorController implements DevPreviewToolSession {
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
     this.listeners.clear();
-    this.dismissListeners.clear();
     if (this.lingering === null) this.stopHearingSource();
   }
 

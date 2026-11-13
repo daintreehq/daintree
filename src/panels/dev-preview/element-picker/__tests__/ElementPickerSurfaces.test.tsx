@@ -59,8 +59,6 @@ import { createFakeHost, verifyAll, workspaceClosedError, type FakeHost } from "
 
 let host: FakeHost;
 let uninstall: () => void;
-/** What the dev preview's close would do: turn the tool off. */
-const closePicker = vi.fn();
 
 function hostContext() {
   return {
@@ -101,7 +99,7 @@ function PickerHarness() {
   const handle = useDevPreviewToolSessionHandle("preview-1", ELEMENT_PICKER_TOOL_ID);
   const live = (handle?.session ?? null) as InspectorController | null;
   if (live === null) return null;
-  const props = { ...hostContext(), session: live, onClose: closePicker };
+  const props = { ...hostContext(), session: live, onClose: () => {} };
   return (
     <>
       <ElementPickerToolbar {...props} />
@@ -405,21 +403,25 @@ describe("page verdicts", () => {
 });
 
 describe("Escape", () => {
-  beforeEach(() => {
-    closePicker.mockClear();
-  });
+  const pickerOn = () =>
+    useDevPreviewToolStore.getState().activeByPanel["preview-1"] === ELEMENT_PICKER_TOOL_ID;
 
-  it("turns the picker off when the page's Escape finds nothing selected", async () => {
+  it("turns the picker off when the page's Escape finds nothing selected, surfaces or not", async () => {
     await mountBound();
+    // The surfaces can be loading, failed, or hidden with the dock tab; the
+    // page's Escape still has to get out.
+    cleanup();
+    expect(pickerOn()).toBe(true);
 
     act(() => host.pushEvent({ type: "dismissRequested" }));
 
-    expect(closePicker).toHaveBeenCalledTimes(1);
+    expect(pickerOn()).toBe(false);
   });
 
   it("keeps the picker on for a request from another session, or from Browse", async () => {
     await mountBound();
     act(() => host.pushEvent({ type: "dismissRequested" }, undefined, "session-0"));
+    expect(pickerOn()).toBe(true);
 
     fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
     await waitFor(() =>
@@ -429,7 +431,7 @@ describe("Escape", () => {
     );
     act(() => host.pushEvent({ type: "dismissRequested" }));
 
-    expect(closePicker).not.toHaveBeenCalled();
+    expect(pickerOn()).toBe(true);
   });
 
   it("lets go of the selection on the chrome's Escape, and leaves the next one to the host", async () => {

@@ -109,12 +109,15 @@ export function useFindInPage(
     setMatchCount(0);
     latestRequestIdRef.current = null;
     safeStopFind();
+    // Said now, not when the effect below catches up: the keyboard goes back to
+    // the page next, and its very next Escape must reach it.
+    publishFindOpen(panelId, false);
     // Unmounting the bar would leave the keyboard on `document.body`. A close
     // forwarded from the guest can land after the user has moved to another pane;
     // that keyboard stays where it went.
     if (pane && active && active !== document.body && !pane.contains(active)) return;
     if (!focusWebviewPage(webviewElement)) pane?.focus({ preventScroll: true });
-  }, [safeStopFind, webviewElement]);
+  }, [panelId, safeStopFind, webviewElement]);
 
   const setQuery = useCallback(
     (q: string) => {

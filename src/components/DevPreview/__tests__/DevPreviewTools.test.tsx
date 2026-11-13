@@ -20,7 +20,7 @@ import {
   useDevPreviewToolEscape,
 } from "../DevPreviewTools";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
-import { _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
+import { _resetForTests as resetEscapeStack, registerEscapeFallback } from "@/lib/escapeStack";
 import type {
   DevPreviewToolButtonProps,
   DevPreviewToolDefinition,
@@ -501,7 +501,24 @@ describe("Escape from the dev preview's chrome", () => {
     expect(toolOn()).toBe(false);
   });
 
-  it("leaves Escape to a field, a layer that took it, a held key, and other panes", () => {
+  it("swallows a held key's repeats, so they never reach an older fallback", () => {
+    // Registered first, as dictation's is at startup: the pane's is newer.
+    const older = vi.fn(() => true);
+    registerEscapeFallback(older);
+    render(<Pane />);
+    const live = openTool();
+    const strip = screen.getByRole("button", { name: "Close picker" });
+
+    escapeFrom(strip);
+    expect(escapeFrom(strip, { repeat: true }).defaultPrevented).toBe(true);
+    expect(escapeFrom(strip, { repeat: true }).defaultPrevented).toBe(true);
+
+    expect(live.held).toBe(false);
+    expect(toolOn()).toBe(true);
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to a field, a layer that took it, and other panes", () => {
     render(
       <>
         <Pane />
@@ -512,7 +529,6 @@ describe("Escape from the dev preview's chrome", () => {
     const strip = screen.getByRole("button", { name: "Close picker" });
 
     escapeFrom(screen.getByRole("textbox", { name: "Address" }));
-    escapeFrom(strip, { repeat: true });
     escapeFrom(screen.getByRole("button", { name: "Elsewhere" }));
     const claimed = new KeyboardEvent("keydown", {
       key: "Escape",

@@ -940,9 +940,9 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     function pressEscape(
       findOpen: boolean,
       input: { isComposing?: boolean } = {},
-      embedderDestroyed = false
+      embedderDestroyed = false,
+      send: (...args: unknown[]) => void = vi.fn()
     ) {
-      const send = vi.fn();
       const setFindOpen = vi.fn();
       const isFindOpen = vi.fn(() => findOpen);
       mockedGetWebviewDialogService.mockReturnValue({
@@ -971,7 +971,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         isComposing: false,
         ...input,
       });
-      return { event, send, isFindOpen, setFindOpen };
+      return { event, send: vi.mocked(send), isFindOpen, setFindOpen };
     }
 
     it("keeps the Escape from the page, so closing the bar is all it does", () => {
@@ -999,7 +999,20 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     });
 
     it("leaves a composing Escape to the page's IME", () => {
-      const { event, setFindOpen } = pressEscape(true, { isComposing: true });
+      const { event, send, setFindOpen } = pressEscape(true, { isComposing: true });
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(setFindOpen).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledWith("webview:find-shortcut", {
+        panelId: "panel-a",
+        shortcut: "close",
+      });
+    });
+
+    it("leaves Escape to the page when the close can't be delivered", () => {
+      const { event, setFindOpen } = pressEscape(true, {}, false, () => {
+        throw new Error("renderer gone");
+      });
 
       expect(event.preventDefault).not.toHaveBeenCalled();
       expect(setFindOpen).not.toHaveBeenCalled();

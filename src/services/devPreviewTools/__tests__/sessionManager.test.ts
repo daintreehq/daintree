@@ -155,6 +155,28 @@ describe("dev preview tool sessions", () => {
     expect(live()).toBeNull();
   });
 
+  it("lets a session turn its own tool off, as the toggle would", () => {
+    switchOn();
+    const session = live();
+
+    session?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBeUndefined();
+    expect(session?.disposals).toBe(1);
+  });
+
+  it("leaves a successor alone when a session that is over asks to close", () => {
+    register(makeSession, "other");
+    switchOn();
+    const first = live();
+    useDevPreviewToolStore.getState().setActive(PANEL, "other");
+    expect(live()).not.toBe(first);
+
+    first?.contexts[0]?.close();
+
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("other");
+  });
+
   it("switches the tool off and disposes when the preview is trashed", () => {
     switchOn();
     const session = live();
