@@ -52,6 +52,12 @@ import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
 import { useRevealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { RevealActionButton, runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
+import {
+  diffDisplayOrder,
+  groupDiffChangeSet,
+  resolveDiffFileNavigation,
+  type DiffFileAnchor,
+} from "@/components/FileViewer/diffChangeSet";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
@@ -404,12 +410,56 @@ export function DiffPane({
     ]
   );
 
-  // Survives the open file dropping out of the set, so stepping resumes from
-  // where the user was rather than jumping to the top.
-  const lastIndexRef = useRef(0);
+  // A missing open file keeps a stepper to walk on to the files that remain,
+  // even once only one does and the pane is no longer a workspace.
+  const showFileStepper = isWorkspace || (currentIndex === -1 && (changeSet?.length ?? 0) > 0);
+  const sidebarVisible = isWorkspace && diffShowFileList;
+  // The shelf's filter box. Held here because the stepper walks the order the
+  // shelf shows; it stands down while the shelf is hidden, since a filter the
+  // user can't see shouldn't decide which files the stepper skips.
+  const [fileFilter, setFileFilter] = useState("");
+  const effectiveFilter = sidebarVisible ? fileFilter : "";
+  const fullOrder = useMemo(
+    () => (changeSet ? diffDisplayOrder(groupDiffChangeSet(changeSet)) : []),
+    [changeSet]
+  );
+  const visibleOrder = useMemo(
+    () =>
+      changeSet && effectiveFilter.trim() !== ""
+        ? diffDisplayOrder(groupDiffChangeSet(changeSet, effectiveFilter))
+        : fullOrder,
+    [changeSet, effectiveFilter, fullOrder]
+  );
+
+  // The shelf as it stood when the open file was last in it, tagged with its
+  // path: once the file leaves the set, stepping resumes from the gap it left,
+  // and a pane sent to some other missing file gets none of this one's history.
+  // The path alone, not the whole cursor: an opener that loses the file can
+  // re-aim the pane at it under its old status or side (the Review Hub falls
+  // back to its original selection), and that is still the same gap.
+  const [anchorState, setAnchorState] = useState<{
+    filePath: string;
+    anchor: DiffFileAnchor;
+  } | null>(null);
   useEffect(() => {
-    if (currentIndex !== -1) lastIndexRef.current = currentIndex;
-  }, [currentIndex]);
+    if (!changeSet || filePath === undefined || currentIndex === -1) return;
+    const position = fullOrder.indexOf(currentIndex);
+    setAnchorState((current) =>
+      current?.filePath === filePath &&
+      current.anchor.files === changeSet &&
+      current.anchor.order === fullOrder &&
+      current.anchor.position === position
+        ? current
+        : { filePath, anchor: { files: changeSet, order: fullOrder, position } }
+    );
+  }, [changeSet, fullOrder, currentIndex, filePath]);
+  const anchor =
+    anchorState !== null && anchorState.filePath === filePath ? anchorState.anchor : null;
+
+  const navigation = useMemo(
+    () => resolveDiffFileNavigation(changeSet ?? [], fullOrder, visibleOrder, currentIndex, anchor),
+    [changeSet, fullOrder, visibleOrder, currentIndex, anchor]
+  );
 
   const selectFileAt = useCallback(
     (index: number) => {
@@ -424,21 +474,14 @@ export function DiffPane({
 
   const navigateFile = useCallback(
     (delta: -1 | 1) => {
-      if (!changeSet || changeSet.length === 0) return;
-      // Clamp against the live length first — a worktree refresh can shrink the
-      // set while the panel is open, leaving the resolved index stale.
-      const current = Math.min(
-        currentIndex === -1 ? lastIndexRef.current : currentIndex,
-        changeSet.length - 1
-      );
-      const next = Math.min(Math.max(current + delta, 0), changeSet.length - 1);
-      selectFileAt(next);
+      const target = delta === -1 ? navigation.previousIndex : navigation.nextIndex;
+      if (target !== null) selectFileAt(target);
     },
-    [changeSet, currentIndex, selectFileAt]
+    [navigation, selectFileAt]
   );
 
   // Warms the next file's diff so forward stepping renders from cache.
-  const nextEntry = currentIndex === -1 ? undefined : changeSet?.[currentIndex + 1];
+  const nextEntry = navigation.nextIndex === null ? undefined : changeSet?.[navigation.nextIndex];
   const nextPath = nextEntry?.path;
   const nextStatus = nextEntry?.status;
   const nextSide = nextEntry?.side;
@@ -628,9 +671,8 @@ export function DiffPane({
   // blocks a double submit from the first millisecond.
   const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
-  const hasPrevFile = isWorkspace && currentIndex > 0;
-  const hasNextFile =
-    isWorkspace && currentIndex !== -1 && currentIndex < (changeSet?.length ?? 0) - 1;
+  const hasPrevFile = showFileStepper && navigation.previousIndex !== null;
+  const hasNextFile = showFileStepper && navigation.nextIndex !== null;
 
   // The footer is a toolbar like the header above the diff: one tab stop,
   // arrow keys between its controls.
@@ -1333,10 +1375,12 @@ export function DiffPane({
       onKeyDown={handleFileKeyDown}
     >
       <div className="flex flex-1 min-h-0">
-        {isWorkspace && diffShowFileList && changeSet && (
+        {sidebarVisible && changeSet && (
           <DiffFileSidebar
             files={changeSet}
             currentIndex={currentIndex}
+            filter={fileFilter}
+            onFilterChange={setFileFilter}
             worktreePath={worktreePath}
             // Already resolved here; the sidebar would otherwise repeat the
             // path→worktree lookup the pane has done above.
@@ -1566,7 +1610,7 @@ export function DiffPane({
         />
       )}
 
-      {(isWorkspace || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
+      {(showFileStepper || currentEntry !== undefined || hasPendingNotes || noteSend !== null) && (
         <div
           ref={footerRef}
           data-testid="diff-pane-footer"
@@ -1593,7 +1637,7 @@ export function DiffPane({
                 )}
               </FileViewerToolbar.IconButton>
             )}
-            {isWorkspace && (
+            {showFileStepper && (
               <>
                 <FileViewerToolbar.IconButton
                   label="Previous file"
@@ -1608,7 +1652,9 @@ export function DiffPane({
                   data-testid="diff-file-position-indicator"
                   className="text-xs text-text-secondary tabular-nums"
                 >
-                  {currentIndex + 1} of {changeSet?.length ?? 0}
+                  {navigation.position === null
+                    ? pluralize(navigation.total, "file")
+                    : `${navigation.position + 1} of ${navigation.total}`}
                 </span>
                 <FileViewerToolbar.IconButton
                   label="Next file"

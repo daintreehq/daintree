@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
-import { basename, dirname, join } from "@shared/utils/path";
+import { basename, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PathTail } from "@/components/ui/PathTail";
@@ -23,8 +23,13 @@ import {
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
-import type { DiffChangeSetEntry } from "./diffChangeSet";
+import {
+  DIFF_STATUS_CONFIG,
+  formatDiffDir,
+  groupDiffChangeSet,
+  summarizeChangeSet,
+} from "./diffChangeSet";
+import type { DiffChangeSetEntry, IndexedDiffEntry } from "./diffChangeSet";
 import { pluralize } from "@/lib/pluralize";
 
 export interface DiffFileSidebarProps {
@@ -43,16 +48,13 @@ export interface DiffFileSidebarProps {
    * `Discard changes` and `Trash file`.
    */
   statusIsLocal?: boolean;
+  /**
+   * The filter box's text. Held by the pane, whose file stepper walks the same
+   * filtered order the shelf shows.
+   */
+  filter: string;
+  onFilterChange: (filter: string) => void;
   onSelect: (index: number) => void;
-}
-
-interface IndexedEntry extends DiffChangeSetEntry {
-  index: number;
-}
-
-interface DirGroup {
-  dir: string;
-  files: IndexedEntry[];
 }
 
 /** Per-row inputs, shared by the static and windowed paths so they cannot drift. */
@@ -79,7 +81,7 @@ interface ShelfRowContext {
  * that coordinate system, and windowing must not quietly swap it for the
  * display index.
  */
-function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext }) {
+function DiffShelfRow({ file, ctx }: { file: IndexedDiffEntry; ctx: ShelfRowContext }) {
   const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
   const viewed = ctx.viewedSet.has(file.viewedKey);
   const isCurrent = file.index === ctx.currentIndex;
@@ -257,9 +259,10 @@ export function DiffFileSidebar({
   worktreePath,
   worktreeId = null,
   statusIsLocal = true,
+  filter,
+  onFilterChange,
   onSelect,
 }: DiffFileSidebarProps) {
-  const [filter, setFilter] = useState("");
   // The one file-row menu, shared with the worktree card, the file browser and
   // the Review Hub (#11757). Built once for the list, rendered per row.
   const { renderItems: renderFileRowMenuItems } = useFileRowMenuItems({
@@ -282,25 +285,7 @@ export function DiffFileSidebar({
     [files, viewedSet]
   );
 
-  const groups = useMemo((): DirGroup[] => {
-    const query = filter.trim().toLowerCase();
-    const grouped = new Map<string, IndexedEntry[]>();
-    files.forEach((file, index) => {
-      if (query && !file.path.toLowerCase().includes(query)) return;
-      const dir = dirname(file.path);
-      const key = !dir || dir === "." ? "" : dir;
-      const bucket = grouped.get(key);
-      if (bucket) bucket.push({ ...file, index });
-      else grouped.set(key, [{ ...file, index }]);
-    });
-    return Array.from(grouped.entries())
-      .map(([dir, groupFiles]) => ({ dir, files: groupFiles }))
-      .sort((a, b) => {
-        if (a.dir === "") return -1;
-        if (b.dir === "") return 1;
-        return a.dir.localeCompare(b.dir);
-      });
-  }, [files, filter]);
+  const groups = useMemo(() => groupDiffChangeSet(files, filter), [files, filter]);
 
   const visibleCount = useMemo(
     () => groups.reduce((count, group) => count + group.files.length, 0),
@@ -312,7 +297,7 @@ export function DiffFileSidebar({
   // is the bridge back — reveal speaks slot order, everything else (the open
   // file, `onSelect`, `aria-current`) speaks the original changeset's order.
   const flat = useMemo(() => {
-    const entries: IndexedEntry[] = [];
+    const entries: IndexedDiffEntry[] = [];
     const counts: number[] = [];
     const dirs: string[] = [];
     // `itemContent` is the odd one out: it is called with the file-only index,
@@ -467,8 +452,8 @@ export function DiffFileSidebar({
         <SearchField
           size="compact"
           value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          onClear={() => setFilter("")}
+          onChange={(event) => onFilterChange(event.target.value)}
+          onClear={() => onFilterChange("")}
           clearLabel="Clear file filter"
           placeholder="Filter files"
           aria-label="Filter files"
@@ -493,7 +478,7 @@ export function DiffFileSidebar({
             scale="sidebar"
             title="No files match the filter"
             action={
-              <Button variant="subtle" size="sm" onClick={() => setFilter("")}>
+              <Button variant="subtle" size="sm" onClick={() => onFilterChange("")}>
                 Clear filter
               </Button>
             }
