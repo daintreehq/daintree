@@ -6,6 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
+import {
+  _resetComposerSnapshotsForTesting,
+  keepComposerSnapshot,
+  takeComposerSnapshot,
+} from "@/lib/composerRemount";
 import { getViewWorkspaceId } from "../viewWorkspaceId";
 import { VOICE_RECENT_PROMPT_MAX_CHARS } from "@shared/config/voiceCorrection";
 
@@ -28,6 +33,7 @@ describe("terminalInputStore", () => {
       lastTypedAgentTarget: null,
     });
     vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+    _resetComposerSnapshotsForTesting();
   });
 
   describe("fleet draft holds (#14949)", () => {
@@ -182,6 +188,55 @@ describe("terminalInputStore", () => {
       store.clearAllDraftInputs();
 
       expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+  });
+
+  describe("chips kept across a composer's remount (#16883)", () => {
+    const keep = (draftKey: string) =>
+      keepComposerSnapshot(draftKey, {
+        draft: "look",
+        images: [],
+        files: [],
+        selection: { anchor: 4, head: 4 },
+        caretPublished: true,
+      });
+    const kept = (draftKey: string) => takeComposerSnapshot(draftKey, "look") !== null;
+
+    it("go when the draft is emptied or cleared, and only that draft's", () => {
+      const store = useTerminalInputStore.getState();
+      keep("p:a");
+      keep("p:b");
+      store.setDraftInput("a", "", "p");
+      expect(kept("p:a")).toBe(false);
+
+      keep("p:a");
+      store.clearDraftInput("a", "p");
+      expect(kept("p:a")).toBe(false);
+      expect(kept("p:b")).toBe(true);
+    });
+
+    it("stay through a write that leaves text", () => {
+      keep("p:a");
+      useTerminalInputStore.getState().setDraftInput("a", "look", "p");
+      expect(kept("p:a")).toBe(true);
+    });
+
+    it("go with the project's drafts, except a preserved terminal's", () => {
+      keep("p:a");
+      keep("p:b");
+      keep("q:a");
+      useTerminalInputStore.getState().resetForProjectSwitch("p", new Set(["b"]));
+      expect(kept("p:a")).toBe(false);
+      expect(kept("p:b")).toBe(true);
+      expect(kept("q:a")).toBe(true);
+    });
+
+    it("all go when every draft is cleared", () => {
+      keep("p:a");
+      keep("q:b");
+      useTerminalInputStore.getState().clearAllDraftInputs();
+      expect(kept("p:a")).toBe(false);
+      expect(kept("q:b")).toBe(false);
     });
   });
 

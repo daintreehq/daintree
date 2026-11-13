@@ -149,6 +149,15 @@ const { useReviewMarksStore, _resetReviewMarksStoreForTesting } =
   await import("../reviewMarksStore");
 const { useDiffViewedStore } = await import("../diffViewedStore");
 const { useLayoutUndoStore } = await import("../layoutUndoStore");
+const {
+  _resetPendingUploadsForTests,
+  composerUploadSurface,
+  getHeldBackAttachments,
+  holdBackAttachments,
+  isolatedComposerUploadSurface,
+} = await import("@/components/Terminal/uploads/pendingUploads");
+const { _resetComposerSnapshotsForTesting, keepComposerSnapshot, takeComposerSnapshot } =
+  await import("@/lib/composerRemount");
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -575,6 +584,52 @@ describe("rendererStoreOrchestrator", () => {
 
     usePanelStore.getState().removePanel("term-1");
     expect(getLastComposerSend("term-1")).toBeUndefined();
+  });
+
+  describe("a composer's state kept across remounts (#16883)", () => {
+    const IMAGE = { type: "image" as const, filePath: "/tmp/a.png", thumbnailDataUrl: "" };
+    const keep = (draftKey: string) =>
+      keepComposerSnapshot(draftKey, {
+        draft: "/tmp/a.png",
+        images: [{ from: 0, to: 10, filePath: "/tmp/a.png", thumbnailUrl: "" }],
+        files: [],
+        selection: { anchor: 10, head: 10 },
+        caretPublished: false,
+      });
+    const panel = (id: string) => ({
+      id,
+      title: id,
+      kind: "terminal" as const,
+      cwd: "/test",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+    });
+
+    beforeEach(() => {
+      _resetPendingUploadsForTests();
+      _resetComposerSnapshotsForTesting();
+      usePanelStore.setState({
+        panelsById: { "term-1": panel("term-1"), "term-2": panel("term-2") },
+        panelIds: ["term-1", "term-2"],
+      });
+      for (const id of ["term-1", "term-2"]) {
+        keep(`proj:${id}`);
+        holdBackAttachments(composerUploadSurface(id), [IMAGE]);
+        holdBackAttachments(isolatedComposerUploadSurface(id), [IMAGE]);
+      }
+    });
+
+    it.each(["trashPanel", "removePanel"] as const)("goes when the panel closes (%s)", (close) => {
+      usePanelStore.getState()[close]("term-1");
+
+      expect(takeComposerSnapshot("proj:term-1", "/tmp/a.png")).toBeNull();
+      expect(getHeldBackAttachments(composerUploadSurface("term-1"))).toEqual([]);
+      expect(getHeldBackAttachments(isolatedComposerUploadSurface("term-1"))).toEqual([]);
+      // Another panel's stays.
+      expect(getHeldBackAttachments(composerUploadSurface("term-2"))).toEqual([IMAGE]);
+      expect(takeComposerSnapshot("proj:term-2", "/tmp/a.png")).not.toBeNull();
+    });
   });
 
   it("clears worktree focus tracking when last-focused terminal is removed", () => {

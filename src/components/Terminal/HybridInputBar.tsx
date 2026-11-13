@@ -597,7 +597,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceId = voiceTarget?.panelId ?? terminalId;
     const voiceProjectId = voiceTarget ? voiceTarget.projectId : projectId;
     const draftKeyRef = useRef(draftKey);
-    useEffect(() => {
+    // Before the editor factory's layout effect, which builds a tab's editor
+    // over the draft this names.
+    useLayoutEffect(() => {
       draftKeyRef.current = draftKey;
     }, [draftKey]);
     const isInHistoryMode = useTerminalInputStore((s) => {
@@ -809,8 +811,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
-    // Held back for this composer's draft, so gone with the composer.
-    useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
+    // A pane's composer keeps what was held back for it through a remount, and
+    // its panel's close lets it go. An isolated one's terminal may never close
+    // as a panel here, so what was held back for it goes with it.
+    useEffect(() => {
+      if (!isolated) return;
+      return () => void takeHeldBackAttachments(uploadSurface);
+    }, [isolated, uploadSurface]);
     const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
       const view = editorViewRef.current;
       if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
@@ -2500,7 +2507,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       draftKeyRef,
       editorHostRef,
       editorViewRef,
-      value,
       disabled,
       placeholder,
       effectiveTheme,

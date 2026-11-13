@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { EditorState } from "@codemirror/state";
-import { makeDraftKey } from "@/lib/draftKey";
+import { isTerminalDraftKey, makeDraftKey } from "@/lib/draftKey";
+import { forgetComposerSnapshots } from "@/lib/composerRemount";
 import type { TerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
@@ -65,11 +66,25 @@ export function triggerPopStash(terminalId: string): void {
   inputControllers.get(terminalId)?.pop();
 }
 
-function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<string, V> {
-  const suffix = `:${terminalId}`;
+function terminalKeyMatcher(terminalId: string): (key: string) => boolean {
+  return (key) => isTerminalDraftKey(key, terminalId);
+}
+
+function projectKeyMatcher(
+  projectId: string,
+  preserveTerminalIds?: Set<string>
+): (key: string) => boolean {
+  const prefix = `${projectId}:`;
+  return (key) => key.startsWith(prefix) && !preserveTerminalIds?.has(key.slice(prefix.length));
+}
+
+function deleteMatchingKeys<V>(
+  map: Map<string, V>,
+  matches: (key: string) => boolean
+): Map<string, V> {
   let changed = false;
   for (const key of map.keys()) {
-    if (key === terminalId || key.endsWith(suffix)) {
+    if (matches(key)) {
       changed = true;
       break;
     }
@@ -77,9 +92,13 @@ function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<str
   if (!changed) return map;
   const next = new Map(map);
   for (const key of [...next.keys()]) {
-    if (key === terminalId || key.endsWith(suffix)) next.delete(key);
+    if (matches(key)) next.delete(key);
   }
   return next;
+}
+
+function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<string, V> {
+  return deleteMatchingKeys(map, terminalKeyMatcher(terminalId));
 }
 
 function deleteProjectKeys<V>(
@@ -87,30 +106,7 @@ function deleteProjectKeys<V>(
   projectId: string,
   preserveTerminalIds?: Set<string>
 ): Map<string, V> {
-  const prefix = `${projectId}:`;
-  let changed = false;
-  for (const key of map.keys()) {
-    if (key.startsWith(prefix)) {
-      if (preserveTerminalIds) {
-        const terminalId = key.slice(prefix.length);
-        if (preserveTerminalIds.has(terminalId)) continue;
-      }
-      changed = true;
-      break;
-    }
-  }
-  if (!changed) return map;
-  const next = new Map(map);
-  for (const key of [...next.keys()]) {
-    if (key.startsWith(prefix)) {
-      if (preserveTerminalIds) {
-        const terminalId = key.slice(prefix.length);
-        if (preserveTerminalIds.has(terminalId)) continue;
-      }
-      next.delete(key);
-    }
-  }
-  return next;
+  return deleteMatchingKeys(map, projectKeyMatcher(projectId, preserveTerminalIds));
 }
 
 /**
@@ -276,9 +272,11 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     const key = makeDraftKey(terminalId, projectId);
     return get().draftInputs.get(key) ?? "";
   },
-  setDraftInput: (terminalId, value, projectId) =>
+  setDraftInput: (terminalId, value, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    // An emptied draft takes its chips with it, even one already empty here.
+    if (value === "") forgetComposerSnapshots((k) => k === key);
     set((state) => {
-      const key = makeDraftKey(terminalId, projectId);
       const existing = state.draftInputs.get(key);
       // Short-circuit on no-op writes — fleet mirroring otherwise causes
       // every keystroke to fan out N redundant Map-replacements that wake
@@ -293,14 +291,17 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newDraftInputs.set(key, value);
       }
       return { draftInputs: newDraftInputs };
-    }),
-  clearDraftInput: (terminalId, projectId) =>
+    });
+  },
+  clearDraftInput: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    forgetComposerSnapshots((k) => k === key);
     set((state) => {
-      const key = makeDraftKey(terminalId, projectId);
       const newDraftInputs = new Map(state.draftInputs);
       newDraftInputs.delete(key);
       return { draftInputs: newDraftInputs };
-    }),
+    });
+  },
   bumpExternalDraftRevision: (options) =>
     set((state) => {
       const externalDraftRevision = state.externalDraftRevision + 1;
@@ -326,7 +327,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       return { lastTypedAgentTarget: { terminalId, workspaceId } };
     }),
 
-  clearAllDraftInputs: () =>
+  clearAllDraftInputs: () => {
+    forgetComposerSnapshots(() => true);
     set({
       draftInputs: new Map(),
       pendingDrafts: new Map(),
@@ -337,7 +339,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       historyIndex: new Map(),
       tempDraft: new Map(),
       lastTypedAgentTarget: null,
-    }),
+    });
+  },
 
   mirrorFleetDraft: (primaryId, value, armedIds, projectId) =>
     set((state) => {
@@ -581,7 +584,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     return history?.length ?? 0;
   },
 
-  clearTerminalState: (terminalId) =>
+  clearTerminalState: (terminalId) => {
+    forgetComposerSnapshots(terminalKeyMatcher(terminalId));
     set((state) => {
       const newDraftInputs = deleteTerminalKeys(state.draftInputs, terminalId);
       const newPendingDrafts = deleteTerminalKeys(state.pendingDrafts, terminalId);
@@ -629,9 +633,11 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         voiceSubmittingPanels: newVoiceSubmitting,
         lastTypedAgentTarget: newLastTyped,
       };
-    }),
+    });
+  },
 
-  resetForProjectSwitch: (projectId, preserveTerminalIds) =>
+  resetForProjectSwitch: (projectId, preserveTerminalIds) => {
+    forgetComposerSnapshots(projectKeyMatcher(projectId, preserveTerminalIds));
     set((state) => {
       const newDraftInputs = deleteProjectKeys(state.draftInputs, projectId, preserveTerminalIds);
       const newPendingDrafts = deleteProjectKeys(
@@ -684,7 +690,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         tempDraft: newTempDraft,
         lastTypedAgentTarget: newLastTyped,
       };
-    }),
+    });
+  },
 
   getProjectDraftInputs: (projectId) => {
     const prefix = `${projectId}:`;
