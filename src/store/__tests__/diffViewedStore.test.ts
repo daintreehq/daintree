@@ -268,15 +268,15 @@ describe("diffViewedStore", () => {
 
     it("matches the store's absolute change paths against the key's relative path", () => {
       observe([change("src/deep/a:b.ts")]);
-      mark("unstaged:src/deep/a:b.ts");
+      mark("working-tree:src/deep/a:b.ts");
 
       observe([change("src/deep/a:b.ts")]);
       reconcile();
-      expect(viewed("unstaged:src/deep/a:b.ts")).toBe(true);
+      expect(viewed("working-tree:src/deep/a:b.ts")).toBe(true);
 
       observe([change("src/deep/a:b.ts", { mtimeMs: 200 })]);
       reconcile();
-      expect(viewed("unstaged:src/deep/a:b.ts")).toBe(false);
+      expect(viewed("working-tree:src/deep/a:b.ts")).toBe(false);
     });
 
     it("leaves marks alone while a source has nothing to say, then compares against the mark", () => {
@@ -355,53 +355,100 @@ describe("diffViewedStore", () => {
       expect(WT in useDiffViewedStore.getState().baselinesByWorktree).toBe(false);
     });
 
-    it("lapses both staging-section marks when the file itself changes", () => {
-      observe([change("a.ts")]);
-      staging([row("a.ts", 1)], [row("a.ts", 2)]);
-      mark("staged:a.ts");
-      mark("unstaged:a.ts");
+    describe("working-tree marks across staging sections (#16897)", () => {
+      const KEY = "working-tree:a.ts";
 
-      // The rows read the same; only the worktree store saw the edit.
-      observe([change("a.ts", { mtimeMs: 200 })]);
-      reconcile();
-
-      expect(viewed("staged:a.ts")).toBe(false);
-      expect(viewed("unstaged:a.ts")).toBe(false);
-    });
-
-    it.each([
-      ["staged", [row("a.ts", 3)], [row("a.ts", 2)]],
-      ["unstaged", [row("a.ts", 1)], [row("a.ts", 2, 4)]],
-    ] as const)(
-      "lapses the %s mark when only that section's row changes",
-      (section, staged, unstaged) => {
+      it("keeps the mark while an unchanged file is staged, partially staged, and unstaged", () => {
         observe([change("a.ts")]);
-        staging([row("a.ts", 1)], [row("a.ts", 2)]);
-        mark("staged:a.ts");
-        mark("unstaged:a.ts");
+        staging([], [row("a.ts", 3)]);
+        mark(KEY);
 
-        // Staging a hunk moves churn between the sections without touching
-        // the file on disk, so the worktree store sees nothing.
-        staging([...staged], [...unstaged]);
+        staging([row("a.ts", 3)], []);
         reconcile(WT);
+        expect(viewed(KEY)).toBe(true);
 
-        const other = section === "staged" ? "unstaged" : "staged";
-        expect(viewed(`${section}:a.ts`)).toBe(false);
-        expect(viewed(`${other}:a.ts`)).toBe(true);
-      }
-    );
+        staging([row("a.ts", 1)], [row("a.ts", 2)]);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(true);
 
-    it("lapses a staging-section mark when its row leaves that section", () => {
-      staging([], [row("a.ts")]);
-      mark("unstaged:a.ts");
+        staging([], [row("a.ts", 3)]);
+        reconcile();
+        expect(viewed(KEY)).toBe(true);
+      });
 
-      staging([row("a.ts")], []);
-      reconcile(WT);
-      expect(viewed("unstaged:a.ts")).toBe(false);
+      it("keeps the mark while a new file is staged and unstaged", () => {
+        const untracked = { status: "untracked" as const, insertions: 4, deletions: null };
+        const added = { status: "added" as const, insertions: 4, deletions: 0 };
+        observe([change("a.ts", untracked)]);
+        staging([], [{ path: "a.ts", ...untracked }]);
+        mark(KEY);
 
-      staging([], [row("a.ts")]);
-      reconcile(WT);
-      expect(viewed("unstaged:a.ts")).toBe(false);
+        observe([change("a.ts", added)]);
+        staging([{ path: "a.ts", ...added }], []);
+        reconcile();
+        expect(viewed(KEY)).toBe(true);
+
+        observe([change("a.ts", untracked)]);
+        staging([], [{ path: "a.ts", ...untracked }]);
+        reconcile();
+        expect(viewed(KEY)).toBe(true);
+      });
+
+      it("lapses the mark once the file's content changes after it moved sections", () => {
+        observe([change("a.ts")]);
+        staging([], [row("a.ts")]);
+        mark(KEY);
+
+        staging([row("a.ts")], []);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(true);
+
+        observe([change("a.ts", { mtimeMs: 200, insertions: 2 })]);
+        reconcile();
+        expect(viewed(KEY)).toBe(false);
+      });
+
+      it("lapses the mark when the file leaves both sections, before the worktree poll sees it", () => {
+        observe([change("a.ts")]);
+        staging([], [row("a.ts")]);
+        mark(KEY);
+
+        staging([], []);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(false);
+
+        staging([row("a.ts")], []);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(false);
+      });
+
+      it("takes no evidence from a staging read that hasn't listed the file yet", () => {
+        // Marked from the change list while the cached staging read predates
+        // the file: its absence there says nothing about the mark.
+        observe([change("a.ts")]);
+        staging([], []);
+        mark(KEY);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(true);
+
+        staging([], [row("a.ts")]);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(true);
+
+        // Once listed, leaving both sections is evidence again.
+        staging([], []);
+        reconcile(WT);
+        expect(viewed(KEY)).toBe(false);
+      });
+
+      it("still lapses on a status change that isn't staging a new file", () => {
+        observe([change("a.ts")]);
+        mark(KEY);
+
+        observe([change("a.ts", { status: "deleted", insertions: 0, deletions: 1 })]);
+        reconcile();
+        expect(viewed(KEY)).toBe(false);
+      });
     });
 
     it("keeps since-review marks apart from working-tree and base-branch ones", () => {

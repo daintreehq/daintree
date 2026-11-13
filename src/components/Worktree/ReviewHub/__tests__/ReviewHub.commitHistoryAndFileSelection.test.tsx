@@ -1006,6 +1006,27 @@ describe("ReviewHub", () => {
       expect(viewedState("src/index.ts")).toBe("true");
     });
 
+    it("keeps a Viewed mark when its unchanged file is staged and unstaged (#16897)", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark src/app.ts as viewed" }));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      const appRow = { path: "src/app.ts", status: "modified" as const, insertions: 3, deletions: 1 };
+      await poll(makeStatus({ staged: [...makeStatus().staged, appRow], unstaged: [] }));
+      const inStaged = () =>
+        screen
+          .getByTestId("review-hub-file-section-staged")
+          .contains(screen.getByTestId("file-stage-row-src/app.ts"));
+      await waitFor(() => expect(inStaged()).toBe(true));
+      expect(viewedState("src/app.ts")).toBe("true");
+
+      await poll(makeStatus());
+      await waitFor(() => expect(inStaged()).toBe(false));
+      expect(viewedState("src/app.ts")).toBe("true");
+    });
+
     it("reads unviewed when a Viewed file leaves the list and comes back unchanged", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("app.ts"));

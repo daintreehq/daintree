@@ -17,6 +17,17 @@ function entryFreshnessKey(entry: FileChangeDetail): string {
   return `${entry.status}:${entry.mtimeMs ?? entry.mtime ?? ""}:${entry.insertions ?? ""}:${entry.deletions ?? ""}`;
 }
 
+// Staging a new file flips git's `untracked` to `added` and moves its line
+// count from Daintree's own newline count to numstat, which can disagree on
+// big, binary or filtered files, so for a new file only the mtime speaks to
+// its content. Everything else reads as `entryFreshnessKey` does.
+function stagingAgnosticKey(entry: FileChangeDetail): string {
+  if (entry.status === "untracked" || entry.status === "added") {
+    return `new:${entry.mtimeMs ?? entry.mtime ?? ""}`;
+  }
+  return entryFreshnessKey(entry);
+}
+
 export function findWorktreeByPath(
   worktrees: ReadonlyMap<string, WorktreeSnapshot>,
   worktreePath: string
@@ -49,6 +60,8 @@ export function selectDiffFreshnessKey(
 /**
  * Every file's freshness key for one worktree at once, keyed by
  * {@link comparablePath}, for callers checking many files against one poll.
+ * Unlike {@link selectDiffFreshnessKey}, staging or unstaging a file leaves its
+ * key alone: the change it carries is the same either side of the index.
  * Undefined when the store has no change list for the worktree.
  */
 export function buildFreshnessIndex(
@@ -59,7 +72,7 @@ export function buildFreshnessIndex(
   if (!changes) return undefined;
   const index = new Map<string, string>();
   for (const change of changes) {
-    index.set(comparablePath(worktreePath, change.path), entryFreshnessKey(change));
+    index.set(comparablePath(worktreePath, change.path), stagingAgnosticKey(change));
   }
   return index;
 }
