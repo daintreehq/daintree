@@ -430,16 +430,16 @@ export function ReviewHubContent({
     ) => {
       const store = usePanelStore.getState();
       const last = hubTargetRef.current;
-      if (last && last.panelId === id && last.selection === selection) {
-        const panel = store.panelsById[id];
-        if (
-          panel?.kind !== "diff" ||
-          panel.filePath !== last.filePath ||
+      const panel = store.panelsById[id];
+      if (
+        last?.panelId === id &&
+        last.selection === selection &&
+        panel?.kind === "diff" &&
+        (panel.filePath !== last.filePath ||
           panel.viewedKey !== last.viewedKey ||
-          panel.fileSide !== last.fileSide
-        ) {
-          return;
-        }
+          panel.fileSide !== last.fileSide)
+      ) {
+        return;
       }
       hubTargetRef.current = { panelId: id, selection, filePath, viewedKey, fileSide };
       store.setDiffPanelFile(id, filePath, fileStatus, viewedKey, fileSide);

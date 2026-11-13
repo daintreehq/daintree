@@ -284,7 +284,6 @@ import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { isHoldingUnrecoverableWork } from "@/services/plugin/panelRecoveryHold";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
-import { usePanelStore } from "@/store/panelStore";
 import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import type { DiffPanelData } from "@shared/types/panel";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";

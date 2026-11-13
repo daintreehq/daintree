@@ -154,7 +154,9 @@ describe.each<OpenDiff>(["working-tree", "base-branch", "since-review"])(
       const list = getByTestId("list");
       const press = (key: string) =>
         act(() => {
-          list.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+          list.dispatchEvent(
+            new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+          );
         });
 
       press("ArrowDown");
