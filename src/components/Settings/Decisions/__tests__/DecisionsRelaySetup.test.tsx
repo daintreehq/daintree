@@ -231,7 +231,11 @@ describe("DecisionsConnectionSection claim and restore", () => {
   });
 
   it("empties the file picker as each kit is read, so the same file chosen again is read again", async () => {
-    restoreIdentity.mockResolvedValue({ result: "kit-refused", origin: ORIGIN, reason: "not-a-kit" });
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
     renderSection({ state: "not-connected" });
     await checkAddress("claimed");
     const input = screen.getByLabelText("Recovery kit file") as HTMLInputElement;
