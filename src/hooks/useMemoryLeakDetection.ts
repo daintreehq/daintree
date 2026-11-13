@@ -2,8 +2,41 @@ import { useEffect, useRef } from "react";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { isPtyPanel } from "@shared/types/panel";
+
+export function buildLeakActions(terminalId: string, muteAlerts: () => void) {
+  return [
+    {
+      label: "Restart terminal",
+      actionId: "terminal.restart" as const,
+      actionArgs: { terminalId },
+      onClick: () => {
+        usePanelStore.getState().restartTerminal(terminalId);
+      },
+    },
+    {
+      label: "Settings",
+      actionId: "app.settings.openTab" as const,
+      actionArgs: { tab: "terminal", subtab: "performance" },
+      onClick: openPerformanceSettings,
+    },
+    {
+      label: "Mute alerts",
+      variant: "secondary" as const,
+      onClick: muteAlerts,
+    },
+  ];
+}
+
+export function openPerformanceSettings(): void {
+  void actionService.dispatch(
+    "app.settings.openTab",
+    { tab: "terminal", subtab: "performance" },
+    { source: "user" }
+  );
+}
 
 export const MEMORY_HISTORY_SIZE = 30;
 export const STARTUP_SKIP_SAMPLES = 30;
@@ -154,30 +187,10 @@ export function useMemoryLeakDetection(enabled: boolean): void {
               panelId: id,
               ...(terminal?.worktreeId ? { worktreeId: terminal.worktreeId } : {}),
             },
-            actions: [
-              {
-                label: "Restart terminal",
-                actionId: "terminal.restart" as const,
-                actionArgs: { terminalId: id },
-                onClick: () => {
-                  usePanelStore.getState().restartTerminal(id);
-                },
-              },
-              {
-                label: "Settings",
-                actionId: "app.settings.openTab" as const,
-                actionArgs: { tab: "terminal", subtab: "performance" },
-                onClick: () => {},
-              },
-              {
-                label: "Mute alerts",
-                variant: "secondary" as const,
-                onClick: () => {
-                  const st = localStateMap.get(id);
-                  if (st) st.dismissed = true;
-                },
-              },
-            ],
+            actions: buildLeakActions(id, () => {
+              const st = localStateMap.get(id);
+              if (st) st.dismissed = true;
+            }),
           });
         }
       }
