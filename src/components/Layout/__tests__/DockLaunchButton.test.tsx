@@ -1345,9 +1345,7 @@ describe("DockLaunchButton", () => {
     const { getByText } = renderButton();
 
     fireEvent.click(getByText("Create a recipe"));
-    expect(actionDispatchMock.mock.calls).toEqual([
-      ["recipe.editor.open", {}, { source: "menu" }],
-    ]);
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
   });
 
   it("fills the first column past a short agent list instead of leaving it empty", () => {

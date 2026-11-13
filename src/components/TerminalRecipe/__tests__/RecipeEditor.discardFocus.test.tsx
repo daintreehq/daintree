@@ -75,7 +75,13 @@ describe("RecipeEditor discard focus (#16906)", () => {
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
     useProjectStore.setState({
-      currentProject: { id: "proj", name: "proj", path: "/p", emoji: "🌲", lastOpened: 0 } as Project,
+      currentProject: {
+        id: "proj",
+        name: "proj",
+        path: "/p",
+        emoji: "🌲",
+        lastOpened: 0,
+      } as Project,
     });
     root = document.createElement("div");
     root.id = "root";
@@ -129,7 +135,9 @@ describe("RecipeEditor discard focus (#16906)", () => {
   it("keeps the editor open, and focus in it, when the discard is cancelled", async () => {
     await askToDiscard();
 
-    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })
+    );
     await settle();
 
     const name = document.getElementById("recipe-name") as HTMLInputElement;

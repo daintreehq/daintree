@@ -75,8 +75,8 @@ const RecipeEditorOpenArgsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-        "Worktree the draft belongs to. Defaults to the one this call came from; with none, the draft is project-wide."
-      ),
+      "Worktree the draft belongs to. Defaults to the one this call came from; with none, the draft is project-wide."
+    ),
   recipeId: z
     .string()
     .min(1)
