@@ -23,6 +23,40 @@ describe("classifyTokenError", () => {
     );
   });
 
+  it("reads an issue tracker's API-key and site-connection wording as credential failures", () => {
+    expect(
+      classifyTokenError("No Linear API key configured. Add one in Settings → Code forge.")
+    ).toBe("not-configured");
+    expect(classifyTokenError("No Jira API token configured")).toBe("not-configured");
+    expect(
+      classifyTokenError(
+        "Jira isn't connected. Add your site, email and API token in Settings → Code forge."
+      )
+    ).toBe("not-configured");
+    expect(classifyTokenError("Linear rejected the API key")).toBe("invalid");
+    expect(
+      classifyTokenError(
+        "Jira rejected the email and API token. Check both, and use a classic API token: tokens with scopes don't work with a site URL."
+      )
+    ).toBe("invalid");
+  });
+
+  it("leaves a tracker's network, setup and quota failures out of the credential kinds", () => {
+    expect(classifyTokenError("Couldn't reach Linear")).toBeNull();
+    expect(classifyTokenError("Linear didn't respond in time")).toBeNull();
+    expect(classifyTokenError("Linear's rate limit was reached. Try again shortly.")).toBeNull();
+    expect(
+      classifyTokenError(
+        "Linear isn't set up for this project yet. Finish its setup in Project settings."
+      )
+    ).toBeNull();
+    expect(
+      classifyTokenError(
+        "Linear has no team with the key ENG in this workspace. Check the team key in Project settings."
+      )
+    ).toBeNull();
+  });
+
   it("returns null for non-token errors and partial-results SSO", () => {
     expect(classifyTokenError(null)).toBeNull();
     expect(classifyTokenError("Cannot reach GitHub. Check your internet connection.")).toBeNull();

@@ -413,6 +413,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
       const shouldPreserve =
         repoStats.stale === true || repoStats.error !== undefined || providerLessWhileResolved;
+      // A split result says whether the issues provider's half was read cleanly
+      // (#16944): its count is an observation even when the code forge's half
+      // failed, so it neither falls back to an older count nor is skipped as
+      // the baseline a later failure falls back to.
+      const issueObserved = repoStats.issueStale === false;
 
       if (!shouldPreserve) {
         // Fresh successful data — record the confirmed counts so a later
@@ -440,6 +445,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         if (repoStats.prCount !== null) {
           markCountStale(opts.projectPath, "pr", repoStats.prCount);
         }
+      } else if (issueObserved && repoStats.issueCount !== null) {
+        lastKnownCountsRef.current.issueCount = repoStats.issueCount;
+        markCountStale(opts.projectPath, "issue", repoStats.issueCount);
       }
 
       // Apply preservation: use preserved counts only when data is stale/errored
@@ -452,6 +460,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         ...repoStats,
         issueCount:
           shouldPreserve &&
+          !issueObserved &&
           (repoStats.issueCount === null || repoStats.issueCount === 0) &&
           lastKnownCountsRef.current.issueCount !== null
             ? lastKnownCountsRef.current.issueCount
@@ -860,6 +869,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           setError(errorMessage);
           lastErrorRef.current = errorMessage;
           recordPollFailure();
+          // A thrown fetch read neither half, so a split result's word that the
+          // issues provider answered cleanly no longer dates its count (#16944).
+          const host = hostStatsRef.current;
+          if (host?.issueStale === false) hostStatsRef.current = { ...host, issueStale: undefined };
+          setStats((prev) =>
+            prev?.issueStale === false ? { ...prev, issueStale: undefined } : prev
+          );
         }
       } finally {
         if (mountedRef.current) {
@@ -984,6 +1000,22 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     correctiveRefetchDoneRef.current = true;
     void polling.refresh();
   }, [providerId, stats, polling, isWorkerInstance]);
+
+  // A saved forge binding — remote, code provider, or issues provider (#13700)
+  // — changes whose counts and failures the last poll carried: until the next
+  // scheduled poll the issues pill would show one tracker's count or failure
+  // under another's name (#16944). Main announces the save as
+  // `forge:remote-changed`, the event provider resolution re-runs on, so the
+  // stats are asked again then.
+  useEffect(() => {
+    if (isWorkerInstance || !currentProjectId) return;
+    const forge = window.electron?.forge;
+    if (typeof forge?.onRemoteChanged !== "function") return;
+    return forge.onRemoteChanged((payload) => {
+      if (payload.projectId !== currentProjectId) return;
+      void polling.refresh();
+    });
+  }, [currentProjectId, isWorkerInstance, polling]);
 
   // Cold-start hydration: before the first poll completes, ask main for the
   // disk-persisted first page so the very first dropdown click after launch

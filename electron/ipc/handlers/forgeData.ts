@@ -21,6 +21,7 @@ import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { sanitizeErrorMessage } from "../transportSafeError.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
   CheckRun,
@@ -147,7 +148,9 @@ async function persistRepoStats(
  * tracker's number under this provider's pill. `clean` is false for anything
  * short of a fresh observation (a failure, or a stale, errored or disk-served
  * answer), and gates persisting and broadcasting the blend exactly as the code
- * snapshot's own freshness gates them.
+ * snapshot's own freshness gates them. `error` carries the issues provider's
+ * own failure, kept apart from the code forge's, so the issues pill can name
+ * the tracker whose credentials need attention.
  */
 async function readIssueOverrideCount(
   cwd: string,
@@ -160,14 +163,15 @@ async function readIssueOverrideCount(
       issuesUrl?: string;
       /** When the issues provider last read this count, not when it was served. */
       refreshedAt?: number;
+      error?: string;
     }
   | undefined
 > {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
     context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
-  } catch {
-    return { count: null, clean: false };
+  } catch (error) {
+    return { count: null, clean: false, error: formatErrorMessage(error, "Issues unavailable") };
   }
   if (!context) return undefined;
   const { impl, repoRef } = context;
@@ -186,6 +190,7 @@ async function readIssueOverrideCount(
         clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
         issuesUrl,
         ...(refreshedAt !== undefined ? { refreshedAt } : {}),
+        ...(snapshot.counts.error ? { error: snapshot.counts.error } : {}),
       };
     }
     // A page without a total can't be counted from its length — that's the
@@ -194,8 +199,13 @@ async function readIssueOverrideCount(
     return page.totalCount === undefined
       ? { count: null, clean: false, issuesUrl }
       : { count: page.totalCount, clean: true, issuesUrl, refreshedAt: Date.now() };
-  } catch {
-    return { count: null, clean: false, issuesUrl };
+  } catch (error) {
+    return {
+      count: null,
+      clean: false,
+      issuesUrl,
+      error: formatErrorMessage(error, "Issues unavailable"),
+    };
   }
 }
 
@@ -567,6 +577,13 @@ async function handleForgeGetRepoStats(payload: {
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
   if (snapshot.source) stats.countsSource = snapshot.source;
+  if (split) {
+    // A successful payload skips the error envelope's scrubbing, and a
+    // tracker's message can echo a setting back verbatim (a server URL with
+    // credentials in it), so it is scrubbed here.
+    if (overrideIssues.error) stats.issueError = sanitizeErrorMessage(overrideIssues.error);
+    stats.issueStale = !overrideIssues.clean;
+  }
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
   if (!split) stats.repoKey = repoKeyOf(repoRef);

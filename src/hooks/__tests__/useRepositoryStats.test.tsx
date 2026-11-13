@@ -185,6 +185,129 @@ describe("useRepositoryStats", () => {
     });
   });
 
+  it("asks for the stats again when this project's forge binding is saved", async () => {
+    const listeners = new Set<(payload: { projectId: string }) => void>();
+    const previousElectron = window.electron;
+    Object.defineProperty(window, "electron", {
+      writable: true,
+      configurable: true,
+      value: {
+        forge: {
+          onRemoteChanged: (callback: (payload: { projectId: string }) => void) => {
+            listeners.add(callback);
+            return () => listeners.delete(callback);
+          },
+        },
+      },
+    });
+    try {
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      } satisfies ForgeRepositoryStats);
+
+      const { unmount } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Another project's save says nothing about this one's counts.
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "other-project" });
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "test-project" });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(2));
+
+      unmount();
+      expect(listeners.size).toBe(0);
+    } finally {
+      Object.defineProperty(window, "electron", {
+        writable: true,
+        configurable: true,
+        value: previousElectron,
+      });
+    }
+  });
+
+  describe("issues bound to another tracker (#16944)", () => {
+    const fresh: ForgeRepositoryStats = {
+      commitCount: 5,
+      issueCount: 3,
+      prCount: 1,
+      loading: false,
+      stale: false,
+      lastUpdated: 1000,
+      issueStale: false,
+    };
+
+    beforeEach(() => {
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/repo/a" });
+      onSwitchMock.mockReturnValue(() => {});
+    });
+
+    it("takes the tracker's clean count even when the code forge's half failed", async () => {
+      getRepoStatsMock
+        .mockResolvedValueOnce(fresh)
+        .mockResolvedValueOnce({
+          ...fresh,
+          issueCount: 0,
+          stale: true,
+          error: "Cannot reach GitHub. Check your internet connection.",
+        })
+        .mockResolvedValueOnce({
+          ...fresh,
+          issueCount: null,
+          stale: true,
+          issueStale: true,
+          issueError: "Couldn't reach Linear",
+        });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.issueCount).toBe(3));
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(0);
+      expect(result.current.stats?.issueStale).toBe(false);
+
+      // The clean 0 is now what a failed tracker read falls back to, not the 3.
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(0);
+    });
+
+    it("stops calling the tracker's count fresh once a fetch throws", async () => {
+      getRepoStatsMock
+        .mockResolvedValueOnce(fresh)
+        .mockRejectedValueOnce(new Error("IPC channel closed"));
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.issueStale).toBe(false));
+
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.error).toBe("IPC channel closed");
+      expect(result.current.stats?.issueCount).toBe(3);
+      expect(result.current.stats?.issueStale).toBeUndefined();
+    });
+  });
+
   it("force-fetches when daintree:refresh-sidebar event is dispatched", async () => {
     const project = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockResolvedValue(project);

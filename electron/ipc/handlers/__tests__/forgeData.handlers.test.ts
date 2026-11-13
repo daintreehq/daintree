@@ -1521,7 +1521,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12, issueStale: false });
+    expect(stats).not.toHaveProperty("issueError");
     // No one repository reported both counts, so there is nothing to match
     // across hosts (#14199).
     expect(stats).not.toHaveProperty("repoKey");
@@ -1580,11 +1581,104 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: null, prCount: 4 });
+    // The failure is the tracker's, kept apart from the code forge's.
+    expect(stats).toMatchObject({ issueError: "issues provider unavailable" });
+    expect(stats).toMatchObject({ error: undefined });
     // A failed read must not overwrite the stored counts.
     expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
       "/repo",
       expect.not.objectContaining({ forge: expect.anything() })
     );
+  });
+
+  it("carries the issues provider's credential failure on its own field", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        buildIssuesUrl: () => "https://tracker.test/issues",
+        repoStats: {
+          getRepoStats: vi.fn(async () => {
+            throw new Error("No Tracker API key configured. Add one in Settings → Code forge.");
+          }),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({
+      issueCount: null,
+      prCount: 4,
+      issueError: "No Tracker API key configured. Add one in Settings → Code forge.",
+    });
+    expect(stats).toMatchObject({ error: undefined });
+  });
+
+  it("scrubs credentials a tracker's message echoes back before it leaves the process", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(
+      new Error(
+        'The Beads server URL "https://alice:hunter2@beads.test" isn\'t an http(s) address.'
+      )
+    );
+    registerForgeDataHandlers();
+
+    const stats = (await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" })) as {
+      issueError?: string;
+    };
+
+    expect(stats.issueError).toContain("Beads server URL");
+    expect(stats.issueError).not.toContain("hunter2");
+  });
+
+  it("carries an error the issues provider reported in its snapshot", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: {
+              issueCount: 3,
+              prCount: null,
+              stale: true,
+              error: "Tracker rejected the API key",
+            },
+            source: "disk" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({
+      issueCount: 3,
+      issueError: "Tracker rejected the API key",
+      issueStale: true,
+    });
+    expect(stats).toMatchObject({ error: undefined });
   });
 
   it("skips cold-start hydration from the code forge's cached issue page", async () => {
@@ -1638,7 +1732,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4, issueStale: true });
+    expect(stats).not.toHaveProperty("issueError");
     expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
       "/repo",
       expect.not.objectContaining({ forge: expect.anything() })
@@ -1656,6 +1751,8 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: 99, prCount: 4 });
+    expect(stats).not.toHaveProperty("issueError");
+    expect(stats).not.toHaveProperty("issueStale");
   });
 });
 
