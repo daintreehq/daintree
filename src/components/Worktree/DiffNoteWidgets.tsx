@@ -64,6 +64,8 @@ interface DiffNoteEditorProps {
   bodyKey: string;
   /** The text to start from when the session has none kept. */
   initialBody: string;
+  /** The view whose gestures this editor answers; none for one that opens nothing. */
+  focusOwner?: object;
   label: string;
   saveLabel: string;
   onSave: (body: string, via: DiffNoteCloseVia) => void;
@@ -79,6 +81,7 @@ function DiffNoteEditor({
   session,
   bodyKey,
   initialBody,
+  focusOwner,
   label,
   saveLabel,
   onSave,
@@ -92,7 +95,11 @@ function DiffNoteEditor({
   // refresh or a layout switch stays out of the way. In a layout effect, as
   // `autoFocus` would be, so the caret is in place before the first paint.
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const focusWanted = useDiffNoteDraftState(session, (state) => state.focus === bodyKey);
+  const focusWanted = useDiffNoteDraftState(
+    session,
+    (state) =>
+      focusOwner !== undefined && state.focus?.key === bodyKey && state.focus.owner === focusOwner
+  );
   useLayoutEffect(() => {
     if (!focusWanted) return;
     textareaRef.current?.focus();
@@ -190,6 +197,8 @@ interface DiffNoteComposerProps {
   anchor: DiffNoteAnchor;
   /** Set when a line draft can't sit under its rows, and why. */
   placement?: DiffNoteCardPlacement;
+  /** The view that opens this draft, whose gestures hand its editor focus. */
+  focusOwner?: object;
   /** Called after the session has closed the draft, saved or not. */
   onDone: (via: DiffNoteCloseVia) => void;
 }
@@ -205,6 +214,7 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
   filePath,
   anchor,
   placement,
+  focusOwner,
   onDone,
 }: DiffNoteComposerProps) {
   const addNote = useDiffNotesStore((s) => s.addNote);
@@ -234,6 +244,7 @@ export const DiffNoteComposer = memo(function DiffNoteComposer({
         session={session}
         bodyKey={bodyKey}
         initialBody=""
+        focusOwner={focusOwner}
         label={`New ${nameAnchor(anchor)}`}
         saveLabel="Add note"
         onSave={(body, via) => {
@@ -363,10 +374,11 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
   const session = useDiffNoteDraftSession();
   const noteId = note.id;
   const editing = useDiffNoteDraftState(session, (state) => state.edits[noteId] === true);
+  const [focusOwner] = useState(() => ({}));
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const closedViaRef = useRef<DiffNoteCloseVia | null>(null);
   const openEditor = () => {
-    session.requestFocus(editDraftBodyKey(noteId));
+    session.requestFocus(editDraftBodyKey(noteId), focusOwner);
     session.openEdit(noteId);
   };
   const closeEditor = (via: DiffNoteCloseVia) => {
@@ -439,6 +451,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
           key={noteId}
           session={session}
           bodyKey={editDraftBodyKey(noteId)}
+          focusOwner={focusOwner}
           initialBody={note.body}
           label={`Edit ${nameAnchor(note.anchor)}`}
           saveLabel="Save"

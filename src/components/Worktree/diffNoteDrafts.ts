@@ -20,13 +20,14 @@ interface DiffNoteDraftState {
   /** Saved notes being rewritten, by note id. */
   edits: Readonly<Record<string, true>>;
   /**
-   * The editor (by body key) a gesture just opened or moved, until that editor
-   * has taken focus. Claimed after the commit that shows it, so it reaches the
-   * editor wherever and whenever it mounts — a composer moved to another row,
-   * one whose row mounts frames later — and nothing restored without a gesture
-   * (a refresh, a layout switch, a return to the file) ever takes focus.
+   * The editor a gesture just opened or moved, until it has taken focus. Held
+   * for the view that made the gesture (`owner`), and only that view's editor
+   * claims it: after the commit that shows it, so it reaches a composer moved
+   * to another row or one whose row mounts frames later, but never an editor
+   * restored by another view — a refresh's remount, the fallback list after a
+   * layout switch, a return to the file — which stays out of the way.
    */
-  focus: string | null;
+  focus: { key: string; owner: object } | null;
 }
 
 /**
@@ -48,7 +49,7 @@ export interface DiffNoteDraftSession {
   closeEdit: (noteId: string) => void;
   readBody: (bodyKey: string) => string | undefined;
   writeBody: (bodyKey: string, body: string) => void;
-  requestFocus: (bodyKey: string) => void;
+  requestFocus: (bodyKey: string, owner: object) => void;
   /** Called by the editor once it has taken the focus asked for it. */
   consumeFocus: (bodyKey: string) => void;
 }
@@ -89,7 +90,7 @@ export function createDiffNoteDraftSession(): DiffNoteDraftSession {
   // A closed draft drops its text and any focus still waiting for its editor.
   const discard = (bodyKey: string): Pick<DiffNoteDraftState, "focus"> => {
     bodies.delete(bodyKey);
-    return { focus: state.focus === bodyKey ? null : state.focus };
+    return { focus: state.focus?.key === bodyKey ? null : state.focus };
   };
 
   return {
@@ -130,11 +131,13 @@ export function createDiffNoteDraftSession(): DiffNoteDraftSession {
     writeBody: (bodyKey, body) => {
       bodies.set(bodyKey, body);
     },
-    requestFocus: (bodyKey) => {
-      if (state.focus !== bodyKey) update({ ...state, focus: bodyKey });
+    requestFocus: (bodyKey, owner) => {
+      if (state.focus?.key !== bodyKey || state.focus.owner !== owner) {
+        update({ ...state, focus: { key: bodyKey, owner } });
+      }
     },
     consumeFocus: (bodyKey) => {
-      if (state.focus === bodyKey) update({ ...state, focus: null });
+      if (state.focus?.key === bodyKey) update({ ...state, focus: null });
     },
   };
 }

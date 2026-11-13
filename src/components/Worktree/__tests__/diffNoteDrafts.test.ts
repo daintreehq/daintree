@@ -87,19 +87,21 @@ describe("diff note draft session", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  it("holds a focus request until its own editor takes it, or its draft closes", () => {
+  it("holds a focus request for the view that made it until its editor takes it, or its draft closes", () => {
     const session = createDiffNoteDraftSession();
+    const view = {};
     session.openFile(FILE);
-    session.requestFocus(fileDraftBodyKey(FILE));
+    session.requestFocus(fileDraftBodyKey(FILE), view);
+    expect(session.getState().focus).toEqual({ key: fileDraftBodyKey(FILE), owner: view });
 
     session.consumeFocus(lineDraftBodyKey(FILE));
-    expect(session.getState().focus).toBe(fileDraftBodyKey(FILE));
+    expect(session.getState().focus?.key).toBe(fileDraftBodyKey(FILE));
     session.consumeFocus(fileDraftBodyKey(FILE));
     expect(session.getState().focus).toBeNull();
 
-    session.requestFocus(fileDraftBodyKey(FILE));
+    session.requestFocus(fileDraftBodyKey(FILE), view);
     session.closeLine(FILE);
-    expect(session.getState().focus).toBe(fileDraftBodyKey(FILE));
+    expect(session.getState().focus?.key).toBe(fileDraftBodyKey(FILE));
     session.closeFile(FILE);
     expect(session.getState().focus).toBeNull();
   });

@@ -1158,17 +1158,8 @@ function FileDiff({
   useEffect(() => {
     setLineSelection(null);
   }, [file]);
-  // A gesture's focus waits for its editor's row, which a large table mounts
-  // over several frames. If this view goes first — another file, a layout
-  // without the table, a refresh — the wait goes with it, so the draft it
-  // restores later doesn't take focus from wherever the reviewer has gone.
-  useEffect(() => {
-    if (draftFileKey === null) return;
-    return () => {
-      draftSession.consumeFocus(lineDraftBodyKey(draftFileKey));
-      draftSession.consumeFocus(fileDraftBodyKey(draftFileKey));
-    };
-  }, [draftSession, draftFileKey]);
+  // This view's gestures hand focus only to editors this view renders.
+  const [focusOwner] = useState(() => ({}));
 
   // Anchors are checked against every rendered row, expanded context included,
   // so a note written on revealed context still matches once it is revealed.
@@ -1277,6 +1268,7 @@ function FileDiff({
               worktreePath={notesWorktree}
               filePath={relPath}
               anchor={lineDraft}
+              focusOwner={focusOwner}
               onDone={handLineDraftFocusBack}
             />
           )}
@@ -1284,7 +1276,15 @@ function FileDiff({
       );
     }
     return result;
-  }, [rowNotes, draftWidgetKey, lineDraft, notesWorktree, relPath, handLineDraftFocusBack]);
+  }, [
+    rowNotes,
+    draftWidgetKey,
+    lineDraft,
+    notesWorktree,
+    relPath,
+    focusOwner,
+    handLineDraftFocusBack,
+  ]);
 
   // Click a line number to note that line; shift-click extends the open draft
   // across a contiguous run of rows on the same side.
@@ -1297,10 +1297,10 @@ function FileDiff({
       const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
       if (contentHash === null) return;
       rememberOpener(lineDraftOpenerRef);
-      draftSession.requestFocus(lineDraftBodyKey(draftFileKey));
+      draftSession.requestFocus(lineDraftBodyKey(draftFileKey), focusOwner);
       draftSession.openLine(draftFileKey, { kind: "lines", side, startLine, endLine, contentHash });
     },
-    [draftFileKey, renderedLineIndex, draftSession, rememberOpener]
+    [draftFileKey, renderedLineIndex, draftSession, rememberOpener, focusOwner]
   );
   const startLineDraft = useCallback(
     ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
@@ -1322,9 +1322,9 @@ function FileDiff({
   const openFileDraft = useCallback(() => {
     if (draftFileKey === null) return;
     rememberOpener(fileDraftOpenerRef);
-    draftSession.requestFocus(fileDraftBodyKey(draftFileKey));
+    draftSession.requestFocus(fileDraftBodyKey(draftFileKey), focusOwner);
     draftSession.openFile(draftFileKey);
-  }, [draftFileKey, draftSession, rememberOpener]);
+  }, [draftFileKey, draftSession, rememberOpener, focusOwner]);
   const gutterEvents = useMemo<EventMap | undefined>(() => {
     if (!notesEnabled) return undefined;
     return {
@@ -2025,6 +2025,7 @@ function FileDiff({
               filePath={relPath}
               anchor={detachedLineDraft.anchor}
               placement={detachedLineDraft.placement}
+              focusOwner={focusOwner}
               onDone={handLineDraftFocusBack}
             />
           )}
@@ -2033,6 +2034,7 @@ function FileDiff({
               worktreePath={notesWorktree}
               filePath={relPath}
               anchor={FILE_NOTE_ANCHOR}
+              focusOwner={focusOwner}
               onDone={handFileDraftFocusBack}
             />
           )}

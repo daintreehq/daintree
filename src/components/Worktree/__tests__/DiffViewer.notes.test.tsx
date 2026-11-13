@@ -7,13 +7,7 @@ import { DiffViewer, _flushLangLoadsForTests, _resetLangStateForTests } from "..
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { PendingFileNotes } from "../DiffNoteWidgets";
-import {
-  DiffNoteDraftContext,
-  diffNoteFileKey,
-  lineDraftBodyKey,
-  useOwnDiffNoteDraftSession,
-  type DiffNoteDraftSession,
-} from "../diffNoteDrafts";
+import { DiffNoteDraftContext, useOwnDiffNoteDraftSession } from "../diffNoteDrafts";
 import { buildDiffLineIndex, hashLineRange } from "../diffNotes";
 import { parseDiff } from "react-diff-view";
 
@@ -23,6 +17,8 @@ const { captured } = vi.hoisted(() => ({
     widgets?: Record<string, React.ReactNode>;
     gutterEvents?: EventMap;
     selectedChanges?: string[];
+    /** Holds row widgets back, as a large table does while its rows stage in. */
+    holdWidgets?: boolean;
   },
 }));
 
@@ -56,7 +52,7 @@ vi.mock("react-diff-view", async () => {
               ))
             )
           )}
-          {Object.entries(props.widgets ?? {}).map(([key, node]) => (
+          {Object.entries(captured.holdWidgets ? {} : (props.widgets ?? {})).map(([key, node]) => (
             <div key={key} data-widget-key={key}>
               {node}
             </div>
@@ -303,16 +299,16 @@ function Pane({
   diff = DIFF,
   worktreePath = "/repo",
   listFile = "src/a.ts",
-  sessionRef,
+  wrap = false,
 }: {
   body: "table" | "list" | "loading";
   diff?: string;
   worktreePath?: string;
   listFile?: string;
-  sessionRef?: { current: DiffNoteDraftSession | null };
+  /** Any prop change that re-renders the table, as more rows staging in would. */
+  wrap?: boolean;
 }) {
   const session = useOwnDiffNoteDraftSession();
-  if (sessionRef) sessionRef.current = session;
   return (
     <TooltipProvider>
       <div data-panel-id="pane">
@@ -320,7 +316,9 @@ function Pane({
           src/a.ts
         </button>
         <DiffNoteDraftContext value={session}>
-          {body === "table" && <DiffViewer diff={diff} annotations={{ worktreePath }} />}
+          {body === "table" && (
+            <DiffViewer diff={diff} annotations={{ worktreePath }} wrapLines={wrap} />
+          )}
           {body === "list" && <PendingFileNotes worktreePath={worktreePath} filePath={listFile} />}
         </DiffNoteDraftContext>
       </div>
@@ -360,10 +358,12 @@ describe("unsaved note drafts", () => {
   beforeEach(() => {
     useDiffNotesStore.setState({ notes: {}, editingIds: {} });
     captured.widgets = undefined;
+    captured.holdWidgets = false;
   });
 
   afterEach(() => {
     useDiffNotesStore.setState({ notes: {}, editingIds: {} });
+    captured.holdWidgets = false;
   });
 
   it("keeps an open line draft and its text through a refresh that unmounts the table", () => {
@@ -384,22 +384,32 @@ describe("unsaved note drafts", () => {
     expect(document.activeElement).toBe(pathPill());
   });
 
-  it("drops a focus request still waiting for its editor when the view goes first", () => {
-    const sessionRef: { current: DiffNoteDraftSession | null } = { current: null };
-    const { rerender } = render(<Pane body="table" sessionRef={sessionRef} />);
+  it("focuses a composer whose row mounts after the gesture that opened it", () => {
+    captured.holdWidgets = true;
+    const { rerender } = render(<Pane body="table" />);
+    clickGutter(1, "new");
+    expect(screen.queryByLabelText("New note on line 2")).toBeNull();
+
+    captured.holdWidgets = false;
+    rerender(<Pane body="table" wrap />);
+
+    expect(document.activeElement).toBe(field("New note on line 2"));
+  });
+
+  it("never hands a gesture's waiting focus to an editor another view restores", () => {
+    captured.holdWidgets = true;
+    const { rerender } = render(<Pane body="table" />);
     clickGutter(1, "new");
     pathPill().focus();
 
-    // A gesture whose editor hasn't mounted yet (its row is still staging in)
-    // when a refresh takes the table away.
-    act(() => {
-      sessionRef.current!.requestFocus(lineDraftBodyKey(diffNoteFileKey("/repo", "src/a.ts")));
-      rerender(<Pane body="loading" sessionRef={sessionRef} />);
-    });
-    expect(sessionRef.current!.getState().focus).toBeNull();
-
-    rerender(<Pane body="table" sessionRef={sessionRef} />);
+    // Straight to a layout without the table, before the row ever mounted.
+    rerender(<Pane body="list" />);
     expect(field("New note on line 2")).toBeTruthy();
+    expect(document.activeElement).toBe(pathPill());
+
+    captured.holdWidgets = false;
+    rerender(<Pane body="table" />);
+    expect(captured.widgets?.I2).toBeDefined();
     expect(document.activeElement).toBe(pathPill());
   });
 
