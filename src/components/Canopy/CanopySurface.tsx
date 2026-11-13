@@ -20,6 +20,9 @@ export function CanopySurface({ isOpen, children }: { isOpen: boolean; children:
       <section
         aria-label={CANOPY_TITLE}
         data-canopy-standalone=""
+        // Focus anywhere in it hands prompt history to the run's reply, short
+        // of the docked global assistant, which is a host of its own.
+        data-prompt-history-host=""
         // Makes the header the window's title bar. Never `app-no-drag`: its
         // body's scrolled terminal would cut the header's drag away (window-modes.css).
         className="app-window-surface flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface-dialog"

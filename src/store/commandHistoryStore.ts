@@ -11,6 +11,12 @@ import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 100;
 
+/**
+ * The bucket the global assistant's prompts are kept in: it belongs to no
+ * project, so there is no "This project" list to offer it.
+ */
+export const GLOBAL_ASSISTANT_HISTORY_ID = "global-assistant";
+
 export interface PromptHistoryEntry {
   id: string;
   prompt: string;

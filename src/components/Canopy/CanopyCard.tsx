@@ -350,6 +350,8 @@ export function CanopyCard({
   const [focused, setFocused] = useState(false);
   const { row } = item;
   const run = row.run;
+  // The All hosts list names a workspace by its host too.
+  const runProjectId = parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId;
   const canReply = canReplyTo(item, stream.secretPrompt);
   const answerChoices = answerOptions(item);
   const canTrash = canTrashItem(item);
@@ -1153,8 +1155,7 @@ export function CanopyCard({
           spawnedAt={run.spawnedAt}
           api={terminalApi}
           cwd={run.cwd}
-          // The All hosts list names a workspace by its host too.
-          projectId={parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId}
+          projectId={runProjectId}
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
@@ -1246,6 +1247,8 @@ export function CanopyCard({
                 isolated
                 otherHostId={otherHostId}
                 voiceTarget={voiceTarget}
+                // Its draft stays its own; the prompts it sends are the run's project's.
+                historyProjectId={runProjectId}
                 terminalId={item.runId}
                 cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}

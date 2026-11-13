@@ -284,6 +284,11 @@ interface UseTokenResolutionParams {
    * (Canopy's reply): its target's id and project, which address the same draft.
    */
   voice?: { panelId: string; projectId?: string };
+  /**
+   * The project whose prompt history a send is kept in, apart from the draft's
+   * scope: an isolated composer's draft is no project's. None keeps no record.
+   */
+  historyProjectId?: string;
   cwd: string;
   agentId?: BuiltInAgentId;
   /**
@@ -308,6 +313,7 @@ export function useTokenResolution({
   setActiveCompletionContext,
   terminalId,
   voice,
+  historyProjectId,
   cwd,
   agentId,
   expandContext = true,
@@ -421,10 +427,10 @@ export function useTokenResolution({
           }, retract);
         }
         latest.resetHistoryIndex(latest.terminalId, latest.projectId);
-        if (latest.projectId) {
+        if (historyProjectId) {
           useCommandHistoryStore
             .getState()
-            .recordPrompt(latest.projectId, authored, agentId ?? null);
+            .recordPrompt(historyProjectId, authored, agentId ?? null);
         }
 
         // The whole composer reset is one decision: if the draft is newer than
@@ -456,6 +462,7 @@ export function useTokenResolution({
       agentId,
       cwd,
       expandContext,
+      historyProjectId,
       takesDiffNotes,
       terminalId,
       voiceId,

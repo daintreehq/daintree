@@ -157,6 +157,8 @@ export function CanopyGlobalAssistant({
       ref={rootRef}
       className="flex min-h-0 flex-1 flex-col"
       data-testid="canopy-global-assistant"
+      // Focus here hands prompt history to this composer, not the run's reply beside it.
+      data-prompt-history-host=""
     >
       {errorCallout}
       {shownItem !== null ? (

@@ -78,7 +78,7 @@ describe("useEditorKeymap", () => {
       isComposingRef: { current: false },
       handledEnterRef: { current: false },
       editableCompartmentRef: { current: new Compartment() },
-      historyPaletteOpenRef: { current: null },
+      requestHistorySearch: vi.fn(),
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,

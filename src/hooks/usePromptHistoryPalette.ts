@@ -1,6 +1,10 @@
 import { useState, useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
-import { useCommandHistoryStore, type PromptHistoryEntry } from "@/store/commandHistoryStore";
+import {
+  GLOBAL_ASSISTANT_HISTORY_ID,
+  useCommandHistoryStore,
+  type PromptHistoryEntry,
+} from "@/store/commandHistoryStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { toPromptPreview } from "@/utils/promptHistoryPreview";
@@ -40,7 +44,18 @@ export type HistoryScope = "project" | "global";
 
 export interface UsePromptHistoryPaletteOptions {
   terminalId: string;
+  /** The history offered as "This project". */
   projectId: string | undefined;
+  /**
+   * The scope of the draft a recalled prompt goes into, when it isn't the
+   * history's: an isolated composer's draft is no project's.
+   */
+  draftProjectId?: string;
+}
+
+/** History with no project of its own to list: every project's is what there is. */
+export function isProjectlessHistory(projectId: string | undefined): boolean {
+  return projectId === undefined || projectId === GLOBAL_ASSISTANT_HISTORY_ID;
 }
 
 function toItem(entry: SourcedEntry): PromptHistoryItem {
@@ -65,8 +80,14 @@ function newestPerPrompt(entries: readonly SourcedEntry[]): SourcedEntry[] {
   return out;
 }
 
-export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHistoryPaletteOptions) {
-  const [scope, setScope] = useState<HistoryScope>("project");
+export function usePromptHistoryPalette({
+  terminalId,
+  projectId,
+  draftProjectId = projectId,
+}: UsePromptHistoryPaletteOptions) {
+  const [chosenScope, setScope] = useState<HistoryScope>("project");
+  const projectless = isProjectlessHistory(projectId);
+  const scope: HistoryScope = projectless ? "global" : chosenScope;
 
   const history = useCommandHistoryStore((s) => s.history);
 
@@ -99,7 +120,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
 
   const changeScope = useCallback(
     (next: HistoryScope) => {
-      if (next === scope) return;
+      if (next === scope || projectless) return;
       setScope(next);
       // The switch lives in the footer and the chord flips it from the search
       // field, so nothing under focus changes: say what the list now holds.
@@ -112,7 +133,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
           "polite"
         );
     },
-    [scope]
+    [scope, projectless]
   );
 
   const toggleScope = useCallback(() => {
@@ -122,11 +143,13 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   const selectEntry = useCallback(
     (entry: PromptHistoryEntry) => {
       const store = useTerminalInputStore.getState();
-      store.setDraftInput(terminalId, entry.prompt, projectId);
-      store.bumpExternalDraftRevision({ replacesDraftOf: { terminalId, projectId } });
+      store.setDraftInput(terminalId, entry.prompt, draftProjectId);
+      store.bumpExternalDraftRevision({
+        replacesDraftOf: { terminalId, projectId: draftProjectId },
+      });
       palette.close();
     },
-    [terminalId, projectId, palette]
+    [terminalId, draftProjectId, palette]
   );
 
   const confirmSelection = useCallback(() => {
@@ -139,6 +162,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   return {
     ...palette,
     scope,
+    projectless,
     setScope: changeScope,
     toggleScope,
     selectEntry,

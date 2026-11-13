@@ -53,7 +53,8 @@ interface UseEditorKeymapParams {
   isComposingRef: React.RefObject<boolean>;
   handledEnterRef: React.MutableRefObject<boolean>;
   editableCompartmentRef: React.RefObject<Compartment>;
-  historyPaletteOpenRef: React.RefObject<(() => void) | null>;
+  /** ⌘R: open prompt history for this composer, handing history to it first if need be. */
+  requestHistorySearch: () => void;
   applyAutocompleteSelection: (mode: "enter" | "complete", index?: number) => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
   sendFromEditor: (route?: ComposerSendRoute) => void;
@@ -95,7 +96,7 @@ export function useEditorKeymap({
   isComposingRef,
   handledEnterRef,
   editableCompartmentRef,
-  historyPaletteOpenRef,
+  requestHistorySearch,
   applyAutocompleteSelection,
   handleHistoryNavigation,
   sendFromEditor,
@@ -402,7 +403,7 @@ export function useEditorKeymap({
       return true;
     },
     onHistorySearch: () => {
-      historyPaletteOpenRef.current?.();
+      requestHistorySearch();
       return true;
     },
   });
