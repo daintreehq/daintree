@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import type { RefObject } from "react";
 import type { StagingFileEntry, GitStatus } from "@shared/types";
+import type { GitDiffSide } from "@shared/types/git";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
@@ -136,6 +136,21 @@ const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 
 /** Ragged widths so the loading rows read as file paths, not as a table. */
 const SKELETON_FILE_ROW_WIDTHS = ["w-64", "w-48", "w-56"] as const;
+
+/**
+ * The hub selection a diff was opened or retargeted for, compared by identity:
+ * the working-tree pick and base-branch file are replaced on every gesture, and
+ * a since-review pick is its path.
+ */
+type HubDiffSelection = object | string;
+
+interface HubDiffTarget {
+  panelId: string;
+  selection: HubDiffSelection;
+  filePath: string;
+  viewedKey: string | undefined;
+  fileSide: GitDiffSide | undefined;
+}
 
 export interface ReviewHubContentProps {
   /**
@@ -393,6 +408,44 @@ export function ReviewHubContent({
   const [selectedSinceReviewPath, setSelectedSinceReviewPath] = useState<string | null>(null);
   const hasSinceReviewSelection = selectedSinceReviewPath !== null;
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
+  // The file this hub last put in its panel, and the selection it put there
+  // for. Once open, the panel's own sidebar and stepper move it without the
+  // hub hearing about it, so this is how the hub tells "the panel still shows
+  // my file" from "the user stepped elsewhere".
+  const hubTargetRef = useRef<HubDiffTarget | null>(null);
+
+  // Point the open panel at the hub's file. A new selection is the user asking
+  // for that file, so it always lands. The same selection re-run (a poll
+  // moving its status or section) only follows while the panel is still on
+  // what the hub last put there: a background refresh must never pull a panel
+  // the user stepped to another file back to the one first clicked.
+  const retargetHubDiff = useCallback(
+    (
+      id: string,
+      selection: HubDiffSelection,
+      filePath: string,
+      fileStatus: GitStatus,
+      viewedKey: string | undefined,
+      fileSide?: GitDiffSide
+    ) => {
+      const store = usePanelStore.getState();
+      const last = hubTargetRef.current;
+      if (last && last.panelId === id && last.selection === selection) {
+        const panel = store.panelsById[id];
+        if (
+          panel?.kind !== "diff" ||
+          panel.filePath !== last.filePath ||
+          panel.viewedKey !== last.viewedKey ||
+          panel.fileSide !== last.fileSide
+        ) {
+          return;
+        }
+      }
+      hubTargetRef.current = { panelId: id, selection, filePath, viewedKey, fileSide };
+      store.setDiffPanelFile(id, filePath, fileStatus, viewedKey, fileSide);
+    },
+    []
+  );
 
   // Layer the diff above this hub when the hub is itself the presented dialog;
   // a plain open would supersede it, destroying the staging surface (draft,
@@ -420,6 +473,7 @@ export function ReviewHubContent({
   // if something is layered above it.
   useEffect(() => {
     if (!diffPanelId || dialogStack.includes(diffPanelId)) return;
+    hubTargetRef.current = null;
     setDiffPanelId(null);
     setSelectedFile(null);
     setSelectedBaseBranchFile(null);
@@ -463,11 +517,7 @@ export function ReviewHubContent({
   const savedScrollTop = useRef(0);
   const conflictSectionRef = useRef<HTMLDivElement>(null);
   const unstagedSectionRef = useRef<HTMLDivElement>(null);
-  // Row element that opened a diff modal; AppDialog falls back to it when the
-  // trigger unmounted (e.g. the file left the list while the modal was open).
-  const diffTriggerRef = useRef<HTMLElement | null>(null);
-  const openSinceReviewFile = useCallback((path: string, trigger: HTMLElement) => {
-    diffTriggerRef.current = trigger;
+  const openSinceReviewFile = useCallback((path: string) => {
     setSelectedSinceReviewPath(path);
   }, []);
   // Clearing or replacing a mark drops the reviewed state for good (the point
@@ -741,17 +791,22 @@ export function ReviewHubContent({
     if (!selectedFile || !liveWorkingTreeStatus) return;
     const store = usePanelDialogStore.getState();
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(
-          diffPanelId,
-          selectedFile.path,
-          liveWorkingTreeStatus,
-          liveWorkingTreeViewedKey,
-          liveWorkingTreeSide
-        );
+      retargetHubDiff(
+        diffPanelId,
+        selectedFile,
+        selectedFile.path,
+        liveWorkingTreeStatus,
+        liveWorkingTreeViewedKey,
+        liveWorkingTreeSide
+      );
       return;
     }
+    const opened = {
+      selection: selectedFile,
+      filePath: selectedFile.path,
+      viewedKey: liveWorkingTreeViewedKey,
+      fileSide: liveWorkingTreeSide,
+    };
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedFile.path,
@@ -765,7 +820,16 @@ export function ReviewHubContent({
     })
       // A refused or superseded open resolves null. Drop the selection with it,
       // or this effect sees "selection, no panel" and retries forever.
-      .then((newPanelId) => (newPanelId ? setDiffPanelId(newPanelId) : setSelectedFile(null)));
+      .then((newPanelId) => {
+        if (!newPanelId) {
+          setSelectedFile(null);
+          return;
+        }
+        // What was asked for, not what the panel shows by now: a step taken
+        // before the open settled is the user's, not the hub's.
+        hubTargetRef.current = { panelId: newPanelId, ...opened };
+        setDiffPanelId(newPanelId);
+      });
   }, [
     selectedFile,
     liveWorkingTreeStatus,
@@ -774,6 +838,7 @@ export function ReviewHubContent({
     diffPanelId,
     worktreeId,
     openDiffDialog,
+    retargetHubDiff,
   ]);
 
   useEffect(() => {
@@ -781,9 +846,13 @@ export function ReviewHubContent({
     const store = usePanelDialogStore.getState();
     const viewedKey = `base:${selectedBaseBranchFile.path}`;
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified", viewedKey);
+      retargetHubDiff(
+        diffPanelId,
+        selectedBaseBranchFile,
+        selectedBaseBranchFile.path,
+        "modified",
+        viewedKey
+      );
       return;
     }
     void openDiffDialog(store, {
@@ -796,19 +865,41 @@ export function ReviewHubContent({
       title: basename(selectedBaseBranchFile.path),
       viewedKey,
       ...(worktreeId && { worktreeId }),
-    }).then((newPanelId) =>
-      newPanelId ? setDiffPanelId(newPanelId) : setSelectedBaseBranchFile(null)
-    );
-  }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch, openDiffDialog]);
+    }).then((newPanelId) => {
+      if (!newPanelId) {
+        setSelectedBaseBranchFile(null);
+        return;
+      }
+      hubTargetRef.current = {
+        panelId: newPanelId,
+        selection: selectedBaseBranchFile,
+        filePath: selectedBaseBranchFile.path,
+        viewedKey,
+        fileSide: undefined,
+      };
+      setDiffPanelId(newPanelId);
+    });
+  }, [
+    selectedBaseBranchFile,
+    diffPanelId,
+    worktreeId,
+    mainBranch,
+    openDiffDialog,
+    retargetHubDiff,
+  ]);
 
   useEffect(() => {
     if (!selectedSinceReviewPath) return;
     const store = usePanelDialogStore.getState();
     const viewedKey = `since-review:${selectedSinceReviewPath}`;
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(diffPanelId, selectedSinceReviewPath, "modified", viewedKey);
+      retargetHubDiff(
+        diffPanelId,
+        selectedSinceReviewPath,
+        selectedSinceReviewPath,
+        "modified",
+        viewedKey
+      );
       return;
     }
     void openDiffDialog(store, {
@@ -820,10 +911,21 @@ export function ReviewHubContent({
       title: basename(selectedSinceReviewPath),
       viewedKey,
       ...(worktreeId && { worktreeId }),
-    }).then((newPanelId) =>
-      newPanelId ? setDiffPanelId(newPanelId) : setSelectedSinceReviewPath(null)
-    );
-  }, [selectedSinceReviewPath, diffPanelId, worktreeId, openDiffDialog]);
+    }).then((newPanelId) => {
+      if (!newPanelId) {
+        setSelectedSinceReviewPath(null);
+        return;
+      }
+      hubTargetRef.current = {
+        panelId: newPanelId,
+        selection: selectedSinceReviewPath,
+        filePath: selectedSinceReviewPath,
+        viewedKey,
+        fileSide: undefined,
+      };
+      setDiffPanelId(newPanelId);
+    });
+  }, [selectedSinceReviewPath, diffPanelId, worktreeId, openDiffDialog, retargetHubDiff]);
 
   // Keep the open panel's change set in step with the live poll. The store
   // bails on a value-equal set, so a quiet poll costs nothing.
@@ -1356,23 +1458,16 @@ export function ReviewHubContent({
   // same way and hand focus back to the same row on close. A second opener
   // would drift from this one the first time either changed.
   const openFileDiff = useCallback(
-    (
-      section: FileStageRowSection,
-      filePath: string,
-      fileStatus: GitStatus,
-      triggerEl: HTMLElement | null
-    ) => {
+    (section: FileStageRowSection, filePath: string, fileStatus: GitStatus) => {
       setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
       setSelectionSection((prev) => (prev === null ? prev : null));
       selectionAnchorRef.current = filePath;
-      diffTriggerRef.current = triggerEl;
       setSelectedFile({ path: filePath, status: fileStatus, section });
     },
     [setSelectedPaths, setSelectionSection, selectionAnchorRef]
   );
 
-  const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile, trigger: HTMLElement) => {
-    diffTriggerRef.current = trigger;
+  const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile) => {
     setSelectedBaseBranchFile(file);
   }, []);
 
@@ -1437,12 +1532,7 @@ export function ReviewHubContent({
       }
 
       // Plain click: clear any selection, open diff.
-      openFileDiff(
-        section,
-        filePath,
-        fileStatus,
-        e.currentTarget instanceof HTMLElement ? e.currentTarget : null
-      );
+      openFileDiff(section, filePath, fileStatus);
     },
     [
       derivedStaged,
@@ -1473,11 +1563,7 @@ export function ReviewHubContent({
   });
 
   const renderRowMenu = useCallback(
-    (
-      file: StagingFileEntry,
-      section: FileStageRowSection,
-      triggerRef: RefObject<HTMLElement | null>
-    ) =>
+    (file: StagingFileEntry, section: FileStageRowSection) =>
       renderFileRowMenuItems(
         {
           absolutePath: join(worktreePath, file.path),
@@ -1489,7 +1575,7 @@ export function ReviewHubContent({
         {
           // Routed through the hub's own opener so the menu lands on the same
           // overlay a click does, with the same selection reset.
-          onOpenDiff: () => openFileDiff(section, file.path, file.status, triggerRef.current),
+          onOpenDiff: () => openFileDiff(section, file.path, file.status),
           hasChanges: true,
         }
       ),
@@ -1517,6 +1603,8 @@ export function ReviewHubContent({
     setSelectedFile,
     selectedBaseBranchFile,
     setSelectedBaseBranchFile,
+    selectedSinceReviewPath,
+    setSelectedSinceReviewPath,
     fileListExpanded,
     diffMode,
     openFileDiff,
