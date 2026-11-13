@@ -925,9 +925,9 @@ export function WorktreeOverviewModal({
                   <Button
                     variant="ghost-danger"
                     size="sm"
+                    data-testid="worktree-bulk-remove"
                     onClick={bulkRemove.handleRemoveClick}
                     disabled={bulkRemove.isExecuting || !hasDeletableSelection}
-                    data-testid="worktree-bulk-remove"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete worktrees
