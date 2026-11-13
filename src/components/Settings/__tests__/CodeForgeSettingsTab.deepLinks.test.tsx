@@ -150,6 +150,7 @@ function renderTab({
             isActive
             scrollToSectionId={link?.id ?? null}
             query={link?.query ?? null}
+            request={link}
             onHandled={onHandled}
             tab="code-forge"
           >
@@ -321,6 +322,26 @@ describe("CodeForgeSettingsTab deep links", () => {
     await waitFor(() => expect(handled).toHaveBeenCalled());
     expect(shownSubtab()).toBe("general");
     expect(handled).toHaveBeenCalledExactlyOnceWith("forge-access-token", false);
+  });
+
+  it("routes a new link to the same section afresh while the last one still waits", async () => {
+    const panel = deferred<{ default: ComponentType }>();
+    slots.views.set(
+      "gitlab.forgeSettingsTab",
+      lazy(() => panel.promise)
+    );
+    const { route } = install();
+    const { handled, link } = renderTab({ sectionId: "forge-access-token", query: "gitlab" });
+    await route(GITHUB);
+    await waitFor(() => expect(shownSubtab()).toBe(GITLAB_ID));
+
+    // Opened again for the same section, as a targeted open does, with no search words.
+    await link("forge-access-token", null);
+
+    await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(handled).toHaveBeenCalledExactlyOnceWith("forge-access-token", true);
+    expect(shownSubtab()).toBe(GITHUB_ID);
+    expect(landedIn("github-panel")).toBe(true);
   });
 
   it("lands a link to a provider's own row once the provider list loads", async () => {

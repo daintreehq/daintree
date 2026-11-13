@@ -45,10 +45,17 @@ export interface SettingsDeepLink {
   sectionId: string | null;
   /** What was typed into settings search when the link came from there. */
   query: string | null;
+  /** This link's identity: a new link to the same section is a different value. */
+  request: object | null;
   holds: SettingsDeepLinkHolds | null;
 }
 
-const NO_DEEP_LINK: SettingsDeepLink = { sectionId: null, query: null, holds: null };
+const NO_DEEP_LINK: SettingsDeepLink = {
+  sectionId: null,
+  query: null,
+  request: null,
+  holds: null,
+};
 
 const SettingsDeepLinkContext = createContext<SettingsDeepLink>(NO_DEEP_LINK);
 

@@ -206,12 +206,15 @@ describe("SettingsDeepLinkScope", () => {
     return loaded ? <div id={rowId} /> : null;
   }
 
+  const request = { sectionId: "row-target", query: "gitlab token" };
+
   function scope(children: React.ReactNode, onHandled = vi.fn(), isActive = true) {
     return (
       <SettingsDeepLinkScope
         isActive={isActive}
-        scrollToSectionId="row-target"
-        query="gitlab token"
+        scrollToSectionId={request.sectionId}
+        query={request.query}
+        request={request}
         onHandled={onHandled}
         tab="voice"
       >
@@ -325,6 +328,7 @@ describe("SettingsDeepLinkScope", () => {
         isActive
         scrollToSectionId={id}
         query={null}
+        request={id === null ? null : { sectionId: id }}
         onHandled={handler}
         tab="voice"
       >
@@ -345,17 +349,17 @@ describe("SettingsDeepLinkScope", () => {
   });
 
   it("hands the link and its search words only to the tab that's showing", () => {
-    const seen: Array<{ sectionId: string | null; query: string | null }> = [];
+    const seen: Array<ReturnType<typeof useSettingsDeepLink>> = [];
     function Reader() {
-      const { sectionId, query } = useSettingsDeepLink();
-      seen.push({ sectionId, query });
+      seen.push(useSettingsDeepLink());
       return null;
     }
     const { rerender } = render(scope(<Reader />, vi.fn(), false));
-    expect(seen.at(-1)).toEqual({ sectionId: null, query: null });
+    expect(seen.at(-1)).toMatchObject({ sectionId: null, query: null, request: null });
 
     rerender(scope(<Reader />, vi.fn(), true));
-    expect(seen.at(-1)).toEqual({ sectionId: "row-target", query: "gitlab token" });
+    expect(seen.at(-1)).toMatchObject({ sectionId: "row-target", query: "gitlab token" });
+    expect(seen.at(-1)?.request).toBe(request);
   });
 
   it("does nothing outside a settings tab", () => {

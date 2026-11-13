@@ -107,6 +107,15 @@ function install(saved: Partial<typeof SAVED> = {}) {
 
 function renderVoiceTab(sectionId: string | null) {
   const onHandled = vi.fn();
+  // One request per section, stable across rerenders, as the dialog's scroll target is.
+  const requests = new Map<string, object>();
+  const requestFor = (id: string) => {
+    const known = requests.get(id);
+    if (known) return known;
+    const fresh = { id };
+    requests.set(id, fresh);
+    return fresh;
+  };
   const tree = (id: string | null) => (
     <SettingsValidationProvider>
       <div id="settings-panel-voice">
@@ -114,6 +123,7 @@ function renderVoiceTab(sectionId: string | null) {
           isActive
           scrollToSectionId={id}
           query={null}
+          request={id === null ? null : requestFor(id)}
           onHandled={onHandled}
           tab="voice"
         >

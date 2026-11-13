@@ -1433,7 +1433,7 @@ function SettingsDialogInner({
                               onSettingsChange={onSettingsChange}
                               isActive={isActive && !panelsHidden}
                               scrollToSectionId={scrollToSection}
-                              scrollQuery={scrollTarget?.query ?? null}
+                              scrollTarget={scrollTarget}
                               onScrollToSectionHandled={handleScrollToSectionHandled}
                             />
                           </Suspense>
@@ -1505,7 +1505,7 @@ function LazyTabContentImpl({
   onSettingsChange,
   isActive,
   scrollToSectionId,
-  scrollQuery,
+  scrollTarget,
   onScrollToSectionHandled,
 }: {
   entry: LazySettingsTabEntry;
@@ -1515,7 +1515,7 @@ function LazyTabContentImpl({
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
-  scrollQuery: string | null;
+  scrollTarget: { sectionId: string; query?: string } | null;
   onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
   const id = entry.id as SettingsTab;
@@ -1547,7 +1547,8 @@ function LazyTabContentImpl({
     <SettingsDeepLinkScope
       isActive={isActive}
       scrollToSectionId={scrollToSectionId}
-      query={scrollQuery}
+      query={scrollTarget?.query ?? null}
+      request={scrollTarget}
       onHandled={onScrollToSectionHandled}
       tab={id}
     >
@@ -1943,6 +1944,7 @@ export function SettingsDeepLinkScope({
   isActive,
   scrollToSectionId,
   query,
+  request,
   onHandled,
   tab,
   children,
@@ -1950,6 +1952,8 @@ export function SettingsDeepLinkScope({
   isActive: boolean;
   scrollToSectionId: string | null;
   query: string | null;
+  /** The link's identity, so a tab can tell a new link to the same section from the last. */
+  request: object | null;
   onHandled: (id: string, landed: boolean) => void;
   tab: SettingsTab;
   children: React.ReactNode;
@@ -1959,6 +1963,7 @@ export function SettingsDeepLinkScope({
   const deepLink: SettingsDeepLink = {
     sectionId: isActive ? scrollToSectionId : null,
     query: isActive ? query : null,
+    request: isActive ? request : null,
     holds,
   };
   return <SettingsDeepLinkProvider value={deepLink}>{children}</SettingsDeepLinkProvider>;

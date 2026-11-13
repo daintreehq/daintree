@@ -309,9 +309,10 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const credentialsLink = deepLink.sectionId === TOKEN_LINK_ID;
   const routing = isLoading || (credentialsLink && projectForge.loading);
   // Routed once per link: a subtab picked while the provider's panel is still loading
-  // in is the user's, not one to switch back.
-  const [routedLink, setRoutedLink] = useState<string | null>(null);
-  const routed = deepLink.sectionId !== null && routedLink === deepLink.sectionId;
+  // in is the user's, not one to switch back. Kept by the link's identity, so a new
+  // link to the same section routes afresh, and the same link shown again doesn't.
+  const [routedLink, setRoutedLink] = useState<object | null>(null);
+  const routed = deepLink.request !== null && routedLink === deepLink.request;
   const linkSubtab =
     routing || routed
       ? null
@@ -327,14 +328,10 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           : null;
   useHoldSettingsDeepLink(routing || (linkSubtab !== null && linkSubtab !== effectiveSubtab));
   useLayoutEffect(() => {
-    if (deepLink.sectionId === null) {
-      setRoutedLink(null);
-      return;
-    }
     if (linkSubtab === null) return;
-    setRoutedLink(deepLink.sectionId);
+    setRoutedLink(deepLink.request);
     if (linkSubtab !== effectiveSubtab) onSubtabChange(linkSubtab);
-  }, [deepLink.sectionId, linkSubtab, effectiveSubtab, onSubtabChange]);
+  }, [deepLink.request, linkSubtab, effectiveSubtab, onSubtabChange]);
 
   const isGeneral = effectiveSubtab === GENERAL_ID;
   const selectedEntry = !isGeneral
