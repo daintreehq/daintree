@@ -30,10 +30,9 @@ const PRIMITIVES = new Set([
 ]);
 
 const DIRECT_WRITERS: Record<string, string> = {
-  // Hand the main-process clipboard to `useCopyWithFeedback` as its `write`;
-  // the guest page may hold focus.
-  "src/components/Browser/BrowserPaneStates.tsx": "main-process write for the hook",
-  "src/components/DevPreview/DevPreviewWebviewOverlays.tsx": "main-process write for CopyButton",
+  // The one main-process write that panes hosting a guest webview hand to
+  // `useCopyWithFeedback` / `CopyButton`; the guest page may hold focus.
+  "src/lib/mainClipboard.ts": "main-process write for guest-hosting panes",
   // Copy feedback lives in the banner's reducer, keyed to the notice.
   "src/components/DevPreview/BlockedNavBanner.tsx": "per-notice reducer state",
   // The commit row's hash copy owns a row-scoped check and failure state.
@@ -49,7 +48,6 @@ const DIRECT_WRITERS: Record<string, string> = {
   "src/hooks/useErrors.ts": "toast action",
   "src/components/Worktree/WorktreeCard/notifyAttachmentFailure.ts": "toast action",
   // Actions are the MCP surface too; the UI that dispatches them confirms.
-  "src/services/actions/definitions/browserActions.ts": "action",
   "src/services/actions/definitions/gitActions.impl.ts": "action",
   "src/services/actions/definitions/portalTabActions.ts": "action",
   "src/services/actions/definitions/terminalInputActions.ts": "action",

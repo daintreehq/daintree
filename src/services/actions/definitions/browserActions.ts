@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { usePanelStore } from "@/store/panelStore";
 import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
@@ -223,7 +224,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
         throw new Error("No browser URL available to copy");
       }
 
-      await navigator.clipboard.writeText(derivedUrl);
+      await writeMainClipboard(derivedUrl);
     },
   }));
 

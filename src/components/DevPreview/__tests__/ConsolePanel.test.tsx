@@ -80,6 +80,9 @@ vi.mock("@/components/ui/tooltip", () => ({
 const mockPaneId = "test-pane-id";
 
 const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+const navigatorWriteText = vi
+  .fn<(text: string) => Promise<void>>()
+  .mockRejectedValue(new Error("NotAllowedError"));
 
 let nextId = 1;
 
@@ -135,8 +138,14 @@ beforeEach(() => {
   nextId = 1;
   viewport.shows = null;
   useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
+  // The guest webview may hold focus, which rejects navigator.clipboard, so
+  // the panel copies through the main-process clipboard.
+  Object.defineProperty(window, "electron", {
+    value: { clipboard: { writeText } },
+    configurable: true,
+  });
   Object.defineProperty(navigator, "clipboard", {
-    value: { writeText },
+    value: { writeText: navigatorWriteText },
     configurable: true,
   });
 });
@@ -235,6 +244,17 @@ describe("per-row copy", () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
+  });
+
+  it("copies through the main-process clipboard, never the renderer's", async () => {
+    seedConsoleRow({ summaryText: "focus" });
+    renderPanel();
+
+    const button = screen.getByRole("button", { name: "Copy console message" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
+    expect(navigatorWriteText).not.toHaveBeenCalled();
   });
 
   it("does not show the copied check when the clipboard write fails", async () => {

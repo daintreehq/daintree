@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -326,6 +327,7 @@ const ConsoleRow = memo(function ConsoleRow({
             revealing the 24px target never grows the row. */}
           <CopyButton
             text={copyText}
+            write={writeMainClipboard}
             aria-label="Copy console message"
             tooltip="Copy message"
             tooltipSide="left"
@@ -495,7 +497,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   const showJump = !isAtBottom && filtered.length > 0;
   const jumpPresence = useAnimatedPresence({ isOpen: showJump, animationDuration: 0 });
 
-  const { copied: allCopied, copy: copyAll } = useCopyWithFeedback();
+  const { copied: allCopied, copy: copyAll } = useCopyWithFeedback({ write: writeMainClipboard });
   const handleCopyVisible = useCallback(async () => {
     const ok = await copyAll(serializeConsoleMessages(filtered));
     if (!ok) useAnnouncerStore.getState().announce(COPY_FAILED_LABEL, "assertive");
