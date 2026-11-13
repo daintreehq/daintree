@@ -185,6 +185,13 @@ export interface ForgeRepositoryStats {
   loading: boolean;
   /** Error message when the forge fetch failed (counts may still be cached). */
   error?: string;
+  /**
+   * The issues provider's own failure when the project binds its issues to a
+   * provider other than the code forge (#13700), so the issues pill can ask for
+   * that tracker's credentials. {@link error} stays the code forge's. Absent
+   * when the issue count read cleanly or no issues provider is bound.
+   */
+  issueError?: string;
   /** Whether the stats are from cache and may be outdated. */
   stale?: boolean;
   /** Epoch ms when stats were last successfully fetched from the forge. */
