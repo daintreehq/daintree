@@ -700,6 +700,64 @@ describe("AppDialog focus trapping", () => {
       document.body.removeChild(root);
     });
 
+    it("leaves focus alone on a close that opts out, handing over the restore it skipped", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const destination = document.createElement("button");
+      const elsewhere = document.createElement("button");
+      document.body.append(destination, elsewhere);
+      let skippedRestore: (() => void) | undefined;
+      // Where the close's own step takes the user instead.
+      const onCloseComplete = vi.fn((restore?: () => void) => {
+        skippedRestore = restore;
+        destination.focus();
+      });
+      const dialog = (isOpen: boolean, restoreFocusOnClose: boolean) => (
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={isOpen}
+            onClose={() => {}}
+            restoreFocusOnClose={restoreFocusOnClose}
+            onCloseComplete={onCloseComplete}
+          >
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      try {
+        const { rerender } = render(dialog(true, false));
+        await act(() => vi.runAllTimersAsync());
+        const triggerFocused = vi.fn();
+        trigger.addEventListener("focus", triggerFocused);
+
+        rerender(dialog(false, false));
+
+        expect(triggerFocused).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(destination);
+        expect(onCloseComplete).toHaveBeenCalledTimes(1);
+        // A hand-off that falls through can still put focus back.
+        act(() => skippedRestore?.());
+        expect(document.activeElement).toBe(trigger);
+
+        // Wherever the next opening starts from is where its close returns.
+        elsewhere.focus();
+        rerender(dialog(true, true));
+        await act(() => vi.runAllTimersAsync());
+        onCloseComplete.mockImplementation(() => {});
+        rerender(dialog(false, true));
+
+        expect(document.activeElement).toBe(elsewhere);
+        expect(onCloseComplete).toHaveBeenLastCalledWith();
+      } finally {
+        destination.remove();
+        elsewhere.remove();
+        trigger.remove();
+        root.remove();
+      }
+    });
+
     it("falls through to #root when the connected target cannot take focus", async () => {
       const { root, fallbackButton, trigger } = setupTriggerAndRoot();
       // A connected but non-focusable element: focus() is a no-op.

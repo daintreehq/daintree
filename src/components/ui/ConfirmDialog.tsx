@@ -100,8 +100,10 @@ type ConfirmDialogBaseProps = {
   restoreFocusTo?: RestoreFocusTarget;
   /** Forwarded to {@link AppDialog.preferRestoreFocusTo}. */
   preferRestoreFocusTo?: boolean;
+  /** Forwarded to {@link AppDialog.restoreFocusOnClose}. */
+  restoreFocusOnClose?: boolean;
   /** Forwarded to {@link AppDialog.onCloseComplete}. */
-  onCloseComplete?: () => void;
+  onCloseComplete?: (restoreSkippedFocus?: () => void) => void;
   /**
    * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
    * beside the action row. Use it to say why the primary action is currently
@@ -180,6 +182,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     focusResetKey,
     restoreFocusTo,
     preferRestoreFocusTo,
+    restoreFocusOnClose,
     onCloseComplete,
     hasPreview = false,
     size = "sm",
@@ -308,6 +311,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
       preferRestoreFocusTo={preferRestoreFocusTo}
+      restoreFocusOnClose={restoreFocusOnClose}
       onCloseComplete={onCloseComplete}
     >
       <AppDialog.Header>
