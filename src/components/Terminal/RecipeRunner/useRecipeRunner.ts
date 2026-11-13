@@ -74,7 +74,11 @@ export interface UseRecipeRunnerResult {
   handlePin: (recipeId: string) => void;
   handleUnpin: (recipeId: string) => void;
   handleDelete: (recipeId: string) => void;
+  /** The recipe the delete confirm is open for; null once it closes. */
   pendingDeleteId: string | null;
+  /** The recipe the delete confirm last asked about, kept through its exit. */
+  deleteTarget: { id: string; name: string } | null;
+  isDeleting: boolean;
   deleteError: string | null;
   confirmDelete: () => void;
   cancelDelete: () => void;
@@ -123,8 +127,13 @@ export function useRecipeRunner({
   const [spawnFailureSummary, setSpawnFailureSummary] = useState<SpawnFailureSummary | null>(null);
   const [unresolvedVars, setUnresolvedVars] = useState<string[]>([]);
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // Kept after the confirm closes, so its title still names the recipe through
+  // the exit: by then a deleted recipe has already left the store.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const pendingDeleteId = isDeleteOpen ? (deleteTarget?.id ?? null) : null;
 
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
@@ -204,8 +213,7 @@ export function useRecipeRunner({
     // Drop any in-flight delete confirmation — a pending recipe id belongs to
     // the previous worktree's filtered list; confirming it after the switch
     // would delete a recipe out of its original context.
-    setPendingDeleteId(null);
-    setDeleteError(null);
+    setIsDeleteOpen(false);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
     return () => pendingConfirmRef.current?.abort();
@@ -505,10 +513,14 @@ export function useRecipeRunner({
   // Route deletes through the `recipe.delete` action (danger:"confirm") behind
   // a ConfirmDialog rendered in RecipeRunner.tsx, matching RecipeManager and
   // RecipesTab — never call the store's deleteRecipe directly (Tier D1 gate).
-  const handleDelete = useCallback((recipeId: string) => {
-    setDeleteError(null);
-    setPendingDeleteId(recipeId);
-  }, []);
+  const handleDelete = useCallback(
+    (recipeId: string) => {
+      setDeleteError(null);
+      setDeleteTarget({ id: recipeId, name: getRecipeById(recipeId)?.name ?? "recipe" });
+      setIsDeleteOpen(true);
+    },
+    [getRecipeById]
+  );
 
   const confirmDelete = useCallback(() => {
     const recipeId = pendingDeleteId;
@@ -518,6 +530,7 @@ export function useRecipeRunner({
     // "already gone" error.
     if (isConfirmingDeleteRef.current) return;
     isConfirmingDeleteRef.current = true;
+    setIsDeleting(true);
     void (async () => {
       setDeleteError(null);
       try {
@@ -527,7 +540,7 @@ export function useRecipeRunner({
           { source: "user", confirmed: true }
         );
         if (result.ok) {
-          setPendingDeleteId(null);
+          setIsDeleteOpen(false);
         } else {
           // Keep the dialog open with retry copy rather than closing on a silent
           // failure (the action surface is the user's only recovery path here).
@@ -536,13 +549,16 @@ export function useRecipeRunner({
         }
       } finally {
         isConfirmingDeleteRef.current = false;
+        setIsDeleting(false);
       }
     })();
   }, [pendingDeleteId]);
 
+  // The error stays with the closing confirm, like its title; the next request
+  // clears it.
   const cancelDelete = useCallback(() => {
-    setPendingDeleteId(null);
-    setDeleteError(null);
+    if (isConfirmingDeleteRef.current) return;
+    setIsDeleteOpen(false);
   }, []);
 
   const handleCreate = useCallback(() => {
@@ -649,6 +665,8 @@ export function useRecipeRunner({
     handleUnpin,
     handleDelete,
     pendingDeleteId,
+    deleteTarget,
+    isDeleting,
     deleteError,
     confirmDelete,
     cancelDelete,

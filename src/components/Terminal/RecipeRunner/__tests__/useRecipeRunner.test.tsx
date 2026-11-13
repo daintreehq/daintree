@@ -1311,6 +1311,90 @@ describe("useRecipeRunner — delete confirm flow", () => {
     );
   });
 
+  it("keeps naming the recipe after the confirm closes, through its exit (#16906)", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
+
+    // The store drops the recipe as the delete lands; the closing dialog must
+    // not fall back to a generic title.
+    dispatchMock.mockImplementationOnce(async () => {
+      recipes.length = 0;
+      return { ok: true, result: undefined };
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    await flush();
+
+    expect(result.current.pendingDeleteId).toBeNull();
+    expect(result.current.deleteTarget).toEqual({ id: "r1", name: "Dev server" });
+  });
+
+  it("is busy while the delete runs, and a cancel then is ignored", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Dev server" }));
+    let settle: (value: { ok: true; result: undefined }) => void = () => {};
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    act(() => {
+      result.current.confirmDelete();
+    });
+    expect(result.current.isDeleting).toBe(true);
+
+    act(() => {
+      result.current.cancelDelete();
+    });
+    expect(result.current.pendingDeleteId).toBe("r1");
+
+    await act(async () => {
+      settle({ ok: true, result: undefined });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(result.current.isDeleting).toBe(false);
+    expect(result.current.pendingDeleteId).toBeNull();
+  });
+
+  it("closes the confirm for another worktree and names the next request afresh", () => {
+    recipes.push(
+      makeRecipe({ id: "r1", name: "Dev server" }),
+      makeRecipe({ id: "r2", name: "Docs" })
+    );
+    const { result, rerender } = renderHook(
+      ({ worktreeId }) => useRecipeRunner({ activeWorktreeId: worktreeId, defaultCwd: "/tmp" }),
+      { initialProps: { worktreeId: "wt-1" } }
+    );
+
+    act(() => {
+      result.current.handleDelete("r1");
+    });
+    rerender({ worktreeId: "wt-2" });
+    expect(result.current.pendingDeleteId).toBeNull();
+
+    act(() => {
+      result.current.handleDelete("r2");
+    });
+    expect(result.current.pendingDeleteId).toBe("r2");
+    expect(result.current.deleteTarget).toEqual({ id: "r2", name: "Docs" });
+  });
+
   it("cancelDelete clears the pending id without dispatching", () => {
     const { result } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
