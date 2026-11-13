@@ -13,7 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { pluralize } from "@/lib/pluralize";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { injectSchemeToDOM, resolveCommittedScheme, useAppThemeStore } from "@/store/appThemeStore";
+import {
+  injectSchemeToDOM,
+  resolveCommittedScheme,
+  resolveProjectScheme,
+  useAppThemeStore,
+} from "@/store/appThemeStore";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { commitAppThemeSelection } from "@/lib/commitAppThemeSelection";
@@ -219,6 +224,9 @@ export function ThemeBrowser() {
   const previewSchemeId = useAppThemeStore((s) => s.previewSchemeId);
   const setPreviewSchemeId = useAppThemeStore((s) => s.setPreviewSchemeId);
   const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
+  // A project with its own theme keeps showing it after Set theme saves the
+  // global one (#13833), and Cancel goes back to it.
+  const projectScheme = useAppThemeStore(resolveProjectScheme);
 
   const [query, setQuery] = useState("");
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
@@ -229,6 +237,7 @@ export function ThemeBrowser() {
     return committed?.type === "light" ? "light" : "dark";
   });
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -426,20 +435,25 @@ export function ThemeBrowser() {
   // still in the document: opening from Settings unmounts the Settings dialog,
   // and that path is already handled by useThemeBrowserSettingsBridge reopening
   // the Appearance tab — focusing a detached node would just strand the user on
-  // document.body.
+  // document.body. That reopen lands focus on the theme section before this
+  // panel's exit animation ends, so only focus this panel stranded is handed
+  // back: an opener recorded once Settings had already closed (the toolbar's
+  // Settings button) would otherwise take it from behind the reopened dialog.
+  // The hand-back waits a frame because the app chrome stays inert until the
+  // render that follows this unmount releases the browser's overlay claim, and
+  // an inert opener refuses focus.
   useEffect(() => {
     const opener = document.activeElement;
+    const root = rootRef.current;
     const rafId = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => {
       cancelAnimationFrame(rafId);
-      if (
-        opener instanceof HTMLElement &&
-        opener.isConnected &&
-        opener !== document.body &&
-        typeof opener.focus === "function"
-      ) {
-        opener.focus({ preventScroll: true });
-      }
+      if (!(opener instanceof HTMLElement) || opener === document.body) return;
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        const stranded = active === null || active === document.body || !!root?.contains(active);
+        if (stranded && opener.isConnected) opener.focus({ preventScroll: true });
+      });
     };
   }, []);
 
@@ -514,6 +528,9 @@ export function ThemeBrowser() {
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // An IME confirms a candidate with Enter and pages candidates with the
+      // Page keys; until it commits, every keystroke belongs to the field.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       if (
         e.key === "ArrowDown" ||
         e.key === "ArrowUp" ||
@@ -540,6 +557,7 @@ export function ThemeBrowser() {
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         "flex flex-col h-full bg-surface-canvas border-l border-divider",
         OVERLAY_SHEET_SHADOW_CLASS
@@ -703,7 +721,9 @@ export function ThemeBrowser() {
             interactive. Saying so is what the scrim alone cannot do — and it
             says it without tinting or blurring the very thing being judged. */}
         <p id={PREVIEW_HINT_ID} className="flex-1 min-w-0 text-2xs text-text-secondary">
-          Live preview — pick a theme, or cancel to go back
+          {projectScheme
+            ? `This project shows its own theme, ${projectScheme.name}. Set theme changes the global theme.`
+            : "Live preview — pick a theme, or cancel to go back"}
         </p>
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel

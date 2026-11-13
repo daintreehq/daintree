@@ -740,6 +740,46 @@ describe("ThemeBrowser navigation contract", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBe(darkSchemeAt(3)!.id);
   });
 
+  // An IME confirms its candidate with Enter and pages candidates with Page
+  // keys; those keystrokes belong to the composition, not to the list.
+  describe("while an IME is composing", () => {
+    it.each([
+      ["isComposing", { isComposing: true }],
+      ["keyCode 229", { keyCode: 229 }],
+    ])("leaves Enter to the composition (%s)", async (_label, composing) => {
+      const { appThemeClient } = await import("@/clients/appThemeClient");
+      vi.mocked(appThemeClient.setColorScheme).mockClear();
+      render(<Harness />);
+      const input = screen.getByLabelText("Filter themes");
+      const target = otherDarkScheme();
+      fireEvent.click(findRowByName(target.name));
+
+      fireEvent.keyDown(input, { key: "Enter", ...composing });
+
+      expect(useThemeBrowserStore.getState().isOpen).toBe(true);
+      expect(useAppThemeStore.getState().selectedSchemeId).toBe(DEFAULT_APP_SCHEME_ID);
+      expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+      expect(appThemeClient.setColorScheme).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["PageDown", { isComposing: true }],
+      ["PageUp", { isComposing: true }],
+      ["PageDown", { keyCode: 229 }],
+      ["PageUp", { keyCode: 229 }],
+    ])("leaves %s to the composition (%o)", (key, composing) => {
+      render(<Harness />);
+      const input = screen.getByLabelText("Filter themes");
+      const target = darkSchemeAt(2)!;
+      fireEvent.click(findRowByName(target.name));
+
+      const notCancelled = fireEvent.keyDown(input, { key, ...composing });
+
+      expect(notCancelled).toBe(true);
+      expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+    });
+  });
+
   // The cursor is the highlighted row, not a number that outlives the list it
   // was counted in. Every case below changes the list under a cursor and then
   // arrows, and each one used to step from an index the new list never offered.
@@ -949,6 +989,20 @@ describe("ThemeBrowser navigation contract", () => {
         useAppThemeStore.setState({ projectSchemeId: null, projectSnapshotScheme: null });
       });
 
+      // Set theme saves the global theme (#13833), so the window goes back to
+      // the project's after it; the dialog's description says so up front.
+      it("says Set theme changes the global theme while this project keeps its own", () => {
+        const project = schemesOf("dark")[1]!;
+        useAppThemeStore.setState({ projectSchemeId: project.id });
+        render(<Harness />);
+
+        const dialog = screen.getByRole("dialog", { name: "Theme browser" });
+        const description = document.getElementById(dialog.getAttribute("aria-describedby")!)!;
+        expect(description.textContent).toBe(
+          `This project shows its own theme, ${project.name}. Set theme changes the global theme.`
+        );
+      });
+
       // The project's theme is already on screen, but its row must still take the
       // highlight when the cursor lands on it, or the arrows, which step from the
       // highlight, would stall one row short.
@@ -1080,7 +1134,12 @@ describe("ThemeBrowser navigation contract", () => {
     expect(useThemeBrowserStore.getState().isOpen).toBe(true);
   });
 
-  it("hands focus back to whatever opened it", () => {
+  const nextFrame = () =>
+    act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+  it("hands focus back to whatever opened it", async () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);
     opener.focus();
@@ -1092,9 +1151,75 @@ describe("ThemeBrowser navigation contract", () => {
     expect(document.activeElement).not.toBe(opener);
 
     view.unmount();
+    await nextFrame();
 
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+
+  // Opened from Settings, closing reopens Settings on the theme section, which
+  // takes focus before the browser's exit animation ends and it unmounts. The
+  // opener it recorded then is no longer where the user is.
+  it("leaves focus where the next surface put it by the time it unmounts", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+
+    const reopened = document.createElement("button");
+    document.body.appendChild(reopened);
+    act(() => reopened.focus());
+    view.unmount();
+    await nextFrame();
+
+    expect(document.activeElement).toBe(reopened);
+    opener.remove();
+    reopened.remove();
+  });
+
+  it("re-reads where focus is once the frame comes, not at unmount", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+
+    view.unmount();
+    const reopened = document.createElement("button");
+    document.body.appendChild(reopened);
+    reopened.focus();
+    await nextFrame();
+
+    expect(document.activeElement).toBe(reopened);
+    opener.remove();
+    reopened.remove();
+  });
+
+  // The app chrome is inert while the browser holds its overlay claim, and the
+  // render that lifts it follows the unmount that releases the claim. jsdom
+  // ignores inert, so the opener stands in for Chromium and refuses focus
+  // while it sits inside an inert subtree.
+  it("hands focus back once the app chrome is no longer inert", async () => {
+    const chrome = document.createElement("div");
+    const opener = document.createElement("button");
+    chrome.appendChild(opener);
+    document.body.appendChild(chrome);
+    const focusOpener = opener.focus.bind(opener);
+    opener.focus = (options?: FocusOptions) => {
+      if (!opener.closest("[inert]")) focusOpener(options);
+    };
+    opener.focus();
+    const view = render(<Harness />);
+    act(() => screen.getByLabelText("Filter themes").focus());
+    chrome.setAttribute("inert", "");
+
+    view.unmount();
+    chrome.removeAttribute("inert");
+    await nextFrame();
+
+    expect(document.activeElement).toBe(opener);
+    chrome.remove();
   });
 
   describe("plugin themes (#13832)", () => {

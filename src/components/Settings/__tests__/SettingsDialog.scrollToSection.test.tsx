@@ -51,6 +51,32 @@ describe("scrollAndHighlightSettingsSection", () => {
     expect(el.classList.contains("settings-highlight")).toBe(true);
   });
 
+  it("focuses a control the section marks for landing ahead of its first field", () => {
+    const el = setupSection("section-marked");
+    const toggle = document.createElement("button");
+    toggle.setAttribute("role", "switch");
+    el.appendChild(toggle);
+    const marked = document.createElement("button");
+    marked.setAttribute("data-settings-focus-target", "");
+    el.appendChild(marked);
+
+    scrollAndHighlightSettingsSection("section-marked");
+
+    expect(document.activeElement).toBe(marked);
+  });
+
+  it("skips a marked control that is disabled", () => {
+    const el = setupSection("section-disabled-mark", true);
+    const marked = document.createElement("button");
+    marked.setAttribute("data-settings-focus-target", "");
+    marked.disabled = true;
+    el.appendChild(marked);
+
+    scrollAndHighlightSettingsSection("section-disabled-mark");
+
+    expect(document.activeElement).toBe(el.querySelector("input"));
+  });
+
   it("does not throw when the section has no inner input", () => {
     const el = setupSection("section-bar", false);
     expect(() => scrollAndHighlightSettingsSection("section-bar")).not.toThrow();
