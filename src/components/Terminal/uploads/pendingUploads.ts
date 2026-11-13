@@ -296,6 +296,15 @@ export const isolatedComposerUploadSurface = (terminalId: string) =>
 export const terminalUploadSurface = (terminalId: string) => `terminal:${terminalId}`;
 export const fileBrowserUploadSurface = (panelId: string) => `file-browser:${panelId}`;
 
+/**
+ * What was held back for a panel's composers outlives their remounts, not the
+ * panel: closing it lets them go (#16883).
+ */
+export function dropComposerHeldBack(terminalId: string): void {
+  takeHeldBackAttachments(composerUploadSurface(terminalId));
+  takeHeldBackAttachments(isolatedComposerUploadSurface(terminalId));
+}
+
 /** @internal Tests only. */
 export function _resetPendingUploadsForTests(): void {
   generation++;

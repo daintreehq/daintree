@@ -18,6 +18,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { readComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
+import { _resetComposerSnapshotsForTesting } from "@/lib/composerRemount";
 import { HybridInputBar, type HybridInputBarProps } from "../HybridInputBar";
 import { insertPreparedAttachments } from "../fileAttachments";
 import { fileDropChipField, imageChipField, readImageChipPaths } from "../inputEditorExtensions";
@@ -54,11 +55,9 @@ afterAll(() => {
   Range.prototype.getBoundingClientRect = originalRangeBounds;
 });
 
-beforeEach(() => {
-  initBuiltInPanelKinds();
-  setCurrentViewStore(createWorktreeStore());
-  const panel = {
-    id: "term-1",
+function agentPanel(id: string): PtyPanelData {
+  return {
+    id,
     title: "claude",
     kind: "terminal",
     cwd: WT_ID,
@@ -72,14 +71,20 @@ beforeEach(() => {
     agentState: "waiting",
     runtimeStatus: "running",
   } as PtyPanelData;
+}
+
+beforeEach(() => {
+  initBuiltInPanelKinds();
+  setCurrentViewStore(createWorktreeStore());
   usePanelStore.setState({
-    panelsById: { [panel.id]: panel },
-    panelIds: [panel.id],
-    panelIdsByWorktreeId: { [WT_ID]: [panel.id] },
-    focusedId: panel.id,
+    panelsById: { "term-1": agentPanel("term-1"), "term-2": agentPanel("term-2") },
+    panelIds: ["term-1", "term-2"],
+    panelIdsByWorktreeId: { [WT_ID]: ["term-1", "term-2"] },
+    focusedId: "term-1",
   });
   useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
   _resetPendingUploadsForTests();
+  _resetComposerSnapshotsForTesting();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -105,30 +110,46 @@ async function settle() {
   });
 }
 
-async function mount() {
-  const onSend = vi.fn<HybridInputBarProps["onSend"]>(() => Promise.resolve(true));
-  const result = render(
+function bar(terminalId: string, onSend: HybridInputBarProps["onSend"]) {
+  return (
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={onSend} />
+        <HybridInputBar terminalId={terminalId} cwd={WT_ID} agentId="claude" onSend={onSend} />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
+}
+
+async function mount() {
+  const onSend = vi.fn<HybridInputBarProps["onSend"]>(() => Promise.resolve(true));
+  const result = render(bar("term-1", onSend));
   await settle();
-  const view = EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
+  const editor = () =>
+    EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
+  const view = editor();
   const pressEnter = async () => {
     await act(async () => {
-      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+      runScopeHandlers(editor(), new KeyboardEvent("keydown", { key: "Enter" }), "editor");
     });
     await settle();
   };
-  return { ...result, view, onSend, pressEnter };
+  /** Shows another terminal's draft in the same composer, as a tab switch does. */
+  const show = async (terminalId: string) => {
+    result.rerender(bar(terminalId, onSend));
+    await settle();
+    return editor();
+  };
+  return { ...result, view, editor, onSend, pressEnter, show };
 }
+
+// jsdom's DOM selection never follows a dispatched one, so focus is stubbed.
+const focus = (view: EditorView) =>
+  Object.defineProperty(view, "hasFocus", { configurable: true, get: () => true });
 
 /** Types `look at ` and attaches an image and a file after it, as a drop does. */
 async function attach(view: EditorView) {
   await act(async () => {
-    view.focus();
+    focus(view);
     view.dispatch({ changes: { from: 0, insert: "look at " }, selection: { anchor: 8 } });
     insertPreparedAttachments(
       view,
@@ -204,15 +225,31 @@ describe("HybridInputBar across a remount (#16883)", () => {
     expect(second.view.state.field(fileDropChipField)).toEqual([]);
   });
 
-  it("lets the chips and held uploads go when the panel closes", async () => {
+  it("keeps each tab's chips through a switch to another terminal and back", async () => {
+    useTerminalInputStore.getState().setDraftInput("term-2", "the other draft");
     const first = await mount();
     await attach(first.view);
     const draft = first.view.state.doc.toString();
-    holdBackAttachments(composerUploadSurface("term-1"), [HELD]);
+
+    const other = await first.show("term-2");
+    expect(other).not.toBe(first.view);
+    expect(other.state.doc.toString()).toBe("the other draft");
+    expect(other.state.field(imageChipField)).toEqual([]);
+
+    const back = await first.show("term-1");
+    expect(back.state.doc.toString()).toBe(draft);
+    expect(readImageChipPaths(back)).toEqual([SHOT]);
+    expect(back.state.field(fileDropChipField).map((e) => e.filePath)).toEqual([NOTES]);
+    expect(useTerminalInputStore.getState().getDraftInput("term-2")).toBe("the other draft");
+  });
+
+  it("lets the chips go when the panel's input state is cleared", async () => {
+    const first = await mount();
+    await attach(first.view);
+    const draft = first.view.state.doc.toString();
     first.unmount();
 
     useTerminalInputStore.getState().clearTerminalState("term-1");
-    expect(getHeldBackAttachments(composerUploadSurface("term-1"))).toEqual([]);
 
     // The same text written back later is a new draft, without the old chips.
     useTerminalInputStore.getState().setDraftInput("term-1", draft);

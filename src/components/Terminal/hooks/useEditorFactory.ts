@@ -53,6 +53,12 @@ import {
   rebaseCorrectionBaseline,
 } from "@/services/voiceCorrectionLanding";
 import { recordComposerBindings } from "../inputEditorExtensions/composerBindings";
+import {
+  keepComposerRemount,
+  restoreComposerRemount,
+} from "../inputEditorExtensions/composerRemount";
+import { takeComposerSnapshot } from "@/lib/composerRemount";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
@@ -63,7 +69,6 @@ interface UseEditorFactoryParams {
   draftKeyRef: React.RefObject<string>;
   editorHostRef: React.RefObject<HTMLDivElement | null>;
   editorViewRef: React.RefObject<EditorView | null>;
-  value: string;
   disabled: boolean;
   placeholder: string;
   effectiveTheme: ITheme;
@@ -116,7 +121,6 @@ export function useEditorFactory({
   draftKeyRef,
   editorHostRef,
   editorViewRef,
-  value,
   disabled,
   placeholder,
   effectiveTheme,
@@ -129,7 +133,6 @@ export function useEditorFactory({
   filePasteExtension,
   plainPasteKeymap,
 }: UseEditorFactoryParams) {
-  const initialValueRef = useRef(value);
   // Read when a review swaps, not when the editor was built.
   const voiceIdRef = useRef(voiceId);
   useLayoutEffect(() => {
@@ -140,6 +143,14 @@ export function useEditorFactory({
     const host = editorHostRef.current;
     if (!host) return;
     if (editorViewRef.current) return;
+
+    // The draft this editor shows for as long as it lives. A tab switch builds
+    // another editor in the same composer, so the draft is read now, not kept
+    // from its first render, and what this one held is kept for its own draft.
+    const draftKey = draftKeyRef.current;
+    const readDraft = () => useTerminalInputStore.getState().draftInputs.get(draftKey) ?? "";
+    const doc = readDraft();
+    const kept = takeComposerSnapshot(draftKey, doc);
 
     const {
       themeCompartmentRef,
@@ -201,7 +212,7 @@ export function useEditorFactory({
       interimWidgetField,
       dictationFollow,
       voiceCaret,
-      createCaretTracker(() => draftKeyRef.current),
+      createCaretTracker(() => draftKeyRef.current, kept?.caretPublished === true),
       completionBoundary,
       pendingAIField,
       pendingLock,
@@ -234,7 +245,8 @@ export function useEditorFactory({
       filePasteExtension,
       plainPasteKeymap,
     ];
-    const state = EditorState.create({ doc: initialValueRef.current, extensions });
+    const created = EditorState.create({ doc, extensions });
+    const state = kept ? restoreComposerRemount(created, kept) : created;
 
     const view = new EditorView({ state, parent: host });
     editorViewRef.current = view;
@@ -253,6 +265,7 @@ export function useEditorFactory({
     });
 
     return () => {
+      keepComposerRemount(view, draftKey, readDraft());
       view.destroy();
       editorViewRef.current = null;
     };

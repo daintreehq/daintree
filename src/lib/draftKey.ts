@@ -10,6 +10,11 @@ export function makeDraftKey(terminalId: string, projectId?: string): string {
   return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
 
+/** Whether `key` is a draft key for `terminalId`, whatever its scope. */
+export function isTerminalDraftKey(key: string, terminalId: string): boolean {
+  return key === terminalId || key.endsWith(`:${terminalId}`);
+}
+
 /** Whether any draft key for `terminalId` holds more than whitespace, whatever its scope. */
 export function hasDraftText(drafts: ReadonlyMap<string, string>, terminalId: string): boolean {
   const suffix = `:${terminalId}`;

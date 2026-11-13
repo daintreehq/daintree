@@ -132,7 +132,6 @@ import {
   composerUploadSurface,
   isComposerSendHeld,
   isolatedComposerUploadSurface,
-  takeHeldBackAttachments,
   type PreparedAttachment,
 } from "./uploads/pendingUploads";
 import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
@@ -597,7 +596,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceId = voiceTarget?.panelId ?? terminalId;
     const voiceProjectId = voiceTarget ? voiceTarget.projectId : projectId;
     const draftKeyRef = useRef(draftKey);
-    useEffect(() => {
+    // Before the editor factory's layout effect, which builds a tab's editor
+    // over the draft this names.
+    useLayoutEffect(() => {
       draftKeyRef.current = draftKey;
     }, [draftKey]);
     const isInHistoryMode = useTerminalInputStore((s) => {
@@ -809,8 +810,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
-    // Held back for this composer's draft, so gone with the composer.
-    useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
     const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
       const view = editorViewRef.current;
       if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
@@ -2500,7 +2499,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       draftKeyRef,
       editorHostRef,
       editorViewRef,
-      value,
       disabled,
       placeholder,
       effectiveTheme,

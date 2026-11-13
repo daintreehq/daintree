@@ -6,11 +6,12 @@ import { forgetComposerState, recordComposerState } from "@/lib/composerCaret";
  * draft key `draftKey()` names when it runs. Nothing is published until the
  * composer has had focus: a draft the user never clicked into has a caret at
  * 0 they never chose. After that it stays published while focus is elsewhere,
- * since pressing the mic button takes focus with it.
+ * since pressing the mic button takes focus with it. `resumed` carries that
+ * on from a composer this one replaces over the same draft (#16883).
  */
-export function createCaretTracker(draftKey: () => string) {
+export function createCaretTracker(draftKey: () => string, resumed = false) {
   return ViewPlugin.define((view) => {
-    let focused = view.hasFocus;
+    let focused = resumed || view.hasFocus;
     let key: string | null = null;
     const publish = (state: typeof view.state) => {
       const next = draftKey();

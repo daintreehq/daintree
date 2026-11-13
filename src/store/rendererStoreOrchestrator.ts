@@ -20,6 +20,9 @@ import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "./dictationRangeStore";
 import { subscribeRecentDictationsSync } from "@/services/recentDictations";
 import { forgetComposerSurfacePane, trackComposerSurface } from "@/lib/composerSurface";
+import { forgetComposerSnapshots } from "@/lib/composerRemount";
+import { isTerminalDraftKey } from "@/lib/draftKey";
+import { dropComposerHeldBack } from "@/components/Terminal/uploads/pendingUploads";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { observePanelFailures, usePanelFailureStore } from "./panelFailureStore";
@@ -474,6 +477,7 @@ export function initStoreOrchestrator(): () => void {
 
           for (const removedId of removedIds) {
             useTerminalInputStore.getState().clearTerminalState(removedId);
+            dropComposerHeldBack(removedId);
             useLastComposerSendStore.getState().clear(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             // Prune the panel's resource-metrics entry. The PTY `onExit` path
@@ -617,6 +621,10 @@ export function initStoreOrchestrator(): () => void {
           for (const id of trashed.keys()) {
             if (!prevTrashed.has(id)) {
               removeArtifactsForTerminal(id);
+              // The draft stays for an undone close; the chips and uploads its
+              // composer kept across remounts don't (#16883).
+              forgetComposerSnapshots((key) => isTerminalDraftKey(key, id));
+              dropComposerHeldBack(id);
               // Closing is the end of a panel's header-button state, though the
               // id survives in the trash: an undone close must not bring back a
               // spinner for a refresh the old view started.
