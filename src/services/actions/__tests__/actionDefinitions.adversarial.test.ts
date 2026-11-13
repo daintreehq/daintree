@@ -1231,6 +1231,8 @@ describe("panel action hardening", () => {
     expect(mocks.portal.create).toHaveBeenCalledWith({
       tabId: "blank-1",
       url: "https://example.com/reused",
+      // Shielded from LRU eviction until its show lands.
+      isRestore: true,
     });
     expect(mocks.portal.show).toHaveBeenCalled();
   });

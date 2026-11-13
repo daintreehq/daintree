@@ -60,9 +60,12 @@ import {
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import { usePortalStore } from "@/store/portalStore";
 import { actionService } from "@/services/ActionService";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { writeMainClipboard } from "@/lib/mainClipboard";
+import { captureCopyFlashAt, type CopyFlashTicket } from "@/lib/copyFlash";
 import { PortalIcon } from "./PortalIcon";
-import { PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
-import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
+import { PORTAL_COPY_URL_ID, PORTAL_TAB_PANEL_ID, portalTabDomId } from "./portalTabIds";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import {
   DropdownMenu,
@@ -88,6 +91,7 @@ import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { useNativeViewMenu } from "./useNativeViewMenu";
 
 const noopTabAction = (_tabId: string) => {};
+const noopCopyTabUrl = (_tabId: string, _flash: CopyFlashTicket) => {};
 
 const OVERFLOW_FADE_PX = 24;
 
@@ -130,7 +134,7 @@ function SortableTab({
   onDuplicate: (id: string) => void;
   onCloseOthers: (id: string) => void;
   onCloseToRight: (id: string) => void;
-  onCopyUrl: (id: string) => void;
+  onCopyUrl: (id: string, flash: CopyFlashTicket) => void;
   onOpenExternal: (id: string) => void;
   onReload: (id: string) => void;
   onMove: (id: string, delta: -1 | 1) => void;
@@ -249,7 +253,15 @@ function SortableTab({
           Reload
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={!hasUrl} onSelect={afterClose(() => onCopyUrl(tab.id))}>
+        <ContextMenuItem
+          disabled={!hasUrl}
+          onSelect={() => {
+            // The page comes back over everything below the strip once the
+            // menu closes, so the confirmation sits by the tab, not the row.
+            const flash = captureCopyFlashAt(document.getElementById(tabDomId(tab.id)));
+            afterClose(() => onCopyUrl(tab.id, flash))();
+          }}
+        >
           <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           Copy URL
         </ContextMenuItem>
@@ -302,14 +314,13 @@ interface PortalToolbarProps {
   onGoForward?: () => void;
   onReload?: () => void;
   onOpenExternal?: () => void;
-  onCopyUrl?: () => void;
   hasActiveUrl?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
   onDuplicateTab?: (tabId: string) => void;
   onCloseOthers?: (tabId: string) => void;
   onCloseToRight?: (tabId: string) => void;
-  onCopyTabUrl?: (tabId: string) => void;
+  onCopyTabUrl?: (tabId: string, flash: CopyFlashTicket) => void;
   onOpenTabExternal?: (tabId: string) => void;
   onReloadTab?: (tabId: string) => void;
   enabledLinks: PortalLink[];
@@ -329,7 +340,6 @@ export function PortalToolbar({
   onGoForward,
   onReload,
   onOpenExternal,
-  onCopyUrl,
   hasActiveUrl = false,
   canGoBack = false,
   canGoForward = false,
@@ -353,7 +363,7 @@ export function PortalToolbar({
   const duplicateTab = onDuplicateTab ?? noopTabAction;
   const closeOthers = onCloseOthers ?? noopTabAction;
   const closeToRight = onCloseToRight ?? noopTabAction;
-  const copyTabUrl = onCopyTabUrl ?? noopTabAction;
+  const copyTabUrl = onCopyTabUrl ?? noopCopyTabUrl;
   const openTabExternal = onOpenTabExternal ?? noopTabAction;
   const reloadTab = onReloadTab ?? noopTabAction;
 
@@ -508,16 +518,22 @@ export function PortalToolbar({
     measureOverflow();
   };
 
-  const [allTabsOpen, setAllTabsOpen] = useState(false);
   // The page is a native view drawn over the DOM; claiming an overlay hides it
-  // so the menu isn't painted underneath.
-  useOverlayClaim("portal-all-tabs", allTabsOpen && isOverflowing);
+  // so the menu isn't painted underneath. The trigger goes when the strip stops
+  // overflowing, menu open or not.
+  const {
+    open: allTabsOpen,
+    setOpen: setAllTabsOpen,
+    afterClose: afterAllTabsClose,
+  } = useNativeViewMenu("portal-all-tabs", isOverflowing);
   const { setOpen: setNewTabMenuOpen, afterClose: afterNewTabMenuClose } =
     useNativeViewMenu("portal-new-tab-menu");
 
   // With no tab selected (the launchpad over existing tabs) the first tab is
   // the strip's entry point, so the tablist never drops out of the Tab order.
   const tabStopId = tabs.some((t) => t.id === activeTabId) ? activeTabId : (tabs[0]?.id ?? null);
+
+  const activeUrl = tabs.find((t) => t.id === activeTabId)?.url || null;
 
   // Manual activation, like every document tab strip: arrows and Home/End move
   // focus, Enter/Space select. Selecting swaps the native page view in, which
@@ -584,22 +600,27 @@ export function PortalToolbar({
           </TooltipTrigger>
           <TooltipContent side="bottom">Reload</TooltipContent>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => {
-                if (activeTabId && hasActiveUrl) onCopyUrl?.();
-              }}
-              aria-disabled={!activeTabId || !hasActiveUrl || undefined}
-              aria-label="Copy URL"
-              className={iconButtonClass}
-            >
-              <Copy className={PANE_TOOLBAR_ICON_CLASS} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Copy URL</TooltipContent>
-        </Tooltip>
+        {/* Written through main: the page may hold focus, and the renderer's
+            clipboard refuses a document that doesn't. Unavailable stays
+            aria-disabled, so the button keeps its place in the arrow order. */}
+        <CopyButton
+          id={PORTAL_COPY_URL_ID}
+          text={activeUrl ?? ""}
+          write={writeMainClipboard}
+          announcement="URL copied"
+          aria-label="Copy URL"
+          aria-disabled={!activeUrl || undefined}
+          onClick={(event) => {
+            if (!activeUrl) event.preventDefault();
+          }}
+          tooltipSide="bottom"
+          // Sized and inked like the raw buttons beside it, not as a ghost
+          // Button, whose glyph brightens on hover and focus.
+          className={cn(
+            iconButtonClass,
+            "size-auto hover:text-text-secondary focus-visible:text-text-secondary"
+          )}
+        />
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -769,7 +790,7 @@ export function PortalToolbar({
               <DropdownMenuContent align="end" className="max-w-[280px]">
                 <DropdownMenuRadioGroup
                   value={activeTabId ?? ""}
-                  onValueChange={(tabId) => onTabClick(tabId)}
+                  onValueChange={(tabId) => afterAllTabsClose(() => onTabClick(tabId))()}
                 >
                   {tabs.map((tab) => (
                     <DropdownMenuRadioItem key={tab.id} value={tab.id}>

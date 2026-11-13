@@ -623,7 +623,7 @@ export class PortalManager {
         if (linkUrl) {
           template.push(
             {
-              label: "Open Link in Browser",
+              label: "Open link in external browser",
               enabled: canOpenExternalUrl(linkUrl),
               click: () => {
                 void openExternalUrl(linkUrl).catch((error) => {
@@ -632,7 +632,7 @@ export class PortalManager {
               },
             },
             {
-              label: "Copy Link Address",
+              label: "Copy link address",
               click: () => {
                 void clipboard.writeText(linkUrl).catch((error) => {
                   console.error("[PortalManager] Failed to copy link URL:", error);
@@ -662,7 +662,7 @@ export class PortalManager {
         if (pageUrl) {
           template.push(
             {
-              label: "Copy Page URL",
+              label: "Copy page URL",
               click: () => {
                 void clipboard.writeText(pageUrl).catch((error) => {
                   console.error("[PortalManager] Failed to copy page URL:", error);
@@ -670,7 +670,7 @@ export class PortalManager {
               },
             },
             {
-              label: "Open Page in Browser",
+              label: "Open page in external browser",
               enabled: canOpenExternalUrl(pageUrl),
               click: () => {
                 void openExternalUrl(pageUrl).catch((error) => {
@@ -685,7 +685,7 @@ export class PortalManager {
           template.push(
             { type: "separator" },
             {
-              label: "Inspect Element",
+              label: "Inspect element",
               click: () => view.webContents.inspectElement(params.x, params.y),
             }
           );

@@ -23,6 +23,9 @@ export const clearPortalPendingIf = (kind: PortalPendingCloseKind): void => {
 
 export const getPortalBounds = () => getPortalPlaceholderBounds();
 
+/** What became of a show: on screen, held back by an overlay or a closed Portal, or gone from main. */
+export type PortalShowOutcome = "shown" | "suppressed" | "missing";
+
 /**
  * Show a portal tab only when no modal overlay owns the viewport and the Portal
  * is still open. Reading both at call time (after any awaits) keeps the portal
@@ -38,11 +41,15 @@ export const getPortalBounds = () => getPortalPlaceholderBounds();
 export const showPortalTabIfNoOverlay = async (
   tabId: string,
   bounds: { x: number; y: number; width: number; height: number }
-): Promise<void> => {
-  if (useUIStore.getState().overlayStack.length > 0) return;
-  if (!usePortalStore.getState().isOpen) return;
+): Promise<PortalShowOutcome> => {
+  if (useUIStore.getState().overlayStack.length > 0) return "suppressed";
+  if (!usePortalStore.getState().isOpen) return "suppressed";
   const shown = await window.electron.portal.show({ tabId, bounds });
-  if (shown === false) usePortalStore.getState().unmarkTabCreated(tabId);
+  if (shown === false) {
+    usePortalStore.getState().unmarkTabCreated(tabId);
+    return "missing";
+  }
+  return "shown";
 };
 
 export const getPortalBoundsWithRetry = async (
@@ -81,19 +88,43 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
     return;
   }
 
-  let createdHere = false;
+  // Another tab was selected during the wait; it shows itself, and showing
+  // this one now would cover it.
+  if (usePortalStore.getState().activeTabId !== tabId) return;
+
   try {
     // Read after the bounds wait: an eviction notice may have landed during it.
-    if (!usePortalStore.getState().createdTabs.has(tabId)) {
-      await window.electron.portal.create({ tabId, url: tab.url, partition: tab.partition });
-      state.markTabCreated(tabId);
-      createdHere = true;
+    if (usePortalStore.getState().createdTabs.has(tabId)) {
+      await showPortalTabIfNoOverlay(tabId, bounds);
+      return;
     }
-    await showPortalTabIfNoOverlay(tabId, bounds);
+    // Marked created only once it is on screen, as PortalVisibilityController
+    // marks its restores: the dock keeps its skeleton until then. A show held
+    // back by an overlay or a closed Portal leaves it unmarked, and the
+    // controller creates and shows it when that clears. Main can drop the
+    // view between create and show; that gets one more try.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const url = usePortalStore.getState().tabs.find((t) => t.id === tabId)?.url;
+      if (!url) return;
+      await window.electron.portal.create({
+        tabId,
+        url,
+        partition: tab.partition,
+        isRestore: true,
+      });
+      // The same, while it loaded. It stays unmarked, so selecting it again
+      // shows it.
+      if (usePortalStore.getState().activeTabId !== tabId) return;
+      const outcome = await showPortalTabIfNoOverlay(tabId, bounds);
+      if (outcome === "suppressed") return;
+      if (outcome === "shown") {
+        usePortalStore.getState().markTabCreated(tabId);
+        return;
+      }
+    }
+    usePortalStore.getState().markTabRestoreFailed(tabId);
   } catch (error) {
     logError("Failed to activate portal tab", error);
-    // A tab created here that never showed is still restoring, so it can fail.
-    if (createdHere) usePortalStore.getState().unmarkTabCreated(tabId);
     usePortalStore.getState().markTabRestoreFailed(tabId);
   }
 };

@@ -7,6 +7,7 @@ import { PortalVisibilityController } from "../PortalVisibilityController";
 import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
+import { activatePortalTab } from "@/services/actions/definitions/portalHelpers";
 
 function deferredPromise() {
   let resolve!: () => void;
@@ -310,6 +311,46 @@ describe("PortalVisibilityController", () => {
       tabId: "tab-1",
       bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
+  });
+
+  it("shows a tab selected under an open menu once the menu lets go of the page", async () => {
+    vi.spyOn(document, "getElementById").mockReturnValue({
+      getBoundingClientRect: () => createPlaceholderRect(),
+    } as unknown as HTMLElement);
+    usePortalStore.setState({
+      isOpen: true,
+      activeTabId: "tab-1",
+      tabs: [
+        { id: "tab-1", title: "Docs", url: "https://example.com/docs" },
+        { id: "tab-2", title: "Evicted", url: "https://example.com/evicted" },
+      ],
+      createdTabs: new Set<string>(["tab-1"]),
+    });
+    render(<PortalVisibilityController />);
+    act(() => {
+      useUIStore.setState({ overlayStack: ["portal-all-tabs"] });
+    });
+
+    await act(async () => {
+      await activatePortalTab("tab-2");
+    });
+    // Created, but held back and still restoring: the dock keeps its skeleton.
+    expect(portal.create).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-2" }));
+    expect(portal.show).not.toHaveBeenCalled();
+    expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(false);
+
+    act(() => {
+      useUIStore.setState({ overlayStack: [] });
+    });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(portal.show).toHaveBeenCalledWith({
+      tabId: "tab-2",
+      bounds: { x: 10, y: 21, width: 301, height: 401 },
+    });
+    expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(true);
   });
 
   it("stops polling and skips show() if the controller unmounts during the bounds wait", async () => {

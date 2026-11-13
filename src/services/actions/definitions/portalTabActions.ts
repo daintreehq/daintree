@@ -1,10 +1,35 @@
+import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { writeMainClipboard } from "@/lib/mainClipboard";
+import { captureCopyFlashAt, showCopyFlash } from "@/lib/copyFlash";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { PORTAL_COPY_URL_ID, portalTabDomId } from "@/components/Portal/portalTabIds";
 import { usePortalStore } from "@/store/portalStore";
 import { usePortalPendingCloseStore } from "@/store/portalPendingCloseStore";
 import { deriveEffectiveTier } from "../deriveEffectiveTier";
 import { activatePortalTab, clearPortalPendingIf, parseConfirmed } from "./portalHelpers";
+
+/**
+ * Written through main, which doesn't need the shell document to hold focus:
+ * the page often does. A copy asked for from a key has nothing on screen to
+ * confirm it, so it flashes by `anchor`, in the dock's toolbar rather than
+ * over the page; the dock's own button and menu row confirm themselves, and
+ * an agent's copy draws nothing.
+ */
+async function copyPortalUrl(
+  url: string,
+  anchor: Element | null,
+  ctx: ActionContext | undefined
+): Promise<void> {
+  const source = ctx?.dispatchSource;
+  const flash = source === "keybinding" || source === "menu" ? captureCopyFlashAt(anchor) : null;
+  await writeMainClipboard(url);
+  if (!flash) return;
+  useAnnouncerStore.getState().announce("URL copied", "polite");
+  showCopyFlash(flash);
+}
 
 export function registerPortalTabActions(
   actions: ActionRegistry,
@@ -161,14 +186,14 @@ export function registerPortalTabActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ tabId: z.string().min(1).optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { tabId } = (args ?? {}) as { tabId?: string };
       const state = usePortalStore.getState();
       const targetId = tabId || state.activeTabId;
       if (!targetId) return;
       const tab = state.tabs.find((t) => t.id === targetId);
       if (!tab?.url) return;
-      await navigator.clipboard.writeText(tab.url);
+      await copyPortalUrl(tab.url, document.getElementById(PORTAL_COPY_URL_ID), ctx);
     },
   }));
 
@@ -223,14 +248,14 @@ export function registerPortalTabActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ tabId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { tabId } = args as { tabId?: string };
       const state = usePortalStore.getState();
       const targetId = tabId ?? state.activeTabId;
       if (!targetId) return;
       const tab = state.tabs.find((t) => t.id === targetId);
       if (tab?.url) {
-        await navigator.clipboard.writeText(tab.url);
+        await copyPortalUrl(tab.url, document.getElementById(portalTabDomId(targetId)), ctx);
       }
     },
   }));

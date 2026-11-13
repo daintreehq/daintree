@@ -72,6 +72,7 @@ describe("activatePortalTab overlay guard", () => {
   beforeEach(() => {
     portalStoreMock.getState.mockReturnValue({
       isOpen: true,
+      activeTabId: "tab-1",
       tabs: [{ id: "tab-1", url: "https://example.com", partition: undefined }],
       createdTabs: new Set<string>(),
       setActiveTab: setActiveTabMock,
@@ -87,14 +88,67 @@ describe("activatePortalTab overlay guard", () => {
     expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
   });
 
-  it("still creates the tab but suppresses the show when an overlay is active", async () => {
+  it("still creates the tab but leaves it restoring when an overlay holds the show back", async () => {
     setOverlay(true);
     await activatePortalTab("tab-1");
-    // Store-side activation and backend creation still happen; only the show is gated.
+    // Store-side activation and backend creation still happen; only the show is
+    // gated. Unmarked, the dock keeps its skeleton and PortalVisibilityController
+    // shows the tab once the overlay clears.
     expect(setActiveTabMock).toHaveBeenCalledWith("tab-1");
     expect(createMock).toHaveBeenCalledOnce();
-    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
     expect(showMock).not.toHaveBeenCalled();
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
+  });
+
+  it("marks the tab created only once its show has resolved", async () => {
+    let resolveShow: (shown: boolean) => void = () => {};
+    showMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveShow = resolve;
+        })
+    );
+
+    const activation = activatePortalTab("tab-1");
+    await vi.waitFor(() => expect(showMock).toHaveBeenCalledOnce());
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
+
+    resolveShow(true);
+    await activation;
+    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("does not show a loaded tab the user moved off during the bounds wait", async () => {
+    const state = { ...portalStoreMock.getState(), createdTabs: new Set<string>(["tab-1"]) };
+    portalStoreMock.getState.mockReturnValue(state);
+    getPortalPlaceholderBoundsMock.mockImplementationOnce(() => {
+      portalStoreMock.getState.mockReturnValue({ ...state, activeTabId: "tab-2" });
+      return null;
+    });
+    vi.useFakeTimers();
+    try {
+      const activation = activatePortalTab("tab-1");
+      await vi.runAllTimersAsync();
+      await activation;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(showMock).not.toHaveBeenCalled();
+  });
+
+  it("does not show a tab the user moved off while it was being created", async () => {
+    const state = portalStoreMock.getState();
+    createMock.mockImplementationOnce(async () => {
+      portalStoreMock.getState.mockReturnValue({ ...state, activeTabId: "tab-2" });
+      return {};
+    });
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).toHaveBeenCalledOnce();
+    expect(showMock).not.toHaveBeenCalled();
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
   });
 });
 
@@ -103,6 +157,7 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
   const tabs = [{ id: "tab-1", url: "https://example.com/latest", partition: "persist:p" }];
   const stateWith = (created: string[]) => ({
     isOpen: true,
+    activeTabId: "tab-1",
     tabs,
     createdTabs: new Set(created),
     setActiveTab: setActiveTabMock,
@@ -120,6 +175,8 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
       tabId: "tab-1",
       url: "https://example.com/latest",
       partition: "persist:p",
+      // Shielded from LRU eviction until the show lands, as the controller's restores are.
+      isRestore: true,
     });
     expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
   });
@@ -151,6 +208,7 @@ describe("activatePortalTab when the restore gives up (#15043)", () => {
   beforeEach(() => {
     portalStoreMock.getState.mockReturnValue({
       isOpen: true,
+      activeTabId: "tab-1",
       tabs: [{ id: "tab-1", url: "https://example.com", partition: undefined }],
       createdTabs: new Set<string>(),
       setActiveTab: setActiveTabMock,
@@ -184,17 +242,33 @@ describe("activatePortalTab when the restore gives up (#15043)", () => {
     expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
   });
 
-  it("takes back the created mark before recording a show that rejects", async () => {
+  it("records a show that rejects without ever marking the tab created", async () => {
     showMock.mockRejectedValueOnce(new Error("boom"));
 
     await activatePortalTab("tab-1");
 
-    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
-    expect(unmarkTabCreatedMock).toHaveBeenCalledWith("tab-1");
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
     expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
-    expect(unmarkTabCreatedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      markTabRestoreFailedMock.mock.invocationCallOrder[0]!
-    );
+  });
+
+  it("creates once more when main drops the new view before its show", async () => {
+    showMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(markTabCreatedMock).toHaveBeenCalledWith("tab-1");
+    expect(markTabRestoreFailedMock).not.toHaveBeenCalled();
+  });
+
+  it("records the failure when the retried view is dropped too", async () => {
+    showMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+
+    await activatePortalTab("tab-1");
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
+    expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
   });
 
   it("leaves a tab it didn't create marked when its show rejects", async () => {
