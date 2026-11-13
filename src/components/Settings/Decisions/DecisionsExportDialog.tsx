@@ -74,9 +74,13 @@ export function DecisionsExportDialog({
         // Two password fields and no submit button of its own block the form's
         // implicit submission, so Enter is the export's own.
         onKeyDown={(event) => {
+          // An IME's Enter commits its candidate; Chromium can send 229 before
+          // `isComposing` flips.
           if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+          if (event.nativeEvent.keyCode === 229) return;
           event.preventDefault();
-          submit();
+          // A held Enter exports once.
+          if (!event.repeat) submit();
         }}
       >
         <Field>

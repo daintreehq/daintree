@@ -432,6 +432,9 @@ export function DecisionsConnectionSection({
             control={({ labelId, descriptionId, disabled }) => (
               <form
                 className="flex items-center gap-2"
+                // Main takes a bare host and adds the scheme, which a URL field's
+                // own validation would refuse before the check ever ran.
+                noValidate
                 onSubmit={(event) => {
                   event.preventDefault();
                   submitDraft();
@@ -439,7 +442,7 @@ export function DecisionsConnectionSection({
               >
                 <Input
                   ref={relayUrlField}
-                  type="text"
+                  type="url"
                   inputMode="url"
                   autoComplete="off"
                   autoCapitalize="off"

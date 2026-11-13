@@ -133,6 +133,9 @@ describe("DecisionsDataSection", () => {
     // An IME's Enter commits its candidate, not the export.
     fireEvent.change(second, { target: { value: PASSPHRASE } });
     fireEvent.keyDown(second, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(second, { key: "Enter", keyCode: 229 });
+    // Nor a held Enter's repeats.
+    fireEvent.keyDown(second, { key: "Enter", repeat: true });
     expect(exportData).not.toHaveBeenCalled();
 
     await act(async () => {

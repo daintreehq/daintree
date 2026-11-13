@@ -94,6 +94,20 @@ describe("DecisionsConnectionSection relay check", () => {
     expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
   });
 
+  it("sends a bare host through the form's own submit, leaving the scheme to main", async () => {
+    checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
+    renderSection({ state: "not-connected" });
+    // An address is no word to check the spelling of.
+    expect(urlField().getAttribute("spellcheck")).toBe("false");
+
+    fireEvent.change(urlField(), { target: { value: "decisions.example.workers.dev" } });
+    // requestSubmit, unlike a bare submit event, runs the form's own validation first.
+    await act(async () => {
+      urlField().form!.requestSubmit();
+    });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith("decisions.example.workers.dev");
+  });
+
   it.each<[string, DecisionsRelayCheck, string, RegExp]>([
     [
       "unreachable",
@@ -566,4 +580,20 @@ describe("DecisionsConnectionSection disconnect focus", () => {
       await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
     }
   );
+
+  it("hands focus back to Disconnect relay when the confirm is cancelled", async () => {
+    render(<Section initial={{ state: "not-connected", relayOrigin: ORIGIN }} />);
+    await act(async () => {});
+
+    const trigger = screen.getByRole("button", { name: "Disconnect relay" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const cancel = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    fireEvent.click(cancel);
+
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(disconnectRelay).not.toHaveBeenCalled();
+  });
 });

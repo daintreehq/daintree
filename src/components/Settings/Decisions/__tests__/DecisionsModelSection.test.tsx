@@ -202,7 +202,10 @@ describe("Decisions → Decision model", () => {
       adapter: null,
       consent: true,
     });
-    // Past any exit animation, still open over a switch that can't take focus yet.
+    // Past any exit animation, still open over a switch that can't take focus
+    // yet, and Cancel can't take back what's being saved.
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
     });
