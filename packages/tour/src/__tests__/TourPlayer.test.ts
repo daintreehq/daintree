@@ -312,12 +312,15 @@ describe("TourPlayer", () => {
     expect(player.getTime()).toBe(5);
   });
 
-  it("ends the chapter at once when a playing seek reaches its end", () => {
-    const { player, advance } = setup([silent(5)]);
+  it("ends the chapter at once, and silences the voice, when a playing seek reaches its end", () => {
+    const { player, audios, advance } = setup([voiced(5, "a")]);
     player.play();
+    audios[0]!.fire("canplaythrough");
     advance(16);
+    expect(audios[0]!.playing).toBe(true);
     player.seek(5);
     expect(player.getState().status).toBe("ended");
+    expect(audios[0]!.playing).toBe(false);
   });
 
   it("stays paused when a paused seek stops short of the end", () => {
