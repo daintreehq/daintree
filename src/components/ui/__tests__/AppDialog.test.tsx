@@ -700,6 +700,49 @@ describe("AppDialog focus trapping", () => {
       document.body.removeChild(root);
     });
 
+    it("leaves focus alone on a close that opts out, and records a fresh opener next time", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const onCloseComplete = vi.fn();
+      const dialog = (isOpen: boolean, restoreFocusOnClose: boolean) => (
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={isOpen}
+            onClose={() => {}}
+            restoreFocusOnClose={restoreFocusOnClose}
+            onCloseComplete={onCloseComplete}
+          >
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      const { rerender } = render(dialog(true, false));
+      await act(() => vi.runAllTimersAsync());
+      const triggerFocused = vi.fn();
+      trigger.addEventListener("focus", triggerFocused);
+
+      rerender(dialog(false, false));
+
+      expect(triggerFocused).not.toHaveBeenCalled();
+      expect(onCloseComplete).toHaveBeenCalledTimes(1);
+
+      // Wherever the next opening starts from is where its close returns.
+      const elsewhere = document.createElement("button");
+      document.body.appendChild(elsewhere);
+      elsewhere.focus();
+      rerender(dialog(true, true));
+      await act(() => vi.runAllTimersAsync());
+      rerender(dialog(false, true));
+
+      expect(document.activeElement).toBe(elsewhere);
+      expect(triggerFocused).not.toHaveBeenCalled();
+      elsewhere.remove();
+      trigger.remove();
+      root.remove();
+    });
+
     it("falls through to #root when the connected target cannot take focus", async () => {
       const { root, fallbackButton, trigger } = setupTriggerAndRoot();
       // A connected but non-focusable element: focus() is a no-op.

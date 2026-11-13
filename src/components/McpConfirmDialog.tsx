@@ -320,7 +320,9 @@ export function McpConfirmDialog() {
     setInspectingId(requestId);
   }, []);
 
-  useEffect(() => {
+  // Layout, so it is listening before a close that completes in this commit's
+  // passive effects sets off for the requester.
+  useLayoutEffect(() => {
     if (!inspecting) return;
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target;
