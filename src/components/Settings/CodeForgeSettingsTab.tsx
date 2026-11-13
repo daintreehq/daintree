@@ -308,22 +308,33 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const projectForge = useResolvedForgeProvider(currentProjectId);
   const credentialsLink = deepLink.sectionId === TOKEN_LINK_ID;
   const routing = isLoading || (credentialsLink && projectForge.loading);
-  const linkSubtab = routing
-    ? null
-    : credentialsLink
-      ? forgeCredentialsSubtab(
-          deepLink.query,
-          providerOptions,
-          projectForge.providerId,
-          effectiveSubtab
-        )
-      : deepLink.sectionId === PAGE_LINK_ID
-        ? providerNamedInQuery(deepLink.query, providerOptions)
-        : null;
+  // Routed once per link: a subtab picked while the provider's panel is still loading
+  // in is the user's, not one to switch back.
+  const [routedLink, setRoutedLink] = useState<string | null>(null);
+  const routed = deepLink.sectionId !== null && routedLink === deepLink.sectionId;
+  const linkSubtab =
+    routing || routed
+      ? null
+      : credentialsLink
+        ? forgeCredentialsSubtab(
+            deepLink.query,
+            providerOptions,
+            projectForge.providerId,
+            effectiveSubtab
+          )
+        : deepLink.sectionId === PAGE_LINK_ID
+          ? providerNamedInQuery(deepLink.query, providerOptions)
+          : null;
   useHoldSettingsDeepLink(routing || (linkSubtab !== null && linkSubtab !== effectiveSubtab));
   useLayoutEffect(() => {
-    if (linkSubtab !== null && linkSubtab !== effectiveSubtab) onSubtabChange(linkSubtab);
-  }, [linkSubtab, effectiveSubtab, onSubtabChange]);
+    if (deepLink.sectionId === null) {
+      setRoutedLink(null);
+      return;
+    }
+    if (linkSubtab === null) return;
+    setRoutedLink(deepLink.sectionId);
+    if (linkSubtab !== effectiveSubtab) onSubtabChange(linkSubtab);
+  }, [deepLink.sectionId, linkSubtab, effectiveSubtab, onSubtabChange]);
 
   const isGeneral = effectiveSubtab === GENERAL_ID;
   const selectedEntry = !isGeneral

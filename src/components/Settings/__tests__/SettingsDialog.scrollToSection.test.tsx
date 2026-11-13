@@ -220,6 +220,11 @@ describe("SettingsDeepLinkScope", () => {
     );
   }
 
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView"
+  );
+
   beforeEach(() => {
     document.body.innerHTML = "";
     Element.prototype.scrollIntoView = vi.fn();
@@ -227,6 +232,11 @@ describe("SettingsDeepLinkScope", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+    } else {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
   });
 
   it("lands on the first commit when nothing holds it", () => {
@@ -306,6 +316,32 @@ describe("SettingsDeepLinkScope", () => {
 
     rerender(scope(<Loading loaded rowId="row-target" />, onHandled, true));
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("lands a link again once it was cleared and asked for anew, but not before", () => {
+    const onHandled = vi.fn();
+    const linked = (id: string | null, handler: (id: string, landed: boolean) => void) => (
+      <SettingsDeepLinkScope
+        isActive
+        scrollToSectionId={id}
+        query={null}
+        onHandled={handler}
+        tab="voice"
+      >
+        <Loading loaded rowId="row-target" />
+      </SettingsDeepLinkScope>
+    );
+    const { rerender } = render(linked("row-target", onHandled));
+    expect(onHandled).toHaveBeenCalledTimes(1);
+
+    // Still pending under a new handler: the same link, already landed.
+    const nextHandler = vi.fn();
+    rerender(linked("row-target", nextHandler));
+    expect(nextHandler).not.toHaveBeenCalled();
+
+    rerender(linked(null, nextHandler));
+    rerender(linked("row-target", nextHandler));
+    expect(nextHandler).toHaveBeenCalledExactlyOnceWith("row-target", true);
   });
 
   it("hands the link and its search words only to the tab that's showing", () => {

@@ -763,6 +763,9 @@ function SettingsDialogInner({
       setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
     }
     searchInputRef.current?.blur();
+    // Clearing search shows the panels again in this urgent commit, so a link still
+    // waiting from an earlier result goes now, before a tab can act on it once more.
+    setScrollTarget(null);
     // Defer scrollToSection together with the tab change. Setting it
     // urgently would let the previously-active tab's effect consume the
     // pending id (it sees isActive=true after the urgent commit but

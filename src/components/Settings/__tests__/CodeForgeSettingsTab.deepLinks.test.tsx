@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { lazy, useCallback, useState, type ComponentType } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { lazy, useCallback, useLayoutEffect, useState, type ComponentType } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForgeProviderEntry, Project } from "@shared/types";
 import type { ResolvedForgeProvider } from "@shared/types/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
@@ -68,17 +68,23 @@ function providerPanel(name: string, sectionId: string): ComponentType {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 let projectSeq = 0;
 
-/** Installs the forge API; the active project's routing answers only when `route` is called. */
+/**
+ * Installs the forge API. The provider list answers at once; the active project's
+ * routing only when `route` or `failRouting` is called.
+ */
 function install({ project = true }: { project?: boolean } = {}) {
   const routing = deferred<ResolvedForgeProvider>();
+  // A fresh project per test: the resolver caches by project id across mounts.
   const projectId = `project-${++projectSeq}`;
   window.electron = {
     forge: {
@@ -101,33 +107,49 @@ function install({ project = true }: { project?: boolean } = {}) {
       act(async () => {
         routing.resolve({ entry, resolvedVia: entry ? "hostname" : null });
       }),
+    failRouting: () =>
+      act(async () => {
+        routing.reject(new Error("resolve failed"));
+      }),
   };
 }
 
-function renderLinked({
-  sectionId,
+/** The dialog around the tab: its subtab memory, the pending link, the nav tab. */
+function renderTab({
+  sectionId = null,
   query = null,
   subtab = null,
 }: {
-  sectionId: string;
+  sectionId?: string | null;
   query?: string | null;
   subtab?: string | null;
-}) {
+} = {}) {
   const handled = vi.fn();
+  const controls: {
+    setLink?: (link: { id: string; query: string | null } | null) => void;
+    setSubtab?: (subtab: string) => void;
+  } = {};
   function Dialog() {
     const [activeSubtab, setActiveSubtab] = useState<string | null>(subtab);
-    const [link, setLink] = useState<string | null>(sectionId);
+    const [link, setLink] = useState(sectionId ? { id: sectionId, query } : null);
+    useLayoutEffect(() => {
+      controls.setLink = setLink;
+      controls.setSubtab = setActiveSubtab;
+    }, []);
     const onHandled = useCallback((id: string, landed: boolean) => {
       handled(id, landed);
       setLink(null);
     }, []);
     return (
       <SettingsValidationProvider>
+        <button type="button" id="settings-tab-code-forge">
+          Code forge
+        </button>
         <div id="settings-panel-code-forge">
           <SettingsDeepLinkScope
             isActive
-            scrollToSectionId={link}
-            query={query}
+            scrollToSectionId={link?.id ?? null}
+            query={link?.query ?? null}
             onHandled={onHandled}
             tab="code-forge"
           >
@@ -138,25 +160,45 @@ function renderLinked({
     );
   }
   render(<Dialog />);
-  return handled;
+  return {
+    handled,
+    /** Issues a link the way search does once the tab is already showing. */
+    link: (id: string, linkQuery: string | null) =>
+      act(() => controls.setLink?.({ id, query: linkQuery })),
+    /** Picks a subtab the way the provider dropdown does. */
+    pick: (next: string) => act(() => controls.setSubtab?.(next)),
+  };
 }
 
 const shownSubtab = () => screen.getByTestId("forge-provider-selector").getAttribute("data-active");
-const highlighted = () => document.querySelector(".settings-highlight");
+
+const scrollIntoView = vi.fn();
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+/** The element the landing scrolled to, last. */
+const scrolledTo = () => scrollIntoView.mock.contexts.at(-1) as Element | undefined;
+const landedIn = (testId: string) => screen.getByTestId(testId).contains(scrolledTo() ?? null);
 
 beforeEach(() => {
   vi.clearAllMocks();
   document.body.innerHTML = "";
-  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
   slots.views.clear();
   slots.views.set("github.forgeSettingsTab", providerPanel("github", "github-token"));
   slots.views.set("gitlab.forgeSettingsTab", providerPanel("gitlab", "gitlab-auth"));
 });
 
+afterEach(() => {
+  if (originalScrollIntoView) {
+    Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+  } else {
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  }
+});
+
 describe("CodeForgeSettingsTab deep links", () => {
   it("opens the provider the active project routes to for a credentials link", async () => {
     const { route } = install();
-    const handled = renderLinked({ sectionId: "forge-access-token", query: "token" });
+    const { handled } = renderTab({ sectionId: "forge-access-token", query: "token" });
     // GitHub, the first provider, would open by default; the project uses GitLab.
     await waitFor(() => expect(window.electron.forge.getProviders).toHaveBeenCalled());
     expect(handled).not.toHaveBeenCalled();
@@ -166,37 +208,81 @@ describe("CodeForgeSettingsTab deep links", () => {
     await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
     expect(handled).toHaveBeenCalledTimes(1);
     expect(shownSubtab()).toBe(GITLAB_ID);
-    expect(screen.getByTestId("gitlab-panel").contains(highlighted())).toBe(true);
+    expect(landedIn("gitlab-panel")).toBe(true);
   });
 
   it("opens the provider the search names over the one the project uses", async () => {
     const { route } = install();
-    const handled = renderLinked({ sectionId: "forge-access-token", query: "github token" });
+    const { handled } = renderTab({ sectionId: "forge-access-token", query: "github token" });
 
     await route(GITLAB);
 
     await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
     expect(shownSubtab()).toBe(GITHUB_ID);
-    expect(screen.getByTestId("github-panel").contains(highlighted())).toBe(true);
+    expect(landedIn("github-panel")).toBe(true);
+  });
+
+  it("switches an already loaded tab to the named provider before landing", async () => {
+    install({ project: false });
+    const { handled, link } = renderTab();
+    await waitFor(() => expect(screen.getByTestId("github-panel")).toBeTruthy());
+
+    await link("forge-access-token", "gitlab token");
+
+    await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(handled).toHaveBeenCalledExactlyOnceWith("forge-access-token", true);
+    expect(shownSubtab()).toBe(GITLAB_ID);
+    expect(landedIn("gitlab-panel")).toBe(true);
   });
 
   it("keeps the provider showing when the project has no forge detected", async () => {
     const { route } = install();
-    const handled = renderLinked({ sectionId: "forge-access-token", subtab: GITLAB_ID });
+    const { handled } = renderTab({ sectionId: "forge-access-token", subtab: GITLAB_ID });
 
     await route(null);
 
     await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
     expect(shownSubtab()).toBe(GITLAB_ID);
+    expect(landedIn("gitlab-panel")).toBe(true);
+  });
+
+  it("falls back to the provider showing when the project's routing can't be read", async () => {
+    const { failRouting } = install();
+    const { handled } = renderTab({ sectionId: "forge-access-token", subtab: GITLAB_ID });
+    await waitFor(() => expect(window.electron.forge.resolveProvider).toHaveBeenCalled());
+    expect(handled).not.toHaveBeenCalled();
+
+    await failRouting();
+
+    await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
+    expect(handled).toHaveBeenCalledTimes(1);
+    expect(shownSubtab()).toBe(GITLAB_ID);
   });
 
   it("leaves General for the first provider when no project is open", async () => {
     install({ project: false });
-    const handled = renderLinked({ sectionId: "forge-access-token", subtab: "general" });
+    const { handled } = renderTab({ sectionId: "forge-access-token", subtab: "general" });
 
     await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
     expect(shownSubtab()).toBe(GITHUB_ID);
     expect(window.electron.forge.resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it("releases the link as a miss when the provider list can't load", async () => {
+    install({ project: false });
+    const providers = deferred<ForgeProviderEntry[]>();
+    window.electron.forge.getProviders = vi.fn(() => providers.promise);
+    const { handled } = renderTab({ sectionId: "forge-access-token" });
+    await waitFor(() => expect(window.electron.forge.getProviders).toHaveBeenCalled());
+    expect(handled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      providers.reject(new Error("list failed"));
+    });
+
+    await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(handled).toHaveBeenCalledExactlyOnceWith("forge-access-token", false);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("waits for the provider's own panel to load in", async () => {
@@ -206,7 +292,7 @@ describe("CodeForgeSettingsTab deep links", () => {
       lazy(() => panel.promise)
     );
     const { route } = install();
-    const handled = renderLinked({ sectionId: "forge-access-token" });
+    const { handled } = renderTab({ sectionId: "forge-access-token" });
     await route(GITHUB);
     await waitFor(() => expect(shownSubtab()).toBe(GITHUB_ID));
     expect(handled).not.toHaveBeenCalled();
@@ -217,13 +303,31 @@ describe("CodeForgeSettingsTab deep links", () => {
 
     await waitFor(() => expect(handled).toHaveBeenCalledWith("forge-access-token", true));
     expect(handled).toHaveBeenCalledTimes(1);
+    expect(landedIn("github-panel")).toBe(true);
+  });
+
+  it("leaves a subtab picked while the provider's panel loads in where it is", async () => {
+    const panel = deferred<{ default: ComponentType }>();
+    slots.views.set(
+      "gitlab.forgeSettingsTab",
+      lazy(() => panel.promise)
+    );
+    install({ project: false });
+    const { handled, pick } = renderTab({ sectionId: "forge-access-token", query: "gitlab" });
+    await waitFor(() => expect(shownSubtab()).toBe(GITLAB_ID));
+
+    await pick("general");
+
+    await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(shownSubtab()).toBe("general");
+    expect(handled).toHaveBeenCalledExactlyOnceWith("forge-access-token", false);
   });
 
   it("lands a link to a provider's own row once the provider list loads", async () => {
     const providers = deferred<ForgeProviderEntry[]>();
     install();
     window.electron.forge.getProviders = vi.fn(() => providers.promise);
-    const handled = renderLinked({ sectionId: "github-token", subtab: GITHUB_ID });
+    const { handled } = renderTab({ sectionId: "github-token", subtab: GITHUB_ID });
     expect(handled).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -232,25 +336,29 @@ describe("CodeForgeSettingsTab deep links", () => {
 
     await waitFor(() => expect(handled).toHaveBeenCalledWith("github-token", true));
     expect(handled).toHaveBeenCalledTimes(1);
+    expect(scrolledTo()?.id).toBe("github-token");
   });
 
-  it("opens the provider a search for the page names", async () => {
+  it("opens the provider a search for the page names, then lands on the page's nav tab", async () => {
     install();
-    const handled = renderLinked({ sectionId: "tab-nav-code-forge", query: "gitlab" });
+    const { handled } = renderTab({ sectionId: "tab-nav-code-forge", query: "gitlab" });
 
     await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(handled).toHaveBeenCalledExactlyOnceWith("tab-nav-code-forge", false);
     expect(shownSubtab()).toBe(GITLAB_ID);
+    expect(document.activeElement?.id).toBe("settings-tab-code-forge");
   });
 
   it("leaves the remembered subtab for a page search that names no provider", async () => {
     install();
-    const handled = renderLinked({
+    const { handled } = renderTab({
       sectionId: "tab-nav-code-forge",
       query: "forge",
       subtab: "general",
     });
 
     await waitFor(() => expect(handled).toHaveBeenCalled());
+    expect(handled).toHaveBeenCalledExactlyOnceWith("tab-nav-code-forge", false);
     expect(shownSubtab()).toBe("general");
   });
 });
@@ -292,6 +400,7 @@ describe("forgeCredentialsSubtab", () => {
 
   it("prefers the named provider, then the project's, then the one showing", () => {
     expect(forgeCredentialsSubtab("github", options, GITLAB_ID, "general")).toBe(GITHUB_ID);
+    expect(forgeCredentialsSubtab("gitlab token", options, GITHUB_ID, GITHUB_ID)).toBe(GITLAB_ID);
     expect(forgeCredentialsSubtab("token", options, GITLAB_ID, GITHUB_ID)).toBe(GITLAB_ID);
     expect(forgeCredentialsSubtab("token", options, null, GITHUB_ID)).toBe(GITHUB_ID);
   });
@@ -300,8 +409,10 @@ describe("forgeCredentialsSubtab", () => {
     expect(forgeCredentialsSubtab(null, options, "gone.provider", GITHUB_ID)).toBe(GITHUB_ID);
   });
 
-  it("leaves General for the first provider that can run", () => {
+  it("leaves General for the first provider that can run, else the first at all", () => {
     expect(forgeCredentialsSubtab(null, options, null, "general")).toBe(GITLAB_ID);
+    const noneRun = options.map((option) => ({ ...option, unavailable: true }));
+    expect(forgeCredentialsSubtab(null, noneRun, null, "general")).toBe(GITHUB_ID);
     expect(forgeCredentialsSubtab(null, [], null, "general")).toBe("general");
   });
 });
