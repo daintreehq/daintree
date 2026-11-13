@@ -1657,10 +1657,13 @@ describe("McpConfirmDialog", () => {
         const opener = focusedOpener();
         const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
         render(<McpConfirmDialog />);
+        const openerFocused = vi.fn();
+        opener.addEventListener("focus", openerFocused);
 
         await stepAside();
         expect(screen.getByRole("button", { name: "Push" })).toBeTruthy();
-        expect(document.activeElement).toBe(opener);
+        // Before the dialog came back, whose own initial focus may follow at once.
+        expect(openerFocused).toHaveBeenCalledTimes(1);
 
         press("Cancel");
         await expect(pending).resolves.toEqual({ decision: "rejected" });
