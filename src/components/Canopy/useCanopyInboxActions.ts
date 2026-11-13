@@ -73,6 +73,7 @@ export function useCanopyInboxActions({
   showsHost,
   isSelected,
   reserveUndo,
+  clearUndo,
   undoReads,
   menuOpenChanged,
   requestRank,
@@ -97,6 +98,8 @@ export function useCanopyInboxActions({
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
   reserveUndo: () => UndoReservation;
+  /** An action Z can't take back was done: Z takes nothing back past it. */
+  clearUndo: () => void;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
   requestRank: () => void;
@@ -476,6 +479,7 @@ export function useCanopyInboxActions({
     },
     onUnpark: function unpark(item: CanopyItem) {
       const { runId } = placeOf(item, hostId, ownHostId);
+      clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .unparkRun(runId)
@@ -486,6 +490,7 @@ export function useCanopyInboxActions({
     },
     onSnooze: function snooze(item: CanopyItem, option: AgentSnoozeDurationOption) {
       const { runId } = placeOf(item, hostId, ownHostId);
+      clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .snoozeRun(runId, option)
@@ -496,6 +501,7 @@ export function useCanopyInboxActions({
     },
     onWake: function wake(item: CanopyItem) {
       const { runId } = placeOf(item, hostId, ownHostId);
+      clearUndo();
       safeFireAndForget(
         window.electron.fleet
           .unsnoozeRun(runId)

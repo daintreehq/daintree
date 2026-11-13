@@ -1904,6 +1904,31 @@ describe("CanopyView", () => {
     expect(fleetApi.parkRun).not.toHaveBeenCalled();
   });
 
+  // Z takes back the newest action; a snooze is one it can't, so it must not
+  // reach past it to an archive done before.
+  it("leaves Z nothing to take back once a run is snoozed after an archive", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    await act(async () => {
+      fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+    });
+    expect(canopy.archive).toHaveBeenCalledTimes(1);
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const trigger = (await within(document.body).findAllByRole("menuitem", { hidden: true })).find(
+      (item) => item.textContent?.startsWith("Snooze")
+    )!;
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+    fireEvent.click(
+      await within(document.body).findByRole("menuitem", { name: "15 minutes", hidden: true })
+    );
+    expect(fleetApi.snoozeRun).toHaveBeenCalledTimes(1);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+    expect(container.ownerDocument.querySelector("[data-canopy-undo-line]")).toBeNull();
+  });
+
   it("offers Unpark only for a parked run, and lifts the park", async () => {
     installElectron();
     const fleet = useFleetSnapshotStore.getState().snapshot!;

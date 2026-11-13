@@ -736,7 +736,7 @@ function CanopyInbox({
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
-  const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
+  const { reserveUndo, clearUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
   const sortShown = workersShown && reorderWaiting;
@@ -789,6 +789,7 @@ function CanopyInbox({
     showsHost,
     isSelected,
     reserveUndo,
+    clearUndo,
     undoReads,
     menuOpenChanged,
     requestRank,
