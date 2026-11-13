@@ -236,12 +236,12 @@ export function useFindInPage(
     return cleanup;
   }, [panelId, open, close, goNext, goPrev, isOpen, paneRef, webviewElement]);
 
-  // Clean up on unmount or webview detach
+  // Clean up on unmount, webview detach, or a pane switch that keeps the webview
   useEffect(() => {
     return () => {
       safeStopFind();
     };
-  }, [safeStopFind]);
+  }, [safeStopFind, panelId]);
 
   // Auto-focus input when find bar opens
   useEffect(() => {

@@ -635,7 +635,7 @@ describe("useFindInPage", () => {
     expect(webview.findInPage).not.toHaveBeenCalled();
   });
 
-  it("closes an open bar when the hook is reused for another pane", () => {
+  it("closes an open bar and ends its search when the hook is reused for another pane", () => {
     const webview = createMockWebview();
     const { result, rerender } = renderHook(
       ({ panelId }) => useFindInPage(panelId, webview, true, true),
@@ -644,12 +644,29 @@ describe("useFindInPage", () => {
 
     act(() => result.current.open());
     act(() => result.current.setQuery("hello"));
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 1, activeMatchOrdinal: 2, matches: 5, finalUpdate: true },
+      });
+    });
+    expect(result.current.matchCount).toBe(5);
+    result.current.isComposingRef.current = true;
     webview.findInPage.mockClear();
+    webview.stopFindInPage.mockClear();
 
     rerender({ panelId: "panel-2" });
+
     expect(result.current.isOpen).toBe(false);
     expect(result.current.query).toBe("");
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.isComposingRef.current).toBe(false);
+    expect(webview.stopFindInPage).toHaveBeenCalledWith("clearSelection");
     expect(webview.findInPage).not.toHaveBeenCalled();
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("again"));
+    expect(webview.findInPage).toHaveBeenCalledWith("again", { findNext: true, matchCase: false });
   });
 
   it("does not step a search the closed bar no longer shows", () => {
