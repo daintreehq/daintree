@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import {
@@ -18,6 +18,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { KbdChord } from "@/components/ui/Kbd";
+import { handFocusOff } from "@/lib/accessibility";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { CHECKLIST_ITEMS } from "./checklistItems";
 
@@ -162,8 +163,42 @@ export function GettingStartedChecklist({
 
   const panelRef = useRef<HTMLDivElement>(null);
   const headerToggleRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [isFocusWithin, setIsFocusWithin] = useState(false);
+  // Where focus was before it came into the card. The card mounts long before
+  // anyone visits it, so this is caught on the way in, not at mount.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const nextIndex = CHECKLIST_ITEMS.findIndex(({ id }) => !items[id]);
+
+  // Dismissed, or gone because the last step finished: the focused control
+  // goes with the card, and Chromium drops focus on <body>. Hand it back to
+  // where the user was before. A layout cleanup runs while the card is still
+  // in the document, so the control being removed is still the active one.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    return () => {
+      const active = document.activeElement;
+      if (!panel || !active || !panel.contains(active)) return;
+      handFocusOff(active, returnFocusRef.current);
+    };
+  }, []);
+
+  // A collapse from anywhere but Escape (auto-collapse, a toggle elsewhere)
+  // makes the body inert under whatever row held focus.
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (!collapsed || !active || !bodyRef.current?.contains(active)) return;
+    handFocusOff(active, headerToggleRef.current);
+  }, [collapsed]);
+
+  // A step that finishes swaps its row button for a plain report row. If that
+  // button held focus, hand it to the header before the button is removed.
+  const handOffFinishedRow = useCallback((row: HTMLButtonElement | null) => {
+    if (!row) return;
+    return () => {
+      if (document.activeElement === row) handFocusOff(row, headerToggleRef.current);
+    };
+  }, []);
 
   // Escape collapses and never re-expands. Focus moves to the header first,
   // because the body is about to become inert and would drop it on the body.
@@ -190,7 +225,13 @@ export function GettingStartedChecklist({
         role="region"
         aria-label="Getting started checklist"
         data-getting-started-checklist=""
-        onFocus={() => setIsFocusWithin(true)}
+        onFocus={(e) => {
+          setIsFocusWithin(true);
+          const from = e.relatedTarget;
+          if (from instanceof HTMLElement && !panelRef.current?.contains(from)) {
+            returnFocusRef.current = from;
+          }
+        }}
         onBlur={(e) => {
           if (!panelRef.current?.contains(e.relatedTarget as Node | null)) {
             setIsFocusWithin(false);
@@ -251,6 +292,7 @@ export function GettingStartedChecklist({
 
         {/* Collapsible body */}
         <div
+          ref={bodyRef}
           id={CHECKLIST_BODY_ID}
           data-animated-reveal
           className={cn(
@@ -315,6 +357,7 @@ export function GettingStartedChecklist({
                 return (
                   <button
                     key={id}
+                    ref={handOffFinishedRow}
                     type="button"
                     data-checklist-item={id}
                     aria-current={isNext ? "step" : undefined}

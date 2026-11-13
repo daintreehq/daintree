@@ -244,6 +244,40 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
   });
 
+  it("reopenChecklist clears the persisted dismissal and keeps progress", () => {
+    registerOnboardingHandlers();
+    seedOnboarding({
+      checklist: {
+        dismissed: false,
+        celebrationShown: false,
+        items: {
+          openedProject: true,
+          launchedAgent: false,
+          createdWorktree: false,
+          ranSecondParallelAgent: false,
+        },
+      },
+    });
+    getHandler("onboarding:checklist-dismiss")(null);
+    expect(getHandler("onboarding:checklist-get")(null)).toMatchObject({ dismissed: true });
+
+    const reopened = getHandler("onboarding:checklist-reopen")(null);
+
+    const expected = {
+      dismissed: false,
+      celebrationShown: false,
+      items: {
+        openedProject: true,
+        launchedAgent: false,
+        createdWorktree: false,
+        ranSecondParallelAgent: false,
+      },
+    };
+    expect(reopened).toEqual(expected);
+    // A view hydrating later, or the next launch, reads it reopened too.
+    expect(getHandler("onboarding:checklist-get")(null)).toEqual(expected);
+  });
+
   describe("tour", () => {
     const PLUGIN_TOUR = "acme.tools.welcome";
     const OTHER_PLUGIN_TOUR = "other.plugin.welcome";

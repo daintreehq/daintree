@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { closeAndAnnounce, restoreFocusTo, TABBABLE_SELECTOR } from "../accessibility";
+import { closeAndAnnounce, handFocusOff, restoreFocusTo, TABBABLE_SELECTOR } from "../accessibility";
 import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
@@ -170,6 +170,62 @@ describe("restoreFocusTo", () => {
 
     expect(() => restoreFocusTo(removed)).not.toThrow();
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("handFocusOff", () => {
+  function addButton(label: string, parent: HTMLElement = document.body): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.textContent = label;
+    parent.appendChild(button);
+    return button;
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("keeps the ring when the control losing focus was showing one", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+    vi.spyOn(from, "matches").mockReturnValue(true);
+    const focus = vi.spyOn(target, "focus");
+
+    handFocusOff(from, target);
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(target);
+  });
+
+  // A mouse user who clicked the control never saw a ring, and the handoff
+  // shouldn't paint one either.
+  it("hands focus over ringless after a pointer press", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+    vi.spyOn(from, "matches").mockReturnValue(false);
+    const focus = vi.spyOn(target, "focus");
+
+    handFocusOff(from, target);
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("falls back to the app shell when no candidate survives", () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    const shellButton = addButton("shell", root);
+    const from = addButton("from");
+    const removed = addButton("removed");
+    removed.remove();
+    from.focus();
+
+    handFocusOff(from, removed, null);
+
+    expect(document.activeElement).toBe(shellButton);
   });
 });
 

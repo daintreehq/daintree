@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type MouseEvent } from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { InlineError } from "@/components/ui/field";
 import {
@@ -26,6 +26,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode } from "@/lib/projectSort";
 import { cn } from "@/lib/utils";
+import { getVisibleTabbableElements, handFocusOff } from "@/lib/accessibility";
 import { keybindingService } from "@/services/KeybindingService";
 import { getProjectGradient, getBrandColorHex } from "@/lib/colorUtils";
 import { formatPath, middleTruncatePath } from "@/utils/textParsing";
@@ -173,9 +174,28 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
   const allDone = checklist ? Object.values(checklist.items).every(Boolean) : false;
-  const showChecklist = gettingStarted.visible && checklist && !checklist.dismissed && !allDone;
+  // Help > Getting Started asked for it, so it shows even when every step is
+  // done, the one case the hook's own visibility rules would hide.
+  const showChecklist =
+    gettingStarted.visible &&
+    checklist &&
+    (gettingStarted.forced || (!checklist.dismissed && !allDone));
   const progressTotal = CHECKLIST_ITEMS.length + 1; // real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
+
+  const quickActionsRef = useRef<HTMLDivElement>(null);
+  // Hiding the checklist takes its focused control with it; hand focus to the
+  // first quick action rather than letting it drop on <body>.
+  const dismissChecklist = (event: MouseEvent<HTMLButtonElement>) => {
+    const control = event.currentTarget;
+    if (document.activeElement === control) {
+      const firstAction = quickActionsRef.current
+        ? getVisibleTabbableElements(quickActionsRef.current)[0]
+        : undefined;
+      handFocusOff(control, firstAction);
+    }
+    gettingStarted.dismiss();
+  };
 
   // The welcome surface scales on its own width, not the viewport's: the
   // Assistant panel takes a variable share of the window (#12438). The query
@@ -226,6 +246,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               </h3>
             )}
             <div
+              ref={quickActionsRef}
               role="group"
               aria-label={hasProjects ? undefined : "Quick actions"}
               aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
@@ -294,10 +315,11 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
           <NudgeSequencer
             showChecklist={!!showChecklist}
+            forced={gettingStarted.forced}
             checklist={checklist}
             progressDone={progressDone}
             progressTotal={progressTotal}
-            onDismissChecklist={gettingStarted.dismiss}
+            onDismissChecklist={dismissChecklist}
           />
 
           {/* Keyboard Shortcuts — the checklist is the teaching surface while it
@@ -384,16 +406,18 @@ export function isAgentWelcomeCardEligible({
 
 function NudgeSequencer({
   showChecklist,
+  forced,
   checklist,
   progressDone,
   progressTotal,
   onDismissChecklist,
 }: {
   showChecklist: boolean;
+  forced: boolean;
   checklist: GettingStartedChecklistState["checklist"];
   progressDone: number;
   progressTotal: number;
-  onDismissChecklist: () => void;
+  onDismissChecklist: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const { loaded, setupBannerDismissed, welcomeCardDismissed } = useAgentDiscoveryOnboarding();
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -416,20 +440,25 @@ function NudgeSequencer({
   // persisted dismiss flag arrives, then flip to a different nudge.
   if (!loaded) return null;
 
-  if (!setupBannerDismissed) return <AgentSetupBannerCard />;
-
-  // Progress before pinning: a user who has just declined setup should see
-  // where they are, not be asked another setup question straight away.
-  if (showChecklist && checklist) {
-    return (
+  const inlineChecklist =
+    showChecklist && checklist ? (
       <InlineChecklist
         checklist={checklist}
         progressDone={progressDone}
         progressTotal={progressTotal}
         onDismiss={onDismissChecklist}
       />
-    );
-  }
+    ) : null;
+
+  // Asked for by name (Help > Getting Started), it outranks the setup banner:
+  // otherwise the request would do nothing visible on this screen.
+  if (forced && inlineChecklist) return inlineChecklist;
+
+  if (!setupBannerDismissed) return <AgentSetupBannerCard />;
+
+  // Progress before pinning: a user who has just declined setup should see
+  // where they are, not be asked another setup question straight away.
+  if (inlineChecklist) return inlineChecklist;
 
   if (welcomeCardEligible) return <AgentWelcomeCard />;
 
@@ -713,7 +742,7 @@ function InlineChecklist({
   checklist: NonNullable<GettingStartedChecklistState["checklist"]>;
   progressDone: number;
   progressTotal: number;
-  onDismiss: () => void;
+  onDismiss: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   // A report, not a second set of buttons: on the welcome screen there is no
   // project, so every item but the first would act on nothing, and the first

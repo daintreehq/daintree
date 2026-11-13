@@ -282,10 +282,12 @@ const dismissed: ChecklistState = {
 
 function makeGettingStarted(
   checklist: ChecklistState | null = allIncomplete,
-  visible = true
+  visible = true,
+  forced = false
 ): GettingStartedChecklistState {
   return {
     visible,
+    forced,
     collapsed: false,
     checklist,
     dismiss: vi.fn(),
@@ -545,6 +547,27 @@ describe("WelcomeScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide getting started" }));
     expect(gettingStarted.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands focus to the first quick action when hidden from its own header", () => {
+    storeState = { ...storeState, projects: [] };
+    const gettingStarted = makeGettingStarted(allIncomplete);
+    render(<WelcomeScreen gettingStarted={gettingStarted} />);
+    const hide = screen.getByRole("button", { name: "Hide getting started" });
+
+    hide.focus();
+    fireEvent.click(hide);
+
+    const quickActions = screen.getByTestId("quick-actions");
+    expect(document.activeElement).toBe(quickActions.querySelector("button"));
+    expect(gettingStarted.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a finished checklist when Help > Getting Started asked for it", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted(allComplete, true, true)} />);
+
+    expect(screen.getByText("Getting started")).toBeTruthy();
+    expect(screen.getByText("5/5")).toBeTruthy();
   });
 
   it("hides checklist when dismissed", () => {
@@ -1043,6 +1066,16 @@ describe("WelcomeScreen", () => {
       expect(screen.getByTestId("agent-setup-banner")).toBeTruthy();
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
       expect(screen.queryByText("Getting started")).toBeNull();
+    });
+
+    it("shows the checklist over the setup banner when Help > Getting Started asked for it", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+
+      render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete, true, true)} />);
+
+      expect(screen.getByText("Getting started")).toBeTruthy();
+      expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
     });
 
     it("shows progress before asking another setup question once the banner is dismissed", () => {

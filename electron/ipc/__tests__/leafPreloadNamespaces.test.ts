@@ -432,5 +432,23 @@ describe("leaf preload namespace bindings", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("onboarding:checklist-mark-item", "openedProject");
     });
+
+    it("routes reopenChecklist() and returns main's checklist", async () => {
+      const state = {
+        dismissed: false,
+        celebrationShown: false,
+        items: {
+          openedProject: true,
+          launchedAgent: false,
+          createdWorktree: false,
+          ranSecondParallelAgent: false,
+        },
+      };
+      const invoke = vi.fn().mockResolvedValue(state);
+      const bindings = buildOnboardingPreloadBindings(invoke);
+
+      await expect(bindings.reopenChecklist()).resolves.toBe(state);
+      expect(invoke).toHaveBeenCalledWith("onboarding:checklist-reopen");
+    });
   });
 });
