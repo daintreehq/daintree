@@ -14,6 +14,7 @@ import {
   DEV_PREVIEW_PROXY_STATUS_TEXT,
 } from "@shared/utils/devPreviewProxy";
 import type { NormalizeResult } from "@shared/utils/urlUtils";
+import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -41,12 +42,29 @@ type MockWebviewElement = HTMLElement & {
   executeJavaScript: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
   capturePage: ReturnType<typeof vi.fn>;
+  canGoBack: ReturnType<typeof vi.fn>;
+  canGoForward: ReturnType<typeof vi.fn>;
+  goBack: ReturnType<typeof vi.fn>;
+  goForward: ReturnType<typeof vi.fn>;
+  goToIndex: ReturnType<typeof vi.fn>;
+  canGoToOffset: ReturnType<typeof vi.fn>;
+  clearHistory: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
+  /** The guest's own session history, as Chromium would keep it. */
+  nav: { entries: string[]; index: number };
+  /** The guest committing a new entry on its own: a link, a redirect, `pushState`. */
+  guestPush: (url: string) => void;
+  /** The guest moving through its own history: `history.back()`, `history.go(n)`. */
+  guestGo: (offset: number) => void;
 };
 
 // Opt-in for the next guest to report a load already in flight, so the pane's
 // mount-time readiness probe leaves it unready (#12296).
 let nextWebviewStartsLoading = false;
+
+// The guest the navigation-history IPC answers for: main reads the session
+// history of the WebContents behind the newest <webview>.
+let latestGuest: MockWebviewElement | null = null;
 
 function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let currentUrl = element.getAttribute("src") ?? "http://localhost:5173/";
@@ -69,10 +87,11 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     }
   };
 
-  webview.reload = vi.fn();
-  webview.stop = vi.fn();
-  webview.loadURL = vi.fn((url: string) => {
-    record.loadURLs.push(url);
+  // Every commit, seed included, lands in the session history; a commit made by
+  // anything other than React's seed write keeps `src` in step without logging
+  // it as one.
+  const nav = { entries: [currentUrl], index: 0 };
+  const showEntry = (url: string) => {
     currentUrl = url;
     inLoadURL = true;
     try {
@@ -80,7 +99,42 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     } finally {
       inLoadURL = false;
     }
+  };
+  const pushEntry = (url: string) => {
+    nav.entries = [...nav.entries.slice(0, nav.index + 1), url];
+    nav.index = nav.entries.length - 1;
+    showEntry(url);
+  };
+  const goToEntry = (index: number) => {
+    if (index < 0 || index >= nav.entries.length) return;
+    nav.index = index;
+    showEntry(nav.entries[index]!);
+  };
+
+  webview.nav = nav;
+  webview.reload = vi.fn();
+  webview.stop = vi.fn();
+  webview.loadURL = vi.fn((url: string) => {
+    record.loadURLs.push(url);
+    pushEntry(url);
   });
+  webview.canGoBack = vi.fn(() => nav.index > 0);
+  webview.canGoForward = vi.fn(() => nav.index < nav.entries.length - 1);
+  webview.goBack = vi.fn(() => goToEntry(nav.index - 1));
+  webview.goForward = vi.fn(() => goToEntry(nav.index + 1));
+  webview.goToIndex = vi.fn((index: number) => goToEntry(index));
+  webview.canGoToOffset = vi.fn((offset: number) => {
+    const target = nav.index + offset;
+    return target >= 0 && target < nav.entries.length;
+  });
+  // Chromium keeps only the last committed entry.
+  webview.clearHistory = vi.fn(() => {
+    nav.entries = [nav.entries[nav.index]!];
+    nav.index = 0;
+  });
+  webview.guestPush = pushEntry;
+  webview.guestGo = (offset: number) => goToEntry(nav.index + offset);
+  latestGuest = webview;
   webview.setZoomFactor = vi.fn();
   webview.getURL = vi.fn(() => {
     syncUrlFromAttribute();
@@ -504,6 +558,16 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         setDeviceEmulation: vi.fn(() => Promise.resolve({ applied: true })),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
+        getNavigationHistory: vi.fn(async () => {
+          const nav = latestGuest?.nav;
+          if (!nav) throw new Error("WebContents not registered as a browser panel");
+          return {
+            entries: nav.entries.map((url, index) => ({ index, url, title: `Title ${index}` })),
+            activeIndex: nav.index,
+            canGoBack: nav.index > 0,
+            canGoForward: nav.index < nav.entries.length - 1,
+          };
+        }),
       },
     };
   });
@@ -3818,6 +3882,211 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(seedsAcrossGuests().at(-1)).toBe(`${shortPortProxy}/x`);
       // Never seeded on the longer-port origin that merely has the real one as a prefix.
       expect(seedsAcrossGuests()).not.toContain(`${PROXY}/x`);
+    });
+  });
+  describe("native session history (#16910)", () => {
+    const ROOT = "http://localhost:5173/";
+    const PAGE_A = "http://localhost:5173/a";
+    const PAGE_B = "http://localhost:5173/b";
+    const PAGE_C = "http://localhost:5173/c";
+
+    async function renderReadyPane() {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(webview, "dom-ready");
+        await Promise.resolve();
+      });
+      return { container, webview };
+    }
+
+    // The guest commits whatever entry its history now points at, and the
+    // <webview> reports it the way Chromium does for a same-document change.
+    async function commitInPage(webview: MockWebviewElement) {
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: webview.nav.entries[webview.nav.index],
+          isMainFrame: true,
+        });
+        await Promise.resolve();
+      });
+    }
+
+    async function guestPushes(webview: MockWebviewElement, url: string) {
+      webview.guestPush(url);
+      await commitInPage(webview);
+    }
+
+    function lastPersistedHistory() {
+      const call = terminalStoreState.setBrowserHistory.mock.calls.at(-1);
+      if (!call) throw new Error("Expected the history to have been persisted");
+      return call[1];
+    }
+
+    it("steps Back and Forward through the guest's own history without reloading", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      webview.loadURL.mockClear();
+
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.goBack).toHaveBeenCalledTimes(1);
+      await commitInPage(webview);
+
+      expect(latestToolbarProps().url).toBe(ROOT);
+      expect(latestToolbarProps().canGoForward).toBe(true);
+
+      await act(async () => {
+        (latestToolbarProps().onForward as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.goForward).toHaveBeenCalledTimes(1);
+      await commitInPage(webview);
+
+      expect(latestToolbarProps().url).toBe(PAGE_A);
+      // Never a fresh document: the page keeps its state and scroll position.
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(webview.nav.entries).toEqual([ROOT, PAGE_A]);
+    });
+
+    it("records the guest's own history.back() as a step back, not a new entry", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, PAGE_B);
+
+      webview.guestGo(-1);
+      await commitInPage(webview);
+
+      expect(lastPersistedHistory()).toEqual({ past: [ROOT], present: PAGE_A, future: [PAGE_B] });
+      expect(latestToolbarProps().canGoForward).toBe(true);
+
+      // A fresh entry from there drops the forward branch, exactly as the guest does.
+      await guestPushes(webview, PAGE_C);
+      expect(lastPersistedHistory()).toEqual({
+        past: [ROOT, PAGE_A],
+        present: PAGE_C,
+        future: [],
+      });
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("follows a multi-step history.go() through the guest's history", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, PAGE_B);
+
+      webview.guestGo(-2);
+      await commitInPage(webview);
+
+      expect(lastPersistedHistory()).toEqual({ past: [], present: ROOT, future: [PAGE_A, PAGE_B] });
+
+      webview.guestGo(2);
+      await commitInPage(webview);
+
+      expect(lastPersistedHistory()).toEqual({ past: [ROOT, PAGE_A], present: PAGE_B, future: [] });
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("offers the guest's history in the Back and Forward menus and jumps without reloading", async () => {
+      const { webview } = await renderReadyPane();
+      await guestPushes(webview, PAGE_A);
+      await guestPushes(webview, PAGE_B);
+      webview.guestGo(-1);
+      await commitInPage(webview);
+
+      const props = latestToolbarProps();
+      expect(props.navSnapshot).toMatchObject({ activeIndex: 1 });
+      expect(props.backEntry).toMatchObject({ index: 0, url: ROOT });
+      expect(props.forwardEntry).toMatchObject({ index: 2, url: PAGE_B });
+
+      act(() => {
+        (props.onGoToHistoryIndex as (index: number) => void)(0);
+      });
+      expect(webview.goToIndex).toHaveBeenCalledWith(0);
+      await commitInPage(webview);
+
+      expect(lastPersistedHistory()).toEqual({ past: [], present: ROOT, future: [PAGE_A, PAGE_B] });
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the saved history when the guest has none of its own", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [PAGE_A], present: ROOT, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+      const { webview } = await renderReadyPane();
+
+      expect(latestToolbarProps().canGoBack).toBe(true);
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+
+      // A restored panel's guest starts on one entry, so Back can only load.
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(webview.loadURL).toHaveBeenCalledWith(PAGE_A);
+      expect(latestToolbarProps().url).toBe(PAGE_A);
+    });
+
+    it("never bounces Back onto the entry a saved-history Back just left", async () => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [PAGE_A, PAGE_B], present: ROOT, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+      const { webview } = await renderReadyPane();
+
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_B);
+      await act(async () => {
+        emitWebviewEvent(webview, "did-navigate", { url: PAGE_B });
+        await Promise.resolve();
+      });
+
+      // The guest recorded B on top of the root it left; pruning keeps its own
+      // Back from returning there.
+      expect(webview.nav.entries).toEqual([PAGE_B]);
+      expect(lastPersistedHistory()).toEqual({ past: [PAGE_A], present: PAGE_B, future: [ROOT] });
+
+      await act(async () => {
+        (latestToolbarProps().onBack as () => void)();
+        await Promise.resolve();
+      });
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(webview.loadURL).toHaveBeenLastCalledWith(PAGE_A);
+      expect(latestToolbarProps().url).toBe(PAGE_A);
+    });
+
+    it("records the page's favicon against the URL it was showing", async () => {
+      const { webview } = await renderReadyPane();
+      const updateFavicon = vi.fn();
+      const original = useUrlHistoryStore.getState().updateFavicon;
+      useUrlHistoryStore.setState({ updateFavicon });
+      try {
+        act(() => {
+          emitWebviewEvent(webview, "page-favicon-updated", {
+            favicons: [`${ROOT}favicon.ico`],
+          });
+        });
+        act(() => {
+          vi.advanceTimersByTime(250);
+        });
+        expect(updateFavicon).toHaveBeenCalledWith("project-1", ROOT, `${ROOT}favicon.ico`);
+      } finally {
+        useUrlHistoryStore.setState({ updateFavicon: original });
+      }
     });
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import type { BrowserHistory } from "@shared/types/browser";
+import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
 import { STOPPED_LOAD_MESSAGE, type NormalizeResult } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
@@ -16,15 +16,16 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import type { WebviewLoadError } from "./useDevPreviewLoadLifecycle";
+import type { GuestHistoryIntent } from "./useGuestHistorySnapshot";
 
 interface UseDevPreviewNavigationParams {
   id: string;
   currentProjectId?: string;
   currentUrl: string;
-  canGoBack: boolean;
-  canGoForward: boolean;
   history: BrowserHistory;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
+  navSnapshot: BrowserNavigationHistorySnapshot | null;
+  guestHistoryIntentRef: React.RefObject<GuestHistoryIntent>;
   zoomFactor: number;
   setZoomFactor: React.Dispatch<React.SetStateAction<number>>;
   devServerUrl: string | null;
@@ -58,10 +59,10 @@ export function useDevPreviewNavigation({
   id,
   currentProjectId,
   currentUrl,
-  canGoBack,
-  canGoForward,
   history,
   setHistory,
+  navSnapshot,
+  guestHistoryIntentRef,
   zoomFactor,
   setZoomFactor,
   devServerUrl,
@@ -182,19 +183,73 @@ export function useDevPreviewNavigation({
     [currentUrl, clearRetryState, setHistory, validateUrl]
   );
 
+  // Back and Forward step through the guest's own session history, so the page
+  // keeps its in-memory state and scroll position instead of reloading; the
+  // commit listeners move `history` to match. The saved history only takes over
+  // where the guest has nothing of its own: a restored panel or a replaced guest
+  // starts with a single entry.
+  const guestCanGo = useCallback(
+    (offset: number): Electron.WebviewTag | null => {
+      const webview = webviewRef.current;
+      if (!webview || !isWebviewReady) return null;
+      try {
+        return webview.canGoToOffset(offset) ? webview : null;
+      } catch {
+        return null;
+      }
+    },
+    [isWebviewReady, webviewRef]
+  );
+
   const handleBack = useCallback(() => {
-    if (canGoBack) {
+    const webview = guestCanGo(-1);
+    if (webview) {
       clearRetryState();
-      setHistory((prev) => goBackBrowserHistory(prev));
+      guestHistoryIntentRef.current.stepOffset = -1;
+      webview.goBack();
+      return;
     }
-  }, [canGoBack, clearRetryState, setHistory]);
+    if (history.past.length === 0) return;
+    clearRetryState();
+    guestHistoryIntentRef.current.pruneOnCommit = true;
+    setHistory((prev) => goBackBrowserHistory(prev));
+  }, [guestCanGo, history.past.length, clearRetryState, guestHistoryIntentRef, setHistory]);
 
   const handleForward = useCallback(() => {
-    if (canGoForward) {
+    const webview = guestCanGo(1);
+    if (webview) {
       clearRetryState();
-      setHistory((prev) => goForwardBrowserHistory(prev));
+      guestHistoryIntentRef.current.stepOffset = 1;
+      webview.goForward();
+      return;
     }
-  }, [canGoForward, clearRetryState, setHistory]);
+    // Loading the saved entry adds it on top of the guest's history, right where
+    // Forward expects it, so unlike Back there is nothing to prune.
+    if (history.future.length === 0) return;
+    clearRetryState();
+    setHistory((prev) => goForwardBrowserHistory(prev));
+  }, [guestCanGo, history.future.length, clearRetryState, guestHistoryIntentRef, setHistory]);
+
+  // The Back and Forward menus list the guest's own entries by Chromium's index.
+  // The list is sparse, so the entry is matched on `.index`, and the jump goes by
+  // that index rather than an offset, which a snapshot a commit behind would skew.
+  const handleGoToHistoryIndex = useCallback(
+    (index: number) => {
+      if (!navSnapshot?.entries.some((entry) => entry.index === index)) return;
+      const offset = index - navSnapshot.activeIndex;
+      const webview = webviewRef.current;
+      if (offset === 0 || !webview || !isWebviewReady) return;
+      try {
+        webview.goToIndex(index);
+      } catch {
+        // Detached guest, or the entry is gone: nothing navigated.
+        return;
+      }
+      clearRetryState();
+      guestHistoryIntentRef.current.stepOffset = offset;
+    },
+    [navSnapshot, webviewRef, isWebviewReady, clearRetryState, guestHistoryIntentRef]
+  );
 
   // A user-initiated reload is a fresh attempt: hand back the retry budget. Load
   // start no longer refills it on its own, so without this an exhausted panel would
@@ -409,6 +464,7 @@ export function useDevPreviewNavigation({
     handleNavigate,
     handleBack,
     handleForward,
+    handleGoToHistoryIndex,
     handleReload,
     handleCancelLoad,
     handleRetryWebviewLoad,

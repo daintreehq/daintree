@@ -9,6 +9,7 @@ import { initializeBrowserHistory } from "../../Browser/historyUtils";
 import { actionService } from "@/services/ActionService";
 import type { BrowserHistory } from "@shared/types/browser";
 import { STOPPED_LOAD_MESSAGE } from "../../Browser/browserUtils";
+import { createGuestHistoryIntent } from "../useGuestHistorySnapshot";
 
 const PANE_ID = "pane-1";
 
@@ -20,6 +21,11 @@ function makeWebview(overrides: Partial<Record<string, unknown>> = {}): Electron
     getURL: vi.fn(() => "http://localhost:3000/"),
     getWebContentsId: vi.fn(() => 7),
     setZoomFactor: vi.fn(),
+    // A guest with no history of its own unless a test gives it some.
+    canGoToOffset: vi.fn(() => false),
+    goBack: vi.fn(),
+    goForward: vi.fn(),
+    goToIndex: vi.fn(),
     isDevToolsOpened: vi.fn(() => false),
     openDevTools: vi.fn(),
     closeDevTools: vi.fn(),
@@ -36,10 +42,10 @@ function baseParams(overrides: Partial<Parameters<typeof useDevPreviewNavigation
     id: PANE_ID,
     currentProjectId: "proj-1",
     currentUrl: history.present,
-    canGoBack: false,
-    canGoForward: false,
     history,
     setHistory: vi.fn(),
+    navSnapshot: null,
+    guestHistoryIntentRef: { current: createGuestHistoryIntent() },
     zoomFactor: 1,
     setZoomFactor: vi.fn(),
     devServerUrl: null,
@@ -241,22 +247,22 @@ describe("useDevPreviewNavigation — history handlers", () => {
     expect(next.present).toContain("localhost:5173/app");
   });
 
-  it("handleBack is a no-op when canGoBack is false", () => {
+  it("handleBack is a no-op with nothing behind the page", () => {
     const setHistory = vi.fn();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ setHistory, canGoBack: false }))
-    );
+    const params = baseParams({ setHistory });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
     act(() => result.current.handleBack());
     expect(setHistory).not.toHaveBeenCalled();
+    expect(params.guestHistoryIntentRef.current).toEqual(createGuestHistoryIntent());
   });
 
-  it("handleForward is a no-op when canGoForward is false", () => {
+  it("handleForward is a no-op with nothing ahead of the page", () => {
     const setHistory = vi.fn();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ setHistory, canGoForward: false }))
-    );
+    const params = baseParams({ setHistory });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
     act(() => result.current.handleForward());
     expect(setHistory).not.toHaveBeenCalled();
+    expect(params.guestHistoryIntentRef.current).toEqual(createGuestHistoryIntent());
   });
 
   // A load start no longer refills the connection-retry budget (#12296), so every
@@ -287,21 +293,36 @@ describe("useDevPreviewNavigation — history handlers", () => {
 
   it("handleBack and handleForward reset the retry budget only when they navigate", () => {
     const clearRetryState = vi.fn();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(
-        baseParams({ clearRetryState, canGoBack: false, canGoForward: false })
-      )
-    );
+    const { result } = renderHook(() => useDevPreviewNavigation(baseParams({ clearRetryState })));
     act(() => result.current.handleBack());
     act(() => result.current.handleForward());
     expect(clearRetryState).not.toHaveBeenCalled();
 
-    const { result: navigable } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ clearRetryState, canGoBack: true, canGoForward: true }))
+    // Through the saved history...
+    const { result: saved } = renderHook(() =>
+      useDevPreviewNavigation(
+        baseParams({
+          clearRetryState,
+          history: { past: ["http://localhost:3000/a"], present: "http://localhost:3000/", future: ["http://localhost:3000/b"] },
+        })
+      )
     );
-    act(() => navigable.current.handleBack());
-    act(() => navigable.current.handleForward());
+    act(() => saved.current.handleBack());
+    act(() => saved.current.handleForward());
     expect(clearRetryState).toHaveBeenCalledTimes(2);
+
+    // ...and through the guest's own.
+    const { result: native } = renderHook(() =>
+      useDevPreviewNavigation(
+        baseParams({
+          clearRetryState,
+          webviewRef: { current: makeWebview({ canGoToOffset: vi.fn(() => true) }) },
+        })
+      )
+    );
+    act(() => native.current.handleBack());
+    act(() => native.current.handleForward());
+    expect(clearRetryState).toHaveBeenCalledTimes(4);
   });
 
   it("handleReload and handleRetryWebviewLoad reset the retry budget", () => {
@@ -550,8 +571,6 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
           history,
           setHistory,
           currentUrl: history.present,
-          canGoBack: history.past.length > 0,
-          canGoForward: history.future.length > 0,
           devServerUrl: init.devServerUrl ?? null,
           proxyOrigin: init.proxyOrigin ?? null,
         })
@@ -657,5 +676,132 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
 
     act(() => result.current.handleForward());
     expect(seen.history.present).toBe(`${PROXY}/once`);
+  });
+});
+
+// Back and Forward step through the guest's own session history so the page keeps
+// its state and scroll position (#16910); the saved history only covers what the
+// guest has no entries for.
+describe("useDevPreviewNavigation — guest session history", () => {
+  const ROOT = "http://localhost:3000/";
+  const PAGE_A = "http://localhost:3000/a";
+  const PAGE_B = "http://localhost:3000/b";
+
+  function guestWithHistory(canGoToOffset: (offset: number) => boolean) {
+    return makeWebview({ canGoToOffset: vi.fn(canGoToOffset) });
+  }
+
+  it("steps the guest back and forward without touching the saved history", () => {
+    const setHistory = vi.fn();
+    const webview = guestWithHistory(() => true);
+    const params = baseParams({ setHistory, webviewRef: { current: webview } });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleBack());
+    expect(webview.goBack).toHaveBeenCalledTimes(1);
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBe(-1);
+
+    act(() => result.current.handleForward());
+    expect(webview.goForward).toHaveBeenCalledTimes(1);
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBe(1);
+
+    // The commit listeners move the history once the guest gets there.
+    expect(setHistory).not.toHaveBeenCalled();
+    expect(webview.loadURL).not.toHaveBeenCalled();
+    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(false);
+  });
+
+  it("falls back to the saved history while the guest isn't ready", () => {
+    const setHistory = vi.fn();
+    const webview = guestWithHistory(() => true);
+    const { result } = renderHook(() =>
+      useDevPreviewNavigation(
+        baseParams({
+          setHistory,
+          isWebviewReady: false,
+          webviewRef: { current: webview },
+          history: { past: [PAGE_A], present: ROOT, future: [] },
+        })
+      )
+    );
+    act(() => result.current.handleBack());
+    expect(webview.goBack).not.toHaveBeenCalled();
+    expect(setHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms a prune for a saved-history Back, but not for a saved-history Forward", () => {
+    const setHistory = vi.fn();
+    const params = baseParams({
+      setHistory,
+      history: { past: [PAGE_A], present: ROOT, future: [PAGE_B] },
+    });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleForward());
+    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(false);
+    expect(setHistory.mock.calls[0]![0](params.history).present).toBe(PAGE_B);
+
+    act(() => result.current.handleBack());
+    expect(params.guestHistoryIntentRef.current.pruneOnCommit).toBe(true);
+    expect(setHistory.mock.calls[1]![0](params.history).present).toBe(PAGE_A);
+  });
+
+  it("jumps to a history-menu entry by its own index, the list being sparse", () => {
+    const clearRetryState = vi.fn();
+    const webview = guestWithHistory(() => true);
+    const params = baseParams({
+      clearRetryState,
+      webviewRef: { current: webview },
+      navSnapshot: {
+        // Index 1 was filtered out of the menu (a credential URL, say).
+        entries: [
+          { index: 0, url: ROOT, title: "" },
+          { index: 2, url: PAGE_A, title: "" },
+          { index: 3, url: PAGE_B, title: "" },
+        ],
+        activeIndex: 3,
+        canGoBack: true,
+        canGoForward: false,
+      },
+    });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleGoToHistoryIndex(0));
+    expect(webview.goToIndex).toHaveBeenCalledWith(0);
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBe(-3);
+    expect(clearRetryState).toHaveBeenCalledTimes(1);
+
+    // Neither an index the menu doesn't hold nor the current entry goes anywhere.
+    act(() => result.current.handleGoToHistoryIndex(1));
+    act(() => result.current.handleGoToHistoryIndex(3));
+    expect(webview.goToIndex).toHaveBeenCalledTimes(1);
+    expect(clearRetryState).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves everything alone when the guest refuses a history-menu jump", () => {
+    const clearRetryState = vi.fn();
+    const webview = makeWebview({
+      goToIndex: vi.fn(() => {
+        throw new Error("The WebView must be attached to the DOM");
+      }),
+    });
+    const params = baseParams({
+      clearRetryState,
+      webviewRef: { current: webview },
+      navSnapshot: {
+        entries: [
+          { index: 0, url: ROOT, title: "" },
+          { index: 1, url: PAGE_A, title: "" },
+        ],
+        activeIndex: 1,
+        canGoBack: true,
+        canGoForward: false,
+      },
+    });
+    const { result } = renderHook(() => useDevPreviewNavigation(params));
+
+    act(() => result.current.handleGoToHistoryIndex(0));
+    expect(clearRetryState).not.toHaveBeenCalled();
+    expect(params.guestHistoryIntentRef.current.stepOffset).toBeNull();
   });
 });
