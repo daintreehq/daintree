@@ -292,7 +292,7 @@ describe("WorkspaceRootSidebar", () => {
     // an exact list so a git-shaped group can't be added back unnoticed.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
     // "New panel…" is the menu's direct launcher row, which a workspace root
-    // honours like Launch does; "Review worktree" needs a worktree and is absent.
+    // honours like Launch does; "Open Review Hub" needs a worktree and is absent.
     expect(contextMenuRootRows()).toEqual(["New panel…", "Launch", "Open", "Copy"]);
   });
 

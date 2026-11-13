@@ -81,7 +81,7 @@ import {
 } from "@shared/theme/worktreeColors";
 import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
-import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
+import { hostFileManagerRevealLabel, revealCopiesHostPath } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { isReservedEnvironmentKey } from "@/lib/resourceEnvironments";
@@ -482,7 +482,7 @@ export function WorktreeMenuItems({
             Open in editor
           </C.Item>
         )}
-        <C.Item onSelect={isRemoteWindow() ? onCopyPath : onRevealInFinder}>
+        <C.Item onSelect={revealCopiesHostPath() ? onCopyPath : onRevealInFinder}>
           <FolderOpen className={ICON} />
           {hostFileManagerRevealLabel()}
         </C.Item>
@@ -503,7 +503,7 @@ export function WorktreeMenuItems({
   const reviewRows = !worktree
     ? []
     : [
-        // "Review worktree" itself sits at the top of the menu as a direct
+        // "Open Review Hub" itself sits at the top of the menu as a direct
         // item; repeating it here gave the menu two items of one name.
         onOpenChanges && (
           <C.Item
@@ -527,7 +527,7 @@ export function WorktreeMenuItems({
   const reviewSub = reviewRows.length > 0 && (
     <C.Sub key="review">
       <C.SubTrigger>
-        {/* The commit glyph belongs to the direct "Review worktree" row a few
+        {/* The commit glyph belongs to the direct "Open Review Hub" row a few
             rows up; this submenu holds the diff views, so it wears theirs. */}
         <FileDiff className={ICON} />
         Review
@@ -1399,7 +1399,7 @@ export function WorktreeMenuItems({
     worktree && onOpenReviewHub && (
       <C.Item key="review-direct" onSelect={onOpenReviewHub}>
         <GitCommitHorizontal className={ICON} />
-        Review worktree
+        Open Review Hub
       </C.Item>
     )
   );

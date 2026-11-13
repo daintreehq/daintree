@@ -12,6 +12,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { screen, cleanup, fireEvent } from "@testing-library/react";
 import type { WorktreeState } from "../../../types";
 import { fileManagerRevealLabel } from "@/lib/platform";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { sshConnection, wslConnection } from "@shared/types/remoteHosts";
 import {
   makeWorktree,
   renderWorkspaceRootMenu,
@@ -116,7 +118,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     // root, ahead of the grouped long tail.
     expect(rootRowLabels(container)).toEqual([
       "New panel…",
-      "Review worktree",
+      "Open Review Hub",
       "Launch",
       "Open",
       "Review",
@@ -147,10 +149,10 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     });
 
     // The hub alone leaves the Review submenu with nothing to hold, so only
-    // the direct "Review worktree" row remains; with no panel palette there
+    // the direct "Open Review Hub" row remains; with no panel palette there
     // is no "New panel…" row either.
     expect(rootRowLabels(container)).toEqual([
-      "Review worktree",
+      "Open Review Hub",
       "Launch",
       "Open",
       "Git",
@@ -169,7 +171,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     renderWorktreeMenu({ onOpenPanelPalette, onOpenReviewHub }, "context-menu");
 
     fireEvent.click(screen.getByText("New panel…"));
-    fireEvent.click(screen.getByText("Review worktree"));
+    fireEvent.click(screen.getByText("Open Review Hub"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("context-menu");
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
@@ -178,7 +180,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
   it("offers no direct Review row for a workspace root, which has no worktree to review", () => {
     const { container } = renderWorkspaceRootMenu({ onOpenReviewHub: vi.fn() });
 
-    expect(rootRowLabels(container)).not.toContain("Review worktree");
+    expect(rootRowLabels(container)).not.toContain("Open Review Hub");
   });
 
   it("never renders two separators in a row", () => {
@@ -290,7 +292,7 @@ describe("WorktreeMenuItems — quiet git detail", () => {
 
     expect(rootRowLabels(container)).toEqual([
       "New panel…",
-      "Review worktree",
+      "Open Review Hub",
       "Launch",
       "Open",
       "Git",
@@ -309,7 +311,7 @@ describe("WorktreeMenuItems — quiet git detail", () => {
       "Compare with another worktree…",
       "—",
     ]);
-    expect(git).not.toContain("Review worktree");
+    expect(git).not.toContain("Open Review Hub");
     expect(git).toContain("Fetch");
     expect(git).toContain("Force push with lease…");
     expect(git.slice(-6)).toEqual([
@@ -356,7 +358,7 @@ describe("WorktreeMenuItems — quiet git detail", () => {
   });
 
   it("dispatches a folded row exactly as the shown menu does", () => {
-    // "Review worktree" is a direct root row now, so a review row that really
+    // "Open Review Hub" is a direct root row now, so a review row that really
     // folds into Git stands in for it.
     const onCompareDiff = vi.fn();
     renderWorktreeMenu({ ...fullyPopulated(), onCompareDiff, quietGit: true });
@@ -878,6 +880,43 @@ describe("WorktreeMenuItems — Open", () => {
     expect(onOpenFileBrowser).toHaveBeenCalledTimes(1);
     expect(onOpenEditor).toHaveBeenCalledTimes(1);
     expect(onRevealInFinder).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WorktreeMenuItems — Open in a remote window", () => {
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+  });
+
+  afterEach(() => {
+    delete window.__DAINTREE_HOST_ID__;
+    _resetHostPlatformForTests();
+  });
+
+  // A WSL distro's files are on this PC: main opens them in Explorer through
+  // WSL's share, so the row that says so has to reveal, not copy.
+  it("reveals a WSL worktree in Explorer instead of copying its path", () => {
+    setHostPlatformInfo({ platform: "linux", connection: wslConnection("Ubuntu") });
+    const onCopyPath = vi.fn();
+    const onRevealInFinder = vi.fn();
+    renderWorktreeMenu({ onCopyPath, onRevealInFinder });
+
+    fireEvent.click(screen.getByText("Show in Explorer"));
+
+    expect(onRevealInFinder).toHaveBeenCalledTimes(1);
+    expect(onCopyPath).not.toHaveBeenCalled();
+  });
+
+  it("copies an ssh host's path under a label that says so", () => {
+    setHostPlatformInfo({ platform: "linux", connection: sshConnection("greg@studio-01") });
+    const onCopyPath = vi.fn();
+    const onRevealInFinder = vi.fn();
+    renderWorktreeMenu({ onCopyPath, onRevealInFinder });
+
+    fireEvent.click(screen.getByText("Copy host path"));
+
+    expect(onCopyPath).toHaveBeenCalledTimes(1);
+    expect(onRevealInFinder).not.toHaveBeenCalled();
   });
 });
 
@@ -1554,7 +1593,7 @@ describe("WorktreeMenuItems — View uncommitted changes (#11420)", () => {
     );
 
     expect(labels).toEqual(["View uncommitted changes", "Compare with another worktree…"]);
-    expect(rootRowLabels(container)[0]).toBe("Review worktree");
+    expect(rootRowLabels(container)[0]).toBe("Open Review Hub");
   });
 
   it("carries the changed-file count into the accessible name, not just the muted slot", () => {
