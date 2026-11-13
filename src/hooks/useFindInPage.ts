@@ -36,6 +36,23 @@ export function useFindInPage(
   const isComposingRef = useRef(false);
   const latestRequestIdRef = useRef<number | null>(null);
 
+  // The kept query and matchCase belong to one pane. A tab switch reuses this
+  // instance with another pane's id, which starts a fresh find session instead
+  // of inheriting the last pane's search.
+  const [ownerPanelId, setOwnerPanelId] = useState(panelId);
+  if (ownerPanelId !== panelId) {
+    setOwnerPanelId(panelId);
+    setIsOpen(false);
+    setQueryState("");
+    setActiveMatch(0);
+    setMatchCount(0);
+    setMatchCase(false);
+  }
+  useEffect(() => {
+    latestRequestIdRef.current = null;
+    isComposingRef.current = false;
+  }, [panelId]);
+
   // Electron's `findNext: true` starts a new find session, and `false` steps
   // through the current one. A step sent with no session open gets no
   // `found-in-page` reply at all, so a new query must start a session.

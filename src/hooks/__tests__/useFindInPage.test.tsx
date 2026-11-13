@@ -590,6 +590,68 @@ describe("useFindInPage", () => {
     expect(webview.findInPage).toHaveBeenCalledWith("hello", { findNext: true, matchCase: false });
   });
 
+  it("does not search while closed when the webview becomes ready or is replaced", () => {
+    const first = createMockWebview();
+    const second = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ webview, ready }) => useFindInPage("panel-1", webview, ready, true),
+      { initialProps: { webview: first, ready: true } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    first.findInPage.mockClear();
+
+    rerender({ webview: first, ready: false });
+    rerender({ webview: first, ready: true });
+    rerender({ webview: second, ready: true });
+
+    expect(first.findInPage).not.toHaveBeenCalled();
+    expect(second.findInPage).not.toHaveBeenCalled();
+    expect(result.current.query).toBe("hello");
+  });
+
+  it("starts a fresh find session when the hook is reused for another pane", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ panelId }) => useFindInPage(panelId, webview, true, true),
+      { initialProps: { panelId: "panel-1" } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.toggleMatchCase());
+    act(() => result.current.setQuery("hello"));
+    act(() => result.current.close());
+    expect(result.current.query).toBe("hello");
+
+    rerender({ panelId: "panel-2" });
+    expect(result.current.query).toBe("");
+    expect(result.current.matchCase).toBe(false);
+    expect(result.current.isOpen).toBe(false);
+
+    webview.findInPage.mockClear();
+    act(() => result.current.open());
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("closes an open bar when the hook is reused for another pane", () => {
+    const webview = createMockWebview();
+    const { result, rerender } = renderHook(
+      ({ panelId }) => useFindInPage(panelId, webview, true, true),
+      { initialProps: { panelId: "panel-1" } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+    webview.findInPage.mockClear();
+
+    rerender({ panelId: "panel-2" });
+    expect(result.current.isOpen).toBe(false);
+    expect(result.current.query).toBe("");
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
   it("does not step a search the closed bar no longer shows", () => {
     const webview = createMockWebview();
     let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
