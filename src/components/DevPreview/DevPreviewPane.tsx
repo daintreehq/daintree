@@ -42,6 +42,11 @@ import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { loadWebviewUrl } from "./loadWebviewUrl";
+import {
+  createGuestHistoryIntent,
+  useGuestHistorySnapshot,
+  type GuestHistoryIntent,
+} from "./useGuestHistorySnapshot";
 import { isOnOrigin, toDevServerAddress } from "./urlSync";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
@@ -270,6 +275,9 @@ export function DevPreviewPane({
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
   const lastSetUrlRef = useRef<string>(history.present);
+  // What Back, Forward and the history menus asked of the current guest's own
+  // history; each guest starts with nothing asked of it.
+  const guestHistoryIntentRef = useRef<GuestHistoryIntent>(createGuestHistoryIntent());
   // Identity and seed of the current guest, as one value. `seedUrl` is the webview
   // `src` attribute, fixed for the lifetime of each guest.
   //
@@ -310,8 +318,6 @@ export function DevPreviewPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const canGoBack = history.past.length > 0;
-  const canGoForward = history.future.length > 0;
   const isUnconfigured =
     Boolean(currentProjectId) &&
     !isSettingsLoading &&
@@ -480,10 +486,20 @@ export function DevPreviewPane({
     zoomFactor,
     evictingRef,
     lastSetUrlRef,
+    guestHistoryIntentRef,
     setHistory,
     setBlockedNav: dispatchBlockedNav,
     onRenderProcessGone: handleRenderProcessGone,
   });
+
+  const { navSnapshot, backEntry, forwardEntry } = useGuestHistorySnapshot(
+    webviewElement,
+    isWebviewReady
+  );
+  // The guest's own history covers what it has visited; the saved history also
+  // covers what a restored panel or a replaced guest visited before it.
+  const canGoBack = history.past.length > 0 || Boolean(navSnapshot?.canGoBack);
+  const canGoForward = history.future.length > 0 || Boolean(navSnapshot?.canGoForward);
 
   useEffect(() => {
     if (!isUnconfigured) return;
@@ -513,6 +529,7 @@ export function DevPreviewPane({
         // re-load the same URL on first ready (#9940). The isUnconfigured effect
         // resets this to "" afterward when there is no dev command.
         lastSetUrlRef.current = webviewSeedUrl;
+        guestHistoryIntentRef.current = createGuestHistoryIntent();
         clearRetryState();
       }
       setWebviewElement(node);
@@ -556,6 +573,7 @@ export function DevPreviewPane({
     if (!webview) return false;
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     // The cache-ignoring reload runs in the main process against a *registered*
     // panel, and registration is itself gated on the guest reaching dom-ready
     // (useWebviewDialog). For a guest that never got there the IPC resolves
@@ -602,6 +620,7 @@ export function DevPreviewPane({
     handleNavigate,
     handleBack,
     handleForward,
+    handleGoToHistoryIndex,
     handleReload,
     handleCancelLoad,
     handleRetryWebviewLoad,
@@ -618,10 +637,10 @@ export function DevPreviewPane({
     id,
     currentProjectId,
     currentUrl,
-    canGoBack,
-    canGoForward,
     history,
     setHistory,
+    navSnapshot,
+    guestHistoryIntentRef,
     zoomFactor,
     setZoomFactor,
     devServerUrl: url,
@@ -977,6 +996,9 @@ export function DevPreviewPane({
           url={currentUrl}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
+          backEntry={backEntry}
+          forwardEntry={forwardEntry}
+          navSnapshot={navSnapshot}
           isLoading={isLoading}
           zoomFactor={zoomFactor}
           isWebviewReady={isWebviewReady}
@@ -992,6 +1014,7 @@ export function DevPreviewPane({
           toAddress={toAddress}
           onBack={handleBack}
           onForward={handleForward}
+          onGoToHistoryIndex={handleGoToHistoryIndex}
           onReload={handleReload}
           onFocusPage={() => isWebviewReady && !isEvicted && focusWebviewPage(webviewRef.current)}
           onStop={handleCancelLoad}

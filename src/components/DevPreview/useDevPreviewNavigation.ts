@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBrowserActionListeners } from "@/hooks/useBrowserActionListeners";
-import type { BrowserHistory } from "@shared/types/browser";
+import type { BrowserHistory, BrowserNavigationHistorySnapshot } from "@shared/types/browser";
 import { STOPPED_LOAD_MESSAGE, type NormalizeResult } from "../Browser/browserUtils";
 import {
   goBackBrowserHistory,
@@ -16,15 +16,16 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import type { WebviewLoadError } from "./useDevPreviewLoadLifecycle";
+import type { GuestHistoryIntent } from "./useGuestHistorySnapshot";
 
 interface UseDevPreviewNavigationParams {
   id: string;
   currentProjectId?: string;
   currentUrl: string;
-  canGoBack: boolean;
-  canGoForward: boolean;
   history: BrowserHistory;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
+  navSnapshot: BrowserNavigationHistorySnapshot | null;
+  guestHistoryIntentRef: React.RefObject<GuestHistoryIntent>;
   zoomFactor: number;
   setZoomFactor: React.Dispatch<React.SetStateAction<number>>;
   devServerUrl: string | null;
@@ -58,10 +59,10 @@ export function useDevPreviewNavigation({
   id,
   currentProjectId,
   currentUrl,
-  canGoBack,
-  canGoForward,
   history,
   setHistory,
+  navSnapshot,
+  guestHistoryIntentRef,
   zoomFactor,
   setZoomFactor,
   devServerUrl,
@@ -173,28 +174,94 @@ export function useDevPreviewNavigation({
         // them — silently cancelling a 502's overlay and its auto-recovery.
         if (normalized.url !== currentUrl) {
           clearRetryState();
+          // A new load supersedes any step still on its way to the guest.
+          guestHistoryIntentRef.current.stepOffset = null;
         }
         // Push history only; the imperative navigation effect drives loadURL now
         // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
         setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
       }
     },
-    [currentUrl, clearRetryState, setHistory, validateUrl]
+    [currentUrl, clearRetryState, guestHistoryIntentRef, setHistory, validateUrl]
   );
 
+  // Back and Forward step through the guest's own session history, so the page
+  // keeps its in-memory state and scroll position instead of reloading; the
+  // commit listeners move `history` to match. The saved history only takes over
+  // where the guest has nothing of its own: a restored panel or a replaced guest
+  // starts with a single entry.
+  const guestCanGo = useCallback(
+    (offset: number): Electron.WebviewTag | null => {
+      const webview = webviewRef.current;
+      if (!webview || !isWebviewReady) return null;
+      try {
+        return webview.canGoToOffset(offset) ? webview : null;
+      } catch {
+        return null;
+      }
+    },
+    [isWebviewReady, webviewRef]
+  );
+
+  // A step the guest takes itself supersedes a saved-history Back that hasn't
+  // committed (stopped, or still loading): the guest's entries are still in order,
+  // and pruning on the step's commit would throw away the ones it can still reach.
   const handleBack = useCallback(() => {
-    if (canGoBack) {
+    const webview = guestCanGo(-1);
+    if (webview) {
       clearRetryState();
-      setHistory((prev) => goBackBrowserHistory(prev));
+      guestHistoryIntentRef.current = { stepOffset: -1, pruneOnCommitOf: null };
+      webview.goBack();
+      return;
     }
-  }, [canGoBack, clearRetryState, setHistory]);
+    const previousUrl = history.past.at(-1);
+    if (previousUrl === undefined) return;
+    clearRetryState();
+    guestHistoryIntentRef.current.pruneOnCommitOf = previousUrl;
+    setHistory((prev) => goBackBrowserHistory(prev));
+  }, [guestCanGo, history.past, clearRetryState, guestHistoryIntentRef, setHistory]);
 
   const handleForward = useCallback(() => {
-    if (canGoForward) {
+    const webview = guestCanGo(1);
+    if (webview) {
       clearRetryState();
-      setHistory((prev) => goForwardBrowserHistory(prev));
+      guestHistoryIntentRef.current = { stepOffset: 1, pruneOnCommitOf: null };
+      webview.goForward();
+      return;
     }
-  }, [canGoForward, clearRetryState, setHistory]);
+    // Loading the saved entry adds it on top of the guest's history, right where
+    // Forward expects it, so unlike Back there is nothing to prune.
+    if (history.future.length === 0) return;
+    clearRetryState();
+    setHistory((prev) => goForwardBrowserHistory(prev));
+  }, [guestCanGo, history.future.length, clearRetryState, guestHistoryIntentRef, setHistory]);
+
+  // The Back and Forward menus list the guest's own entries by Chromium's index.
+  // The list is sparse, so the entry is matched on `.index`. It is also read
+  // asynchronously, so the jump goes ahead only while the guest still stands on
+  // the entry the menu says and still has the one picked; Chromium ignores a jump
+  // to an index it no longer has, and a stale pick waits for the next read.
+  const handleGoToHistoryIndex = useCallback(
+    (index: number) => {
+      if (!navSnapshot?.entries.some((entry) => entry.index === index)) return;
+      const activeIndex = navSnapshot.activeIndex;
+      const offset = index - activeIndex;
+      const webview = webviewRef.current;
+      if (offset === 0 || !webview || !isWebviewReady) return;
+      try {
+        const standsThere =
+          webview.canGoToOffset(-activeIndex) && !webview.canGoToOffset(-activeIndex - 1);
+        if (!standsThere || !webview.canGoToOffset(offset)) return;
+        webview.goToIndex(index);
+      } catch {
+        // Detached guest: nothing navigated.
+        return;
+      }
+      clearRetryState();
+      guestHistoryIntentRef.current = { stepOffset: offset, pruneOnCommitOf: null };
+    },
+    [navSnapshot, webviewRef, isWebviewReady, clearRetryState, guestHistoryIntentRef]
+  );
 
   // A user-initiated reload is a fresh attempt: hand back the retry budget. Load
   // start no longer refills it on its own, so without this an exhausted panel would
@@ -202,10 +269,15 @@ export function useDevPreviewNavigation({
   const handleReload = useCallback(() => {
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     webviewRef.current?.reload();
-  }, [clearRetryState, setWebviewLoadError, webviewRef]);
+  }, [clearRetryState, guestHistoryIntentRef, setWebviewLoadError, webviewRef]);
 
+  // A stopped step never commits, and the next commit — a reload of the page
+  // still showing — must not be read as that step. A pending prune stays armed:
+  // the guest's entries behind it are still out of order, whatever commits next.
   const handleCancelLoad = useCallback(() => {
+    guestHistoryIntentRef.current.stepOffset = null;
     clearLoadTimers();
     setIsLoading(false);
     try {
@@ -214,11 +286,12 @@ export function useDevPreviewNavigation({
       // Webview detached
     }
     setWebviewLoadError({ code: "aborted", message: STOPPED_LOAD_MESSAGE });
-  }, [clearLoadTimers, setIsLoading, setWebviewLoadError, webviewRef]);
+  }, [clearLoadTimers, setIsLoading, setWebviewLoadError, webviewRef, guestHistoryIntentRef]);
 
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);
     clearRetryState();
+    guestHistoryIntentRef.current.stepOffset = null;
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
@@ -230,7 +303,14 @@ export function useDevPreviewNavigation({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl, clearRetryState, setWebviewLoadError, setIsLoading, webviewRef]);
+  }, [
+    currentUrl,
+    clearRetryState,
+    guestHistoryIntentRef,
+    setWebviewLoadError,
+    setIsLoading,
+    webviewRef,
+  ]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
@@ -409,6 +489,7 @@ export function useDevPreviewNavigation({
     handleNavigate,
     handleBack,
     handleForward,
+    handleGoToHistoryIndex,
     handleReload,
     handleCancelLoad,
     handleRetryWebviewLoad,
