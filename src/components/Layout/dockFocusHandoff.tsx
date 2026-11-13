@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useRef } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useRef } from "react";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 /**
@@ -90,13 +90,19 @@ export function releaseFocusOwner(event: React.FocusEvent, ref: { current: Eleme
  */
 export function useFocusOwner() {
   const ownerRef = useRef<Element | null>(null);
+  // Read-and-clear, so the ref never leaves the hook.
+  const takeOwner = useCallback((): Element | null => {
+    const owner = ownerRef.current;
+    ownerRef.current = null;
+    return owner;
+  }, []);
   const handlers = {
     onFocusCapture: (event: React.FocusEvent) => {
       ownerRef.current = event.target;
     },
     onBlurCapture: (event: React.FocusEvent) => releaseFocusOwner(event, ownerRef),
   };
-  return { ownerRef, handlers };
+  return { takeOwner, handlers };
 }
 
 /**
@@ -108,16 +114,15 @@ export function useFocusOwner() {
  */
 export function useDockPillHideHandoff(count: number) {
   const { handoff } = useDockFocusLandmark();
-  const { ownerRef, handlers } = useFocusOwner();
+  const { takeOwner, handlers } = useFocusOwner();
   useLayoutEffect(() => {
     if (count > 0) return;
-    const owner = ownerRef.current;
+    const owner = takeOwner();
     if (!owner) return;
-    ownerRef.current = null;
     // Focus that already moved somewhere real was moved on purpose.
     const active = document.activeElement;
     if (active && active !== document.body && active !== owner) return;
     handoff();
-  }, [count, handoff, ownerRef]);
+  }, [count, handoff, takeOwner]);
   return handlers;
 }

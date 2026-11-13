@@ -156,7 +156,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   // would leave it null — and the handoff below would then skip someone who is
   // very much standing here. It also lets go when focus leaves, so an expiry
   // long after the user moved on does not reach into wherever they went.
-  const { ownerRef: focusOwnerRef, handlers: focusOwnerHandlers } = useFocusOwner();
+  const { takeOwner: takeFocusOwner, handlers: focusOwnerHandlers } = useFocusOwner();
   const landmark = useDockFocusLandmark();
 
   // The opener unmounted with the popover, so a cancelled dialog would drop
@@ -401,13 +401,12 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       handedOffRef.current = false;
       return;
     }
-    if (!focusOwnerRef.current || handedOffRef.current) return;
+    if (!takeFocusOwner() || handedOffRef.current) return;
     focusedRowRef.current = null;
-    focusOwnerRef.current = null;
     handedOffRef.current = true;
     if (document.activeElement && document.activeElement !== document.body) return;
     handOffToDock();
-  }, [trashedTerminals.length, handOffToDock, focusOwnerRef]);
+  }, [trashedTerminals.length, handOffToDock, takeFocusOwner]);
 
   // Hand focus on when the row holding it disappears. Only when focus actually
   // fell on the body: a restore moves focus deliberately, and stealing it back

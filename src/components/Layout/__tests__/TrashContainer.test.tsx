@@ -727,99 +727,94 @@ describe("TrashContainer", () => {
       expect(title()).not.toMatch(/Remove Terminal 1/);
     });
   });
-});
 
-describe("TrashContainer — focus handoff when the trash empties (#16921)", () => {
-  const handoff = vi.fn();
-  const landmarkTarget = document.createElement("button");
-  const resolve = vi.fn((): HTMLElement | null => landmarkTarget);
-  const landmark = { handoff, resolve };
+  describe("focus handoff when the trash empties (#16921)", () => {
+    const handoff = vi.fn();
+    const landmarkTarget = document.createElement("button");
+    const resolve = vi.fn((): HTMLElement | null => landmarkTarget);
+    const landmark = { handoff, resolve };
 
-  function renderTrash(items: ReturnType<typeof makeTrashedItem>[]) {
-    const tree = (list: typeof items) => (
-      <DockFocusLandmarkContext.Provider value={landmark}>
-        <button type="button" data-testid="elsewhere" />
-        <TrashContainer trashedTerminals={list} />
-      </DockFocusLandmarkContext.Provider>
-    );
-    const view = render(tree(items));
-    return { ...view, empty: () => view.rerender(tree([])) };
-  }
+    function renderTrash(items: ReturnType<typeof makeTrashedItem>[]) {
+      const tree = (list: typeof items) => (
+        <DockFocusLandmarkContext.Provider value={landmark}>
+          <button type="button" data-testid="elsewhere" />
+          <TrashContainer trashedTerminals={list} />
+        </DockFocusLandmarkContext.Provider>
+      );
+      const view = render(tree(items));
+      return { ...view, empty: () => view.rerender(tree([])) };
+    }
 
-  beforeEach(() => {
-    handoff.mockClear();
-    resolve.mockClear();
-    confirmDialogProps = null;
-    emptyTrashSpy = vi.fn();
-    vi.spyOn(usePanelStore.getState(), "emptyTrash").mockImplementation(
-      emptyTrashSpy as unknown as (ids: string[]) => void
-    );
-  });
-
-  it("hands focus to the dock when the last entry goes while the pill holds it", () => {
-    const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
-    act(() => getByTestId("trash-container").focus());
-
-    empty();
-
-    expect(handoff).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves focus alone when it is somewhere else", () => {
-    const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
-    act(() => getByTestId("elsewhere").focus());
-
-    empty();
-
-    expect(handoff).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(getByTestId("elsewhere"));
-  });
-
-  it("leaves focus alone when the user left the control before it emptied", async () => {
-    const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
-    const pill = getByTestId("trash-container");
-    act(() => pill.focus());
-    // A click on nothing: focus goes to <body> with no element to name.
-    act(() => pill.blur());
-    await act(async () => {
-      await Promise.resolve();
+    beforeEach(() => {
+      handoff.mockClear();
+      resolve.mockClear();
     });
 
-    empty();
+    it("hands focus to the dock when the last entry goes while the pill holds it", () => {
+      const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
+      act(() => getByTestId("trash-container").focus());
 
-    expect(handoff).not.toHaveBeenCalled();
-  });
+      empty();
 
-  it("hands focus on after confirming Empty trash from inside the dialog", () => {
-    const { getByTestId, empty } = renderTrash([makeTrashedItem("1"), makeTrashedItem("2")]);
-    act(() => getByTestId("empty-trash-button").click());
-    act(() => getByTestId("confirm-dialog-confirm").focus());
-    act(() => getByTestId("confirm-dialog-confirm").click());
+      expect(handoff).toHaveBeenCalledTimes(1);
+    });
 
-    // The confirm empties the store; the dock re-renders with nothing in it.
-    empty();
+    it("leaves focus alone when it is somewhere else", () => {
+      const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
+      act(() => getByTestId("elsewhere").focus());
 
-    expect(emptyTrashSpy).toHaveBeenCalledTimes(1);
-    expect(handoff).toHaveBeenCalledTimes(1);
-  });
+      empty();
 
-  it("restores the dialog's focus to the dock once the popover is gone with the trash", () => {
-    const { getByTestId } = renderTrash([makeTrashedItem("1")]);
-    act(() => getByTestId("empty-trash-button").click());
-    const restoreTarget = confirmDialogProps?.restoreFocusTo;
+      expect(handoff).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(getByTestId("elsewhere"));
+    });
 
-    // No popover in the document: the trash is empty, so the dialog's restore
-    // has to agree with the handoff rather than fall back to the app shell.
-    expect(restoreTarget?.()).toBe(landmarkTarget);
+    it("leaves focus alone when the user left the control before it emptied", async () => {
+      const { getByTestId, empty } = renderTrash([makeTrashedItem("1")]);
+      const pill = getByTestId("trash-container");
+      act(() => pill.focus());
+      // A click on nothing: focus goes to <body> with no element to name.
+      act(() => pill.blur());
+      await act(async () => {
+        await Promise.resolve();
+      });
 
-    const popover = document.createElement("div");
-    popover.id = "trash-container-popover";
-    document.body.appendChild(popover);
-    try {
-      expect(restoreTarget?.()).toBe(popover);
-    } finally {
-      popover.remove();
-    }
+      empty();
+
+      expect(handoff).not.toHaveBeenCalled();
+    });
+
+    it("hands focus on after confirming Empty trash from inside the dialog", () => {
+      const { getByTestId, empty } = renderTrash([makeTrashedItem("1"), makeTrashedItem("2")]);
+      act(() => getByTestId("empty-trash-button").click());
+      act(() => getByTestId("confirm-dialog-confirm").focus());
+      act(() => getByTestId("confirm-dialog-confirm").click());
+
+      // The confirm empties the store; the dock re-renders with nothing in it.
+      empty();
+
+      expect(emptyTrashSpy).toHaveBeenCalledTimes(1);
+      expect(handoff).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores the dialog's focus to the dock once the popover is gone with the trash", () => {
+      const { getByTestId } = renderTrash([makeTrashedItem("1")]);
+      act(() => getByTestId("empty-trash-button").click());
+      const restoreTarget = confirmDialogProps?.restoreFocusTo;
+
+      // No popover in the document: the trash is empty, so the dialog's restore
+      // has to agree with the handoff rather than fall back to the app shell.
+      expect(restoreTarget?.()).toBe(landmarkTarget);
+
+      const popover = document.createElement("div");
+      popover.id = "trash-container-popover";
+      document.body.appendChild(popover);
+      try {
+        expect(restoreTarget?.()).toBe(popover);
+      } finally {
+        popover.remove();
+      }
+    });
   });
 });
 
