@@ -760,6 +760,75 @@ describe("DiffPane — file stepping", () => {
   });
 });
 
+describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
+  function expectSelected(target: DiffChangeSetEntry): void {
+    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      target.path,
+      target.status,
+      target.viewedKey,
+      target.side
+    );
+    setDiffPanelFileMock.mockClear();
+  }
+
+  function unavailable(label: string): boolean {
+    return screen.getByLabelText(label).getAttribute("aria-disabled") === "true";
+  }
+
+  // The sidebar puts root files first, then folders alphabetically; the raw
+  // set here is in neither order.
+  const zed = entry("src/zed.ts");
+  const root = entry("root.ts");
+  const lib = entry("lib/lib.ts");
+  const unordered = [zed, root, lib];
+
+  it("counts and steps in the sidebar's folder order, not the change set's", () => {
+    seedPanel({ filePath: "root.ts", fileStatus: "modified", changeSet: unordered });
+    const { rerender } = renderPane();
+    expect(positionText()).toBe("1 of 3");
+    expect(unavailable("Previous file")).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("Next file"));
+    expectSelected(lib);
+
+    seedPanel({ filePath: "src/zed.ts", fileStatus: "modified", changeSet: unordered });
+    rerender(paneElement());
+    expect(positionText()).toBe("3 of 3");
+    expect(unavailable("Next file")).toBe(true);
+
+    pressInPane("[");
+    expectSelected(lib);
+  });
+
+  it("steps onto the file that shifted into the open one's place once it leaves the set", () => {
+    const a = entry("a.ts");
+    const b = entry("b.ts");
+    const c = entry("c.ts");
+    seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a, b, c] });
+    const { rerender } = renderPane();
+    expect(positionText()).toBe("2 of 3");
+
+    // Staged or reverted: b.ts is gone, c.ts now sits where it was.
+    seedPanel({ filePath: "b.ts", fileStatus: "modified", changeSet: [a, c] });
+    rerender(paneElement());
+
+    expect(positionText()).not.toMatch(/^0 of/);
+    expect(unavailable("Previous file")).toBe(false);
+    expect(unavailable("Next file")).toBe(false);
+
+    pressInPane("]");
+    expectSelected(c);
+    fireEvent.click(screen.getByLabelText("Next file"));
+    expectSelected(c);
+    pressInPane("[");
+    expectSelected(a);
+    fireEvent.click(screen.getByLabelText("Previous file"));
+    expectSelected(a);
+  });
+});
+
 describe("DiffPane — file keys across the whole pane (#16643)", () => {
   const changeSet = [entry("a.ts"), entry("b.ts", "added"), entry("c.ts")];
 

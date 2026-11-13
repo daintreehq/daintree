@@ -1,5 +1,6 @@
 import type { GitStatus } from "@shared/types";
 import type { DiffChangeSetEntry } from "@shared/types/git";
+import { dirname } from "@shared/utils/path";
 
 // The entry shape moved to shared types when it became a field on
 // `DiffPanelData` (shared/ cannot import from src/). Re-exported here so the
@@ -36,4 +37,42 @@ export function summarizeChangeSet(files: DiffChangeSetEntry[]): {
     deletions += file.deletions ?? 0;
   }
   return { insertions, deletions };
+}
+
+export interface IndexedDiffEntry extends DiffChangeSetEntry {
+  /** Position in the original change set, whatever the display order. */
+  index: number;
+}
+
+export interface DiffDirGroup {
+  dir: string;
+  files: IndexedDiffEntry[];
+}
+
+/**
+ * The shelf's display order: root files first, then folders alphabetically,
+ * each folder's files in change-set order, keeping only paths that contain the
+ * filter. The pane's stepper walks the same order, so both read it from here.
+ */
+export function groupDiffChangeSet(
+  files: readonly DiffChangeSetEntry[],
+  filter = ""
+): DiffDirGroup[] {
+  const query = filter.trim().toLowerCase();
+  const grouped = new Map<string, IndexedDiffEntry[]>();
+  files.forEach((file, index) => {
+    if (query && !file.path.toLowerCase().includes(query)) return;
+    const dir = dirname(file.path);
+    const key = !dir || dir === "." ? "" : dir;
+    const bucket = grouped.get(key);
+    if (bucket) bucket.push({ ...file, index });
+    else grouped.set(key, [{ ...file, index }]);
+  });
+  return Array.from(grouped.entries())
+    .map(([dir, groupFiles]) => ({ dir, files: groupFiles }))
+    .sort((a, b) => {
+      if (a.dir === "") return -1;
+      if (b.dir === "") return 1;
+      return a.dir.localeCompare(b.dir);
+    });
 }
