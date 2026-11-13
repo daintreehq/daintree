@@ -27,6 +27,9 @@ import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS, latestUndoOnly } from "@/lib
 
 export type DiffNoteSendScope = "file" | "all";
 
+/** Matches the send-to-agent palette's locked rows. */
+const INPUT_LOCKED_REASON = "Input locked";
+
 /** Everything a send needs, so a retry re-aims at what failed, not what's on screen now. */
 export interface DiffNoteSendRequest {
   targetId: string;
@@ -47,7 +50,8 @@ interface DiffNotesSendMenuProps {
 /**
  * Sends a worktree's pending notes into an agent's composer. Scope defaults to
  * the file on screen; "All files" is a deliberate second choice because it
- * reaches notes the reviewer can't see from here.
+ * reaches notes the reviewer can't see from here — unless the file on screen
+ * has none, when "This file" would open on a menu where nothing can be sent.
  */
 export function DiffNotesSendMenu({
   worktreePath,
@@ -61,8 +65,6 @@ export function DiffNotesSendMenu({
 
   if (allNotes.length === 0) return null;
 
-  // "All files" is only ever chosen, never fallen back to: it can reach notes
-  // the reviewer can't see from here.
   const count = scope === "file" ? fileCount : allNotes.length;
 
   const send = (targetId: string) => {
@@ -73,7 +75,10 @@ export function DiffNotesSendMenu({
   return (
     <DropdownMenu
       onOpenChange={(open) => {
-        if (open) setScope("file");
+        // Chosen afresh on every opening, so a scope picked for one file never
+        // carries over to the next. The radio row says which one is aimed at,
+        // count included, before any agent is picked.
+        if (open) setScope(fileCount === 0 ? "all" : "file");
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -148,7 +153,9 @@ function DiffNoteTargetItems({
         <DropdownMenuItem
           key={target.id}
           disabled={disabled || target.isInputLocked}
-          aria-label={`${target.title}, ${target.worktreeName ?? "no worktree"}`}
+          aria-label={`${target.title}, ${
+            target.isInputLocked ? INPUT_LOCKED_REASON : (target.worktreeName ?? "no worktree")
+          }`}
           onSelect={() => onSend(target.id)}
         >
           <span
@@ -159,12 +166,18 @@ function DiffNoteTargetItems({
             <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
           </span>
           <span className="truncate">{target.title}</span>
-          <DropdownMenuMeta
-            className="max-w-[140px] truncate"
-            title={target.worktreeName ?? undefined}
-          >
-            {target.worktreeName ?? "No worktree"}
-          </DropdownMenuMeta>
+          {/* A locked row says why in place of its worktree, as the send-to-agent
+              palette does: that's the line that explains why it can't be picked. */}
+          {target.isInputLocked ? (
+            <DropdownMenuMeta>{INPUT_LOCKED_REASON}</DropdownMenuMeta>
+          ) : (
+            <DropdownMenuMeta
+              className="max-w-[140px] truncate"
+              title={target.worktreeName ?? undefined}
+            >
+              {target.worktreeName ?? "No worktree"}
+            </DropdownMenuMeta>
+          )}
         </DropdownMenuItem>
       ))}
     </>
