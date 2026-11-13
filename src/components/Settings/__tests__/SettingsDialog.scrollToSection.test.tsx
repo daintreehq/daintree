@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render } from "@testing-library/react";
-import { scrollAndHighlightSettingsSection, useSettingsScrollToSection } from "../SettingsDialog";
+import { lazy, Suspense, type ComponentType } from "react";
+import { act, render } from "@testing-library/react";
+import {
+  SettingsDeepLinkScope,
+  scrollAndHighlightSettingsSection,
+  useSettingsScrollToSection,
+} from "../SettingsDialog";
+import {
+  SettingsDeepLinkHold,
+  useHoldSettingsDeepLink,
+  useSettingsDeepLink,
+} from "../settingsDeepLink";
 
 /**
  * Tests for the deep-link scroll mechanism (#6878).
@@ -185,5 +195,178 @@ describe("useSettingsScrollToSection", () => {
     rerender(<Probe isActive={true} scrollToSectionId="section-late" onHandled={onHandled} />);
     expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
     expect(onHandled).toHaveBeenCalledWith("section-late", true);
+  });
+});
+
+describe("SettingsDeepLinkScope", () => {
+  // Content that renders its row only once its values have loaded in, holding the
+  // link until then, as a tab hydrating from IPC does.
+  function Loading({ loaded, rowId }: { loaded: boolean; rowId: string }) {
+    useHoldSettingsDeepLink(!loaded);
+    return loaded ? <div id={rowId} /> : null;
+  }
+
+  const request = { sectionId: "row-target", query: "gitlab token" };
+
+  function scope(children: React.ReactNode, onHandled = vi.fn(), isActive = true) {
+    return (
+      <SettingsDeepLinkScope
+        isActive={isActive}
+        scrollToSectionId={request.sectionId}
+        query={request.query}
+        request={request}
+        onHandled={onHandled}
+        tab="voice"
+      >
+        {children}
+      </SettingsDeepLinkScope>
+    );
+  }
+
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView"
+  );
+
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalScrollIntoView) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+    } else {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+
+  it("lands on the first commit when nothing holds it", () => {
+    const onHandled = vi.fn();
+    render(scope(<Loading loaded rowId="row-target" />, onHandled));
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("waits for a hold taken on the tab's first commit, then lands on the loaded row", () => {
+    const onHandled = vi.fn();
+    const { rerender } = render(scope(<Loading loaded={false} rowId="row-target" />, onHandled));
+    expect(onHandled).not.toHaveBeenCalled();
+
+    rerender(scope(<Loading loaded rowId="row-target" />, onHandled));
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("reports a miss once loaded when the row still isn't there", () => {
+    const onHandled = vi.fn();
+    const { rerender } = render(scope(<Loading loaded={false} rowId="row-other" />, onHandled));
+    expect(onHandled).not.toHaveBeenCalled();
+
+    rerender(scope(<Loading loaded rowId="row-other" />, onHandled));
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", false);
+  });
+
+  it("waits for every hold in the tab", () => {
+    const onHandled = vi.fn();
+    const both = (first: boolean, second: boolean) =>
+      scope(
+        <>
+          <Loading loaded={first} rowId="row-target" />
+          <Loading loaded={second} rowId="row-second" />
+        </>,
+        onHandled
+      );
+    const { rerender } = render(both(false, false));
+    rerender(both(true, false));
+    expect(onHandled).not.toHaveBeenCalled();
+
+    rerender(both(true, true));
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("holds through a Suspense fallback until the content behind it commits", async () => {
+    let reveal!: (module: { default: ComponentType }) => void;
+    const Lazy = lazy(
+      () =>
+        new Promise<{ default: ComponentType }>((resolve) => {
+          reveal = resolve;
+        })
+    );
+    const onHandled = vi.fn();
+    render(
+      scope(
+        <Suspense fallback={<SettingsDeepLinkHold />}>
+          <Lazy />
+        </Suspense>,
+        onHandled
+      )
+    );
+    expect(onHandled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      reveal({ default: () => <div id="row-target" /> });
+    });
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("lands as soon as a tab that finished loading while hidden is shown", () => {
+    const onHandled = vi.fn();
+    const { rerender } = render(
+      scope(<Loading loaded={false} rowId="row-target" />, onHandled, false)
+    );
+    rerender(scope(<Loading loaded rowId="row-target" />, onHandled, false));
+    expect(onHandled).not.toHaveBeenCalled();
+
+    rerender(scope(<Loading loaded rowId="row-target" />, onHandled, true));
+    expect(onHandled).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("lands a link again once it was cleared and asked for anew, but not before", () => {
+    const onHandled = vi.fn();
+    const linked = (id: string | null, handler: (id: string, landed: boolean) => void) => (
+      <SettingsDeepLinkScope
+        isActive
+        scrollToSectionId={id}
+        query={null}
+        request={id === null ? null : { sectionId: id }}
+        onHandled={handler}
+        tab="voice"
+      >
+        <Loading loaded rowId="row-target" />
+      </SettingsDeepLinkScope>
+    );
+    const { rerender } = render(linked("row-target", onHandled));
+    expect(onHandled).toHaveBeenCalledTimes(1);
+
+    // Still pending under a new handler: the same link, already landed.
+    const nextHandler = vi.fn();
+    rerender(linked("row-target", nextHandler));
+    expect(nextHandler).not.toHaveBeenCalled();
+
+    rerender(linked(null, nextHandler));
+    rerender(linked("row-target", nextHandler));
+    expect(nextHandler).toHaveBeenCalledExactlyOnceWith("row-target", true);
+  });
+
+  it("hands the link and its search words only to the tab that's showing", () => {
+    const seen: Array<ReturnType<typeof useSettingsDeepLink>> = [];
+    function Reader() {
+      seen.push(useSettingsDeepLink());
+      return null;
+    }
+    const { rerender } = render(scope(<Reader />, vi.fn(), false));
+    expect(seen.at(-1)).toMatchObject({ sectionId: null, query: null, request: null });
+
+    rerender(scope(<Reader />, vi.fn(), true));
+    expect(seen.at(-1)).toMatchObject({ sectionId: "row-target", query: "gitlab token" });
+    expect(seen.at(-1)?.request).toBe(request);
+  });
+
+  it("does nothing outside a settings tab", () => {
+    function Standalone() {
+      useHoldSettingsDeepLink(true);
+      return <div data-testid="standalone" />;
+    }
+    expect(() => render(<Standalone />)).not.toThrow();
   });
 });

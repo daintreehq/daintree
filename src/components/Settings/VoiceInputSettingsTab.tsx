@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useId, useRef } from "react";
+import { useCallback, useState, useEffect, useId, useLayoutEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { Eye, EyeOff, XCircle, ExternalLink, ChevronRight, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,7 @@ import {
 import { LastDictationTermsSection } from "./LastDictationTerms";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { useHoldSettingsDeepLink, useSettingsDeepLink } from "./settingsDeepLink";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
@@ -542,6 +543,14 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
     returnFocusToManage.current = null;
     manageDictionaryRef.current?.focus({ focusVisible: target.visible } as FocusOptions);
   }, [dictionaryOpen]);
+
+  // Every setting search can name is on the main page, so a link landing here closes
+  // the dictionary over it, and waits for the saved values that decide which rows show.
+  const linkPending = useSettingsDeepLink().sectionId !== null;
+  useHoldSettingsDeepLink(isLoading || (linkPending && dictionaryOpen));
+  useLayoutEffect(() => {
+    if (linkPending) setDictionaryOpen(false);
+  }, [linkPending]);
 
   const provider = settings.transcriptionProvider;
   const blockers = dictationBlockers(settings, micPermission);
