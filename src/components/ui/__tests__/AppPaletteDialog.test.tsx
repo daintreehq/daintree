@@ -3,7 +3,12 @@ import { render, act, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
-import { deferPaletteFocusRestore } from "../paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+  deferPaletteFocusRestore,
+  suppressPaletteFocusRestore,
+} from "../paletteFocusRestore";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -281,6 +286,8 @@ describe("AppPaletteDialog focus restore", () => {
     _resetForTests();
     usePaletteStore.setState({ activePaletteId: null });
     animatedPresenceState.shouldRender = true;
+    consumeDeferredPaletteFocusRestore();
+    consumePaletteFocusRestoreSuppression();
     vi.useRealTimers();
   });
 
@@ -475,6 +482,74 @@ describe("AppPaletteDialog focus restore", () => {
 
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+
+  it("falls back to the app shell when a handed-off pick removed the opener", async () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    const fallbackButton = document.createElement("button");
+    root.appendChild(fallbackButton);
+    const trigger = document.createElement("button");
+    document.body.append(root, trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    screen.getByPlaceholderText("Palette input").focus();
+    // A command that closed the panel the palette was opened from.
+    deferPaletteFocusRestore((restore) => restore());
+    trigger.remove();
+    rerender(closedPalette());
+
+    expect(document.activeElement).toBe(fallbackButton);
+    root.remove();
+  });
+
+  it("yields a handed-off restore to a palette opening in its place", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    let restore: (() => void) | null = null;
+    deferPaletteFocusRestore((r) => {
+      restore = r;
+    });
+    rerender(closedPalette());
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    usePaletteStore.setState({ activePaletteId: "action" });
+    act(() => restore?.());
+
+    expect(restore).not.toBeNull();
+    expect(document.activeElement).not.toBe(trigger);
+    trigger.remove();
+  });
+
+  it("drops a pending hand-off when the close is suppressed", async () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    await act(() => vi.runAllTimersAsync());
+    deferPaletteFocusRestore((restore) => restore());
+    suppressPaletteFocusRestore();
+    rerender(closedPalette());
+
+    expect(document.activeElement).not.toBe(trigger);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+    trigger.remove();
+  });
+
+  it("leaves a hand-off for the palette closing now when one with nothing to restore unmounts", () => {
+    const { unmount } = renderPalette({ isOpen: false });
+    const receive = vi.fn();
+    deferPaletteFocusRestore(receive);
+    unmount();
+
+    expect(consumeDeferredPaletteFocusRestore()).toBe(receive);
   });
 
   it("cancels delayed autofocus when the palette closes before its animation frame", async () => {

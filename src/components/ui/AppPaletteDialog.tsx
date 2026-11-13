@@ -95,6 +95,32 @@ export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
   workspace: "w-[880px] max-w-[calc(100vw-2rem)]",
 };
 
+/**
+ * Hands the keyboard back to the element that opened a palette, or somewhere
+ * sensible when that element has gone (a command that closed the panel it was
+ * opened from).
+ */
+function returnFocusToOpener(el: HTMLElement, dialog: HTMLElement | null): void {
+  // Palette-to-palette handoff: the next palette will install its own focus,
+  // so skip restore entirely — and skip the overlay clear below, which would
+  // wipe overlays the incoming palette owns.
+  if (usePaletteStore.getState().activePaletteId) return;
+  // A command that opened a dialog: it has the keyboard now, and this
+  // palette's opener is behind its backdrop. The dialog hands focus back
+  // there itself when it closes.
+  if (focusHeldByOtherModal(dialog)) return;
+  // Re-arm the tooltip focus-open suppression right before the focus move:
+  // focusing a tooltip trigger re-opens its tooltip synchronously through
+  // Radix's focus path, and this runs an exit animation after the
+  // close-transition clear already fired (issue #11030).
+  clearDialogOverlays();
+  if (document.contains(el)) {
+    el.focus();
+    return;
+  }
+  focusAfterOverlayCloses(dialog);
+}
+
 /** Why the palette asked to close — for a consumer whose Escape is two-stage. */
 export type PaletteCloseReason = "escape" | "backdrop";
 
@@ -185,48 +211,36 @@ export function AppPaletteDialog({
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
     openerCapturedRef.current = false;
+    // Nothing to give back: this palette never opened, or its exit already
+    // restored and this is the host unmounting. The one-shots below belong to
+    // whichever palette is closing now, so leave them for it.
+    if (!el) return;
+    // Both are one-shots for this close; read both so a hand-off left behind
+    // by a suppressed close can't reach whichever palette is next.
+    const suppressed = consumePaletteFocusRestoreSuppression();
+    const receive = consumeDeferredPaletteFocusRestore();
     // A caller placed focus deliberately (the fleet overview focusing the run
     // it opened); putting it back would undo that. Overlays are still cleared —
     // only the focus move is skipped.
-    if (consumePaletteFocusRestoreSuppression()) {
+    if (suppressed) {
       clearDialogOverlays();
       return;
     }
     // The caller decides once it knows whether its pick moved focus elsewhere.
-    const receive = consumeDeferredPaletteFocusRestore();
     if (receive) {
-      clearDialogOverlays();
+      if (!usePaletteStore.getState().activePaletteId) clearDialogOverlays();
       const dialog = dialogRef.current;
       receive(() => {
-        if (!el || !document.contains(el)) return;
         // Only while nothing else has taken the keyboard meanwhile: focus
         // still on the body, or still in this palette on its way out.
         const active = document.activeElement;
         const unclaimed =
           !active || active === document.body || (dialog !== null && dialog.contains(active));
-        if (unclaimed) el.focus();
+        if (unclaimed) returnFocusToOpener(el, dialog);
       });
       return;
     }
-    if (!el) return;
-    // Palette-to-palette handoff: the next palette will install its
-    // own focus, so skip restore entirely — and skip the overlay clear
-    // below, which would wipe overlays the incoming palette owns.
-    if (usePaletteStore.getState().activePaletteId) return;
-    // A command that opened a dialog: it has the keyboard now, and this
-    // palette's opener is behind its backdrop. The dialog hands focus back
-    // there itself when it closes.
-    if (focusHeldByOtherModal(dialogRef.current)) return;
-    // Re-arm the tooltip focus-open suppression right before the focus
-    // move: focusing a tooltip trigger re-opens its tooltip synchronously
-    // through Radix's focus path, and this runs an exit animation after
-    // the close-transition clear already fired (issue #11030).
-    clearDialogOverlays();
-    if (document.contains(el)) {
-      el.focus();
-      return;
-    }
-    focusAfterOverlayCloses(dialogRef.current);
+    returnFocusToOpener(el, dialogRef.current);
   }, []);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
