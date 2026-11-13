@@ -77,10 +77,12 @@ function learningSwitch(): HTMLButtonElement {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 /** Longer than a dialog's exit animation, so one that closed has left the DOM by then. */
@@ -218,9 +220,10 @@ describe("Decisions → Decision model", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(learningSwitch()));
   });
 
-  it("closes the agreement on a failed save too, with the failure beside the switch", async () => {
+  it("closes the agreement on a failed save too, with the failure in the section", async () => {
     getModel.mockResolvedValue(state());
-    setModel.mockRejectedValue(new Error("store is locked"));
+    const saving = deferred<DecisionsModelState>();
+    setModel.mockReturnValue(saving.promise);
     await renderSection();
 
     learningSwitch().focus();
@@ -232,8 +235,14 @@ describe("Decisions → Decision model", () => {
     await act(async () => {
       fireEvent.click(accept);
     });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXIT_ALLOWANCE_MS));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () => saving.reject(new Error("store is locked")));
     await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.body.textContent).toContain("Couldn't change learning");
+    expect(row("decisions-model").textContent).toContain("store is locked");
     expect(learningSwitch().getAttribute("aria-checked")).toBe("false");
     await vi.waitFor(() => expect(document.activeElement).toBe(learningSwitch()));
   });

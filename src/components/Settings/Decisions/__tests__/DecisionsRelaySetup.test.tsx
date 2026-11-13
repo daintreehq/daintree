@@ -261,15 +261,37 @@ describe("DecisionsConnectionSection claim and restore", () => {
       reason: "wrong-secret",
       kept: true,
     });
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
     renderSection({ state: "not-connected", keysStored: true });
     await checkAddress("claimed");
     const secretInput = () =>
       document.querySelector<HTMLInputElement>("#decisions-claim-secret input")!;
     const showSecret = screen.getByRole("button", { name: "Show claim secret" });
     const showPassphrase = screen.getByRole("button", { name: "Show recovery kit passphrase" });
+    const revealBoth = async () => {
+      fireEvent.change(secretInput(), { target: { value: SECRET } });
+      fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+      await chooseKit('{"v":1}');
+      fireEvent.click(showSecret);
+      fireEvent.click(showPassphrase);
+    };
+    const expectBothMasked = () => {
+      for (const [field, eye] of [
+        [secretInput(), showSecret],
+        [passphraseField(), showPassphrase],
+      ] as const) {
+        expect(field.type).toBe("password");
+        expect(field.value).toBe("");
+        expect(eye.getAttribute("aria-pressed")).toBe("false");
+      }
+    };
+
     fireEvent.change(secretInput(), { target: { value: SECRET } });
     fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
-
     // A press on the eye leaves the caret in the field.
     expect(fireEvent.mouseDown(showSecret)).toBe(false);
     fireEvent.click(showSecret);
@@ -287,29 +309,35 @@ describe("DecisionsConnectionSection claim and restore", () => {
 
     await submit(secretInput());
     expect(claimRelay).toHaveBeenCalledOnce();
-    for (const [field, eye] of [
-      [secretInput(), showSecret],
-      [passphraseField(), showPassphrase],
-    ] as const) {
-      expect(field.type).toBe("password");
-      expect(field.value).toBe("");
-      expect(eye.getAttribute("aria-pressed")).toBe("false");
-    }
+    expectBothMasked();
+
+    await revealBoth();
+    await submit(passphraseField());
+    expect(restoreIdentity).toHaveBeenCalledOnce();
+    expectBothMasked();
   });
 
   it("masks a shown secret again once its field is emptied", async () => {
-    renderSection({ state: "not-connected" });
-    await checkAddress("unclaimed");
-    const secretInput = () =>
-      document.querySelector<HTMLInputElement>("#decisions-claim-secret input")!;
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("claimed");
+    const fields: [() => HTMLInputElement, string, string][] = [
+      [
+        () => document.querySelector<HTMLInputElement>("#decisions-claim-secret input")!,
+        "Show claim secret",
+        SECRET,
+      ],
+      [passphraseField, "Show recovery kit passphrase", PASSPHRASE],
+    ];
 
-    fireEvent.change(secretInput(), { target: { value: SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Show claim secret" }));
-    expect(secretInput().type).toBe("text");
-    fireEvent.change(secretInput(), { target: { value: "" } });
-    expect(secretInput().type).toBe("password");
-    fireEvent.change(secretInput(), { target: { value: SECRET } });
-    expect(secretInput().type).toBe("password");
+    for (const [field, eye, value] of fields) {
+      fireEvent.change(field(), { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: eye }));
+      expect(field().type).toBe("text");
+      fireEvent.change(field(), { target: { value: "" } });
+      expect(field().type).toBe("password");
+      fireEvent.change(field(), { target: { value } });
+      expect(field().type).toBe("password");
+    }
   });
 
   it("clears the other form's secret too, whichever form is sent", async () => {

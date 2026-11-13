@@ -124,6 +124,39 @@ describe("DecisionsSettingsTab", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(enable()));
   });
 
+  it("closes the agreement on a failed turn on too, saying why", async () => {
+    getStatus.mockResolvedValue({ state: "off" });
+    let refuse!: (reason: unknown) => void;
+    setEnabled.mockReturnValue(
+      new Promise<DecisionsStatus>((_, reject) => {
+        refuse = reject;
+      })
+    );
+    await renderTab();
+    const enable = () =>
+      screen.getByRole("switch", { name: "Enable Decisions" }) as HTMLButtonElement;
+
+    enable().focus();
+    fireEvent.click(enable());
+    const accept = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Turn on Decisions",
+    });
+    act(() => accept.focus());
+    await act(async () => {
+      fireEvent.click(accept);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () => refuse(new Error("The key store couldn't be opened")));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("alert").textContent).toContain("The key store couldn't be opened");
+    expect(enable().getAttribute("aria-checked")).toBe("false");
+    await vi.waitFor(() => expect(document.activeElement).toBe(enable()));
+  });
+
   it("asks for the kit's passphrase as soon as a claim records the relay", async () => {
     getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1 });
     checkRelay.mockResolvedValue({

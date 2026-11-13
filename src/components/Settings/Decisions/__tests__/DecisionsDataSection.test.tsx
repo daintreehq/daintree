@@ -11,6 +11,7 @@ import type {
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsDataSection } from "../DecisionsDataSection";
+import { DecisionsExportDialog } from "../DecisionsExportDialog";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const HOST = "decisions.example.workers.dev";
@@ -119,7 +120,7 @@ describe("DecisionsDataSection", () => {
     expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
   });
 
-  it("exports on Enter from either passphrase field once both match, and only then", async () => {
+  it("exports on Enter once both passphrases match, never for an IME's or a held Enter", async () => {
     const reply = deferred<DecisionsExportResult>();
     exportData.mockReturnValue(reply.promise);
     renderSection({ state: "not-connected", relayOrigin: ORIGIN });
@@ -139,7 +140,7 @@ describe("DecisionsDataSection", () => {
     expect(exportData).not.toHaveBeenCalled();
 
     await act(async () => {
-      fireEvent.keyDown(first, { key: "Enter" });
+      fireEvent.keyDown(second, { key: "Enter" });
     });
     expect(exportData).toHaveBeenCalledExactlyOnceWith({ passphrase: PASSPHRASE });
     expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
@@ -150,27 +151,81 @@ describe("DecisionsDataSection", () => {
     await gone("dialog");
   });
 
-  it("ties the mismatch to the repeated passphrase for assistive tech", () => {
+  it("exports on Enter from the first passphrase field too, and on the form's own submit", async () => {
+    exportData.mockResolvedValue({ result: "cancelled" });
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+    const fill = () => {
+      const [first, second] = passphraseFields();
+      fireEvent.change(first, { target: { value: PASSPHRASE } });
+      fireEvent.change(second, { target: { value: PASSPHRASE } });
+      return first;
+    };
+
+    fireEvent.click(button("Export…"));
+    const first = fill();
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Enter" });
+    });
+    expect(exportData).toHaveBeenCalledOnce();
+    await gone("dialog");
+
+    fireEvent.click(button("Export…"));
+    const again = fill();
+    await act(async () => {
+      fireEvent.submit(again.form!);
+    });
+    expect(exportData).toHaveBeenCalledTimes(2);
+    expect(exportData).toHaveBeenLastCalledWith({ passphrase: PASSPHRASE });
+  });
+
+  it("sends nothing from the keyboard or the form while an export is running", () => {
+    const onExport = vi.fn<(passphrase: string) => void>();
+    const dialogWhile = (exporting: boolean) => (
+      <TooltipProvider>
+        <DecisionsExportDialog
+          isOpen
+          exporting={exporting}
+          error={null}
+          onCancel={() => {}}
+          onExport={onExport}
+        />
+      </TooltipProvider>
+    );
+    const view = render(dialogWhile(false));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+
+    view.rerender(dialogWhile(true));
+    fireEvent.keyDown(second, { key: "Enter" });
+    fireEvent.submit(second.form!);
+    expect(onExport).not.toHaveBeenCalled();
+
+    view.rerender(dialogWhile(false));
+    fireEvent.keyDown(second, { key: "Enter" });
+    expect(onExport).toHaveBeenCalledExactlyOnceWith(PASSPHRASE);
+  });
+
+  it("ties the mismatch to the repeated passphrase for assistive tech, and lets go of it once fixed", () => {
     renderSection({ state: "not-connected", relayOrigin: ORIGIN });
 
     fireEvent.click(button("Export…"));
     const [first, second] = passphraseFields();
-    /** What a screen reader reads after the field's name. */
-    const described = (field: HTMLInputElement) =>
-      (field.getAttribute("aria-describedby") ?? "")
-        .split(" ")
-        .map((id) => (id ? (document.getElementById(id)?.textContent ?? "") : ""))
-        .join(" ");
+    const describedBy = (field: HTMLInputElement) =>
+      (field.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
     fireEvent.change(first, { target: { value: PASSPHRASE } });
     fireEvent.change(second, { target: { value: `${PASSPHRASE}!` } });
     expect(second.getAttribute("aria-invalid")).toBe("true");
-    expect(described(second)).toContain("The passphrases don't match");
+    const errorId = describedBy(second).find((id) =>
+      document.getElementById(id)?.textContent?.includes("The passphrases don't match")
+    );
+    expect(errorId).toBeTruthy();
     expect(first.getAttribute("aria-invalid")).toBeNull();
-    expect(described(first)).not.toContain("The passphrases don't match");
+    expect(describedBy(first)).not.toContain(errorId);
 
     fireEvent.change(second, { target: { value: PASSPHRASE } });
     expect(second.getAttribute("aria-invalid")).toBeNull();
-    expect(described(second)).not.toContain("The passphrases don't match");
+    expect(describedBy(second)).not.toContain(errorId);
   });
 
   it("keeps the export open with the reason when main couldn't export, and shows nothing for a cancel", async () => {

@@ -97,15 +97,20 @@ describe("DecisionsConnectionSection relay check", () => {
   it("sends a bare host through the form's own submit, leaving the scheme to main", async () => {
     checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
     renderSection({ state: "not-connected" });
-    // An address is no word to check the spelling of.
-    expect(urlField().getAttribute("spellcheck")).toBe("false");
 
+    fireEvent.change(urlField(), { target: { value: ORIGIN } });
+    expect(urlField().validity.typeMismatch).toBe(false);
     fireEvent.change(urlField(), { target: { value: "decisions.example.workers.dev" } });
+    // A URL field holds a bare host as a mismatch of its own, which neither
+    // stops the check nor reaches assistive tech as an invalid entry.
+    expect(urlField().validity.typeMismatch).toBe(true);
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
     // requestSubmit, unlike a bare submit event, runs the form's own validation first.
     await act(async () => {
       urlField().form!.requestSubmit();
     });
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith("decisions.example.workers.dev");
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
   });
 
   it.each<[string, DecisionsRelayCheck, string, RegExp]>([
@@ -541,6 +546,8 @@ describe("DecisionsConnectionSection disconnect focus", () => {
   }
 
   beforeEach(() => {
+    checkRelay.mockReset();
+    startSetupCheck.mockReset();
     disconnectRelay.mockReset();
     const stub = electronStub();
     Object.defineProperty(window, "electron", {

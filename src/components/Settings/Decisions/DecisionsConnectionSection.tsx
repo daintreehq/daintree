@@ -459,7 +459,9 @@ export function DecisionsConnectionSection({
                   placeholder="https://decisions.example.workers.dev"
                   aria-labelledby={labelId}
                   aria-describedby={descriptionId}
-                  aria-invalid={check?.result === "invalid-url" ? true : undefined}
+                  // Explicit both ways: a bare host fails the URL field's own check,
+                  // which assistive tech would otherwise read as invalid.
+                  aria-invalid={check?.result === "invalid-url"}
                   disabled={disabled}
                 />
                 <Button
