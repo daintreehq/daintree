@@ -264,12 +264,31 @@ export function DaintreeAssistantSettingsTab() {
 
   const versionWarning = useAssistantVersionWarning(effectiveAgentId);
 
-  const agentOptions = useMemo(() => {
-    return getAssistantSupportedAgentIds().map((id) => ({
-      value: id,
-      label: getAgentConfig(id)?.name ?? id,
-    }));
-  }, []);
+  // Read again with availability, like `installedAgentIds`, so a backend that
+  // Reload configuration adds or drops reaches the list. An agent is marked only
+  // once detection has answered for it, by the same test that decides which
+  // agent is the only one installed. It stays choosable: the dock offers Run
+  // anyway for a CLI the probe missed, and the user may install it next.
+  const agentOptions = useMemo(
+    () =>
+      getAssistantSupportedAgentIds().map((id) => {
+        const notInstalled = cliAvailabilityKnown && !installedAgentIds.includes(id);
+        return {
+          value: id,
+          label: getAgentConfig(id)?.name ?? id,
+          description: notInstalled ? "Not installed" : undefined,
+          notInstalled,
+        };
+      }),
+    [cliAvailabilityKnown, installedAgentIds]
+  );
+  // The saved agent the dock would stop on its missing-CLI gate. A saved agent the
+  // assistant no longer supports isn't listed, and has the dropped-agent notice.
+  const notInstalledPreferredAgentId =
+    preferredAgentId !== null &&
+    agentOptions.some((option) => option.value === preferredAgentId && option.notInstalled)
+      ? preferredAgentId
+      : null;
   // The select tracks the persisted choice exactly. Showing the only installed
   // agent as selected would read as saved, and picking a value the select
   // already shows never fires onChange, so the user couldn't save it. The
@@ -412,8 +431,12 @@ export function DaintreeAssistantSettingsTab() {
     void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" });
   };
 
-  const handleGoToAgentSettings = () => {
-    void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+  const handleGoToAgentSettings = (agentId: string) => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: agentId },
+      { source: "user" }
+    );
   };
 
   const handleGoToSkipPermissions = () => {
@@ -596,13 +619,37 @@ export function DaintreeAssistantSettingsTab() {
             }
           />
         )}
+        {notInstalledPreferredAgentId && (
+          <AgentNotice
+            testId="assistant-agent-not-installed-banner"
+            title={`${getAgentConfig(notInstalledPreferredAgentId)?.name ?? notInstalledPreferredAgentId} isn't installed`}
+            body={
+              installedAgentIds.length > 0
+                ? "The assistant can't start until its CLI is installed. Install it, or choose an installed agent above."
+                : "The assistant can't start until its CLI is installed."
+            }
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGoToAgentSettings(notInstalledPreferredAgentId)}
+              >
+                Open agent settings
+              </Button>
+            }
+          />
+        )}
         {versionWarning && (
           <AgentNotice
             testId="assistant-version-warning-banner"
             title={`${versionWarning.agentName} needs an update`}
             body={`Version ${versionWarning.required} or later is required, but ${versionWarning.installed} is installed. Update the CLI to avoid a blocked or degraded session.`}
             action={
-              <Button variant="outline" size="sm" onClick={handleGoToAgentSettings}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleGoToAgentSettings(versionWarning.agentId)}
+              >
                 Open agent settings
               </Button>
             }
