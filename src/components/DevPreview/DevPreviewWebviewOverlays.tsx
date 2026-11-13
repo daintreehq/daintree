@@ -31,9 +31,7 @@ import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useStoppedLoadFocus } from "@/hooks/useStoppedLoadFocus";
-
-// The main-process clipboard: the guest page may hold focus.
-const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
+import { writeMainClipboard } from "@/lib/mainClipboard";
 
 interface DevPreviewWebviewOverlaysProps {
   reconnectAttempt: number;

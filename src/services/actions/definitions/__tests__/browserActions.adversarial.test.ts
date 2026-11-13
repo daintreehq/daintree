@@ -48,6 +48,7 @@ function setPanelState(state: {
 
 const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
 const clipboardSpy = vi.fn<(text: string) => Promise<void>>();
+const navigatorClipboardSpy = vi.fn<(text: string) => Promise<void>>();
 const captureScreenshotSpy =
   vi.fn<(panelId: string) => Promise<{ pngBase64: string; width: number; height: number }>>();
 const writeImageSpy = vi.fn<(bytes: Uint8Array) => Promise<void>>();
@@ -107,6 +108,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   dispatchSpy.mockReset().mockReturnValue(true);
   clipboardSpy.mockReset().mockResolvedValue(undefined);
+  navigatorClipboardSpy.mockReset().mockResolvedValue(undefined);
   addPanelSpy.mockReset().mockResolvedValue("new-panel");
   setBrowserUrlSpy.mockReset();
   activateTerminalSpy.mockReset();
@@ -122,7 +124,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis.window, "electron", {
     value: {
       webview: { captureScreenshot: captureScreenshotSpy },
-      clipboard: { writeImage: writeImageSpy },
+      clipboard: { writeImage: writeImageSpy, writeText: clipboardSpy },
     },
     configurable: true,
   });
@@ -131,7 +133,7 @@ beforeEach(() => {
     configurable: true,
   });
   Object.defineProperty(globalThis, "navigator", {
-    value: { clipboard: { writeText: clipboardSpy } },
+    value: { clipboard: { writeText: navigatorClipboardSpy } },
     configurable: true,
   });
 });
@@ -333,6 +335,7 @@ describe("browserActions adversarial", () => {
     await run("browser.copyUrl");
 
     expect(clipboardSpy).toHaveBeenCalledWith("https://copy.example");
+    expect(navigatorClipboardSpy).not.toHaveBeenCalled();
   });
 
   it("browser.setZoomLevel dispatches with validated zoomFactor", async () => {

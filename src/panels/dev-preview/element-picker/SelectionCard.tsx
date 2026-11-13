@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { actionService } from "@/services/ActionService";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { cn } from "@/lib/utils";
 import type { SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
@@ -107,6 +108,7 @@ export function SelectionIdentity({
               text={source}
               aria-label="Copy path"
               announcement="Path copied"
+              write={writeMainClipboard}
               tooltipSide="bottom"
             />
             {absolute ? (
@@ -137,6 +139,7 @@ export function SelectionIdentity({
               text={`${reported.path}${reported.line === null ? "" : `:${reported.line}`}`}
               aria-label="Copy path"
               announcement="Path copied"
+              write={writeMainClipboard}
               tooltipSide="bottom"
             />
           </>
