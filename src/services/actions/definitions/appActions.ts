@@ -56,10 +56,11 @@ async function refreshRendererConfig(): Promise<void> {
   ]);
   // Through the store, not only the host's probe: every reader of availability
   // (the assistant's agent choices among them) re-reads the registry when it
-  // changes, which is how the reloaded config's agents reach them.
+  // changes, which is how the reloaded config's agents reach them. A recheck,
+  // because a probe already running may have started before the reload.
   useCliAvailabilityStore
     .getState()
-    .refresh(true)
+    .recheck()
     .catch((error: unknown) => {
       logError("[app.reloadConfig] Failed to refresh CLI availability", error);
     });

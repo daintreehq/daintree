@@ -6,7 +6,7 @@ const userAgentRefreshMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefine
 const agentSettingsRefreshMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const loadOverridesMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
-const cliAvailabilityRefreshMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const cliAvailabilityRecheckMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const reloadConfigMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("@/clients", () => ({
@@ -23,7 +23,7 @@ vi.mock("@/store/agentSettingsStore", () => ({
 }));
 
 vi.mock("@/store/cliAvailabilityStore", () => ({
-  useCliAvailabilityStore: { getState: () => ({ refresh: cliAvailabilityRefreshMock }) },
+  useCliAvailabilityStore: { getState: () => ({ recheck: cliAvailabilityRecheckMock }) },
 }));
 vi.mock("@/store/appThemeStore", () => ({
   useAppThemeStore: { getState: () => ({}) },
@@ -123,12 +123,10 @@ describe("appActions adversarial", () => {
     expect(userAgentRefreshMock).toHaveBeenCalledTimes(1);
     expect(agentSettingsRefreshMock).toHaveBeenCalledTimes(1);
     expect(loadOverridesMock).toHaveBeenCalledTimes(1);
-    // The store's refresh, which reaches every reader; the action only probes.
-    expect(cliAvailabilityRefreshMock).toHaveBeenCalledWith(true);
-    expect(dispatchMock).not.toHaveBeenCalledWith(
-      "cliAvailability.refresh",
-      expect.anything(),
-      expect.anything()
+    // The store's recheck, which reaches every reader; the action only probes.
+    expect(cliAvailabilityRecheckMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.map(([actionId]) => actionId)).not.toContain(
+      "cliAvailability.refresh"
     );
   });
 
@@ -144,21 +142,28 @@ describe("appActions adversarial", () => {
 
     const reload = cb();
     await Promise.resolve();
-    expect(cliAvailabilityRefreshMock).not.toHaveBeenCalled();
+    expect(cliAvailabilityRecheckMock).not.toHaveBeenCalled();
 
     finishRegistry();
     await reload;
-    expect(cliAvailabilityRefreshMock).toHaveBeenCalledWith(true);
+    expect(cliAvailabilityRecheckMock).toHaveBeenCalledTimes(1);
   });
 
   it("catches a failed CLI availability refresh", async () => {
     register();
-    cliAvailabilityRefreshMock.mockRejectedValueOnce(new Error("probe failed"));
+    cliAvailabilityRecheckMock.mockRejectedValueOnce(new Error("probe failed"));
     const cb = onConfigReloadedMock.mock.calls[0]![0];
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(cb()).resolves.toBeUndefined();
-    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+    // Other refreshes in this fixture log too, so it looks for this one's line.
+    await vi.waitFor(() =>
+      expect(
+        errorSpy.mock.calls.some((args) =>
+          args.some((arg) => String(arg).includes("Failed to refresh CLI availability"))
+        )
+      ).toBe(true)
+    );
     errorSpy.mockRestore();
   });
 

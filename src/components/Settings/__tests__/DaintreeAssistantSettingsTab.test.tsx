@@ -2519,11 +2519,11 @@ describe("DaintreeAssistantSettingsTab", () => {
 
   it("opens the settings of the only installed agent its version warning names (#16929)", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "antigravity"]);
-    useCliAvailabilityStore.setState({
-      availability: { claude: "missing", antigravity: "ready" } as never,
+    useCliAvailabilityStore.setState((state) => ({
+      availability: { ...state.availability, claude: "missing", antigravity: "ready" },
       hasRealData: true,
       lastCheckedAt: 1,
-    });
+    }));
     installApi(
       {},
       {},

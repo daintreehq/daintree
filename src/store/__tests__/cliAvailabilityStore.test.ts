@@ -266,6 +266,120 @@ describe("cliAvailabilityStore", () => {
     });
   });
 
+  describe("recheck", () => {
+    const rechecked = { ...installedAvail, gemini: "ready" };
+
+    function deferProbe() {
+      let resolve!: (value: typeof installedAvail) => void;
+      refreshMock.mockReturnValueOnce(
+        new Promise<typeof installedAvail>((r) => {
+          resolve = r;
+        })
+      );
+      return (value: typeof installedAvail) => resolve(value);
+    }
+
+    it("probes at once when no probe is running", async () => {
+      refreshMock.mockResolvedValueOnce(rechecked);
+
+      await useCliAvailabilityStore.getState().recheck();
+
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+      expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
+    });
+
+    it("probes again after a refresh already running instead of taking its answer", async () => {
+      const finishRunning = deferProbe();
+      refreshMock.mockResolvedValueOnce(rechecked);
+      const running = useCliAvailabilityStore.getState().refresh(true);
+
+      const recheck = useCliAvailabilityStore.getState().recheck();
+      await Promise.resolve();
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+
+      finishRunning(installedAvail);
+      await Promise.all([running, recheck]);
+
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+      expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
+    });
+
+    it("probes again after a running initialize", async () => {
+      const finishInit = deferProbe();
+      refreshMock.mockResolvedValueOnce(rechecked);
+      const init = useCliAvailabilityStore.getState().initialize();
+
+      const recheck = useCliAvailabilityStore.getState().recheck();
+      finishInit(installedAvail);
+      await Promise.all([init, recheck]);
+
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+      expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
+    });
+
+    it("still probes again when the running probe fails", async () => {
+      refreshMock.mockRejectedValueOnce(new Error("probe failed"));
+      refreshMock.mockResolvedValueOnce(rechecked);
+      const running = useCliAvailabilityStore.getState().refresh(true);
+
+      const recheck = useCliAvailabilityStore.getState().recheck();
+      await expect(running).rejects.toThrow("probe failed");
+      await recheck;
+
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+      expect(useCliAvailabilityStore.getState().availability).toEqual(rechecked);
+    });
+
+    it("shares one probe among calls made while it waits", async () => {
+      const finishRunning = deferProbe();
+      refreshMock.mockResolvedValueOnce(rechecked);
+      const running = useCliAvailabilityStore.getState().refresh(true);
+
+      const first = useCliAvailabilityStore.getState().recheck();
+      const second = useCliAvailabilityStore.getState().recheck();
+      expect(second).toBe(first);
+
+      finishRunning(installedAvail);
+      await Promise.all([running, first, second]);
+
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("waits out its own probe for a call made once that probe has started", async () => {
+      const finishRunning = deferProbe();
+      const finishRecheck = deferProbe();
+      const later = { ...rechecked, opencode: "ready" };
+      refreshMock.mockResolvedValueOnce(later);
+      const running = useCliAvailabilityStore.getState().refresh(true);
+      const first = useCliAvailabilityStore.getState().recheck();
+
+      finishRunning(installedAvail);
+      await running;
+      await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(2));
+
+      const second = useCliAvailabilityStore.getState().recheck();
+      expect(second).not.toBe(first);
+      finishRecheck(rechecked);
+      await Promise.all([first, second]);
+
+      expect(refreshMock).toHaveBeenCalledTimes(3);
+      expect(useCliAvailabilityStore.getState().availability).toEqual(later);
+    });
+
+    it("doesn't probe once the store is cleaned up while it waits", async () => {
+      const finishRunning = deferProbe();
+      const running = useCliAvailabilityStore.getState().refresh(true);
+      const recheck = useCliAvailabilityStore.getState().recheck();
+
+      cleanupCliAvailabilityStore();
+      finishRunning(installedAvail);
+      await Promise.all([running, recheck]);
+
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+      expect(useCliAvailabilityStore.getState().hasRealData).toBe(false);
+    });
+  });
+
   describe("details", () => {
     it("populates details alongside availability on initialize", async () => {
       refreshMock.mockResolvedValueOnce(installedAvail);
