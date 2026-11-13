@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -57,6 +57,7 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => {
 });
 
 import { SearchablePalette } from "../SearchablePalette";
+import { LISTBOX_PAGE_SIZE } from "@/hooks/useListboxCursor";
 import type { PaletteSurfaceTier } from "../AppPaletteDialog";
 
 interface Item {
@@ -85,6 +86,11 @@ function renderPalette(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
   return render(<SearchablePalette<Item> {...props} />);
+}
+
+function cleanupAndRender(overrides: Record<string, unknown> = {}) {
+  cleanup();
+  return renderPalette(overrides);
 }
 
 describe("SearchablePalette keyboard navigation (non-composing)", () => {
@@ -227,36 +233,112 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
   );
 });
 
-describe("SearchablePalette Tab remap (input)", () => {
-  it("moves the selection forward on Tab and cancels native traversal", () => {
+describe("SearchablePalette Tab (input)", () => {
+  it("leaves Tab to native traversal, so controls past the list stay reachable", () => {
     const onSelectNext = vi.fn();
-    renderPalette({ onSelectNext });
+    renderPalette({
+      onSelectNext,
+      afterList: <button type="button">Assign issue to me</button>,
+    });
     const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
 
-    expect(onSelectNext).toHaveBeenCalledTimes(1);
-    expect(notCancelled).toBe(false);
+    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(true);
   });
 
-  it("moves the selection backward on Shift+Tab and cancels native traversal", () => {
+  it("does not move the selection on Shift+Tab", () => {
     const onSelectPrevious = vi.fn();
     renderPalette({ onSelectPrevious });
-    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), {
-      key: "Tab",
-      shiftKey: true,
-    });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab", shiftKey: true });
 
-    expect(onSelectPrevious).toHaveBeenCalledTimes(1);
-    expect(notCancelled).toBe(false);
+    expect(onSelectPrevious).not.toHaveBeenCalled();
   });
 
-  it("lets the custom onKeyDown hook pre-empt the Tab remap", () => {
-    const onSelectNext = vi.fn();
+  it("still hands Tab to the consumer's onKeyDown first", () => {
     const onKeyDown = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
-    renderPalette({ onSelectNext, onKeyDown });
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+    renderPalette({ onKeyDown });
+    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
 
     expect(onKeyDown).toHaveBeenCalledTimes(1);
-    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(false);
+  });
+});
+
+describe("SearchablePalette onListKeyDown", () => {
+  it("offers list chords before navigation from the field and the region alike", () => {
+    const onConfirm = vi.fn();
+    const onListKeyDown = vi.fn((e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && e.altKey) e.preventDefault();
+    });
+    renderPalette({ onConfirm, onListKeyDown });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", altKey: true });
+    fireEvent.keyDown(screen.getByRole("group", { name: "Test" }), { key: "Enter", altKey: true });
+    expect(onListKeyDown).toHaveBeenCalledTimes(2);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole("group", { name: "Test" }), { key: "Enter" });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs after the field's own onKeyDown, which can still claim a key first", () => {
+    const onListKeyDown = vi.fn();
+    const onKeyDown = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
+    renderPalette({ onKeyDown, onListKeyDown });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onListKeyDown).not.toHaveBeenCalled();
+  });
+});
+
+describe("SearchablePalette PageUp/PageDown", () => {
+  const many: Item[] = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
+
+  it("moves the cursor a page down and back up from either field or region", () => {
+    const onSelectIndex = vi.fn();
+    renderPalette({ results: many, selectedIndex: 3, onSelectIndex });
+
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "PageDown" })).toBe(false);
+    expect(onSelectIndex).toHaveBeenLastCalledWith(3 + LISTBOX_PAGE_SIZE);
+
+    cleanupAndRender({ results: many, selectedIndex: 3 + LISTBOX_PAGE_SIZE, onSelectIndex });
+    expect(fireEvent.keyDown(screen.getByRole("group", { name: "Test" }), { key: "PageUp" })).toBe(
+      false
+    );
+    expect(onSelectIndex).toHaveBeenLastCalledWith(3);
+  });
+
+  it("stops at the ends rather than wrapping", () => {
+    const onSelectIndex = vi.fn();
+    renderPalette({ results: many, selectedIndex: many.length - 2, onSelectIndex });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "PageDown" });
+    expect(onSelectIndex).toHaveBeenLastCalledWith(many.length - 1);
+
+    cleanupAndRender({ results: many, selectedIndex: 1, onSelectIndex });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "PageUp" });
+    expect(onSelectIndex).toHaveBeenLastCalledWith(0);
+  });
+
+  it.each(["PageUp", "PageDown"])("leaves %s alone with no rows or a modifier held", (key) => {
+    const onSelectIndex = vi.fn();
+    renderPalette({ results: [], selectedIndex: -1, onSelectIndex });
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key })).toBe(true);
+
+    cleanupAndRender({ results: many, selectedIndex: 3, onSelectIndex });
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key, shiftKey: true })).toBe(true);
+    expect(onSelectIndex).not.toHaveBeenCalled();
+  });
+
+  it.each(["PageUp", "PageDown"])("leaves %s to the consumer's onKeyDown first", (key) => {
+    const onSelectIndex = vi.fn();
+    const onKeyDown = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
+    renderPalette({ results: many, selectedIndex: 3, onSelectIndex, onKeyDown });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key });
+
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onSelectIndex).not.toHaveBeenCalled();
   });
 });
 
@@ -316,6 +398,67 @@ describe("SearchablePalette Escape clears before it closes", () => {
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("clears a query first when Escape comes from the results region or a control past the list", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    renderPalette({
+      query: "abc",
+      onQueryChange,
+      onClose,
+      afterList: <button type="button">Assign issue to me</button>,
+    });
+
+    const region = screen.getByRole("group", { name: "Test" });
+    region.focus();
+    fireEvent.keyDown(region, { key: "Escape" });
+    // The emptied search is the next thing typed into, so the field takes focus.
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+
+    const control = screen.getByRole("button", { name: "Assign issue to me" });
+    control.focus();
+    fireEvent.keyDown(control, { key: "Escape" });
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+
+    expect(onQueryChange).toHaveBeenCalledTimes(2);
+    expect(onQueryChange).toHaveBeenLastCalledWith("");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps an answer through Escape when clearQueryOnEscape is off, from field and region", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    renderPalette({ query: "staging", onQueryChange, onClose, clearQueryOnEscape: false });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("group", { name: "Test" }), { key: "Escape" });
+
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenNthCalledWith(1, "escape");
+    expect(onClose).toHaveBeenNthCalledWith(2, "escape");
+  });
+
+  it("closes from the results region once the field is empty, saying it was Escape", () => {
+    const onClose = vi.fn();
+    renderPalette({ query: "", onClose });
+
+    fireEvent.keyDown(screen.getByRole("group", { name: "Test" }), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("escape");
+  });
+
+  it("closes on a scrim click even with a query in the field", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    renderPalette({ query: "abc", onQueryChange, onClose });
+
+    fireEvent.click(screen.getByRole("dialog").parentElement!);
+
+    expect(onClose).toHaveBeenCalledWith("backdrop");
+    expect(onQueryChange).not.toHaveBeenCalled();
   });
 });
 

@@ -254,4 +254,18 @@ describe("SendToAgentPalette pointer and Home/End", () => {
     fireEvent.keyDown(search, { key: "End" });
     expect(setSelectedIndex).toHaveBeenLastCalledWith(2);
   });
+
+  it("pages onto the nearest open row back toward the cursor when the page lands on locked rows", () => {
+    const setSelectedIndex = vi.fn();
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      item(`r${i}`, { isInputLocked: i < 5 || i >= 20 })
+    );
+    renderPalette(rows, { setSelectedIndex, selectedIndex: 14 });
+    const search = document.querySelector("input")!;
+
+    fireEvent.keyDown(search, { key: "PageUp" });
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(5);
+    fireEvent.keyDown(search, { key: "PageDown" });
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(19);
+  });
 });

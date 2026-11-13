@@ -159,8 +159,36 @@ function fireKey(
       return prevented;
     },
   } as unknown as React.KeyboardEvent<HTMLInputElement>;
+  // The shell's order on the field: its own keys first, then the list chords.
+  const onListKeyDown = lastSearchablePaletteProps.current?.onListKeyDown as
+    ((e: React.KeyboardEvent<HTMLElement>) => void) | undefined;
   act(() => {
     onKeyDown(event);
+    if (!prevented) onListKeyDown?.(event);
+  });
+  return prevented;
+}
+
+/** A key on the results region, which hands the shell only the list keys. */
+function fireRegionKey(key: string) {
+  const onListKeyDown = lastSearchablePaletteProps.current?.onListKeyDown as
+    ((e: React.KeyboardEvent<HTMLElement>) => void) | undefined;
+  let prevented = false;
+  const event = {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    preventDefault: () => {
+      prevented = true;
+    },
+    stopPropagation: () => {},
+    get defaultPrevented() {
+      return prevented;
+    },
+  } as unknown as React.KeyboardEvent<HTMLElement>;
+  act(() => {
+    onListKeyDown?.(event);
   });
   return prevented;
 }
@@ -331,6 +359,10 @@ describe("ActionPalette", () => {
     expect(fireKey("Enter")).toBe(true);
     expect(onSearchProjects).toHaveBeenCalledTimes(1);
     expect(onSearchProjects).toHaveBeenCalledWith("work/api");
+
+    // Tab reaches the results region, and Enter there keeps the same promise.
+    expect(fireRegionKey("Enter")).toBe(true);
+    expect(onSearchProjects).toHaveBeenCalledTimes(2);
   });
 
   it("routes '/' from an empty field without handing the switcher any text", () => {
@@ -909,6 +941,14 @@ describe("ActionPalette", () => {
 
       onClose("backdrop");
       expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a typed answer through Escape, which only a search clears first", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} argPrompt={prompt} query="pro" />);
+      expect(lastSearchablePaletteProps.current?.clearQueryOnEscape).toBe(false);
+
+      rerender(<ActionPalette {...baseProps} query="pro" />);
+      expect(lastSearchablePaletteProps.current?.clearQueryOnEscape).not.toBe(false);
     });
 
     it("doesn't treat prefix characters as mode routes while answering", () => {

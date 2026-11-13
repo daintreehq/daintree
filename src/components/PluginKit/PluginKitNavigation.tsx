@@ -1,5 +1,6 @@
 import {
   isValidElement,
+  useCallback,
   useDeferredValue,
   useEffect,
   useId,
@@ -24,7 +25,11 @@ import type {
   PluginStepState,
   PluginStepperProps,
 } from "@shared/types/plugin-sdk-react";
-import { AppPaletteDialog, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
+import {
+  AppPaletteDialog,
+  PALETTE_BODY_SCROLLER_SELECTOR,
+  PaletteNoMatchHint,
+} from "@/components/ui/AppPaletteDialog";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -271,6 +276,32 @@ export function demoteDisabled(results: readonly PaletteResult[]): PaletteResult
   ];
 }
 
+/**
+ * Brings a list row into view clear of the results region's edge fades. The
+ * region's scroll padding keeps a natively revealed row out from under them,
+ * but Virtuoso scrolls by number and never reads it, so it is applied here.
+ */
+function revealRow(handle: VirtuosoHandle | null, scroller: HTMLElement | null, index: number) {
+  const inset = scroller ? Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0 : 0;
+  handle?.scrollIntoView({
+    index,
+    calculateViewLocation: ({
+      itemTop,
+      itemBottom,
+      viewportTop,
+      viewportBottom,
+      locationParams,
+    }) => {
+      if (itemTop < viewportTop + inset)
+        return { ...locationParams, align: "start", offset: -inset };
+      if (itemBottom > viewportBottom - inset) {
+        return { ...locationParams, align: "end", offset: inset };
+      }
+      return null;
+    },
+  });
+}
+
 /** The enabled index nearest `from` going `dir`, wrapping; -1 when none is. */
 function stepEnabled(results: readonly PaletteResult[], from: number, dir: 1 | -1): number {
   const count = results.length;
@@ -396,13 +427,20 @@ function KitCommandPalette({
   const listId = `${baseId}list`;
   const optionPrefix = `${baseId}option`;
   const handle = useRef<VirtuosoHandle>(null);
-  const [listPx, setListPx] = useState<number | null>(null);
+  // The palette's results region scrolls the list rather than a scroller of
+  // Virtuoso's own, which would be a second tab stop that took Tab and then
+  // ignored every key. The region hands the list keys on and names the active
+  // option, and a long list still has a keyboard-reachable scroller.
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const findScrollParent = useCallback((el: HTMLElement | null) => {
+    setScrollParent(el?.closest<HTMLElement>(PALETTE_BODY_SCROLLER_SELECTOR) ?? null);
+  }, []);
 
   const moveTo = (index: number) => {
     if (index < 0) return;
     setCursor(index);
     const row = rowOf[index];
-    if (row !== undefined) handle.current?.scrollIntoView({ index: row });
+    if (row !== undefined) revealRow(handle.current, scrollParent, row);
   };
 
   // A new search puts the cursor's row in view: the list keeps its scroll
@@ -418,8 +456,8 @@ function KitCommandPalette({
     if (activeRow === undefined) return;
     // The first row takes its band's heading into view with it.
     if (activeRow <= 1) handle.current?.scrollToIndex({ index: 0 });
-    else handle.current?.scrollIntoView({ index: activeRow });
-  }, [filterQuery, activeRow]);
+    else revealRow(handle.current, scrollParent, activeRow);
+  }, [filterQuery, activeRow, scrollParent]);
 
   const handleQuery = (next: string) => {
     setQuery(next);
@@ -530,26 +568,26 @@ function KitCommandPalette({
         />
       );
     }
-    const estimate = rows.length * PALETTE_ROW_PX;
     return (
       <PluginStyleScope block>
-        <Virtuoso
-          ref={handle}
-          // Sized to its rows up to the palette body's own cap, so a short list
-          // does not stretch the palette and a long one scrolls inside it.
-          style={{ height: `min(${listPx ?? estimate}px, calc(60vh - 1rem))` }}
-          context={{ listId, label: heading }}
-          components={PALETTE_COMPONENTS}
-          data={rows}
-          defaultItemHeight={PALETTE_ROW_PX}
-          increaseViewportBy={8 * PALETTE_ROW_PX}
-          initialTopMostItemIndex={Math.max(0, (rowOf[active] ?? 0) - 1)}
-          computeItemKey={(index, row) =>
-            row.kind === "head" ? `head-${index}-${row.label}` : row.result.item.id
-          }
-          itemContent={(_index, row) => renderRow(row)}
-          totalListHeightChanged={setListPx}
-        />
+        <div ref={findScrollParent}>
+          {scrollParent !== null && (
+            <Virtuoso
+              ref={handle}
+              customScrollParent={scrollParent}
+              context={{ listId, label: heading }}
+              components={PALETTE_COMPONENTS}
+              data={rows}
+              defaultItemHeight={PALETTE_ROW_PX}
+              increaseViewportBy={8 * PALETTE_ROW_PX}
+              initialTopMostItemIndex={Math.max(0, (rowOf[active] ?? 0) - 1)}
+              computeItemKey={(index, row) =>
+                row.kind === "head" ? `head-${index}-${row.label}` : row.result.item.id
+              }
+              itemContent={(_index, row) => renderRow(row)}
+            />
+          )}
+        </div>
       </PluginStyleScope>
     );
   };
@@ -566,7 +604,12 @@ function KitCommandPalette({
       onQueryChange={handleQuery}
       onSelectPrevious={() => moveTo(stepEnabled(results, active - 1, -1))}
       onSelectNext={() => moveTo(stepEnabled(results, active + 1, 1))}
-      onSelectIndex={(index) => moveTo(stepEnabled(results, index, index === 0 ? 1 : -1))}
+      // Home, End and the page keys. A disabled target hands the cursor to the
+      // nearest enabled row back toward the current one, which is enabled, so
+      // the wrapping scan stops there instead of going round the list.
+      onSelectIndex={(index) =>
+        moveTo(stepEnabled(results, index, index === 0 || index < active ? 1 : -1))
+      }
       onHoverIndex={(index) => setCursor(index)}
       onConfirm={() => choose(active)}
       onClose={close}

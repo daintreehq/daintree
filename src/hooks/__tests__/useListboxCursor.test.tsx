@@ -4,6 +4,8 @@ import { useLayoutEffect, useState } from "react";
 import { renderHook, render, act, cleanup } from "@testing-library/react";
 import {
   keyBelongsToField,
+  LISTBOX_PAGE_SIZE,
+  pageListboxCursor,
   stepListboxCursor,
   useListboxCursor,
   type ListboxCursorKeyEvent,
@@ -428,6 +430,31 @@ describe("stepListboxCursor", () => {
         }
       }
     }
+  });
+});
+
+describe("pageListboxCursor", () => {
+  it("moves a page each way and stops at the ends instead of wrapping", () => {
+    expect(pageListboxCursor("PageDown", 2, 30, 10)).toBe(12);
+    expect(pageListboxCursor("PageUp", 12, 30, 10)).toBe(2);
+    expect(pageListboxCursor("PageDown", 25, 30, 10)).toBe(29);
+    expect(pageListboxCursor("PageUp", 4, 30, 10)).toBe(0);
+    expect(pageListboxCursor("PageDown", 1, 3, 10)).toBe(2);
+  });
+
+  it("moves the shared page size when none is given", () => {
+    expect(pageListboxCursor("PageDown", 2, 100)).toBe(2 + LISTBOX_PAGE_SIZE);
+    expect(pageListboxCursor("PageUp", 2 + LISTBOX_PAGE_SIZE, 100)).toBe(2);
+  });
+
+  it("pages from the first row when the cursor is off the list", () => {
+    expect(pageListboxCursor("PageDown", -1, 30, 10)).toBe(10);
+    expect(pageListboxCursor("PageUp", 40, 30, 10)).toBe(0);
+  });
+
+  it("leaves other keys and empty lists alone", () => {
+    expect(pageListboxCursor("ArrowDown", 0, 30)).toBeNull();
+    expect(pageListboxCursor("PageDown", 0, 0)).toBeNull();
   });
 });
 

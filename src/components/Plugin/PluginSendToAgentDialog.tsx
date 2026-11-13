@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import type { PaletteCloseReason } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Badge } from "@/components/ui/badge";
 import { GitBranchPlus, Plus } from "@/components/icons";
@@ -264,11 +265,11 @@ export function PluginSendToAgentDialog() {
   );
 
   // Rows only report hover when they can take the draft, so this scan only
-  // matters for Home and End, which the shell routes through here with index
-  // 0 or the last index: a disabled row at either end hands the cursor on.
+  // matters for Home, End and the page keys, which the shell routes through
+  // here: a disabled target hands the cursor on, back toward the current row.
   const handleHoverIndex = useCallback(
     (index: number) => {
-      const step = index === 0 ? 1 : -1;
+      const step = index === 0 || index < selectedIndex ? 1 : -1;
       for (let i = index; i >= 0 && i < results.length; i += step) {
         if (canSelectSendToAgentRow(results[i]!)) {
           setSelectedIndex(i);
@@ -276,7 +277,7 @@ export function PluginSendToAgentDialog() {
         }
       }
     },
-    [results, setSelectedIndex]
+    [results, selectedIndex, setSelectedIndex]
   );
 
   const handleConfirm = useCallback(() => {
@@ -284,12 +285,22 @@ export function PluginSendToAgentDialog() {
     if (row) choose(row);
   }, [results, selectedIndex, choose]);
 
-  const handleClose = useCallback(() => {
-    answer({ status: "cancelled" });
-  }, [answer]);
-
   // Escape in the branch step steps back to the list rather than dismissing the
-  // whole handoff — the user asked for a different row, not to give up.
+  // whole handoff — the user asked for a different row, not to give up. The
+  // field's own handler below covers it there; this covers the rest of the
+  // palette, while a scrim click still gives up.
+  const handleClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (mode === "branch" && reason === "escape") {
+        setMode("pick");
+        setQuery("");
+        return;
+      }
+      answer({ status: "cancelled" });
+    },
+    [mode, setQuery, answer]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (mode === "branch" && e.key === "Escape") {
@@ -444,6 +455,8 @@ export function PluginSendToAgentDialog() {
         onSelectNext={selectNext}
         onConfirm={handleConfirm}
         onClose={handleClose}
+        // The branch name is an answer, not a search: Escape steps back with it.
+        clearQueryOnEscape={mode !== "branch"}
         onHoverIndex={handleHoverIndex}
         onKeyDown={handleKeyDown}
         getItemId={(row) => row.id}

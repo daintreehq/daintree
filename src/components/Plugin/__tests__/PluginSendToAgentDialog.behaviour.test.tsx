@@ -294,6 +294,35 @@ describe("PluginSendToAgentDialog", () => {
     expect(option("feat-1")).toBeTruthy();
   });
 
+  it("clears a search on the pick step before Escape gives up", () => {
+    const resolve = open();
+    act(() => {
+      fireEvent.change(combobox(), { target: { value: "feat" } });
+    });
+    press("Escape");
+    expect(combobox().value).toBe("");
+    expect(resolve).not.toHaveBeenCalled();
+    press("Escape");
+    expect(resolve).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
+  it("steps back from the branch step on Escape from the results region too, branch name and all", () => {
+    const resolve = open();
+    act(() => {
+      fireEvent.click(option("new-worktree"));
+    });
+    expect(combobox().value).not.toBe("");
+    const region = combobox()
+      .closest('[role="dialog"]')!
+      .querySelector<HTMLElement>('[role="group"][tabindex="0"]')!;
+    act(() => {
+      fireEvent.keyDown(region, { key: "Escape" });
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(option("feat-1")).toBeTruthy();
+    expect(combobox().value).toBe("");
+  });
+
   it("names both operations on the branch step, and says add to draft in the heading", () => {
     open();
     expect(document.body.textContent).toContain(`Add "Fix login redirect" to an agent's draft`);

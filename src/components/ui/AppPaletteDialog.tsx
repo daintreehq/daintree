@@ -551,6 +551,14 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * that ignores them — the shell never cancels a key itself, so a handler with
  * no case for these leaves them to the browser exactly as before.
  */
+/**
+ * Finds the results region's scroll container from inside a palette body, for
+ * a virtual list that should scroll it (Virtuoso's `customScrollParent`)
+ * rather than draw a scroller of its own: the region is the list's one tab
+ * stop, the one that hands on the list keys and carries the active option.
+ */
+export const PALETTE_BODY_SCROLLER_SELECTOR = "[data-palette-body-scroller]";
+
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -705,6 +713,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
       role="group"
       aria-label={ariaLabel}
       aria-activedescendant={activeDescendant}
+      data-palette-body-scroller=""
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
       compact={compactFade}

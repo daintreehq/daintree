@@ -299,8 +299,24 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
       timeout: T_MEDIUM,
     });
 
-    // Close and reopen — it must start on the module step again, not the level step.
+    // Escape on the level step goes back to the module step rather than closing.
     await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.logLevelPalette.step1Dialog)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(window.locator(SEL.logLevelPalette.step2Dialog)).not.toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // Close from the level step and reopen — it must start on the module step
+    // again, not the level step. "Clear override" (the last level) closes the
+    // picker without leaving an override behind for later tests.
+    await window.locator(SEL.logLevelPalette.searchInput).press("Enter");
+    await expect(window.locator(SEL.logLevelPalette.step2Dialog)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await window.keyboard.press("End");
+    await window.keyboard.press("Enter");
     await expect(window.locator(SEL.logLevelPalette.step2Dialog)).not.toBeVisible({
       timeout: T_MEDIUM,
     });

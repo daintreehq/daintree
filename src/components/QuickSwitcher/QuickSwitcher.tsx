@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
+import {
+  PaletteFooterHints,
+  PaletteNoMatchHint,
+  type PaletteCloseReason,
+} from "@/components/ui/AppPaletteDialog";
 import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -123,8 +127,7 @@ export function QuickSwitcher({
   );
 
   // Keyword + Tab scopes the switcher to that provider; Backspace on an empty
-  // field, or Escape once the query is clear, steps back out. Plain Tab and
-  // Shift+Tab keep moving the selection as before.
+  // field steps back out. Plain Tab and Shift+Tab move focus as usual.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (
@@ -141,24 +144,29 @@ export function QuickSwitcher({
         useAnnouncerStore.getState().announce(`Searching ${keywordProvider.title}`, "polite");
         return;
       }
-      if (!scopedProvider) return;
-      if (e.key === "Backspace") {
-        const input = e.currentTarget;
-        if (input.selectionStart === 0 && input.selectionEnd === 0) {
-          e.preventDefault();
-          exitScope();
-          useAnnouncerStore.getState().announce("Searching everything", "polite");
-        }
-        return;
-      }
-      if (e.key === "Escape" && query === "") {
+      if (!scopedProvider || e.key !== "Backspace") return;
+      const input = e.currentTarget;
+      if (input.selectionStart === 0 && input.selectionEnd === 0) {
         e.preventDefault();
-        e.stopPropagation();
         exitScope();
         useAnnouncerStore.getState().announce("Searching everything", "polite");
       }
     },
-    [keywordProvider, scopedProvider, enterScope, exitScope, query]
+    [keywordProvider, scopedProvider, enterScope, exitScope]
+  );
+
+  // Escape once the query is clear steps out of a scope before it closes, from
+  // the field or from anywhere else in the palette; a scrim click closes.
+  const handleClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && scopedProvider) {
+        exitScope();
+        useAnnouncerStore.getState().announce("Searching everything", "polite");
+        return;
+      }
+      close();
+    },
+    [scopedProvider, exitScope, close]
   );
 
   // Hold the last chip label across the exit animation so it doesn't blank out.
@@ -210,7 +218,7 @@ export function QuickSwitcher({
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
-      onClose={close}
+      onClose={handleClose}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
       inputPrefix={chipNode}

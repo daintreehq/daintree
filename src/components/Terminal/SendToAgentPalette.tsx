@@ -118,13 +118,13 @@ export function SendToAgentPalette({
     [selectItem]
   );
 
-  // The shell routes Home and End through its hover callback with index 0 or
-  // the last index. A locked row at either end hands the cursor to its nearest
-  // open neighbour instead of swallowing the key. Rows report the pointer
+  // The shell routes Home, End and the page keys through its hover callback. A
+  // locked target hands the cursor to its nearest open neighbour back toward
+  // the current row instead of swallowing the key. Rows report the pointer
   // straight to `setSelectedIndex`, so none of this scanning applies to hover.
-  const handleEdgeIndex = useCallback(
+  const handleJumpIndex = useCallback(
     (index: number) => {
-      const step = index === 0 ? 1 : -1;
+      const step = index === 0 || index < selectedIndex ? 1 : -1;
       for (let i = index; i >= 0 && i < results.length; i += step) {
         if (!results[i]!.isInputLocked) {
           setSelectedIndex(i);
@@ -132,7 +132,7 @@ export function SendToAgentPalette({
         }
       }
     },
-    [results, setSelectedIndex]
+    [results, selectedIndex, setSelectedIndex]
   );
 
   const allLocked = results.length > 0 && results.every((item) => item.isInputLocked);
@@ -155,7 +155,7 @@ export function SendToAgentPalette({
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
       onClose={close}
-      onHoverIndex={handleEdgeIndex}
+      onHoverIndex={handleJumpIndex}
       getItemId={(item) => item.id}
       getActionLabel={getSendToAgentActionLabel}
       renderItem={(item, index, isItemSelected) => (
