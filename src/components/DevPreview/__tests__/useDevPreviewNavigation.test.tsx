@@ -303,7 +303,11 @@ describe("useDevPreviewNavigation — history handlers", () => {
       useDevPreviewNavigation(
         baseParams({
           clearRetryState,
-          history: { past: ["http://localhost:3000/a"], present: "http://localhost:3000/", future: ["http://localhost:3000/b"] },
+          history: {
+            past: ["http://localhost:3000/a"],
+            present: "http://localhost:3000/",
+            future: ["http://localhost:3000/b"],
+          },
         })
       )
     );
