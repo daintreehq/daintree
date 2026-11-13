@@ -1,5 +1,7 @@
 import type { KeyboardEvent } from "react";
 import { isVisibleTabbableElement, TABBABLE_SELECTOR } from "@/lib/accessibility";
+import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { usePanelStore } from "@/store/panelStore";
@@ -48,10 +50,22 @@ function fallbackTarget(): HTMLElement | null {
   if (shell) return shell;
   const overlays = document.querySelectorAll<HTMLElement>('[aria-modal="true"]');
   for (let i = overlays.length - 1; i >= 0; i--) {
-    const target = edgeTabbable(overlays[i]!, "start");
+    const overlay = overlays[i]!;
+    if (isClosing(overlay)) continue;
+    const target = edgeTabbable(overlay, "start");
     if (target) return target;
   }
   return edgeTabbable(document.body, "start");
+}
+
+// A dialog fading out keeps `aria-modal` and isn't inert. An AppDialog drops
+// its backstop mark as it starts to close; a Radix one reads closed.
+function isClosing(overlay: HTMLElement): boolean {
+  if (overlay.getAttribute("data-state") === "closed") return true;
+  return (
+    overlay.hasAttribute(APP_DIALOG_SURFACE_ATTR) &&
+    !overlay.hasAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR)
+  );
 }
 
 // Not inert, hidden or parked offscreen: a parked dock panel is aria-hidden
@@ -78,8 +92,9 @@ export function containTab(event: KeyboardEvent<HTMLElement>): void {
   // A dialog or popover portalled out of the view bubbles here through React,
   // and keeps its own Tab handling.
   if (!(active instanceof HTMLElement) || !root.contains(active)) return;
-  const first = edgeTabbable(root, "start");
-  const last = edgeTabbable(root, "end");
+  const radios = radiosIn(root);
+  const first = edgeTabbable(root, "start", radios);
+  const last = edgeTabbable(root, "end", radios);
   if (!first || !last) {
     event.preventDefault();
     root.focus({ preventScroll: true });
@@ -91,10 +106,10 @@ export function containTab(event: KeyboardEvent<HTMLElement>): void {
     ? active === root ||
       active === first ||
       follows(first, active) ||
-      (sameRadioGroup(active, first) && !hasStopBetween(root, first, active))
+      (sameRadioGroup(active, first) && !hasStopBetween(root, first, active, radios))
     : active === last ||
       follows(active, last) ||
-      (sameRadioGroup(active, last) && !hasStopBetween(root, active, last));
+      (sameRadioGroup(active, last) && !hasStopBetween(root, active, last, radios));
   if (!atEdge) return;
   event.preventDefault();
   (event.shiftKey ? last : first).focus({ preventScroll: true });
@@ -117,31 +132,38 @@ function sameRadioGroup(a: Element, b: Element): boolean {
   );
 }
 
-/**
- * Whether sequential navigation stops on `el`. A radio group is one stop: its
- * checked option, or with none usable checked, whichever end Tab enters from.
- */
-function isTabStop(el: HTMLElement, root: ParentNode): boolean {
-  if (!isVisibleTabbableElement(el)) return false;
-  if (!(el instanceof HTMLInputElement) || el.type !== "radio" || el.name === "") return true;
-  if (el.checked) return true;
-  for (const option of root.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
-    if (
-      option.checked &&
-      !option.disabled &&
-      sameRadioGroup(option, el) &&
-      isVisibleTabbableElement(option)
-    ) {
-      return false;
-    }
-  }
-  return true;
+function radiosIn(root: ParentNode): HTMLInputElement[] {
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
 }
 
-function hasStopBetween(root: ParentNode, start: Element, end: Element): boolean {
+/** Whether Tab can reach `el` at all, before radio groups are considered. */
+function isReachable(el: HTMLElement): boolean {
+  return el.matches(TAB_STOP_SELECTOR) && !el.matches(":disabled") && isVisibleTabbableElement(el);
+}
+
+/**
+ * Whether sequential navigation stops on `el`. A radio group is one stop: its
+ * checked option when Tab can reach it, else every option, so a scan from
+ * either end lands on the option Tab enters the group by.
+ */
+function isTabStop(el: HTMLElement, radios: readonly HTMLInputElement[]): boolean {
+  if (!isReachable(el)) return false;
+  if (!(el instanceof HTMLInputElement) || el.type !== "radio" || el.name === "") return true;
+  if (el.checked) return true;
+  return !radios.some(
+    (option) => option.checked && sameRadioGroup(option, el) && isReachable(option)
+  );
+}
+
+function hasStopBetween(
+  root: ParentNode,
+  start: Element,
+  end: Element,
+  radios: readonly HTMLInputElement[]
+): boolean {
   for (const el of root.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR)) {
     if (!follows(el, start) || !follows(end, el)) continue;
-    if (!sameRadioGroup(el, start) && isTabStop(el, root)) return true;
+    if (!sameRadioGroup(el, start) && isTabStop(el, radios)) return true;
   }
   return false;
 }
@@ -152,11 +174,15 @@ const TAB_STOP_SELECTOR = `${TABBABLE_SELECTOR}, details > summary:first-of-type
 
 // Scans in from one end and stops at the first stop, so a long plugin list
 // costs a visibility check per Tab only at the edges.
-function edgeTabbable(root: ParentNode, from: "start" | "end"): HTMLElement | null {
+function edgeTabbable(
+  root: ParentNode,
+  from: "start" | "end",
+  radios: readonly HTMLInputElement[] = radiosIn(root)
+): HTMLElement | null {
   const all = root.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR);
   for (let i = 0; i < all.length; i++) {
     const el = all[from === "start" ? i : all.length - 1 - i]!;
-    if (isTabStop(el, root)) return el;
+    if (isTabStop(el, radios)) return el;
   }
   return null;
 }

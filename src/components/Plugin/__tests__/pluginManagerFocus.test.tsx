@@ -162,6 +162,36 @@ describe("containTab", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "First" }));
   });
 
+  it("doesn't let a checked option Tab can't reach hide the rest of its group", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <input type="radio" name="mode" aria-label="Fast" defaultChecked tabIndex={-1} />
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const first = screen.getByRole("button", { name: "First" });
+    first.focus();
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Slow" }));
+  });
+
+  it("lets Tab leave an unchecked group's first option for a control before its last", () => {
+    render(
+      <View>
+        <button type="button">First</button>
+        <input type="radio" name="mode" aria-label="Fast" />
+        <button type="button">Middle</button>
+        <input type="radio" name="mode" aria-label="Slow" />
+      </View>
+    );
+    const entered = screen.getByRole("radio", { name: "Fast" });
+    entered.focus();
+
+    expect(fireEvent.keyDown(entered, { key: "Tab" })).toBe(true);
+  });
+
   it("wraps from either option of a group with nothing checked", () => {
     render(
       <View>
@@ -282,6 +312,43 @@ describe("handFocusBack", () => {
     handFocusBack(null);
 
     expect(document.activeElement).toBe(sheetSearch);
+  });
+
+  it("passes over a dialog fading out for the overlay that stays", () => {
+    const { root } = shell();
+    root.setAttribute("inert", "");
+    const sheet = document.createElement("div");
+    sheet.setAttribute("aria-modal", "true");
+    const sheetSearch = document.createElement("input");
+    sheet.appendChild(sheetSearch);
+    const closingDialog = document.createElement("div");
+    closingDialog.setAttribute("aria-modal", "true");
+    closingDialog.setAttribute("data-app-dialog-surface", "");
+    closingDialog.appendChild(document.createElement("button"));
+    document.body.append(sheet, closingDialog);
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(sheetSearch);
+  });
+
+  it("prefers the topmost of two open overlays", () => {
+    const { root } = shell();
+    root.setAttribute("inert", "");
+    const sheet = document.createElement("div");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.appendChild(document.createElement("input"));
+    const dialog = document.createElement("div");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("data-app-dialog-surface", "");
+    dialog.setAttribute("data-escape-backstop-dialog", "");
+    const confirm = document.createElement("button");
+    dialog.appendChild(confirm);
+    document.body.append(sheet, dialog);
+
+    handFocusBack(null);
+
+    expect(document.activeElement).toBe(confirm);
   });
 
   it("takes the document's first control when nothing else is left", () => {
