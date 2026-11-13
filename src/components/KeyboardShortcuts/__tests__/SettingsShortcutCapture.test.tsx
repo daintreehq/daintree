@@ -496,7 +496,7 @@ describe("SettingsShortcutCapture", () => {
   });
 
   describe("validateCombo prop", () => {
-    it("shows inline validation error and disables Save when validator returns a message", () => {
+    it("shows the validation error and stays armed for a retry, with nothing to save", () => {
       const validate = vi.fn((_combo: string) => "Agent shortcuts use Ctrl+Alt+letter");
 
       render(
@@ -525,10 +525,20 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
       expect(screen.getByText("Agent shortcuts use Ctrl+Alt+letter")).toBeTruthy();
 
-      const saveButton = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
-      expect(saveButton.disabled).toBe(true);
+      // The refused combo stays on show in the armed recorder, not as a pending first key.
+      const field = screen.getByTestId("shortcut-capture-field");
+      expect(field.getAttribute("data-recording")).toBe("true");
+      expect(field.textContent).toContain("Try again");
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
 
-      fireEvent.click(saveButton);
+      // The next press is a fresh attempt, not the second key of a chord.
+      act(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "d", code: "KeyD", ctrlKey: true, bubbles: true })
+        );
+        vi.advanceTimersByTime(1100);
+      });
+      expect(validate).toHaveBeenLastCalledWith("Cmd+d");
       expect(mockOnCapture).not.toHaveBeenCalled();
     });
 
@@ -1211,6 +1221,29 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       expect(mockOnCancel).not.toHaveBeenCalled();
       expect(mockOnCapture).not.toHaveBeenCalled();
+    });
+
+    it("puts the earlier combo back when Tab leaves a re-record", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Record again" }));
+      press({ key: "Tab", code: "Tab" });
+
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(document.activeElement).toBe(save);
+      fireEvent.click(save);
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
     });
 
     it("still records Tab when it carries Control", () => {
