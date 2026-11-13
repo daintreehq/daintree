@@ -35,6 +35,20 @@ describe("targetOwnsCopy", () => {
     expect(targetOwnsCopy(input)).toBe(false);
   });
 
+  it("leaves Cmd+C to the terminal from xterm's own textarea, selected after a right-click", () => {
+    const helper = document.createElement("textarea");
+    helper.className = "xterm-helper-textarea";
+    field(helper, "buffer selection");
+    helper.select();
+    expect(targetOwnsCopy(helper)).toBe(false);
+  });
+
+  it("leaves Cmd+C to the terminal when a textarea's caret is collapsed", () => {
+    const textarea = field(document.createElement("textarea"), "draft");
+    textarea.setSelectionRange(5, 5);
+    expect(targetOwnsCopy(textarea)).toBe(false);
+  });
+
   it("leaves Cmd+C to the terminal for an input type with no text selection", () => {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
