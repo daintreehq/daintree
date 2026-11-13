@@ -125,11 +125,15 @@ export function GitHubListItem({
   const stateLabel = getStateLabel(item.state, type, isItemPR && item.isDraft);
 
   // The number the tick belongs to rather than a bare flag, so a row handed a
-  // different item mid-dwell can never show the last item's copy as its own.
+  // different item mid-dwell can never show the last item's copy as its own,
+  // not even for the frame before the reset below runs.
   const [copiedNumber, setCopiedNumber] = useState<number | null>(null);
   const copied = copiedNumber === item.number;
   const copyTimeoutRef = useRef<number | undefined>(undefined);
 
+  // Resets on an `<Activity>` reveal as well as on a new item: a tick that
+  // outlived either would describe a copy the user can no longer see.
+  const itemNumber = item.number;
   useEffect(() => {
     setCopiedNumber(null);
     return () => {
@@ -137,7 +141,7 @@ export function GitHubListItem({
         clearTimeout(copyTimeoutRef.current);
       }
     };
-  }, []);
+  }, [itemNumber]);
 
   const rowModel = deriveRowModel(item, worktree, activeWorktreeId);
   const { isActiveWorktree } = rowModel;

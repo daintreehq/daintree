@@ -321,6 +321,21 @@ describe("GitHubListItem", () => {
     expect(checkIconAfter).toBeNull();
   });
 
+  it("does not bring a copy tick back when the row returns to the item it copied", async () => {
+    const { rerender } = render(<GitHubListItem item={baseIssue} type="issue" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Copy number 42"));
+    });
+
+    rerender(<GitHubListItem item={{ ...baseIssue, number: 43 }} type="issue" />);
+    rerender(<GitHubListItem item={baseIssue} type="issue" />);
+
+    // Still inside the dwell window: the tick belonged to a copy the row has
+    // since moved off, not to what it shows now.
+    expect(screen.getByLabelText("Copy number 42").querySelector("svg.lucide-check")).toBeNull();
+  });
+
   it("resets copy state on Activity hide/reveal so checkmark does not persist across reopen", async () => {
     function Harness({ mode }: { mode: "visible" | "hidden" }) {
       return (
