@@ -11,10 +11,22 @@
  *  - Removing a row commits the updated env immediately.
  *  - Renaming a key commits only when the new name is non-empty and unique.
  */
-import { useState, type ReactElement } from "react";
+import { useContext, useEffect, useState, type ContextType, type ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, fireEvent, screen, type RenderOptions } from "@testing-library/react";
+import {
+  act,
+  render as rtlRender,
+  fireEvent,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
 import { EnvVarEditor } from "../EnvVarEditor";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+  type FailedSettingsFlush,
+  type SettingsFlushReason,
+} from "../SettingsFlushRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
@@ -1307,5 +1319,223 @@ describe("EnvVarEditor", () => {
       expect(input.getAttribute("type")).toBe("password");
       expect(input.getAttribute("autocomplete")).toBe("new-password");
     });
+  });
+});
+
+describe("unsaved drafts", () => {
+  type FlushApi = NonNullable<ContextType<typeof SettingsFlushContext>>;
+
+  let onChange: ReturnType<typeof vi.fn<(env: Record<string, string>) => void>>;
+  let registry: FlushApi | null = null;
+  const captureRegistry = (api: FlushApi) => {
+    registry = api;
+  };
+
+  beforeEach(() => {
+    onChange = vi.fn<(env: Record<string, string>) => void>();
+    registry = null;
+  });
+
+  function RegistryProbe({ onRegistry }: { onRegistry: (api: FlushApi) => void }) {
+    const api = useContext(SettingsFlushContext);
+    useEffect(() => {
+      if (api) onRegistry(api);
+    }, [api, onRegistry]);
+    return null;
+  }
+
+  /** The editor under the Settings dialog's flush registry. */
+  function renderInSettings(ui: ReactElement) {
+    return rtlRender(ui, {
+      wrapper: ({ children }) => (
+        <TooltipProvider>
+          <SettingsFlushProvider>
+            {children}
+            <RegistryProbe onRegistry={captureRegistry} />
+          </SettingsFlushProvider>
+        </TooltipProvider>
+      ),
+    });
+  }
+
+  async function flushSettings(reason: SettingsFlushReason = "close") {
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await registry!.flushAll(reason);
+    });
+    return failed;
+  }
+
+  const keys = () =>
+    (screen.getAllByTestId("env-editor-key") as HTMLInputElement[]).map((el) => el.value);
+
+  describe("closing Settings", () => {
+    it("saves an edit no blur reached", async () => {
+      renderInSettings(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />);
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "2" } });
+      expect(onChange).not.toHaveBeenCalled();
+
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).toHaveBeenLastCalledWith({ FOO: "2" });
+    });
+
+    it("holds the close on the first row whose name keeps the table from saving", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      const barKey = screen.getAllByTestId("env-editor-key")[1] as HTMLInputElement;
+      fireEvent.change(barKey, { target: { value: "" } });
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "9" } });
+      // Not blurred yet, so the blank name isn't flagged.
+      expect(screen.queryByTestId("env-editor-error-empty")).toBeNull();
+
+      const failed = await flushSettings();
+
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.tab).toBe("agents");
+      const landing = document.getElementById(failed[0]!.landOn);
+      expect(landing?.querySelector('[data-testid="env-editor-key"]')).toBe(barKey);
+      // What the close stopped on is now said where it is.
+      expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("never holds a hide, and leaves the draft as it was", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+
+      expect(await flushSettings("hide")).toEqual([]);
+      expect(keys()).toEqual(["FOO", ""]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("has nothing to do while the table is what is saved", async () => {
+      renderInSettings(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />);
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("stays out of the close without a Settings page to report to", async () => {
+      renderInSettings(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} />);
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+      expect(await flushSettings()).toEqual([]);
+    });
+
+    it("lets an override emptied without a blur fall back to the inherited value", async () => {
+      renderInSettings(
+        <EnvVarEditor
+          env={{ API_KEY: "mine" }}
+          inheritedEnv={{ API_KEY: "global" }}
+          onChange={onChange}
+          settingsTab="agents"
+        />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "" } });
+
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).toHaveBeenLastCalledWith({});
+    });
+  });
+
+  describe("switching agent or preset", () => {
+    it("brings back a draft that couldn't save after switching away and back", () => {
+      const { rerender } = render(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="switch-a" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, {
+        target: { value: "BAD NAME" },
+      });
+
+      rerender(<EnvVarEditor env={{ BAR: "2" }} onChange={onChange} contextKey="switch-b" />);
+      expect(keys()).toEqual(["BAR"]);
+
+      rerender(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="switch-a" />);
+      expect(keys()).toEqual(["BAD NAME"]);
+      expect(screen.getByTestId("env-editor-error-invalid")).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("brings it back across a remount, with a blank name flagged at once", () => {
+      const first = render(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+      first.unmount();
+
+      render(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />);
+      expect(keys()).toEqual(["FOO", ""]);
+      expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
+    });
+
+    it("rebuilds the inherited rows from what is inherited on return", () => {
+      const { rerender } = render(
+        <EnvVarEditor
+          env={{ X: "1" }}
+          inheritedEnv={{ A: "1" }}
+          onChange={onChange}
+          contextKey="inherit-a"
+        />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, { target: { value: "" } });
+
+      rerender(<EnvVarEditor env={{}} onChange={onChange} contextKey="inherit-b" />);
+      rerender(
+        <EnvVarEditor
+          env={{ X: "1" }}
+          inheritedEnv={{ A: "1", B: "2" }}
+          onChange={onChange}
+          contextKey="inherit-a"
+        />
+      );
+
+      expect(keys()).toEqual(["", "A", "B"]);
+      expect(screen.getAllByTestId("env-editor-row-inherited")).toHaveLength(2);
+    });
+
+    it("drops a parked draft once the env it was drafted against has changed", () => {
+      const { rerender } = render(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="stale-a" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, { target: { value: "" } });
+
+      rerender(<EnvVarEditor env={{}} onChange={onChange} contextKey="stale-b" />);
+      rerender(<EnvVarEditor env={{ FOO: "9" }} onChange={onChange} contextKey="stale-a" />);
+
+      expect(keys()).toEqual(["FOO"]);
+      expect((screen.getAllByTestId("env-editor-value")[0] as HTMLInputElement).value).toBe("9");
+    });
+  });
+
+  it("Discard changes puts back the saved table", () => {
+    render(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} />);
+    expect(screen.queryByTestId("env-editor-discard")).toBeNull();
+    fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "FOO" } });
+
+    fireEvent.click(screen.getByTestId("env-editor-discard"));
+
+    expect(keys()).toEqual(["FOO", "BAR"]);
+    expect(screen.queryByTestId("env-editor-error-duplicate")).toBeNull();
+    expect(screen.queryByTestId("env-editor-discard")).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("an import lands in a draft that can't save yet instead of replacing it", () => {
+    render(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} />);
+    const fooKey = screen.getAllByTestId("env-editor-key")[0]!;
+    fireEvent.change(fooKey, { target: { value: "BAD NAME" } });
+
+    fireEvent.click(screen.getByTestId("env-editor-import"));
+    fireEvent.change(screen.getByTestId("import-env-textarea"), { target: { value: "NEW=2" } });
+    fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+    expect(keys()).toEqual(["BAD NAME", "NEW"]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Fixing the name saves both.
+    fireEvent.change(fooKey, { target: { value: "FOO" } });
+    fireEvent.blur(fooKey);
+    expect(onChange).toHaveBeenLastCalledWith({ FOO: "1", NEW: "2" });
   });
 });

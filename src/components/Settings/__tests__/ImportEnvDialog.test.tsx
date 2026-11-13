@@ -259,6 +259,27 @@ describe("ImportEnvDialog", () => {
       expect(primary().getAttribute("aria-disabled")).toBe("true");
       expect(screen.queryByTestId("app-dialog-hint")).toBeNull();
     });
+
+    /** A paste of only whitespace leaves the field looking untouched; the hint says it landed. */
+    it("says nothing was found after a paste of only whitespace", () => {
+      renderDialog();
+      const textarea = screen.getByTestId("import-env-textarea");
+      fireEvent.paste(textarea, { clipboardData: { getData: () => "  \n\t\n" } });
+      fireEvent.change(textarea, { target: { value: "  \n\t\n" } });
+
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
+    });
+
+    it("goes quiet again once the field has held text and is cleared", () => {
+      renderDialog();
+      const textarea = screen.getByTestId("import-env-textarea");
+      fireEvent.paste(textarea, { clipboardData: { getData: () => "   " } });
+      fireEvent.change(textarea, { target: { value: "FOO=1" } });
+      fireEvent.change(textarea, { target: { value: "" } });
+
+      expect(screen.queryByTestId("app-dialog-hint")).toBeNull();
+    });
   });
 
   describe("parse problems", () => {

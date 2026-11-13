@@ -87,6 +87,7 @@ export function EnvBlock({
               onChange={onGlobalEnvChange}
               suggestions={suggestions}
               contextKey={`global-${agentId}`}
+              settingsTab="agents"
               data-testid="global-env-editor"
             />
             <EnvVarReference suggestions={suggestions} />
@@ -110,6 +111,7 @@ export function EnvBlock({
             onChange={onPresetEnvChange}
             suggestions={suggestions}
             contextKey={selectedPreset.id}
+            settingsTab="agents"
             inheritedEnv={globalEnv}
             data-testid="preset-env-editor"
           />
