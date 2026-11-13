@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const dispatch = vi.hoisted(() => vi.fn());
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+
 import {
   computeSlope,
   isPlateau,
@@ -9,6 +13,7 @@ import {
   MIN_MEMORY_KB,
   ALERT_COOLDOWN_MS,
   PLATEAU_RANGE_THRESHOLD_KB,
+  openPerformanceSettings,
   type LeakState,
 } from "../useMemoryLeakDetection";
 
@@ -230,5 +235,16 @@ describe("dismiss", () => {
     );
     const result = feedSamples(state, samples);
     expect(result).toBe(false);
+  });
+});
+
+describe("openPerformanceSettings", () => {
+  it("dispatches the Terminal → Performance settings action", () => {
+    openPerformanceSettings();
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "terminal", subtab: "performance" },
+      { source: "user" }
+    );
   });
 });

@@ -2,8 +2,17 @@ import { useEffect, useRef } from "react";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { isPtyPanel } from "@shared/types/panel";
+
+export function openPerformanceSettings(): void {
+  void actionService.dispatch(
+    "app.settings.openTab",
+    { tab: "terminal", subtab: "performance" },
+    { source: "user" }
+  );
+}
 
 export const MEMORY_HISTORY_SIZE = 30;
 export const STARTUP_SKIP_SAMPLES = 30;
@@ -167,7 +176,7 @@ export function useMemoryLeakDetection(enabled: boolean): void {
                 label: "Settings",
                 actionId: "app.settings.openTab" as const,
                 actionArgs: { tab: "terminal", subtab: "performance" },
-                onClick: () => {},
+                onClick: openPerformanceSettings,
               },
               {
                 label: "Mute alerts",
