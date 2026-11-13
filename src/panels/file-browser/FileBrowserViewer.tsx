@@ -2,13 +2,11 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Copy,
   Download,
-  ExternalLink,
   FileDiff,
   FileText,
   FileX,
   Folder,
   FolderTree,
-  Globe,
   PanelLeftClose,
   PanelLeftOpen,
   PanelTop,
@@ -53,6 +51,12 @@ import {
   UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
+import {
+  defaultFileViewMode,
+  FILE_OPEN_ACTION_COPY,
+  fileOpenTarget,
+} from "@/components/FileViewer/fileViewPolicy";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import {
@@ -376,13 +380,11 @@ export function FileBrowserViewer({
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
-  // toggle. Untouched, each renderable type opens on the default that suits it:
-  // markdown is a document you read rendered, while HTML in a repo is code you
-  // opened to read, and a page that renders near-blank otherwise looks like a
-  // broken file (#12205). Once chosen the mode is sticky and shared across both
-  // types, deliberately not reset on file change: a reader paging through docs
-  // in source keeps source, mirroring FilePane (whose per-panel mode also
-  // survives a file swap). A mode the open file can't honour falls back to
+  // toggle. Untouched, each type opens on its own default, the one FilePane's
+  // picker uses too (`defaultFileViewMode`, #12205). Once chosen the mode is
+  // sticky and shared across both types, deliberately not reset on file change:
+  // a reader paging through docs in source keeps source, mirroring FilePane
+  // (whose per-panel mode also survives a file swap). A mode the open file can't honour falls back to
   // Source without being written back, so paging from a changed file in Diff to
   // a clean one and on to another changed file lands back in Diff.
   const [explicitRenderMode, setExplicitRenderMode] = useState<FileViewMode | null>(null);
@@ -453,7 +455,8 @@ export function FileBrowserViewer({
     ...(changeStatus !== undefined ? (["diff"] as const) : []),
     ...(canEdit ? (["edit"] as const) : []),
   ];
-  const requestedMode = explicitRenderMode ?? (isMarkdown ? "rendered" : "source");
+  const requestedMode =
+    explicitRenderMode ?? (filePath !== null ? defaultFileViewMode(filePath) : "source");
   const renderMode: FileViewMode = availableModes.includes(requestedMode)
     ? requestedMode
     : "source";
@@ -494,6 +497,7 @@ export function FileBrowserViewer({
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
+  const diffFontSize = usePreferencesStore((state) => state.diffFontSize);
   const effectiveDiffWrapLines = diffWrapLines ?? (filePath !== null && isProseFilePath(filePath));
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const previousMode = useRef(renderMode);
@@ -859,31 +863,16 @@ export function FileBrowserViewer({
               dismiss: "Dismiss editor error",
             };
 
-  // Which external surface the toolbar's second action aims at. Text belongs in
-  // the editor; media, PDFs and images open with whatever the OS uses for that
-  // type; an HTML page opens in the browser, mirroring FilePane. Never the OS
-  // default for an unknown or binary file — that handler may execute it.
-  const openTarget: OpenTarget =
-    filePath === null
-      ? "editor"
-      : isHtml
-        ? "browser"
-        : isImageFilePath(filePath) && !isSvgFilePath(filePath)
-          ? "default-app"
-          : isVideoFilePath(filePath) ||
-              isAudioFilePath(filePath) ||
-              isPdfFilePath(filePath) ||
-              isUnsupportedVideoFilePath(filePath) ||
-              isUnsupportedAudioFilePath(filePath)
-            ? "default-app"
-            : "editor";
+  // Which external surface the toolbar's second action aims at, by type and
+  // shared with FilePane.
+  const openTarget = filePath === null ? "editor" : fileOpenTarget(filePath);
   const remoteFile = useRemoteFileContext();
   // A default app or browser here can't open a file on an ssh host, so a copy
   // saved here stands in for it (a WSL distro's files open from this PC as they are).
   const savesInstead = openTarget !== "editor" && remoteFile?.saveTarget != null;
   const openAction = savesInstead
     ? { label: saveHostFileLabel(), icon: Download }
-    : OPEN_ACTION_COPY[openTarget];
+    : FILE_OPEN_ACTION_COPY[openTarget];
   const runOpen = () => {
     if (savesInstead) {
       if (filePath) void saveHostFile(filePath);
@@ -1010,7 +999,9 @@ export function FileBrowserViewer({
                 // markdown one, which only ever applied to Source view.
                 renderMode === "diff"
                   ? { value: effectiveDiffWrapLines, onValueChange: setDiffWrapLines }
-                  : readable && isMarkdown && renderMode === "source"
+                  : // Edit honours the same preference (the editor is handed
+                    // `wrapLines` below), so it carries the same toggle.
+                    renderMode === "edit" || (readable && isMarkdown && renderMode === "source")
                     ? { value: wrapLines, onValueChange: setWrapLines }
                     : null
               }
@@ -1291,6 +1282,7 @@ export function FileBrowserViewer({
         <div
           data-testid="file-browser-diff"
           className="h-full min-h-0 overflow-auto diff-scroll-root"
+          style={diffFontStyle(diffFontSize)}
         >
           <Suspense fallback={<DiffLoadingSkeleton />}>
             {diffContent === undefined ? (
@@ -1629,14 +1621,6 @@ const MEDIA_STAGE_CLASS = "flex h-full w-full items-center justify-center overfl
 /** Row widths under which the secondary actions fold into "More actions". */
 const COMPACT_BELOW = 360;
 const COMPACT_BELOW_WITH_MODES = 560;
-
-type OpenTarget = "editor" | "default-app" | "browser";
-
-const OPEN_ACTION_COPY: Record<OpenTarget, { label: string; icon: LucideIcon }> = {
-  editor: { label: "Open in editor", icon: ExternalLink },
-  "default-app": { label: "Open in default app", icon: ExternalLink },
-  browser: { label: "Open in browser", icon: Globe },
-};
 
 /**
  * The file's own actions, laid out as buttons at width and folded into one

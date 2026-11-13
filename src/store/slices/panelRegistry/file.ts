@@ -6,7 +6,7 @@ type Set = PanelRegistryStoreApi["setState"];
 export const createFilePanelActions = (
   set: Set
 ): Pick<PanelRegistrySlice, "setFilePanelPath" | "setFileViewMode" | "setFileEditorChoice"> => ({
-  setFilePanelPath: (id, filePath) => {
+  setFilePanelPath: (id, filePath, viewMode) => {
     set((state) => {
       const panel = state.panelsById[id];
       if (!panel) return state;
@@ -17,7 +17,10 @@ export const createFilePanelActions = (
       // the user picks next, so it doesn't carry over — nor does the editor a
       // default picked for it.
       const { fileContainmentRoot: _pinnedRoot, fileEditorChoice: _pinnedEditor, ...rest } = panel;
-      const newById = { ...state.panelsById, [id]: { ...rest, filePath } };
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...rest, filePath, ...(viewMode !== undefined && { fileViewMode: viewMode }) },
+      };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });
