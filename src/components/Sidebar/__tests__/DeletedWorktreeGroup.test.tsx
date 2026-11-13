@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -48,6 +48,12 @@ vi.mock("@/components/DragDrop/SortableWorktreeTerminal", () => ({
     return <>{children}</>;
   },
   getAccordionDragId: (id: string) => `accordion-${id}`,
+}));
+
+// jsdom has no layout, so overflow is whatever the test says it is.
+const truncation = vi.hoisted(() => ({ truncated: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.truncated }),
 }));
 
 vi.mock("@/components/Terminal/TerminalIcon", () => ({
@@ -118,6 +124,7 @@ function renderGroup(list: DeletedWorktree[] = worktrees) {
 
 beforeEach(() => {
   cleanup();
+  truncation.truncated = false;
   sortableProps.mockClear();
   useTerminalPendingDestructiveActionStore.getState().clear();
   useWorktreeSelectionStore.getState().reset();
@@ -165,6 +172,65 @@ describe("DeletedWorktreeGroup", () => {
         name: "Drag to rescue claude in deleted worktree feature/alpha",
       })
     ).toBeTruthy();
+  });
+
+  describe("rail chip title", () => {
+    const LONG_TITLE = "claude-code-session-with-a-very-long-title";
+    // Past Radix's default hover delay (700 ms).
+    const PAST_HOVER_DELAY_MS = 1000;
+
+    function chipTitle(): HTMLElement {
+      const chip = screen.getByRole("button", {
+        name: `${LONG_TITLE} in deleted worktree feature/alpha`,
+      });
+      const span = Array.from(chip.querySelectorAll("span")).find(
+        (el) => el.textContent === LONG_TITLE
+      );
+      if (!span) throw new Error("chip title not rendered");
+      return span;
+    }
+
+    function hoverChipTitle() {
+      act(() => {
+        fireEvent.pointerMove(chipTitle(), { pointerType: "mouse" });
+        vi.advanceTimersByTime(PAST_HOVER_DELAY_MS);
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("discloses the full title on hover when it is cut off", () => {
+      truncation.truncated = true;
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      hoverChipTitle();
+
+      expect(screen.getByRole("tooltip").textContent).toBe(LONG_TITLE);
+    });
+
+    it("adds no tooltip when the title fits", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+
+      hoverChipTitle();
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("leaves the chip button the only tab stop when the title is cut off", () => {
+      truncation.truncated = true;
+      setPanels([{ id: "t1", worktreeId: "wt-1", title: LONG_TITLE }]);
+      renderGroup([worktrees[0]!]);
+
+      expect(chipTitle().hasAttribute("tabindex")).toBe(false);
+    });
   });
 
   it("swaps the rail for the member cards once expanded", () => {

@@ -781,3 +781,32 @@ describe("WorktreeDetailsSection review change hint", () => {
     expect(screen.getByText(/Changed since review/)).toBeDefined();
   });
 });
+
+describe("WorktreeDetailsSection resource controls", () => {
+  it.each([
+    { status: "stopped", label: "Resume resource", callback: "onResourceResume" },
+    { status: "running", label: "Pause resource", callback: "onResourcePause" },
+    { status: "running", label: "Connect to resource", callback: "onResourceConnect" },
+  ] as const)(
+    "runs the visible $label button and mounts no hidden menu trigger beside it",
+    ({ status, label, callback }) => {
+      const handlers = {
+        onResourceResume: vi.fn(),
+        onResourcePause: vi.fn(),
+        onResourceConnect: vi.fn(),
+      };
+      const { container } = renderSection({
+        hasResourceConfig: true,
+        resourceStatus: status,
+        ...handlers,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      expect(handlers[callback]).toHaveBeenCalledTimes(1);
+      // A clipped 1px trigger no pointer can reach opened a menu nobody could use.
+      expect(screen.queryByText("Resource actions")).toBeNull();
+      expect(container.querySelector("[data-radix-context-menu-trigger], .sr-only")).toBeNull();
+    }
+  );
+});

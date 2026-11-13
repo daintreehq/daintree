@@ -690,6 +690,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     gridRef,
     activeDescendantId,
     keyboardCursorId,
+    focusFirstRow,
+    hasRows: hasKeyboardRows,
     handleGridKeyDown,
     handleGridFocus,
     handleGridFocusCapture,
@@ -1264,8 +1266,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <WorktreeSidebarSearchBar
           inputRef={searchInputRef}
           // ArrowDown from the field walks into the results, as it does in the
-          // overview: the grid takes focus and its cursor lands on the first row.
-          onArrowIntoResults={() => gridRef.current?.focus()}
+          // overview: the grid takes focus and its cursor lands on the first
+          // row. With nothing matching there is no row to land on, and the
+          // field keeps the keys rather than hand them to an empty grid.
+          onArrowIntoResults={focusFirstRow}
           chipCounts={chipCounts}
           statusText={filterStatusText}
           filterSummaryText={activeFacetText || null}
@@ -1322,7 +1326,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         aria-rowcount={ariaRowCount}
         aria-activedescendant={activeDescendantId}
         // No rows, no stop: an empty grid took focus with nothing to show it.
-        tabIndex={keyboardItems.length > 0 ? 0 : -1}
+        // Headers and the deleted-worktree rail are items but not rows.
+        tabIndex={hasKeyboardRows ? 0 : -1}
         onKeyDown={handleGridKeyDown}
         onFocus={handleGridFocus}
         onFocusCapture={handleGridFocusCapture}

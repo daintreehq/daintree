@@ -1700,8 +1700,6 @@ export function WorktreeCard({
                         onResourceProvision={
                           hasProvisionCommand ? handleResourceProvision : undefined
                         }
-                        onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-                        onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                         syncDetail={
                           variant === "sidebar" &&
                           !quietGit &&
