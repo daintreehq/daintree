@@ -21,6 +21,9 @@ vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: vi.fn(),
 }));
 
+import { systemClient } from "@/clients";
+import { notify } from "@/lib/notify";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDiagnosticsReviewStore } from "../diagnosticsReviewStore";
 
 const samplePayload = {
@@ -38,6 +41,8 @@ function resetStore() {
     reviewPayload: null,
     scope: null,
     downloadError: null,
+    saveError: null,
+    savedIssueUrl: null,
   });
 }
 
@@ -45,6 +50,8 @@ describe("diagnosticsReviewStore", () => {
   beforeEach(() => {
     collectMock.mockReset();
     saveMock.mockReset();
+    vi.mocked(notify).mockClear();
+    vi.mocked(safeFireAndForget).mockClear();
     resetStore();
   });
 
@@ -209,7 +216,7 @@ describe("diagnosticsReviewStore", () => {
     expect(state.isSaving).toBe(false);
   });
 
-  it("saveReview surfaces IPC failures via downloadError", async () => {
+  it("saveReview keeps the dialog open and reports an IPC failure through saveError", async () => {
     collectMock.mockResolvedValueOnce(samplePayload);
     saveMock.mockRejectedValueOnce(new Error("disk full"));
     await useDiagnosticsReviewStore.getState().openReview();
@@ -217,7 +224,115 @@ describe("diagnosticsReviewStore", () => {
     await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
     const state = useDiagnosticsReviewStore.getState();
     expect(state.isSaving).toBe(false);
-    expect(state.downloadError).toContain("disk full");
+    expect(state.isOpen).toBe(true);
+    expect(state.saveError).toContain("disk full");
+    // The surfaces behind the dialog read downloadError; a save failure belongs
+    // to the dialog it happened in.
+    expect(state.downloadError).toBeNull();
+  });
+
+  it("saveReview clears the last failure while a retry is in flight", async () => {
+    collectMock.mockResolvedValueOnce(samplePayload);
+    saveMock.mockRejectedValueOnce(new Error("disk full"));
+    await useDiagnosticsReviewStore.getState().openReview();
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+
+    let resolveSave: (value: boolean) => void = () => {};
+    saveMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    const retry = useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    expect(useDiagnosticsReviewStore.getState().isSaving).toBe(true);
+    expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
+    resolveSave(false);
+    await retry;
+    expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
+  });
+
+  it("closing or reopening the review drops a failed save's error", async () => {
+    collectMock.mockResolvedValue(samplePayload);
+    saveMock.mockRejectedValue(new Error("disk full"));
+    await useDiagnosticsReviewStore.getState().openReview();
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    useDiagnosticsReviewStore.getState().closeReview();
+    expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
+
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    expect(useDiagnosticsReviewStore.getState().saveError).not.toBeNull();
+    await useDiagnosticsReviewStore.getState().openReview();
+    expect(useDiagnosticsReviewStore.getState().saveError).toBeNull();
+  });
+
+  it("confirms a toast save with a notification once the dialog has closed", async () => {
+    collectMock.mockResolvedValueOnce(samplePayload);
+    saveMock.mockResolvedValueOnce(true);
+    await useDiagnosticsReviewStore.getState().openReview();
+
+    await useDiagnosticsReviewStore.getState().saveReview({ app: true }, []);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({ type: "success" });
+    expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+  });
+
+  describe("inline confirmation", () => {
+    it("keeps the review open on its saved view and raises no notification", async () => {
+      collectMock.mockResolvedValueOnce(samplePayload);
+      saveMock.mockResolvedValueOnce(true);
+      await useDiagnosticsReviewStore.getState().openReview();
+
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      const state = useDiagnosticsReviewStore.getState();
+      expect(state.isOpen).toBe(true);
+      expect(state.isSaving).toBe(false);
+      expect(state.savedIssueUrl).toMatch(/^https:\/\/github\.com\//);
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("never reaches the saved view when the user cancels or the save fails", async () => {
+      collectMock.mockResolvedValueOnce(samplePayload);
+      await useDiagnosticsReviewStore.getState().openReview();
+
+      saveMock.mockResolvedValueOnce(false);
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+
+      saveMock.mockRejectedValueOnce(new Error("EACCES"));
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+      expect(useDiagnosticsReviewStore.getState().saveError).toContain("EACCES");
+    });
+
+    it("opens the saved issue and closes the review on continue", async () => {
+      collectMock.mockResolvedValueOnce(samplePayload);
+      saveMock.mockResolvedValueOnce(true);
+      await useDiagnosticsReviewStore.getState().openReview();
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      const issueUrl = useDiagnosticsReviewStore.getState().savedIssueUrl;
+
+      useDiagnosticsReviewStore.getState().continueToIssue();
+      expect(systemClient.openExternal).toHaveBeenCalledWith(issueUrl);
+      expect(safeFireAndForget).toHaveBeenCalledTimes(1);
+      const state = useDiagnosticsReviewStore.getState();
+      expect(state.isOpen).toBe(false);
+      expect(state.savedIssueUrl).toBeNull();
+    });
+
+    it("leaves the saved view behind once the review closes or reopens", async () => {
+      collectMock.mockResolvedValue(samplePayload);
+      saveMock.mockResolvedValue(true);
+      await useDiagnosticsReviewStore.getState().openReview();
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      useDiagnosticsReviewStore.getState().closeReview();
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+
+      await useDiagnosticsReviewStore.getState().openReview();
+      await useDiagnosticsReviewStore.getState().saveReview({ app: true }, [], null, "inline");
+      await useDiagnosticsReviewStore.getState().openReview();
+      expect(useDiagnosticsReviewStore.getState().savedIssueUrl).toBeNull();
+    });
   });
 
   it("saveReview no-ops if there is no payload yet", async () => {

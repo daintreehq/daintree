@@ -518,9 +518,10 @@ function AppInner() {
         {/* Diagnostics host stays reachable while the crash dialog is blocking
             the app — without this, the inline "Send diagnostics" action in
             CrashRecoveryDialog (recovery-failed banner) has nothing to render
-            the dialog into. */}
+            the dialog into. It opens over that dialog, so it takes the nested
+            tier, and it confirms a save itself: no Toaster is mounted yet. */}
         <Suspense fallback={null}>
-          <LazyDiagnosticsReviewDialogHost />
+          <LazyDiagnosticsReviewDialogHost zIndex="nested" confirmation="inline" />
         </Suspense>
       </div>
     );

@@ -1,5 +1,7 @@
 import { useState, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { Callout } from "@/components/ui/Callout";
+import type { DialogLayer } from "@/components/ui/dialogLayer";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -128,6 +130,15 @@ interface DiagnosticsReviewDialogProps {
    * any section manually before saving.
    */
   initialScope?: DiagnosticsReviewScope | null;
+  /** Why the last save failed, shown above the Save that retries it. */
+  saveError?: string | null;
+  /**
+   * The bundle is written and the review is kept open to confirm it, because
+   * the surface it opened over has nowhere else to say so.
+   */
+  saved?: boolean;
+  onContinueToIssue?: () => void;
+  zIndex?: DialogLayer;
 }
 
 export function DiagnosticsReviewDialog({
@@ -137,6 +148,10 @@ export function DiagnosticsReviewDialog({
   onSave,
   isSaving,
   initialScope,
+  saveError = null,
+  saved = false,
+  onContinueToIssue,
+  zIndex,
 }: DiagnosticsReviewDialogProps) {
   const [enabledSections, setEnabledSections] = useState<Record<string, boolean>>({});
   const [replacements, setReplacements] = useState<ReplacementRule[]>([
@@ -325,15 +340,47 @@ export function DiagnosticsReviewDialog({
   ];
   const filesBytes = files.reduce((sum, file) => sum + file.bytes, 0);
 
+  const dialogProps = {
+    isOpen,
+    onClose,
+    size: "lg",
+    // Locked while the report saves, like every dialog mid-action.
+    dismissible: !isSaving,
+    zIndex,
+    // The saved view drops every control the review held, so focus moves into it.
+    focusResetKey: saved ? "saved" : "review",
+    "data-testid": "diagnostics-review-dialog",
+  } as const;
+
+  if (saved) {
+    return (
+      <AppDialog {...dialogProps}>
+        <AppDialog.Header>
+          <AppDialog.Title>Review diagnostics</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body>
+          <Callout severity="success" title="Diagnostics saved">
+            <AppDialog.Description as="span" className="text-xs">
+              Open a GitHub issue and drag the saved ZIP into it.
+            </AppDialog.Description>
+          </Callout>
+        </AppDialog.Body>
+        <AppDialog.Footer
+          primaryAction={
+            onContinueToIssue && {
+              label: "Continue to GitHub issue",
+              onClick: onContinueToIssue,
+            }
+          }
+          secondaryAction={{ label: "Done", onClick: onClose }}
+        />
+      </AppDialog>
+    );
+  }
+
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      size="lg"
-      // Locked while the report saves, like every dialog mid-action.
-      dismissible={!isSaving}
-      data-testid="diagnostics-review-dialog"
-    >
+    <AppDialog {...dialogProps}>
       <AppDialog.Header>
         <AppDialog.Title>Review diagnostics</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -611,6 +658,21 @@ export function DiagnosticsReviewDialog({
       </AppDialog.Body>
 
       <AppDialog.Footer
+        // In the footer rather than the body, which scrolls: the failure stays
+        // in view beside the Save that retries it, wherever the preview is.
+        hint={
+          saveError ? (
+            <Callout
+              severity="error"
+              role="alert"
+              title="Couldn't save the report"
+              className="w-full select-text"
+            >
+              {saveError}
+            </Callout>
+          ) : undefined
+        }
+        hintPlacement="above"
         primaryAction={{
           label: "Save report",
           onClick: handleSave,

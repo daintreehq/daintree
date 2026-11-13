@@ -284,6 +284,70 @@ describe("DiagnosticsReviewDialog", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Find, rule 2" }));
   });
 
+  it("shows a failed save inside the dialog, beside the Save that retries it", () => {
+    render(
+      <DiagnosticsReviewDialog
+        isOpen
+        onClose={vi.fn()}
+        reviewPayload={payload}
+        onSave={vi.fn()}
+        isSaving={false}
+        saveError="ENOSPC: no space left on device"
+      />
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't save the report");
+    expect(alert.textContent).toContain("ENOSPC: no space left on device");
+    expect(screen.getByRole("button", { name: "Save report" }).getAttribute("aria-disabled")).toBe(
+      null
+    );
+  });
+
+  it("retries a failed save from the same Save", () => {
+    const onSave = vi.fn();
+    render(
+      <DiagnosticsReviewDialog
+        isOpen
+        onClose={vi.fn()}
+        reviewPayload={payload}
+        onSave={onSave}
+        isSaving={false}
+        saveError="EACCES: permission denied"
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save report" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms a saved bundle in place of the review, with the issue as the next step", () => {
+    const onClose = vi.fn();
+    const onContinueToIssue = vi.fn();
+    render(
+      <DiagnosticsReviewDialog
+        isOpen
+        onClose={onClose}
+        reviewPayload={payload}
+        onSave={vi.fn()}
+        isSaving={false}
+        saved
+        onContinueToIssue={onContinueToIssue}
+      />
+    );
+    expect(screen.getByText("Diagnostics saved")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save report" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Report preview" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to GitHub issue" }));
+    expect(onContinueToIssue).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no save error until a save has failed", () => {
+    renderDialog();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("freezes everything that shapes the report while it saves", () => {
     renderDialog(payload, vi.fn(), true);
     for (const control of [

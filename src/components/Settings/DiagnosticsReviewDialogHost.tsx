@@ -1,6 +1,16 @@
 import { useShallow } from "zustand/react/shallow";
-import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
+import {
+  useDiagnosticsReviewStore,
+  type DiagnosticsSaveConfirmation,
+} from "@/store/diagnosticsReviewStore";
+import type { DialogLayer } from "@/components/ui/dialogLayer";
 import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
+
+interface DiagnosticsReviewDialogHostProps {
+  /** `nested` when the host renders over another dialog (the crash-recovery screen). */
+  zIndex?: DialogLayer;
+  confirmation?: DiagnosticsSaveConfirmation;
+}
 
 /**
  * App-level host for the diagnostics review dialog. Reads dialog state from
@@ -9,18 +19,33 @@ import { DiagnosticsReviewDialog } from "./DiagnosticsReviewDialog";
  * outside the Settings subtree and stays mounted regardless of where the
  * request came from.
  */
-export function DiagnosticsReviewDialogHost() {
-  const { isOpen, reviewPayload, isSaving, scope, closeReview, saveReview } =
-    useDiagnosticsReviewStore(
-      useShallow((s) => ({
-        isOpen: s.isOpen,
-        reviewPayload: s.reviewPayload,
-        isSaving: s.isSaving,
-        scope: s.scope,
-        closeReview: s.closeReview,
-        saveReview: s.saveReview,
-      }))
-    );
+export function DiagnosticsReviewDialogHost({
+  zIndex,
+  confirmation = "toast",
+}: DiagnosticsReviewDialogHostProps) {
+  const {
+    isOpen,
+    reviewPayload,
+    isSaving,
+    saveError,
+    savedIssueUrl,
+    scope,
+    closeReview,
+    saveReview,
+    continueToIssue,
+  } = useDiagnosticsReviewStore(
+    useShallow((s) => ({
+      isOpen: s.isOpen,
+      reviewPayload: s.reviewPayload,
+      isSaving: s.isSaving,
+      saveError: s.saveError,
+      savedIssueUrl: s.savedIssueUrl,
+      scope: s.scope,
+      closeReview: s.closeReview,
+      saveReview: s.saveReview,
+      continueToIssue: s.continueToIssue,
+    }))
+  );
 
   return (
     <DiagnosticsReviewDialog
@@ -28,10 +53,14 @@ export function DiagnosticsReviewDialogHost() {
       onClose={closeReview}
       reviewPayload={reviewPayload}
       onSave={(enabledSections, replacements, timeWindowStartMs) => {
-        void saveReview(enabledSections, replacements, timeWindowStartMs);
+        void saveReview(enabledSections, replacements, timeWindowStartMs, confirmation);
       }}
       isSaving={isSaving}
       initialScope={scope}
+      saveError={saveError}
+      saved={savedIssueUrl !== null}
+      onContinueToIssue={continueToIssue}
+      zIndex={zIndex}
     />
   );
 }
