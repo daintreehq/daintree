@@ -87,14 +87,22 @@ vi.mock("@/components/ui/popover", () => ({
   ),
 }));
 
-/** Fires the key cell's popover autofocus handler the way Radix's FocusScope does. */
+/**
+ * Fires the key cell's popover autofocus handler the way Radix's FocusScope
+ * does, including what happens when nobody cancels it: a close hands focus back
+ * to whatever had it when the list opened, which is the name field.
+ */
 function firePopoverAutoFocus(keyInput: HTMLElement, which: "open" | "close"): Event {
   const listbox = document.getElementById(keyInput.getAttribute("aria-controls") ?? "");
-  const handlers = listbox?.parentElement ? popoverAutoFocus.get(listbox.parentElement) : undefined;
+  const handler = listbox?.parentElement
+    ? popoverAutoFocus.get(listbox.parentElement)?.[which]
+    : undefined;
+  if (!handler) throw new Error(`No ${which} autofocus handler for the suggestions list`);
   const event = new Event(`focusScope.autoFocusOn${which === "open" ? "Mount" : "Unmount"}`, {
     cancelable: true,
   });
-  handlers?.[which]?.(event);
+  handler(event);
+  if (which === "close" && !event.defaultPrevented) keyInput.focus();
   return event;
 }
 
@@ -584,7 +592,7 @@ describe("EnvVarEditor", () => {
     });
 
     describe("focus", () => {
-      function renderPicker() {
+      function renderPicker(row = 0) {
         const utils = render(
           <EnvVarEditor
             env={{ FOO: "v", BAR: "w" }}
@@ -592,8 +600,8 @@ describe("EnvVarEditor", () => {
             suggestions={sampleSuggestions}
           />
         );
-        const keyInput = utils.getAllByTestId("env-editor-key")[0] as HTMLInputElement;
-        const valueInput = utils.getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+        const keyInput = utils.getAllByTestId("env-editor-key")[row] as HTMLInputElement;
+        const valueInput = utils.getAllByTestId("env-editor-value")[row] as HTMLInputElement;
         return { ...utils, keyInput, valueInput };
       }
 
@@ -627,17 +635,19 @@ describe("EnvVarEditor", () => {
         const { keyInput, getAllByTestId } = renderPicker();
         keyInput.focus();
         fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        expect(keyInput.getAttribute("aria-expanded")).toBe("true");
 
         // Clicking another row's field dismisses the list from outside.
         const otherValue = getAllByTestId("env-editor-value")[1] as HTMLInputElement;
-        otherValue.focus();
+        act(() => otherValue.focus());
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
         firePopoverAutoFocus(keyInput, "close");
 
         expect(document.activeElement).toBe(otherValue);
       });
 
       it("Enter on a highlighted suggestion moves focus to that row's value field", () => {
-        const { keyInput, valueInput } = renderPicker();
+        const { keyInput, valueInput } = renderPicker(1);
         keyInput.focus();
         fireEvent.keyDown(keyInput, { key: "ArrowDown" });
         fireEvent.keyDown(keyInput, { key: "Enter" });
@@ -645,11 +655,11 @@ describe("EnvVarEditor", () => {
 
         expect(keyInput.value).toBe("ANTHROPIC_API_KEY");
         expect(document.activeElement).toBe(valueInput);
-        expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v", BAR: "w" });
+        expect(onChange).toHaveBeenLastCalledWith({ FOO: "v", ANTHROPIC_API_KEY: "w" });
       });
 
       it("clicking a suggestion keeps focus off the list and lands it in that row's value field", () => {
-        const { keyInput, valueInput } = renderPicker();
+        const { keyInput, valueInput } = renderPicker(1);
         keyInput.focus();
         fireEvent.keyDown(keyInput, { key: "ArrowDown" });
         const listbox = document.getElementById(keyInput.getAttribute("aria-controls")!)!;
@@ -664,7 +674,7 @@ describe("EnvVarEditor", () => {
 
         expect(keyInput.value).toBe("OPENAI_API_KEY");
         expect(document.activeElement).toBe(valueInput);
-        expect(onChange).toHaveBeenLastCalledWith({ OPENAI_API_KEY: "v", BAR: "w" });
+        expect(onChange).toHaveBeenLastCalledWith({ FOO: "v", OPENAI_API_KEY: "w" });
       });
 
       it("Escape closes the list and focus stays in the name field", () => {
@@ -1381,7 +1391,7 @@ describe("unsaved drafts", () => {
       expect(onChange).toHaveBeenLastCalledWith({ FOO: "2" });
     });
 
-    it("holds the close on the first row whose name keeps the table from saving", async () => {
+    it("holds the close on a blank name, and says so where the close stopped", async () => {
       renderInSettings(
         <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} settingsTab="agents" />
       );
@@ -1397,8 +1407,63 @@ describe("unsaved drafts", () => {
       expect(failed[0]!.tab).toBe("agents");
       const landing = document.getElementById(failed[0]!.landOn);
       expect(landing?.querySelector('[data-testid="env-editor-key"]')).toBe(barKey);
-      // What the close stopped on is now said where it is.
       expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { problem: "malformed", edits: [[1, "BAD NAME"]], landsOn: 1 },
+      { problem: "repeated", edits: [[2, "BAR"]], landsOn: 1 },
+      {
+        problem: "malformed then blank",
+        edits: [
+          [2, ""],
+          [1, "BAD NAME"],
+        ],
+        landsOn: 1,
+      },
+      {
+        problem: "blank then repeated",
+        edits: [
+          [0, ""],
+          [2, "BAR"],
+        ],
+        landsOn: 0,
+      },
+    ] as const)("lands on the first row a $problem name holds up", async ({ edits, landsOn }) => {
+      renderInSettings(
+        <EnvVarEditor
+          env={{ FOO: "1", BAR: "2", BAZ: "3" }}
+          onChange={onChange}
+          settingsTab="environment"
+        />
+      );
+      const keyInputs = screen.getAllByTestId("env-editor-key");
+      for (const [row, name] of edits) {
+        fireEvent.change(keyInputs[row]!, { target: { value: name } });
+      }
+
+      const failed = await flushSettings();
+
+      expect(failed.map((f) => f.tab)).toEqual(["environment"]);
+      const landing = document.getElementById(failed[0]!.landOn);
+      expect(landing?.querySelector('[data-testid="env-editor-key"]')).toBe(keyInputs[landsOn]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    // Rows the saved env still has in full: a draft compared by its saveable
+    // part alone would read as saved here.
+    it.each([
+      { added: "left blank", name: "" },
+      { added: "repeating a saved name", name: "FOO" },
+    ])("holds the close on an added row $added", async ({ name }) => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
+      fireEvent.click(screen.getByTestId("env-editor-add"));
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: name } });
+
+      expect(await flushSettings()).toHaveLength(1);
       expect(onChange).not.toHaveBeenCalled();
     });
 
@@ -1410,6 +1475,15 @@ describe("unsaved drafts", () => {
 
       expect(await flushSettings("hide")).toEqual([]);
       expect(keys()).toEqual(["FOO", ""]);
+      expect(screen.queryByTestId("env-editor-error-empty")).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("treats a saved name that only trims to something invalid as saved", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ " ": "1", FOO: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      expect(await flushSettings()).toEqual([]);
       expect(onChange).not.toHaveBeenCalled();
     });
 
@@ -1440,6 +1514,9 @@ describe("unsaved drafts", () => {
 
       expect(await flushSettings()).toEqual([]);
       expect(onChange).toHaveBeenLastCalledWith({});
+      const value = screen.getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(value.value).toBe("global");
+      expect(value.disabled).toBe(true);
     });
   });
 
@@ -1478,8 +1555,8 @@ describe("unsaved drafts", () => {
     it("rebuilds the inherited rows from what is inherited on return", () => {
       const { rerender } = render(
         <EnvVarEditor
-          env={{ X: "1" }}
-          inheritedEnv={{ A: "1" }}
+          env={{ X: "1", A: "mine" }}
+          inheritedEnv={{ A: "1", C: "3" }}
           onChange={onChange}
           contextKey="inherit-a"
         />
@@ -1489,15 +1566,20 @@ describe("unsaved drafts", () => {
       rerender(<EnvVarEditor env={{}} onChange={onChange} contextKey="inherit-b" />);
       rerender(
         <EnvVarEditor
-          env={{ X: "1" }}
-          inheritedEnv={{ A: "1", B: "2" }}
+          env={{ X: "1", A: "mine" }}
+          inheritedEnv={{ A: "changed", B: "2" }}
           onChange={onChange}
           contextKey="inherit-a"
         />
       );
 
+      // A stays the override it was; C is no longer inherited; B now is.
       expect(keys()).toEqual(["", "A", "B"]);
-      expect(screen.getAllByTestId("env-editor-row-inherited")).toHaveLength(2);
+      const values = (screen.getAllByTestId("env-editor-value") as HTMLInputElement[]).map(
+        (el) => el.value
+      );
+      expect(values).toEqual(["1", "mine", "2"]);
+      expect(screen.getAllByTestId("env-editor-row-inherited")).toHaveLength(1);
     });
 
     it("drops a parked draft once the env it was drafted against has changed", () => {
@@ -1518,10 +1600,15 @@ describe("unsaved drafts", () => {
     render(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} />);
     expect(screen.queryByTestId("env-editor-discard")).toBeNull();
     fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "FOO" } });
+    fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "9" } });
 
     fireEvent.click(screen.getByTestId("env-editor-discard"));
 
     expect(keys()).toEqual(["FOO", "BAR"]);
+    const values = (screen.getAllByTestId("env-editor-value") as HTMLInputElement[]).map(
+      (el) => el.value
+    );
+    expect(values).toEqual(["1", "2"]);
     expect(screen.queryByTestId("env-editor-error-duplicate")).toBeNull();
     expect(screen.queryByTestId("env-editor-discard")).toBeNull();
     expect(onChange).not.toHaveBeenCalled();

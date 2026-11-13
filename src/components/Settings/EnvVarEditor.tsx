@@ -169,15 +169,17 @@ function shallowEnvEqual(
 }
 
 /**
- * Whether the editable rows are exactly `env`, names trimmed the way a commit
- * trims them. Not `draftToEnv` equality: that drops blank and repeated names,
- * so a draft only those rows keep from saving would read as saved.
+ * Whether the editable rows are exactly `env`. Not `draftToEnv` equality: that
+ * drops blank and repeated names, so a draft only those rows keep from saving
+ * would read as saved. A name matches as saved, or trimmed the way a commit
+ * trims it — a saved name that only trims to something invalid is still saved,
+ * and must not hold every close on a row the user never touched.
  */
 function draftMatchesEnv(rows: DraftRow[], env: Record<string, string>): boolean {
   const seen = new Set<string>();
   for (const row of rows) {
     if (row.isInherited) continue;
-    const k = row.key.trim();
+    const k = Object.prototype.hasOwnProperty.call(env, row.key) ? row.key : row.key.trim();
     if (seen.has(k) || !Object.prototype.hasOwnProperty.call(env, k) || env[k] !== row.value) {
       return false;
     }

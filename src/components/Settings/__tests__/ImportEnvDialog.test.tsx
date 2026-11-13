@@ -275,8 +275,25 @@ describe("ImportEnvDialog", () => {
       renderDialog();
       const textarea = screen.getByTestId("import-env-textarea");
       fireEvent.paste(textarea, { clipboardData: { getData: () => "   " } });
+      fireEvent.change(textarea, { target: { value: "   " } });
+      expect(screen.getByTestId("app-dialog-hint")).toBeTruthy();
+
       fireEvent.change(textarea, { target: { value: "FOO=1" } });
       fireEvent.change(textarea, { target: { value: "" } });
+
+      expect(screen.queryByTestId("app-dialog-hint")).toBeNull();
+    });
+
+    it("forgets a blank paste when the dialog opens again", () => {
+      const props = { onClose: vi.fn(), env: EXISTING, onImport: vi.fn() };
+      const { rerender } = render(<ImportEnvDialog isOpen {...props} />);
+      const textarea = screen.getByTestId("import-env-textarea");
+      fireEvent.paste(textarea, { clipboardData: { getData: () => "\n" } });
+      fireEvent.change(textarea, { target: { value: "\n" } });
+      expect(screen.getByTestId("app-dialog-hint")).toBeTruthy();
+
+      rerender(<ImportEnvDialog isOpen={false} {...props} />);
+      rerender(<ImportEnvDialog isOpen {...props} />);
 
       expect(screen.queryByTestId("app-dialog-hint")).toBeNull();
     });
