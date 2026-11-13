@@ -93,9 +93,11 @@ describe("VoiceInputButton", () => {
     );
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Stop recording");
+    const tip = (await screen.findByRole("tooltip")).textContent;
+    expect(tip).toContain("Stop recording");
+    expect(tip).toContain("Ctrl");
   });
 
   it("offers setup again once the session that outlived dictation has closed", async () => {
@@ -112,7 +114,7 @@ describe("VoiceInputButton", () => {
     expect(button.getAttribute("aria-pressed")).toBeNull();
     // Its last words are still on their way, but it offers no restart.
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Finishing transcription…");
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Finishing transcription…");
   });
 
   it("renders a resume affordance when this panel is paused", async () => {
@@ -126,9 +128,11 @@ describe("VoiceInputButton", () => {
     );
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Resume voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toContain("Paused");
+    const tip = (await screen.findByRole("tooltip")).textContent;
+    expect(tip).toContain("Paused");
+    expect(tip).toContain("Space");
   });
 
   it("clicking while paused calls togglePause instead of toggle", () => {
@@ -226,7 +230,7 @@ describe("VoiceInputButton", () => {
     const button = screen.getByRole("button");
 
     expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
     expect((await screen.findByRole("tooltip")).textContent).toContain("Click to stop");
   });
@@ -259,7 +263,7 @@ describe("VoiceInputButton", () => {
       const button = getByRole("button");
       // Either way the session is open and a press stops it.
       expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-      expect(button.getAttribute("aria-pressed")).toBe("true");
+      expect(button.getAttribute("aria-pressed")).toBeNull();
       fireEvent.focus(button);
       expect((await screen.findByRole("tooltip")).textContent).toContain(tip);
     }

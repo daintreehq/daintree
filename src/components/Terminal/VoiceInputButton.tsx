@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 import { Mic, Play } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useEffectiveCombo } from "@/hooks";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { VOICE_ORBIT_MIN_OPACITY } from "@/utils/terminalTheme";
 import { useVoiceRecordingStore, type CanopyReplyRow } from "@/store/voiceRecordingStore";
@@ -282,6 +284,10 @@ export function VoiceInputButton({
     canopyRow,
   ]);
 
+  const toggleShortcut = useEffectiveCombo("voiceInput.toggle");
+  const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
+  const shortcut = isPaused ? pauseShortcut : toggleShortcut;
+
   const tooltipText =
     needsSetup && !isFinishing
       ? "Configure voice input"
@@ -420,7 +426,6 @@ export function VoiceInputButton({
                     ? "Stop voice recording"
                     : "Start voice recording"
             }
-            aria-pressed={needsSetup ? undefined : isSessionOpen || isPaused || isPending}
           >
             {/* The glyph is what a click does: stop an open session or a start
                 still on its way, resume a paused one, start again once the
@@ -437,7 +442,7 @@ export function VoiceInputButton({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top">{tooltipText}</TooltipContent>
+        <TooltipContent side="top">{createTooltipContent(tooltipText, shortcut)}</TooltipContent>
       </Tooltip>
     </div>
   );
