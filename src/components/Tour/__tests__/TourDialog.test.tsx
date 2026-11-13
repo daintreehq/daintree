@@ -240,6 +240,99 @@ describe("TourDialog", () => {
       expect(screen.getByRole("status").textContent).toBe("Auto-advance paused");
     });
 
+    it("shows the end card when a paused slider seek reaches the end", () => {
+      const { player } = renderAt(1);
+      act(() => player().pause());
+      expect(screen.queryByRole("button", { name: `Next: ${TOUR_CHAPTERS[2]!.title}` })).toBeNull();
+      fireEvent.keyDown(screen.getByRole("slider"), { key: "End" });
+      expect(player().getState().status).toBe("ended");
+      expect(screen.getByRole("button", { name: `Next: ${TOUR_CHAPTERS[2]!.title}` })).toBeTruthy();
+    });
+
+    it("shows the end card when ArrowRight carries a paused chapter past its end", () => {
+      const { player } = renderAt(1);
+      act(() => {
+        player().pause();
+        player().seek(player().timing.duration - 2);
+      });
+      expect(player().getState().status).toBe("paused");
+      fireEvent.keyDown(screen.getByRole("slider"), { key: "ArrowRight" });
+      expect(player().getState().status).toBe("ended");
+      expect(screen.getByRole("button", { name: `Next: ${TOUR_CHAPTERS[2]!.title}` })).toBeTruthy();
+    });
+
+    it("shows the end card when a paused scrub is dragged to the end of the bar", () => {
+      const { player } = renderAt(1);
+      act(() => player().pause());
+      const slider = screen.getByRole("slider");
+      slider.getBoundingClientRect = () => new DOMRect(0, 0, 100, 24);
+      slider.setPointerCapture = vi.fn();
+      slider.hasPointerCapture = () => true;
+      fireEvent.pointerDown(slider, { pointerId: 1, clientX: 50 });
+      expect(player().getState().status).toBe("paused");
+      fireEvent.pointerMove(slider, { pointerId: 1, clientX: 100 });
+      expect(player().getState().status).toBe("ended");
+      expect(screen.getByRole("button", { name: `Next: ${TOUR_CHAPTERS[2]!.title}` })).toBeTruthy();
+    });
+
+    it("starts the next chapter on its own after a paused seek ended this one", () => {
+      const { player } = renderAt(1);
+      act(() => player().pause());
+      fireEvent.keyDown(screen.getByRole("slider"), { key: "End" });
+      act(() => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(player().getState().chapterIndex).toBe(2);
+      expect(player().getState().status).toBe("playing");
+    });
+
+    it("stays on an ending a paused seek created once 'Stay here' is pressed", () => {
+      const { player } = renderAt(1);
+      act(() => player().pause());
+      fireEvent.keyDown(screen.getByRole("slider"), { key: "End" });
+      fireEvent.click(screen.getByRole("button", { name: "Stay here" }));
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(player().getState().chapterIndex).toBe(1);
+      expect(player().getState().status).toBe("ended");
+    });
+
+    it("counts a paused seek to the last chapter's end as finishing the tour, without leaving it", () => {
+      const { player, props } = renderAt(TOUR_CHAPTERS.length - 1);
+      act(() => player().pause());
+      expect(props.onCompleted).not.toHaveBeenCalled();
+      fireEvent.keyDown(screen.getByRole("slider"), { key: "End" });
+      expect(props.onCompleted).toHaveBeenCalledTimes(1);
+      expect(props.onClose).not.toHaveBeenCalled();
+      expect(screen.getByText("That's the tour")).toBeTruthy();
+    });
+
+    it("leaves a chapter that is already over alone when the end of the bar is clicked again", () => {
+      const { end, player } = renderAt(1);
+      end();
+      const seen: string[] = [];
+      player().subscribe(() => seen.push(player().getState().status));
+      const slider = screen.getByRole("slider");
+      slider.getBoundingClientRect = () => new DOMRect(0, 0, 100, 24);
+      slider.setPointerCapture = vi.fn();
+      fireEvent.pointerDown(slider, { pointerId: 1, clientX: 100 });
+      expect(seen).toEqual([]);
+      expect(player().getState().status).toBe("ended");
+      expect(screen.getByRole("button", { name: `Next: ${TOUR_CHAPTERS[2]!.title}` })).toBeTruthy();
+    });
+
+    it("plays an ended chapter again when the bar is clicked short of its end", () => {
+      const { end, player } = renderAt(1);
+      end();
+      const slider = screen.getByRole("slider");
+      slider.getBoundingClientRect = () => new DOMRect(0, 0, 100, 24);
+      slider.setPointerCapture = vi.fn();
+      fireEvent.pointerDown(slider, { pointerId: 1, clientX: 50 });
+      expect(player().getState().status).toBe("playing");
+      expect(player().getTime()).toBeCloseTo(player().timing.duration / 2);
+    });
+
     it("keeps focus on the track when a focused slider's chapter advances", () => {
       const { end } = renderAt(1);
       screen.getByRole("slider").focus();
@@ -433,6 +526,105 @@ describe("TourDialog", () => {
     expect(slider.getAttribute("aria-valuetext")).toMatch(/^7 seconds of \d+ seconds$/);
   });
 
+  describe("chapter markers", () => {
+    const markers = () => screen.getAllByRole("button", { name: /^Chapter \d+: / });
+    const stops = () => markers().filter((marker) => marker.tabIndex >= 0);
+    const named = (chapter: number) => `Chapter ${chapter}: ${TOUR_CHAPTERS[chapter - 1]!.title}`;
+
+    function renderParked(chapter = 0) {
+      let player: TourPlayer | null = null;
+      const view = renderDialog({ initialChapter: chapter, onPlayer: (p) => (player = p) });
+      // Parked mid-chapter, so any seek the arrows cause shows up in the time.
+      act(() => {
+        player!.pause();
+        player!.seek(7);
+      });
+      return { ...view, player: () => player! };
+    }
+
+    it("are one tab stop, beside the current chapter's slider", () => {
+      renderDialog({ initialChapter: 2 });
+      expect(markers()).toHaveLength(TOUR_CHAPTERS.length - 1);
+      expect(stops()).toHaveLength(1);
+      expect(screen.getByRole("slider").tabIndex).toBe(0);
+    });
+
+    it("move focus between them with the arrows, skipping the slider and wrapping, without seeking", () => {
+      const { player } = renderParked(1);
+      const [first] = markers();
+      expect(first!.getAttribute("aria-label")).toBe(named(1));
+      first!.focus();
+
+      fireEvent.keyDown(first!, { key: "ArrowRight" });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(named(3));
+      expect(stops().map((m) => m.getAttribute("aria-label"))).toEqual([named(3)]);
+
+      // The dialog's own arrows seek the chapter; here they only move focus, so
+      // the time is checked after each press, where opposite seeks can't cancel.
+      expect(player().getTime()).toBe(7);
+
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+      expect(player().getTime()).toBe(7);
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+      expect(player().getTime()).toBe(7);
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(named(TOUR_CHAPTERS.length));
+
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(named(1));
+      expect(player().getTime()).toBe(7);
+      expect(player().getState().chapterIndex).toBe(1);
+    });
+
+    it("jump to the first and last with Home and End, without seeking", () => {
+      const { player } = renderParked(3);
+      const [, second] = markers();
+      second!.focus();
+      fireEvent.keyDown(second!, { key: "End" });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(named(TOUR_CHAPTERS.length));
+      fireEvent.keyDown(document.activeElement!, { key: "Home" });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(named(1));
+      expect(stops()).toHaveLength(1);
+      expect(player().getTime()).toBe(7);
+    });
+
+    it("leave the slider's own keys alone", () => {
+      const { player } = renderParked(1);
+      const slider = screen.getByRole("slider");
+      slider.focus();
+      fireEvent.keyDown(slider, { key: "ArrowRight" });
+      expect(document.activeElement).toBe(slider);
+      expect(player().getTime()).toBe(12);
+    });
+
+    it("keep one stop, and the focus, when a keyboard choice moves the chapter", () => {
+      const { player } = renderParked(0);
+      const target = markers().find((m) => m.getAttribute("aria-label") === named(5))!;
+      target.focus();
+      fireEvent.click(target, { detail: 0 });
+      expect(player().getState().chapterIndex).toBe(4);
+      expect(document.activeElement).toBe(screen.getByRole("slider"));
+      expect(markers()).toHaveLength(TOUR_CHAPTERS.length - 1);
+      expect(stops()).toHaveLength(1);
+    });
+
+    it("keep one stop when the chapter changes from elsewhere, even onto the marker that held it", () => {
+      const { player } = renderParked(1);
+      const [first] = markers();
+      first!.focus();
+      fireEvent.keyDown(first!, { key: "ArrowRight" });
+      expect(stops().map((m) => m.getAttribute("aria-label"))).toEqual([named(3)]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      expect(player().getState().chapterIndex).toBe(2);
+      expect(stops()).toHaveLength(1);
+      expect(stops()[0]!.getAttribute("aria-label")).not.toBe(named(3));
+
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect(player().getState().chapterIndex).toBe(1);
+      expect(stops()).toHaveLength(1);
+    });
+  });
+
   describe("any tour", () => {
     const timing = (text: string): TourChapterTiming => ({
       duration: 4,
@@ -483,6 +675,33 @@ describe("TourDialog", () => {
       window.removeEventListener("daintree:show-getting-started", gettingStarted);
       expect(run).toHaveBeenCalledTimes(1);
       expect(gettingStarted).not.toHaveBeenCalled();
+    });
+
+    it("has no chapter marker to tab to when it is a single chapter, and one when it is two", () => {
+      renderDialog({
+        tour: tourWith({
+          chapters: [{ id: "one", title: "First steps", scene: Plain }],
+          resolveTimings: () => [timing("Hello from Acme")],
+        }),
+      });
+      expect(screen.queryAllByRole("button", { name: /^Chapter \d+: / })).toHaveLength(0);
+      expect(screen.getByRole("slider").tabIndex).toBe(0);
+
+      cleanup();
+      let player: TourPlayer | null = null;
+      renderDialog({ tour: tourWith(), onPlayer: (p) => (player = p) });
+      act(() => {
+        player!.pause();
+        player!.seek(1);
+      });
+      const markers = screen.getAllByRole("button", { name: /^Chapter \d+: / });
+      expect(markers.map((m) => m.tabIndex)).toEqual([0]);
+      markers[0]!.focus();
+      fireEvent.keyDown(markers[0]!, { key: "ArrowRight" });
+      expect(document.activeElement).toBe(markers[0]);
+      // Even with nowhere to go, the arrow stays the marker's and doesn't seek.
+      expect(player!.getTime()).toBe(1);
+      expect(player!.getState().status).toBe("paused");
     });
 
     it("fails only the chapter whose scene throws", () => {

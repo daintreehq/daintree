@@ -157,6 +157,10 @@ export class TourPlayer {
       this.setState({ status: "paused" });
     }
     this.startClock();
+    // The frame loop is what ends a chapter while it plays, and it is stopped
+    // while paused, so a seek that lands on the end has to end it itself or the
+    // end card never shows.
+    if (next >= this.timing.duration && this.state.status !== "ended") this.finish();
   }
 
   goTo(index: number, options: { autoplay?: boolean } = {}): void {
