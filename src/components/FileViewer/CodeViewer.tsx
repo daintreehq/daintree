@@ -89,7 +89,9 @@ const BASE_EXTENSIONS: Extension[] = [
   EditorState.readOnly.of(true),
   focusableSurface,
   search({ top: true, createPanel: createEditorSearchPanel }),
-  keymap.of([{ key: "Mod-l", run: gotoLine }]),
+  // The find bar runs only keys scoped to it, so go to line needs the scope to
+  // answer while the find field has focus.
+  keymap.of([{ key: "Mod-l", run: gotoLine, scope: "editor search-panel" }]),
   editorSearchPanelTheme,
   editorSearchHighlightTheme,
 ];

@@ -103,6 +103,14 @@ describe("CodeViewer keyboard focus", () => {
     expect(document.activeElement).toBe(content);
   });
 
+  it("Mod-l opens go to line from the find field too", () => {
+    const { ref, container } = mountViewer();
+    act(() => ref.current!.openSearch());
+    const event = press(queryInput(container), { key: "l", keyCode: 76, ...modKey() });
+    expect(event.defaultPrevented).toBe(true);
+    expect(container.querySelector(".cm-goto-line")).not.toBeNull();
+  });
+
   it("marks one key owner around the content and the find bar", () => {
     const { ref, content, container } = mountViewer();
     act(() => ref.current!.openSearch());
