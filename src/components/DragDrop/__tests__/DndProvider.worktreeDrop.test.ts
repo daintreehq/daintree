@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { pointerWithin, type ClientRect, type CollisionDetection } from "@dnd-kit/core";
+import {
+  pointerWithin,
+  type ClientRect,
+  type CollisionDetection,
+  type UniqueIdentifier,
+} from "@dnd-kit/core";
 import { resolveCardDropWorktreeId, type OverDropData } from "../dropResolution";
 import { getWorktreeSortDragId } from "../SortableWorktreeCard";
 import { getAccordionDragId } from "../SortableWorktreeTerminal";
@@ -89,17 +94,24 @@ describe("drops over an expanded session list (#16920)", () => {
     x: number,
     y: number,
     targets: Array<{ droppable: Droppable; rect: ClientRect }>
-  ): { id: string; data: OverDropData } {
+  ): { id: string; data: OverDropData | undefined } {
     const [first] = pointerWithin({
-      active: { id: "panel-1", data: { current: undefined }, rect: { current: {} } },
+      active: {
+        id: "panel-1",
+        data: { current: undefined },
+        rect: { current: { initial: null, translated: null } },
+      },
       collisionRect: rect(x - 10, y - 10, 20, 20),
-      droppableRects: new Map(targets.map((t) => [t.droppable.id, t.rect])),
+      droppableRects: new Map<UniqueIdentifier, ClientRect>(
+        targets.map((t) => [t.droppable.id, t.rect])
+      ),
       droppableContainers: targets.map((t) => t.droppable),
       pointerCoordinates: { x, y },
-    } as Parameters<CollisionDetection>[0]);
+    });
     if (!first) throw new Error(`nothing under ${x},${y}`);
     const target = targets.find((t) => t.droppable.id === first.id)!;
-    return { id: String(first.id), data: target.droppable.data.current as OverDropData };
+    const data: OverDropData | undefined = target.droppable.data.current;
+    return { id: String(first.id), data };
   }
 
   const card = rect(0, 0, 240, 200);
