@@ -333,6 +333,113 @@ describe("dropdown close-time focus policy", () => {
   });
 });
 
+describe("dropdown close that hands focus off", () => {
+  // A launch from a menu row sends focus to the panel it opens, and that can
+  // land before the menu's close or after it. The close must neither steal it
+  // back nor strand focus on document.body when it never comes.
+  function renderHandoffDropdown() {
+    let overlay: OverlayFocusRestore | null = null;
+    function Capture() {
+      overlay = useOverlayFocusRestore();
+      return null;
+    }
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <Capture />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+    const trigger = document.querySelector("button") as HTMLButtonElement;
+    return { trigger, expectHandoff: () => overlay!.expectHandoff() };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps focus on a surface the handoff reached before the close", () => {
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+    const panel = document.createElement("textarea");
+    document.body.appendChild(panel);
+
+    act(() => {
+      expectHandoff();
+      contentProps().onClick(itemClick(1));
+    });
+    panel.focus();
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    // Radix's own restoration would have pulled focus back to the trigger.
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(panel);
+    panel.remove();
+  });
+
+  it("returns focus ringless when a pointer-picked handoff never came", () => {
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      contentProps().onClick(itemClick(1));
+    });
+    act(() => contentProps().onCloseAutoFocus(closeEvent()));
+    // Nothing synchronously: the handoff gets its chance first.
+    expect(focusSpy).not.toHaveBeenCalled();
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("returns focus with its ring when a keyboard-picked handoff never came", () => {
+    // Radix selects on Enter by calling .click() from the item's keydown, so
+    // the keydown reaches the content after the item armed the handoff; that
+    // keystroke must not disarm it.
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      contentProps().onClick(itemClick(0));
+      contentProps().onKeyDown();
+    });
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not carry an unspent handoff into the next opening", () => {
+    const { expectHandoff } = renderHandoffDropdown();
+    act(() => expectHandoff());
+    act(() => captured.rootOnOpenChange?.(true));
+
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
 describe("context menu close-time focus policy", () => {
   function renderContextMenu() {
     render(
