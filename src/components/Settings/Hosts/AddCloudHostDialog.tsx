@@ -26,7 +26,11 @@ import {
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
-import { formatHourly, lifetimeLabel, machineSpecLabel } from "./cloudHostLabels";
+import {
+  formatHourly,
+  lifetimeLabel,
+  machineSpecLabel,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 
 interface AddCloudHostDialogProps {
   isOpen: boolean;

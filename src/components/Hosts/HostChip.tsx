@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
@@ -18,6 +18,9 @@ import {
 import {
   AppWindow,
   CircleArrowUp,
+  Cloud,
+  Play,
+  Square,
   GitBranch,
   Plus,
   Server,
@@ -41,6 +44,10 @@ import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
 import { PlatformGlyph } from "./PlatformGlyph";
+import { useCloudHosts } from "./cloud/cloudHostsState";
+import { useCloudMachineActions } from "./cloud/useCloudMachineActions";
+import { canStartMachine, canStopMachine, cloudStatusLabel } from "./cloud/cloudHostLabels";
+import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import { HostNameText } from "./HostNameText";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 import { hostUpdateOffer, runHostUpdate, type HostUpdateOffer } from "./hostUpdate";
@@ -167,8 +174,17 @@ function HostSubmenuLabel({ row }: { row: HostMenuRow }) {
  * it said instead of answering. Secondary ink throughout and no warning mark;
  * the exact time is on the age's own hover.
  */
-function AwayHostLabel({ row }: { row: HostMenuRow }) {
-  const { state, at } = describeAwayHost(row);
+function AwayHostLabel({
+  row,
+  machineState = null,
+}: {
+  row: HostMenuRow;
+  machineState?: string | null;
+}) {
+  const described = describeAwayHost(row);
+  // A cloud machine that isn't running says so, not that its link is down.
+  const state = machineState ?? described.state;
+  const at = machineState ? null : described.at;
   return (
     <span className="flex min-w-0 flex-1 items-baseline">
       {/* Full ink under the pointer or keyboard: quiet, never disabled-looking. */}
@@ -229,18 +245,29 @@ function AwayHostsGroup({
 function HostMenuItem({
   row,
   onPick,
+  cloud = null,
 }: {
   row: HostMenuRow;
   onPick: (row: HostMenuRow, newWindow: boolean) => void;
+  /** A cloud host's machine: while its link is down, what the machine is doing says more. */
+  cloud?: CloudHostStatus | null;
 }) {
   // Drawn by what the link says now; which section it sits in was fixed when
   // the menu opened. One item either way, so a row that changes keeps focus.
   const away = isHostMenuRowAway(row);
-  const { state, note } = describeHostMenuState(row);
+  const described = describeHostMenuState(row);
+  const machineDown = cloud !== null && (cloud.machine !== "running" || cloud.operation !== null);
+  const state = machineDown ? cloudStatusLabel(cloud) : described.state;
+  const note = machineDown
+    ? canStartMachine(cloud)
+      ? "Opening it starts the machine"
+      : null
+    : described.note;
   // A link that has gone wrong carries the chip's own warning mark and full
   // ink; connecting and not connected stay quiet, and connected never goes green.
-  const trouble = hostMenuRowHasTrouble(row);
-  const noteAge = hostMenuNoteAge(row);
+  // A cloud machine that isn't running is no link trouble: it says what the machine is doing.
+  const trouble = !machineDown && hostMenuRowHasTrouble(row);
+  const noteAge = machineDown ? null : hostMenuNoteAge(row);
   const TroubleGlyph = SEVERITY_GLYPH.warning;
   return (
     <DropdownMenuItem
@@ -256,7 +283,7 @@ function HostMenuItem({
       </span>
       <HostMark row={row} />
       {away ? (
-        <AwayHostLabel row={row} />
+        <AwayHostLabel row={row} machineState={machineDown ? state : null} />
       ) : (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {/* The name keeps the whole row when it needs it and the state drops
@@ -349,6 +376,13 @@ export function HostChip() {
   // so no row moves under the pointer.
   const [awayAtOpen, setAwayAtOpen] = useState<ReadonlySet<string> | null>(null);
   const workingOnLabelId = useId();
+  const cloudSnapshot = useCloudHosts().snapshot;
+  const cloudHosts = cloudSnapshot.hosts;
+  const cloudProviders = cloudSnapshot.providers;
+  const cloudFor = (hostId: string) => cloudHosts.find((host) => host.hostId === hostId) ?? null;
+  const machines = useCloudMachineActions();
+  // Each pick bumps it: a start that finishes after a newer pick doesn't switch the window.
+  const pickGeneration = useRef(0);
   // Forwards riding on the link when Disconnect asked first; null while not asking.
   const [disconnectAsk, setDisconnectAsk] = useState<number | null>(null);
   const visible = supported && hasRemoteHosts(hostList);
@@ -367,7 +401,11 @@ export function HostChip() {
     : (storeHostName ?? currentRow.name ?? windowHostId);
   // "SSH · studio-01": the place and how it is reached, so a remote window never reads as local.
   // A Windows Shell reaches its hosts, WSL distros, one way only.
-  const via = remoteConnectionKind() === "wsl" ? "WSL" : "SSH";
+  const windowCloud = isLocalWindow ? null : cloudFor(windowHostId);
+  const cloudProviderName = windowCloud
+    ? (cloudProviders.find((provider) => provider.id === windowCloud.providerId)?.name ?? "Cloud")
+    : null;
+  const via = cloudProviderName ?? (remoteConnectionKind() === "wsl" ? "WSL" : "SSH");
   const locationLabel = isLocalWindow ? name : `${via} · ${name}`;
   // "build-east-01" and "build-east-02" differ only at the end of the machine's
   // own label: its head gives way, its tail never does, and a domain after it
@@ -386,7 +424,12 @@ export function HostChip() {
     );
   };
   const status = hostChipStatus(isLocalWindow, connection, drivenElsewhereBy(lease));
-  const statusText = hostChipStatusText(status);
+  // A window on a cloud machine that isn't running says so, not that it can't log in.
+  const windowMachineDown =
+    windowCloud !== null && (windowCloud.machine !== "running" || windowCloud.operation !== null);
+  const statusText = windowMachineDown
+    ? cloudStatusLabel(windowCloud).toLowerCase()
+    : hostChipStatusText(status);
   // How far away the host feels, while the link is healthy: a quiet reading
   // that steps up to full ink once typing would lag. Any state word replaces it.
   const latency =
@@ -395,11 +438,12 @@ export function HostChip() {
   // A link that has gone quiet, can't be reached or refused the build is a problem
   // the person must see in the chip; connecting and a deliberate disconnect are not.
   const linkTrouble =
-    status === "quiet" ||
-    status === "unreachable" ||
-    status === "host-mode-off" ||
-    status === "access-denied" ||
-    status === "version-mismatch";
+    !windowMachineDown &&
+    (status === "quiet" ||
+      status === "unreachable" ||
+      status === "host-mode-off" ||
+      status === "access-denied" ||
+      status === "version-mismatch");
   const TroubleGlyph = SEVERITY_GLYPH.warning;
   // Down, deliberately or not: the same machine, crossed out, and the words in
   // full ink. Calm, since the window's banner already offers to connect.
@@ -425,6 +469,18 @@ export function HostChip() {
   // pushed or created.
   const pick = (row: HostMenuRow, newWindow: boolean) => {
     if (row.isCurrent && !newWindow) return;
+    const generation = ++pickGeneration.current;
+    // A stopped cloud machine starts only on a yes that names what it costs.
+    const cloud = cloudFor(row.hostId);
+    if (cloud && canStartMachine(cloud) && row.connection?.status !== "connected") {
+      machines.confirmStart({
+        hostId: row.hostId,
+        name: row.name,
+        then: () => void switchToHost(row.hostId, newWindow),
+        stale: () => pickGeneration.current !== generation,
+      });
+      return;
+    }
     void switchToHost(row.hostId, newWindow);
   };
   const isAway = (row: HostMenuRow) => awayAtOpen?.has(row.hostId) ?? isHostMenuRowAway(row);
@@ -535,21 +591,25 @@ export function HostChip() {
           <TooltipContent side="bottom">
             {isLocalWindow
               ? "Working on this machine"
-              : via === "WSL"
-                ? `Working in ${name} on WSL. Project files, terminals and agents run in that Linux distribution${latency !== null ? `. ${latency} ms round trip` : ""}`
-                : `Working on ${name} over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`}
+              : cloudProviderName
+                ? `Working on ${name}, a ${cloudProviderName} machine, over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`
+                : via === "WSL"
+                  ? `Working in ${name} on WSL. Project files, terminals and agents run in that Linux distribution${latency !== null ? `. ${latency} ms round trip` : ""}`
+                  : `Working on ${name} over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`}
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="center" pointer className="w-72">
           <DropdownMenuGroup aria-labelledby={workingOnLabelId}>
             <DropdownMenuLabel id={workingOnLabelId}>Working on</DropdownMenuLabel>
             {hereRows.map((row) => (
-              <HostMenuItem key={row.hostId} row={row} onPick={pick} />
+              <HostMenuItem key={row.hostId} row={row} onPick={pick} cloud={cloudFor(row.hostId)} />
             ))}
           </DropdownMenuGroup>
           <AwayHostsGroup
             rows={awayRows}
-            renderRow={(row) => <HostMenuItem key={row.hostId} row={row} onPick={pick} />}
+            renderRow={(row) => (
+              <HostMenuItem key={row.hostId} row={row} onPick={pick} cloud={cloudFor(row.hostId)} />
+            )}
           />
           <DropdownMenuSeparator />
           <DropdownMenuSub>
@@ -565,7 +625,7 @@ export function HostChip() {
                   textValue={row.name}
                   className="group/host"
                   data-new-window-host-id={row.hostId}
-                  onSelect={() => void switchToHost(row.hostId, true)}
+                  onSelect={() => pick(row, true)}
                 >
                   <SubmenuHostLabel row={row} />
                 </DropdownMenuItem>
@@ -578,7 +638,7 @@ export function HostChip() {
                     textValue={row.name}
                     className="group/host"
                     data-new-window-host-id={row.hostId}
-                    onSelect={() => void switchToHost(row.hostId, true)}
+                    onSelect={() => pick(row, true)}
                   >
                     <SubmenuHostLabel row={row} />
                   </DropdownMenuItem>
@@ -620,6 +680,65 @@ export function HostChip() {
                     </DropdownMenuItem>
                   )}
                 />
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
+          {cloudHosts.length > 0 && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger data-testid="host-chip-cloud-machines">
+                <TickColumn />
+                <Cloud data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
+                Cloud machines
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-72">
+                {cloudHosts.map((cloud) => {
+                  const hostName =
+                    rows.find((row) => row.hostId === cloud.hostId)?.name ?? cloud.hostId;
+                  const busy = machines.isPending(cloud.hostId) || cloud.operation !== null;
+                  const stoppable = canStopMachine(cloud);
+                  const startable = canStartMachine(cloud);
+                  const Glyph = stoppable ? Square : Play;
+                  const verb = stoppable ? "Stop" : "Start";
+                  const detail = [
+                    cloudStatusLabel(cloud),
+                    cloud.hourlyDollars !== null && stoppable
+                      ? `$${cloud.hourlyDollars.toFixed(3)}/h`
+                      : null,
+                    cloud.accountName,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <DropdownMenuItem
+                      key={cloud.hostId}
+                      className="items-start"
+                      data-cloud-machine-host-id={cloud.hostId}
+                      disabled={busy || (!stoppable && !startable)}
+                      aria-label={`${verb} ${hostName}`}
+                      textValue={hostName}
+                      onSelect={() =>
+                        stoppable
+                          ? machines.requestStop(cloud.hostId, hostName)
+                          : machines.start(cloud.hostId)
+                      }
+                    >
+                      <TickColumn />
+                      <Glyph
+                        data-menu-icon
+                        className={cn(MENU_ICON_CLASS, "mt-px")}
+                        aria-hidden="true"
+                      />
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="break-words">
+                          {verb} {hostName}
+                        </span>
+                        <span className="text-2xs text-text-secondary">
+                          {machines.errorFor(cloud.hostId) ?? detail}
+                        </span>
+                      </span>
+                    </DropdownMenuItem>
+                  );
+                })}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           )}
@@ -695,6 +814,7 @@ export function HostChip() {
           void disconnectFromHost(windowHostId, name);
         }}
       />
+      {machines.dialogs}
     </>
   );
 }

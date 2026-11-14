@@ -341,7 +341,7 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
       resourceId: "bx_23456789",
       name: "build",
     });
-    lifecycle.setLifetime("build", 4);
+    await lifecycle.setLifetime("build", 4);
     await lifecycle.startMachine("build");
     expect(vi.mocked(provider.start).mock.calls[0]![2]).toEqual({ lifetimeSeconds: 4 * 3600 });
     await lifecycle.stopMachine("build");
@@ -350,6 +350,19 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
       vi.mocked(provider.stop).mock.invocationCallOrder[0]!
     );
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+  });
+
+  it("moves a running machine's own deadline when its lifetime changes", async () => {
+    const { lifecycle, provider, store } = await setup({ machine: "running" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    vi.mocked(provider.renewLifetime).mockResolvedValue(resource({ machine: "running" }));
+    await lifecycle.setLifetime("build", null);
+    expect(vi.mocked(provider.renewLifetime).mock.calls[0]![2]).toBeNull();
+    expect(store.bindings()[0]!.lifetimeSeconds).toBeNull();
   });
 
   it("won't start a machine whose saved disk expired, and creates nothing in its place", async () => {

@@ -1,5 +1,6 @@
 import { test, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
@@ -79,6 +80,80 @@ async function linkStatus(page: Page): Promise<string | undefined> {
 /** Create requests only: `POST /sandboxes` exactly, not its sub-routes. */
 function creates() {
   return run.boat.requests.filter((r) => r.method === "POST" && r.path === "/sandboxes");
+}
+
+/** The page of the view on top of the Shell's first window: a switch replaces it. */
+async function topViewPage(app: ElectronApplication): Promise<Page | null> {
+  const mark = `top-${randomBytes(4).toString("hex")}`;
+  const marked = await app
+    .evaluate(async ({ BrowserWindow }, value) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win || win.isDestroyed()) return false;
+      const views = win.contentView?.children ?? [];
+      for (let i = views.length - 1; i >= 0; i--) {
+        const view = views[i] as Electron.WebContentsView & { getVisible?: () => boolean };
+        const wc = view.webContents;
+        if (!wc || wc.isDestroyed()) continue;
+        if (typeof view.getVisible === "function" && !view.getVisible()) continue;
+        if (!wc.getURL().startsWith("app://daintree/")) continue;
+        await wc.executeJavaScript(`window.__cloudE2eTopView = ${JSON.stringify(value)}`, true);
+        return true;
+      }
+      return false;
+    }, mark)
+    .catch(() => false);
+  if (!marked) return null;
+  for (const page of app.windows()) {
+    const seen = await page
+      .evaluate(
+        () => (window as unknown as { __cloudE2eTopView?: string }).__cloudE2eTopView ?? null
+      )
+      .catch(() => null);
+    if (seen === mark) return page;
+  }
+  return null;
+}
+
+async function viewHostId(page: Page): Promise<string | null> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __DAINTREE_HOST_ID__?: { id?: string } }).__DAINTREE_HOST_ID__?.id ??
+      null
+  );
+}
+
+async function waitForHostView(hostId: string | null): Promise<Page> {
+  let found: Page | null = null;
+  await expect
+    .poll(
+      async () => {
+        const page = await topViewPage(run.b.app);
+        if (!page) return false;
+        if ((await viewHostId(page).catch(() => "?")) !== hostId) return false;
+        found = page;
+        return true;
+      },
+      { timeout: 60_000, intervals: [250, 500, 1000] }
+    )
+    .toBe(true);
+  return found!;
+}
+
+/** A confirm by its title, whichever role its tier gives it. */
+function confirmDialog(page: Page, title: string) {
+  return page.locator('[role="dialog"], [role="alertdialog"]').filter({ hasText: title });
+}
+
+async function closeSettings(page: Page) {
+  const heading = page.locator(SEL.settings.heading);
+  if (!(await heading.isVisible().catch(() => false))) return;
+  await page.keyboard.press("Escape");
+  await expect(heading).toBeHidden({ timeout: 10_000 });
+}
+
+async function openCloudMachinesMenu(page: Page) {
+  await page.locator(SEL.remoteHosts.hostChip).click();
+  await page.getByTestId("host-chip-cloud-machines").click();
 }
 
 function boatCalls(method: string, pathPrefix: string) {
@@ -322,5 +397,123 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     ).length;
     expect(keysAfter).toBeGreaterThan(keysBefore);
     await shoot(page, "hosts-list-cloud-restarted");
+  });
+
+  test("5. the host menu stops a machine after saying what ends with it", async () => {
+    const page = run.b.window;
+    await closeSettings(page);
+    await openCloudMachinesMenu(page);
+    const stopItem = page.locator(`[data-cloud-machine-host-id="${run.hostId}"]`);
+    await expect(stopItem).toContainText(`Stop ${HOST_NAME}`);
+    await expect(stopItem).toContainText("$0.036/h");
+    await shoot(page, "host-menu-cloud-machines");
+    await stopItem.click();
+    const confirm = confirmDialog(page, `Stop '${HOST_NAME}'?`);
+    await expect(confirm).toBeVisible();
+    await shoot(page, "host-menu-stop-confirm");
+    await confirm.getByRole("button", { name: "Stop machine" }).click();
+    await expect
+      .poll(async () => (await cloudHost(page))?.machine, { timeout: 60_000 })
+      .toBe("stopped");
+
+    // Picking the stopped host asks before starting it.
+    await page.locator(SEL.remoteHosts.hostChip).click();
+    await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
+    const startAsk = confirmDialog(page, `Start '${HOST_NAME}'?`);
+    await expect(startAsk).toContainText("$0.036 an hour");
+    await shoot(page, "host-menu-start-confirm");
+    const resumesBefore = boatCalls("POST", "/sandboxes/").filter((r) =>
+      r.path.endsWith("/resume")
+    ).length;
+    await startAsk.getByRole("button", { name: "Cancel" }).click();
+    expect(boatCalls("POST", "/sandboxes/").filter((r) => r.path.endsWith("/resume")).length).toBe(
+      resumesBefore
+    );
+  });
+
+  test("6. Settings shows the machine's state, starts it from the row, and details it", async () => {
+    const page = run.b.window;
+    await openSettings(page);
+    await page.locator(SEL.remoteHosts.settingsTab).click();
+    const list = page.locator('[id="hosts-list"]');
+    await expect(list).toContainText("Machine stopped");
+    await expect(list).toContainText("Boat · e2e-user");
+    await expect(list.getByRole("button", { name: `Bring back ${HOST_NAME}` })).toHaveCount(0);
+    await shoot(page, "settings-row-cloud-stopped");
+    await list.getByRole("button", { name: `Start ${HOST_NAME}` }).click();
+    await expect
+      .poll(async () => (await cloudHost(page))?.machine, { timeout: 60_000 })
+      .toBe("running");
+    await list.getByRole("button", { name: `Details for ${HOST_NAME}` }).click();
+    const section = page.locator('[id="host-cloud-machine"]');
+    await expect(section).toBeVisible();
+    await expect(section.getByTestId("cloud-machine-state")).toContainText("Machine running");
+    await expect(section).toContainText("$0.036 an hour while running");
+    await expect(section).toContainText("Machine bx_");
+    await shoot(page, "host-detail-cloud-machine");
+  });
+
+  test("7. a window on a stopped machine offers Start and reconnect, and reconnects", async () => {
+    const page = run.b.window;
+    await closeSettings(page);
+    await page.evaluate((id) => window.electron.remoteHosts.connect({ hostId: id }), run.hostId);
+    await expect.poll(() => linkStatus(page), { timeout: 60_000 }).toBe("connected");
+    await page.locator(SEL.remoteHosts.hostChip).click();
+    await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
+    const option = page.locator(SEL.remoteHosts.projectPickerOption(run.hostProject.name));
+    await expect(option).toBeVisible({ timeout: 30_000 });
+    await option.click();
+    const remote = await waitForHostView(run.hostId);
+    await expect(remote.locator(SEL.remoteHosts.hostChip)).toHaveAttribute(
+      "aria-label",
+      new RegExp(`^Working on Boat · ${HOST_NAME}`)
+    );
+    await shoot(remote, "remote-window-boat-chip");
+
+    await remote.evaluate((id) => window.electron.cloudHosts.stopHost({ hostId: id }), run.hostId);
+    const banner = remote
+      .locator('[role="status"]')
+      .filter({ hasText: /machine is stopped|Starting .*machine/ });
+    await expect(banner).toContainText(`${HOST_NAME}'s machine is stopped`, { timeout: 60_000 });
+    await shoot(remote, "remote-window-machine-stopped-banner");
+    await banner.getByRole("button", { name: "Start and reconnect" }).click();
+    await expect.poll(() => linkStatus(remote), { timeout: 90_000 }).toBe("connected");
+    await expect(banner).toHaveCount(0, { timeout: 30_000 });
+    await shoot(remote, "remote-window-reconnected");
+  });
+
+  test("8. removing the host can delete its machine, after its name is typed", async () => {
+    const remote = await waitForHostView(run.hostId);
+    // Back to this machine, then remove from Settings.
+    await remote.locator(SEL.remoteHosts.hostChip).click();
+    await remote.locator(SEL.remoteHosts.hostMenuRow("local")).click();
+    const page = await waitForHostView(null);
+    await openSettings(page);
+    await page.locator(SEL.remoteHosts.settingsTab).click();
+    await page
+      .locator('[id="hosts-list"]')
+      .getByRole("button", { name: `Remove ${HOST_NAME} from this device` })
+      .click();
+    const dialog = confirmDialog(page, `Remove '${HOST_NAME}'?`);
+    await expect(dialog.getByTestId("remove-cloud-host-choice")).toContainText("keeps billing");
+    await shoot(page, "remove-cloud-host-keep");
+    await dialog.getByRole("radio", { name: "Delete the machine too" }).check();
+    const deleteButton = dialog.getByRole("button", { name: "Delete machine" });
+    // Gated on the exact name: nothing, then a wrong name, leave it unavailable.
+    await expect(deleteButton).toHaveAttribute("aria-disabled", "true");
+    await dialog.getByLabel(`Type ${HOST_NAME} to confirm`).fill(`${HOST_NAME}-x`);
+    await expect(deleteButton).toHaveAttribute("aria-disabled", "true");
+    expect(run.boat.requests.filter((r) => r.method === "DELETE")).toHaveLength(0);
+    await dialog.getByLabel(`Type ${HOST_NAME} to confirm`).fill(HOST_NAME);
+    await expect(deleteButton).not.toHaveAttribute("aria-disabled", "true");
+    await shoot(page, "remove-cloud-host-delete");
+    await dialog.getByRole("button", { name: "Delete machine" }).click();
+    await expect(dialog).toBeHidden({ timeout: 30_000 });
+    const deletes = run.boat.requests.filter((r) => r.method === "DELETE");
+    expect(deletes).toHaveLength(1);
+    expect(run.boat.sandboxes.size).toBe(0);
+    const hosts = await page.evaluate(() => window.electron.remoteHosts.list());
+    expect(hosts.find((h) => h.descriptor.id === run.hostId)).toBeUndefined();
+    await shoot(page, "settings-after-delete");
   });
 });

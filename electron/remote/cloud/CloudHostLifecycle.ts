@@ -684,16 +684,34 @@ export class CloudHostLifecycle {
     }
   }
 
-  /** Sets the lifetime the next start and every renewal use. */
-  setLifetime(hostId: unknown, lifetimeHours: unknown): void {
+  /**
+   * Sets how long the machine runs before it stops by itself. A running
+   * machine's own deadline moves too (to that long from now, or none), so
+   * what Settings shows is what will happen to this run.
+   */
+  async setLifetime(hostId: unknown, lifetimeHours: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
     if (!CLOUD_LIFETIME_CHOICES.includes(lifetimeHours as number | null)) {
       throw invalid("Choose how long the machine may run before it stops by itself.");
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({
-      ...current,
-      lifetimeSeconds: lifetimeHours === null ? null : (lifetimeHours as number) * 3600,
-    }));
+    const lifetimeSeconds = lifetimeHours === null ? null : (lifetimeHours as number) * 3600;
+    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
+    if (
+      !binding.resourceId ||
+      machineOf(binding) !== "running" ||
+      this.operations.has(binding.id)
+    ) {
+      return;
+    }
+    const { provider, credentials } = await this.context(binding);
+    try {
+      this.observe(
+        binding.id,
+        await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds)
+      );
+    } catch (error) {
+      throw this.deps.accounts.asAppError(provider, error);
+    }
   }
 
   // --- SSH access ----------------------------------------------------------

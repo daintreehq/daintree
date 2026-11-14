@@ -91,8 +91,8 @@ export class CloudHosts {
     return this.lifecycle.deleteMachine(hostId, resourceId);
   }
 
-  setLifetime(hostId: unknown, lifetimeHours: unknown): void {
-    this.lifecycle.setLifetime(hostId, lifetimeHours);
+  setLifetime(hostId: unknown, lifetimeHours: unknown): Promise<void> {
+    return this.lifecycle.setLifetime(hostId, lifetimeHours);
   }
 
   snapshot(): CloudHostsSnapshot {

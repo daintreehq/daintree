@@ -20,6 +20,15 @@ import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { CloudProvidersSection } from "./CloudProvidersSection";
 import { AddCloudHostDialog } from "./AddCloudHostDialog";
+import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
+import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
+import { useCloudMachineActions } from "@/components/Hosts/cloud/useCloudMachineActions";
+import {
+  canStartMachine,
+  canStopMachine,
+  cloudStatusLabel,
+  machineSpecLabel,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
 import { bringBackMessage, canBringBack, useHostBringBacks, wakeLabel } from "./hostBringBack";
 import {
@@ -61,6 +70,11 @@ export default function HostsSettingsTab() {
   } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const bringBacks = useHostBringBacks();
+  const cloudSnapshot = useCloudHosts().snapshot;
+  const machines = useCloudMachineActions();
+  const [removeCloud, setRemoveCloud] = useState<{ hostId: HostId; name: string } | null>(null);
+  const providerName = (providerId: string) =>
+    cloudSnapshot.providers.find((provider) => provider.id === providerId)?.name ?? providerId;
   // Leaving a host's details puts focus back on the Details button it came
   // from (or, once removed, the list's Add host); entering from the keyboard
   // puts it on the header's way back.
@@ -243,6 +257,11 @@ export default function HostsSettingsTab() {
               .sort((a, b) => hostNameCollator.compare(a.descriptor.name, b.descriptor.name))
               .map(({ descriptor, connection }) => {
                 const wake = wakeLabel(descriptor);
+                const cloud = cloudStatusFor(cloudSnapshot, descriptor.id);
+                // While its machine isn't running, that is the news, not the link.
+                const machineDown =
+                  cloud !== null && (cloud.machine !== "running" || cloud.operation !== null);
+                const machineSaid = cloud ? machines.errorFor(descriptor.id) : null;
                 const bringing = bringBacks.isPending(descriptor.id);
                 const said = bringing
                   ? null
@@ -253,10 +272,15 @@ export default function HostsSettingsTab() {
                     label={descriptor.name}
                     description={
                       <>
-                        {formatHostConnection(descriptor.connection)} <FactSeparator />{" "}
-                        {descriptor.platform
-                          ? platformLabel(descriptor.platform, null)
-                          : "Not seen yet"}
+                        {cloud
+                          ? `${providerName(cloud.providerId)} · ${cloud.accountName}`
+                          : formatHostConnection(descriptor.connection)}{" "}
+                        <FactSeparator />{" "}
+                        {cloud
+                          ? machineSpecLabel(cloud.vcpu, cloud.memoryGB)
+                          : descriptor.platform
+                            ? platformLabel(descriptor.platform, null)
+                            : "Not seen yet"}
                         {/* The mark the host menus and sidebar draw beside the same state. */}
                         <span className="flex items-start gap-1.5">
                           <LinkMark
@@ -273,7 +297,9 @@ export default function HostsSettingsTab() {
                             className="h-4"
                           />
                           <span className="min-w-0">
-                            {connectionLabel(connection)}
+                            {machineDown && cloud
+                              ? cloudStatusLabel(cloud)
+                              : connectionLabel(connection)}
                             {wake && (
                               <>
                                 {" "}
@@ -284,10 +310,38 @@ export default function HostsSettingsTab() {
                         </span>
                       </>
                     }
-                    error={said ? <span role="alert">{said}</span> : undefined}
+                    error={
+                      machineSaid || said || (machineDown && cloud?.lastError) ? (
+                        <span role="alert">{machineSaid ?? said ?? cloud?.lastError?.message}</span>
+                      ) : undefined
+                    }
                     control={
                       <div className="flex items-center gap-1.5">
-                        {(bringing || canBringBack(connection)) && (
+                        {cloud && canStartMachine(cloud) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            data-cloud-start={descriptor.id}
+                            aria-label={`Start ${descriptor.name}`}
+                            loading={machines.isPending(descriptor.id)}
+                            onClick={() => machines.start(descriptor.id)}
+                          >
+                            Start
+                          </Button>
+                        )}
+                        {cloud && canStopMachine(cloud) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            data-cloud-stop={descriptor.id}
+                            aria-label={`Stop ${descriptor.name}`}
+                            loading={machines.isPending(descriptor.id)}
+                            onClick={() => machines.requestStop(descriptor.id, descriptor.name)}
+                          >
+                            Stop
+                          </Button>
+                        )}
+                        {!cloud && (bringing || canBringBack(connection)) && (
                           // Wakes it where a wake is set up, then starts Daintree there if it can.
                           <Button
                             variant="outline"
@@ -319,6 +373,11 @@ export default function HostsSettingsTab() {
                               size="icon-sm"
                               aria-label={`Remove ${descriptor.name} from this device`}
                               onClick={() => {
+                                // By its kind, not its status: a cloud host is never plainly forgotten.
+                                if (descriptor.connection.kind === "cloud") {
+                                  setRemoveCloud({ hostId: descriptor.id, name: descriptor.name });
+                                  return;
+                                }
                                 setForgetError(null);
                                 setForgetTarget({
                                   id: descriptor.id,
@@ -366,6 +425,18 @@ export default function HostsSettingsTab() {
             setAddOpen(false);
             setCloudAddOpen(true);
           }}
+        />
+      )}
+      {machines.dialogs}
+      {removeCloud && (
+        <RemoveCloudHostDialog
+          hostId={removeCloud.hostId}
+          name={removeCloud.name}
+          status={cloudStatusFor(cloudSnapshot, removeCloud.hostId)}
+          providerName={providerName(
+            cloudStatusFor(cloudSnapshot, removeCloud.hostId)?.providerId ?? "boat"
+          )}
+          onClose={() => setRemoveCloud(null)}
         />
       )}
       {cloudAddOpen && (

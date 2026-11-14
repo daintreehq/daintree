@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,10 @@ import {
   requestHostSettings,
 } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { getHostConnectionBannerCopy } from "./recoveryCopy";
+import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
+import { canStartMachine } from "@/components/Hosts/cloud/cloudHostLabels";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 
 const LAST_SEEN_TICK_MS = 30_000;
 
@@ -47,7 +51,24 @@ function useNow(active: boolean): number {
  */
 export function HostConnectionBanner() {
   const variant = useHostConnectionStore(selectHostBannerVariant);
+  const cloudSnapshot = useCloudHosts().snapshot;
+  const [startingMachine, setStartingMachine] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const hostId = useHostConnectionStore((s) => s.hostId);
+  const cloudMachine = cloudStatusFor(cloudSnapshot, hostId)?.machine ?? null;
+  // A start this banner asked for ends once the link is back.
+  useEffect(() => {
+    if (startingMachine && variant === null) setStartingMachine(false);
+  }, [startingMachine, variant]);
+  // Started from elsewhere (the host menu, Settings) while this window waits: dial it now.
+  const lastMachine = useRef(cloudMachine);
+  useEffect(() => {
+    const before = lastMachine.current;
+    lastMachine.current = cloudMachine;
+    if (cloudMachine === "running" && before !== null && before !== "running" && variant !== null) {
+      reconnectHost();
+    }
+  }, [cloudMachine, variant]);
   const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId ?? "");
   const lastSeenAt = useHostConnectionStore((s) => s.lastSeenAt);
   const detail = useHostConnectionStore((s) =>
@@ -80,6 +101,65 @@ export function HostConnectionBanner() {
     detail,
     mismatch === null ? null : olderBuildSide(mismatch)
   );
+
+  // A cloud host whose machine isn't running: the way back is starting it, on
+  // a press that says what it costs, never on its own.
+  const cloud = cloudStatusFor(cloudSnapshot, hostId);
+  const machineStarting = cloud?.operation?.kind === "starting" || startingMachine;
+  if (cloud && hostId !== null && variant !== null && (machineStarting || canStartMachine(cloud))) {
+    const startAndReconnect = () => {
+      setStartingMachine(true);
+      setStartError(null);
+      cloudHostsClient.startHost(hostId).then(
+        // Stays "starting" until the link is back (the effect above lets go of it).
+        () => reconnectHost(),
+        (err: unknown) => {
+          setStartingMachine(false);
+          setStartError(
+            isClientAppError(err) && err.userMessage
+              ? err.userMessage
+              : clientErrorText(err, "Couldn't start the machine")
+          );
+        }
+      );
+    };
+    const stateWords =
+      cloud.machine === "stopped"
+        ? "is stopped"
+        : cloud.machine === "error"
+          ? "reported an error"
+          : "isn't running";
+    return (
+      <InlineStatusBanner
+        icon={machineStarting ? Spinner : undefined}
+        title={
+          machineStarting ? `Starting ${hostName}'s machine` : `${hostName}'s machine ${stateWords}`
+        }
+        description={
+          startError ??
+          (machineStarting
+            ? "This window reconnects once it's running."
+            : `Start it to work here again. It bills ${cloud.accountName}${cloud.hourlyDollars !== null ? ` about $${cloud.hourlyDollars.toFixed(3)} an hour` : ""} while it runs.`)
+        }
+        severity="warning"
+        role="status"
+        ariaLive="off"
+        animated={false}
+        actions={
+          machineStarting
+            ? []
+            : [
+                {
+                  id: "start-machine",
+                  label: "Start and reconnect",
+                  variant: "primary",
+                  onClick: startAndReconnect,
+                },
+              ]
+        }
+      />
+    );
+  }
 
   if (variant === "restarting") {
     // The host's own word that it is coming back: calm for as long as that
