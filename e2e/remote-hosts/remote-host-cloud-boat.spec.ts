@@ -10,6 +10,7 @@ import { openSettings } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { makeShortTempRoot, startPrivateSshd, type PrivateSshd } from "../helpers/privateSshd";
 import { FAKE_BOAT_KEY, startFakeBoat, type FakeBoat } from "../helpers/fakeBoat";
+import { setAppTheme } from "../helpers/theme";
 
 /**
  * Cloud hosts end to end, against a fake Boat API whose one "machine" is a
@@ -24,6 +25,8 @@ import { FAKE_BOAT_KEY, startFakeBoat, type FakeBoat } from "../helpers/fakeBoat
  */
 
 const HOST_NAME = "boat-e2e";
+/** Optional colour scheme for the screenshots (e.g. `bondi`); the app default otherwise. */
+const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 
 interface Run {
   root: string;
@@ -63,8 +66,20 @@ function captureLogs(app: ElectronApplication, sink: string[]): void {
 
 async function shoot(page: Page, name: string): Promise<void> {
   run.shot += 1;
-  const file = path.join(run.shotDir, `${String(run.shot).padStart(2, "0")}-${name}.png`);
-  await page.screenshot({ path: file });
+  const suffix = THEME ? `--${THEME}` : "";
+  const file = path.join(run.shotDir, `${String(run.shot).padStart(2, "0")}-${name}${suffix}.png`);
+  // A dialog or menu still fading in would be captured half drawn over what's behind it.
+  await page
+    .evaluate(() =>
+      Promise.race([
+        Promise.all(
+          document.getAnimations().map((animation) => animation.finished.catch(() => {}))
+        ),
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ])
+    )
+    .catch(() => {});
+  await page.screenshot({ path: file, animations: "disabled" });
 }
 
 async function cloudHost(page: Page) {
@@ -215,6 +230,7 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
       BrowserWindow.getAllWindows()[0]?.setSize(1400, 950);
     });
     run.b.window = await openAndOnboardProject(run.b.app, run.b.window, run.localProject.dir);
+    if (THEME) await setAppTheme(run.b.window, THEME);
   });
 
   test.afterEach(async () => {
@@ -412,9 +428,14 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     await expect(confirm).toBeVisible();
     await shoot(page, "host-menu-stop-confirm");
     await confirm.getByRole("button", { name: "Stop machine" }).click();
+    // Accepted, it follows the stop and can be closed without cancelling it.
+    const progress = confirmDialog(page, `Stopping '${HOST_NAME}'`);
+    await expect(progress.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+    await shoot(page, "host-menu-stop-progress");
     await expect
       .poll(async () => (await cloudHost(page))?.machine, { timeout: 60_000 })
       .toBe("stopped");
+    await expect(progress).toBeHidden({ timeout: 10_000 });
 
     // Picking the stopped host asks before starting it.
     await page.locator(SEL.remoteHosts.hostChip).click();
@@ -447,7 +468,7 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     await list.getByRole("button", { name: `Details for ${HOST_NAME}` }).click();
     const section = page.locator('[id="host-cloud-machine"]');
     await expect(section).toBeVisible();
-    await expect(section.getByTestId("cloud-machine-state")).toContainText("Machine running");
+    await expect(section.getByTestId("cloud-machine-state")).toContainText("Running");
     await expect(section).toContainText("$0.036 an hour while running");
     await expect(section).toContainText("Machine bx_");
     await shoot(page, "host-detail-cloud-machine");
@@ -482,7 +503,39 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     await shoot(remote, "remote-window-reconnected");
   });
 
-  test("8. removing the host can delete its machine, after its name is typed", async () => {
+  test("8. a machine the provider won't describe reads as unknown, never as stopped", async () => {
+    const remote = await waitForHostView(run.hostId);
+    const sandboxId = [...run.boat.sandboxes.keys()][0]!;
+    run.boat.hidden.add(sandboxId);
+    await remote.evaluate(
+      (id) => window.electron.cloudHosts.refreshHost({ hostId: id }).catch(() => undefined),
+      run.hostId
+    );
+    await expect.poll(async () => (await cloudHost(remote))?.machine).toBe("unknown");
+
+    await openSettings(remote);
+    await remote.locator(SEL.remoteHosts.settingsTab).click();
+    const list = remote.locator('[id="hosts-list"]');
+    await expect(list).toContainText("Couldn't check the machine");
+    await expect(list.getByRole("button", { name: `Start ${HOST_NAME}` })).toHaveCount(0);
+    await expect(
+      list.getByRole("button", { name: `Check status of ${HOST_NAME}'s machine` })
+    ).toBeVisible();
+    await shoot(remote, "settings-row-cloud-unknown");
+    await closeSettings(remote);
+
+    await openCloudMachinesMenu(remote);
+    const item = remote.locator(`[data-cloud-machine-host-id="${run.hostId}"]`);
+    await expect(item).toContainText(`Check ${HOST_NAME}`);
+    await shoot(remote, "host-menu-cloud-unknown");
+    run.boat.hidden.delete(sandboxId);
+    await item.click();
+    await expect
+      .poll(async () => (await cloudHost(remote))?.machine, { timeout: 30_000 })
+      .toBe("running");
+  });
+
+  test("9. removing the host can delete its machine, after its name is typed", async () => {
     const remote = await waitForHostView(run.hostId);
     // Back to this machine, then remove from Settings.
     await remote.locator(SEL.remoteHosts.hostChip).click();
@@ -494,7 +547,11 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
       .locator('[id="hosts-list"]')
       .getByRole("button", { name: `Remove ${HOST_NAME} from this device` })
       .click();
-    const dialog = confirmDialog(page, `Remove '${HOST_NAME}'?`);
+    // Found by its content: its title changes to Delete when deleting is chosen.
+    const dialog = page
+      .locator('[role="dialog"], [role="alertdialog"]')
+      .filter({ has: page.getByTestId("remove-cloud-host-choice") });
+    await expect(dialog).toContainText(`Remove '${HOST_NAME}'?`);
     await expect(dialog.getByTestId("remove-cloud-host-choice")).toContainText("keeps billing");
     await shoot(page, "remove-cloud-host-keep");
     await dialog.getByRole("radio", { name: "Delete the machine too" }).check();

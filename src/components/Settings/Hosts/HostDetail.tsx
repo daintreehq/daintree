@@ -296,6 +296,9 @@ export function HostDetail({
         </div>
       )}
 
+      {/* The machine first: what it is doing and what it costs decide everything below. */}
+      {isCloud && <CloudMachineSection hostId={descriptor.id} hostName={hostName} />}
+
       <SettingsSection title="Connection">
         <SettingsGroup>
           <SettingsInput
@@ -408,8 +411,6 @@ export function HostDetail({
           />
         </SettingsGroup>
       </SettingsSection>
-
-      {isCloud && <CloudMachineSection hostId={descriptor.id} hostName={hostName} />}
 
       {sshTarget !== null && <HostWakeSetup descriptor={descriptor} />}
 

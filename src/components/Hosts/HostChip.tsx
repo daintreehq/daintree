@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, RefreshCw } from "lucide-react";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
   DropdownMenu,
@@ -19,8 +19,8 @@ import {
   AppWindow,
   CircleArrowUp,
   Cloud,
-  Play,
-  Square,
+  Power,
+  PowerOff,
   GitBranch,
   Plus,
   Server,
@@ -46,7 +46,17 @@ import { logWarn } from "@/utils/logger";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { useCloudHosts } from "./cloud/cloudHostsState";
 import { useCloudMachineActions } from "./cloud/useCloudMachineActions";
-import { canStartMachine, canStopMachine, cloudStatusLabel } from "./cloud/cloudHostLabels";
+import { useCloudLifecycleNews } from "./cloud/useCloudLifecycleNews";
+import {
+  canStartMachine,
+  canStopMachine,
+  cloudCostFacts,
+  cloudChipStatus,
+  cloudStatusLabel,
+  isObservationStale,
+} from "./cloud/cloudHostLabels";
+import { useNow } from "@/hooks/useNow";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import { HostNameText } from "./HostNameText";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
@@ -246,23 +256,37 @@ function HostMenuItem({
   row,
   onPick,
   cloud = null,
+  now = 0,
 }: {
   row: HostMenuRow;
   onPick: (row: HostMenuRow, newWindow: boolean) => void;
   /** A cloud host's machine: while its link is down, what the machine is doing says more. */
   cloud?: CloudHostStatus | null;
+  /** The clock its reading is judged against. */
+  now?: number;
 }) {
   // Drawn by what the link says now; which section it sits in was fixed when
   // the menu opened. One item either way, so a row that changes keeps focus.
   const away = isHostMenuRowAway(row);
   const described = describeHostMenuState(row);
   const machineDown = cloud !== null && (cloud.machine !== "running" || cloud.operation !== null);
-  const state = machineDown ? cloudStatusLabel(cloud) : described.state;
+  const stale = cloud !== null && cloud.machine !== "unknown" && isObservationStale(cloud, now);
+  const state = machineDown ? cloudStatusLabel(cloud, stale) : described.state;
+  // An old reading says how old, wherever the row sits.
+  const staleAge =
+    machineDown && stale
+      ? cloud.observedAt !== null
+        ? `checked ${formatTimeAgo(cloud.observedAt, now)}`
+        : "never checked"
+      : null;
+  // A running cloud machine's row says what it costs and when it stops, beside the link.
   const note = machineDown
-    ? canStartMachine(cloud)
-      ? "Opening it starts the machine"
-      : null
-    : described.note;
+    ? [staleAge, canStartMachine(cloud) ? "Opening it starts the machine" : null]
+        .filter(Boolean)
+        .join(" · ") || null
+    : cloud !== null
+      ? cloudCostFacts(cloud).join(" · ") || described.note
+      : described.note;
   // A link that has gone wrong carries the chip's own warning mark and full
   // ink; connecting and not connected stay quiet, and connected never goes green.
   // A cloud machine that isn't running is no link trouble: it says what the machine is doing.
@@ -283,7 +307,10 @@ function HostMenuItem({
       </span>
       <HostMark row={row} />
       {away ? (
-        <AwayHostLabel row={row} machineState={machineDown ? state : null} />
+        <AwayHostLabel
+          row={row}
+          machineState={machineDown ? [state, staleAge].filter(Boolean).join(" · ") : null}
+        />
       ) : (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {/* The name keeps the whole row when it needs it and the state drops
@@ -381,11 +408,19 @@ export function HostChip() {
   const cloudProviders = cloudSnapshot.providers;
   const cloudFor = (hostId: string) => cloudHosts.find((host) => host.hostId === hostId) ?? null;
   const machines = useCloudMachineActions();
+  // Judges how old each machine's reading is; ticks only while there are cloud hosts.
+  const now = useNow(cloudHosts.length > 0);
   // Each pick bumps it: a start that finishes after a newer pick doesn't switch the window.
   const pickGeneration = useRef(0);
   // Forwards riding on the link when Disconnect asked first; null while not asking.
   const [disconnectAsk, setDisconnectAsk] = useState<number | null>(null);
   const visible = supported && hasRemoteHosts(hostList);
+  // Starting → Running and the rest, heard while Settings is closed too.
+  const cloudNews = useCloudLifecycleNews(
+    cloudHosts,
+    (hostId) =>
+      hostList.hosts.find((entry) => entry.descriptor.id === hostId)?.descriptor.name ?? hostId
+  );
 
   if (!visible) return null;
 
@@ -427,9 +462,7 @@ export function HostChip() {
   // A window on a cloud machine that isn't running says so, not that it can't log in.
   const windowMachineDown =
     windowCloud !== null && (windowCloud.machine !== "running" || windowCloud.operation !== null);
-  const statusText = windowMachineDown
-    ? cloudStatusLabel(windowCloud).toLowerCase()
-    : hostChipStatusText(status);
+  const statusText = windowMachineDown ? cloudChipStatus(windowCloud) : hostChipStatusText(status);
   // How far away the host feels, while the link is healthy: a quiet reading
   // that steps up to full ink once typing would lag. Any state word replaces it.
   const latency =
@@ -602,13 +635,25 @@ export function HostChip() {
           <DropdownMenuGroup aria-labelledby={workingOnLabelId}>
             <DropdownMenuLabel id={workingOnLabelId}>Working on</DropdownMenuLabel>
             {hereRows.map((row) => (
-              <HostMenuItem key={row.hostId} row={row} onPick={pick} cloud={cloudFor(row.hostId)} />
+              <HostMenuItem
+                key={row.hostId}
+                row={row}
+                onPick={pick}
+                cloud={cloudFor(row.hostId)}
+                now={now}
+              />
             ))}
           </DropdownMenuGroup>
           <AwayHostsGroup
             rows={awayRows}
             renderRow={(row) => (
-              <HostMenuItem key={row.hostId} row={row} onPick={pick} cloud={cloudFor(row.hostId)} />
+              <HostMenuItem
+                key={row.hostId}
+                row={row}
+                onPick={pick}
+                cloud={cloudFor(row.hostId)}
+                now={now}
+              />
             )}
           />
           <DropdownMenuSeparator />
@@ -697,14 +742,21 @@ export function HostChip() {
                   const busy = machines.isPending(cloud.hostId) || cloud.operation !== null;
                   const stoppable = canStopMachine(cloud);
                   const startable = canStartMachine(cloud);
-                  const Glyph = stoppable ? Square : Play;
-                  const verb = stoppable ? "Stop" : "Start";
+                  // Unknown is no reason to start or stop it: the way forward is asking again.
+                  const checkable = !stoppable && !startable && cloud.machine === "unknown";
+                  const stale = isObservationStale(cloud, now);
+                  const Glyph = stoppable ? PowerOff : checkable ? RefreshCw : Power;
+                  const verb = stoppable ? "Stop" : checkable ? "Check" : "Start";
+                  // The price beside both verbs: what it costs now, or what starting it costs.
                   const detail = [
-                    cloudStatusLabel(cloud),
-                    cloud.hourlyDollars !== null && stoppable
-                      ? `$${cloud.hourlyDollars.toFixed(3)}/h`
-                      : null,
+                    cloudStatusLabel(cloud, stale),
+                    ...cloudCostFacts(cloud),
                     cloud.accountName,
+                    stale || checkable
+                      ? cloud.observedAt !== null
+                        ? `checked ${formatTimeAgo(cloud.observedAt, now)}`
+                        : "never checked"
+                      : null,
                   ]
                     .filter(Boolean)
                     .join(" · ");
@@ -713,16 +765,16 @@ export function HostChip() {
                       key={cloud.hostId}
                       className="items-start"
                       data-cloud-machine-host-id={cloud.hostId}
-                      disabled={busy || (!stoppable && !startable)}
-                      aria-label={`${verb} ${hostName}`}
+                      disabled={busy || (!stoppable && !startable && !checkable)}
                       textValue={hostName}
                       onSelect={() =>
                         stoppable
                           ? machines.requestStop(cloud.hostId, hostName)
-                          : machines.start(cloud.hostId)
+                          : checkable
+                            ? machines.check(cloud.hostId)
+                            : machines.start(cloud.hostId)
                       }
                     >
-                      <TickColumn />
                       <Glyph
                         data-menu-icon
                         className={cn(MENU_ICON_CLASS, "mt-px")}
@@ -732,9 +784,14 @@ export function HostChip() {
                         <span className="break-words">
                           {verb} {hostName}
                         </span>
-                        <span className="text-2xs text-text-secondary">
-                          {machines.errorFor(cloud.hostId) ?? detail}
-                        </span>
+                        <span className="text-2xs text-text-secondary">{detail}</span>
+                        {/* The provider's last refusal, from wherever it was asked, until something succeeds. */}
+                        {(machines.errorFor(cloud.hostId) ??
+                          (cloud.operation === null ? cloud.lastError?.message : null)) && (
+                          <span className="text-2xs text-status-error">
+                            {machines.errorFor(cloud.hostId) ?? cloud.lastError?.message}
+                          </span>
+                        )}
                       </span>
                     </DropdownMenuItem>
                   );
@@ -815,6 +872,9 @@ export function HostChip() {
         }}
       />
       {machines.dialogs}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {cloudNews}
+      </div>
     </>
   );
 }

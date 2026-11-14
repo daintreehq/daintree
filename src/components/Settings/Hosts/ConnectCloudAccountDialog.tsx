@@ -225,8 +225,8 @@ export function ConnectCloudAccountDialog({
                   onChange={(e) => setName(e.target.value)}
                 />
                 <FieldDescription>
-                  What Settings and the host menu call this account. The wallet above never changes
-                  with it
+                  What Settings and the host menu call this account. Renaming it never changes who
+                  pays
                 </FieldDescription>
               </Field>
             </>

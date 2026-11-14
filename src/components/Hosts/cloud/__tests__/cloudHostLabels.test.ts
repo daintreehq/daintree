@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import {
+  canCheckMachine,
   canStartMachine,
   canStopMachine,
+  cloudChipStatus,
   cloudStatusLabel,
+  isObservationStale,
   formatHourly,
+  lifetimeSentence,
   machineSpecLabel,
 } from "../cloudHostLabels";
 
@@ -47,7 +51,7 @@ describe("cloud host labels", () => {
           operation: { id: "o", kind: "starting", startedAt: 0, stage: "" },
         })
       )
-    ).toBe("Starting machine");
+    ).toBe("Machine starting");
     expect(
       cloudStatusLabel(
         status({
@@ -55,7 +59,7 @@ describe("cloud host labels", () => {
           stop: { status: "failing", error: "disk" },
         })
       )
-    ).toBe("Stop retrying the save");
+    ).toBe("Machine stopping, retrying the save");
     expect(cloudStatusLabel(status({ machine: "stopped" }))).toBe("Machine stopped");
   });
 
@@ -97,6 +101,54 @@ describe("cloud host labels", () => {
     ).toBe(true);
     expect(canStopMachine(status({ machine: "stopped" }))).toBe(false);
     expect(canStopMachine(status({ resourceId: null, machine: "not-created" }))).toBe(false);
+  });
+
+  it("says an imported lifetime exactly, never rounded to the hour", () => {
+    expect(lifetimeSentence(1800)).toContain("30 minutes after starting");
+    expect(lifetimeSentence(5400)).toContain("90 minutes after starting");
+    expect(lifetimeSentence(7200)).toContain("2 hours after starting");
+    expect(lifetimeSentence(null)).toBe("It runs until you stop it.");
+  });
+
+  it("never reads an unknown state as stopped", () => {
+    const unknown = status({ machine: "unknown" });
+    expect(cloudStatusLabel(unknown)).toBe("Couldn't check the machine");
+    expect(canStartMachine(unknown)).toBe(false);
+    expect(canStopMachine(unknown)).toBe(false);
+    expect(canCheckMachine(unknown, 0)).toBe(true);
+    // The chip never truncates its status, so the long ones have short forms.
+    expect(cloudChipStatus(unknown)).toBe("state unknown");
+    expect(
+      cloudChipStatus(
+        status({
+          operation: { id: "o", kind: "stopping", startedAt: 0, stage: "" },
+          stop: { status: "failing", error: "disk" },
+        })
+      )
+    ).toBe("machine stopping");
+  });
+
+  it("marks a reading past its freshness as the last one", () => {
+    const minute = 60_000;
+    const stopped = status({ machine: "stopped", observedAt: 0 });
+    expect(isObservationStale(stopped, 10 * minute)).toBe(false);
+    expect(isObservationStale(stopped, 13 * minute)).toBe(true);
+    expect(cloudStatusLabel(stopped, true)).toBe("Last reported stopped");
+    expect(canCheckMachine(stopped, 13 * minute)).toBe(true);
+
+    const running = status({ machine: "running", observedAt: 0 });
+    expect(isObservationStale(running, 2 * minute)).toBe(false);
+    expect(isObservationStale(running, 4 * minute)).toBe(true);
+    // Under way, Daintree is polling every few seconds: never stale, never "last reported".
+    const starting = status({
+      machine: "stopped",
+      observedAt: 0,
+      operation: { id: "o", kind: "starting", startedAt: 0, stage: "" },
+    });
+    expect(isObservationStale(starting, 60 * minute)).toBe(false);
+    expect(cloudStatusLabel(starting, true)).toBe("Machine starting");
+    expect(isObservationStale(status({ observedAt: null }), 0)).toBe(true);
+    expect(isObservationStale(status({ resourceId: null, observedAt: null }), 0)).toBe(false);
   });
 
   it("formats what is known of a size and its price", () => {

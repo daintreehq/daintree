@@ -3,6 +3,7 @@ import {
   CLOUD_LIFETIME_CHOICES,
   type CloudHostCreateRequest,
   type CloudHostError,
+  type CloudHostErrorCode,
   type CloudHostImportRequest,
   type CloudHostStatus,
   type CloudMachineState,
@@ -42,6 +43,12 @@ const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
 /** How often the keeper looks for a lifetime to renew. */
 const KEEPER_INTERVAL_MS = 60_000;
+/**
+ * What a failed read records (see inspectInto), which the next good answer
+ * makes obsolete. Codes a refused start or stop also uses (a start limit is
+ * "rate-limited") stay until that operation succeeds.
+ */
+const INSPECTION_ERRORS: ReadonlySet<CloudHostErrorCode> = new Set(["not-found"]);
 /** A lifetime is renewed once this little of it is left (or half of it, for a short one). */
 const RENEW_MARGIN_MS = 30 * 60_000;
 /** After a failed renewal, the next try waits this long. */
@@ -510,6 +517,11 @@ export class CloudHostLifecycle {
     if (resource.dataExpired)
       throw invalid("That machine's saved disk was deleted; it can't be started again.");
     if (resource.machine === "deleted") throw invalid("That machine was deleted.");
+    if (resource.snapshotsDisabled) {
+      throw invalid(
+        "That machine was created with snapshots off, so stopping it erases its disk. Daintree only adds machines whose disk survives a stop."
+      );
+    }
     // Its own lifetime stays as it is; a start renews to it.
     binding.resourceId = resource.resourceId;
     binding.lifetimeSeconds = resource.lifetimeSeconds;
@@ -922,6 +934,12 @@ export class CloudHostLifecycle {
     operation.promise = (async () => {
       try {
         await work(controller.signal);
+        // It worked: anything it recorded on the way (a save Boat retried) is history now.
+        this.deps.store.updateBinding(bindingId, (current) =>
+          current.lastError && current.lastError.at >= operation.startedAt
+            ? { ...current, lastError: null }
+            : current
+        );
       } finally {
         if (this.operations.get(bindingId) === operation) this.operations.delete(bindingId);
         this.nextPollAt.delete(bindingId);
@@ -972,6 +990,12 @@ export class CloudHostLifecycle {
     try {
       const resource = await provider.inspect(credentials, binding.resourceId);
       this.observe(bindingId, resource);
+      // An answer supersedes an earlier failure to get one; a refused start or stop stays.
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.lastError && INSPECTION_ERRORS.has(current.lastError.code)
+          ? { ...current, lastError: null }
+          : current
+      );
       return resource;
     } catch (error) {
       const described = provider.describeError(error);

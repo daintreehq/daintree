@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -27,9 +27,12 @@ import {
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 import {
+  canStartMachine,
   formatHourly,
+  hourlyShort,
   lifetimeLabel,
   machineSpecLabel,
+  sentenceCase,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 
 interface AddCloudHostDialogProps {
@@ -72,6 +75,9 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
+  // Bumped by Retry: reads again without touching what's been filled in.
+  const [catalogTry, setCatalogTry] = useState(0);
+  const [resourcesTry, setResourcesTry] = useState(0);
   const [resourceId, setResourceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +115,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     return () => {
       current = false;
     };
-  }, [accountKey, added]);
+  }, [accountKey, added, catalogTry]);
 
   useEffect(() => {
     if (!accountKey || mode !== "import" || added) return;
@@ -127,7 +133,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     return () => {
       current = false;
     };
-  }, [accountKey, mode, added]);
+  }, [accountKey, mode, added, resourcesTry]);
 
   // Hand over to setup once the machine runs.
   const ready = added !== null && status?.machine === "running" && status.operation === null;
@@ -195,6 +201,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     });
   };
 
+  const checkAdded = () => {
+    if (!added) return;
+    setError(null);
+    cloudHostsClient.refreshHost(added.hostId).catch((err: unknown) => {
+      setError(errorText(err, "Couldn't ask about the machine"));
+    });
+  };
+
   const retry = () => {
     if (!added) return;
     setError(null);
@@ -231,29 +245,40 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     const machine = status?.machine ?? "not-created";
     const operation = status?.operation ?? null;
     const failed = status?.lastError && !operation;
-    const stoppedImport = mode === "import" && !startRequested && machine !== "running";
+    const startable = status !== null && canStartMachine(status);
+    // Unknown is no reason to offer Start: the way forward is asking again.
+    const unknown = machine === "unknown" && !operation;
+    const stoppedImport = mode === "import" && !startRequested && startable;
     body = (
       <div className="space-y-4" data-testid="add-cloud-host-progress">
-        <p className="text-sm text-text-primary">
-          {stoppedImport
-            ? `${added.name} is in your host list. Its machine is ${cloudMachineLabel(machine).toLowerCase()}; Daintree didn't start it.`
-            : `Getting ${added.name} ready`}
-        </p>
-        {!stoppedImport && !failed && (
-          <ProgressBar
-            label="Machine progress"
-            valueText={operation?.stage || cloudMachineLabel(machine)}
-          />
-        )}
-        {!stoppedImport && (
-          <p className="text-xs text-text-secondary" aria-live="polite">
-            {operation?.stage || cloudMachineLabel(machine)}
+        {stoppedImport ? (
+          <p className="text-sm text-text-primary">
+            {`It's in your host list. Its machine is ${cloudMachineLabel(machine).toLowerCase()}, and Daintree didn't start it.`}
           </p>
+        ) : unknown ? (
+          <p className="text-sm text-text-primary">
+            {`It's in your host list, but Daintree couldn't check its machine's state. It may still be running and billing ${status?.accountName ?? "its account"}.`}
+          </p>
+        ) : (
+          !failed && (
+            <>
+              {/* The step under way is the headline; the bar only says that something is. */}
+              <p className="text-sm font-medium text-text-primary" aria-live="polite">
+                {operation?.stage || cloudMachineLabel(machine)}
+              </p>
+              <ProgressBar
+                label="Machine progress"
+                valueText={operation?.stage || cloudMachineLabel(machine)}
+              />
+              <p className="text-xs text-text-secondary">
+                {`Boat usually has a machine running in under a minute. Closing this doesn't stop it: the host's row in Settings → Hosts follows it, and setup carries on from there.`}
+              </p>
+            </>
+          )
         )}
-        {stoppedImport && (
+        {stoppedImport && status && (
           <p className="text-sm text-text-secondary">
-            Start it now to install Daintree there, or leave it stopped and start it from the host
-            menu when you need it.
+            {`Start it now to set up Daintree there${hourlyShort(status.hourlyDollars) ? `; it bills ${status.accountName} ${hourlyShort(status.hourlyDollars)} while it runs` : ""}. Or leave it stopped and start it from the host menu when you need it.`}
           </p>
         )}
         {failed && status?.lastError && (
@@ -266,11 +291,17 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     if (stoppedImport) {
       primary = { label: "Start machine", onClick: startAdded };
       secondary = { label: "Leave stopped", onClick: onClose };
+    } else if (unknown) {
+      primary = { label: "Check status", onClick: checkAdded };
+      secondary = { label: "Close", onClick: onClose };
     } else if (failed && status?.resourceId === null) {
       primary = { label: "Retry", onClick: retry };
       secondary = { label: "Close", onClick: onClose };
-    } else if (failed) {
+    } else if (failed && startable) {
       primary = { label: "Start machine", onClick: startAdded };
+      secondary = { label: "Close", onClick: onClose };
+    } else if (failed) {
+      // Whatever it is doing now, starting isn't the answer: the row follows it.
       secondary = { label: "Close", onClick: onClose };
     } else {
       // Closing leaves the machine coming up; the host's row follows it.
@@ -326,7 +357,16 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               <FieldDescription>What the host menu and window titles call it</FieldDescription>
             </Field>
             {catalogError ? (
-              <Callout severity="error">{catalogError}</Callout>
+              <Callout
+                severity="error"
+                action={
+                  <Button variant="outline" size="sm" onClick={() => setCatalogTry((n) => n + 1)}>
+                    Retry
+                  </Button>
+                }
+              >
+                {catalogError}
+              </Callout>
             ) : (
               <RadioChoiceGroup legend="Size">
                 {(catalog?.machineTypes ?? []).map((type) => (
@@ -341,7 +381,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                     description={
                       type.available
                         ? formatHourly(type.hourlyDollars)
-                        : (type.reason ?? "Not available on this account")
+                        : sentenceCase(type.reason ?? "Not available on this account")
                     }
                   />
                 ))}
@@ -363,27 +403,40 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 </SelectContent>
               </Select>
               <FieldDescription>
-                A guard against a machine left running. While it&apos;s in use from this device,
-                Daintree moves the stop later; stop it yourself when you&apos;re done
+                Counted from each start, and pushed back while a window here shows it or its agents
+                are working. A guard against a machine left running, not a spending limit.
               </FieldDescription>
             </Field>
             {chosenType && (
               <p className="text-xs text-text-secondary" data-testid="add-cloud-host-review">
-                Billed to {account.billingScope.name} on {provider.name}
+                Billed to{" "}
+                {account.billingScope.kind === "personal"
+                  ? `${account.identity ?? account.displayName}'s personal account`
+                  : account.billingScope.name}{" "}
+                on {provider.name}
                 {chosenType.hourlyDollars !== null &&
                   `, about $${chosenType.hourlyDollars.toFixed(3)} an hour while it runs`}
                 .{" "}
                 {lifetimeHours === null
                   ? "It runs until you stop it."
-                  : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after each start.`}{" "}
-                Stopping saves its disk; programs running on it end.
+                  : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after starting unless it's in use here.`}{" "}
+                Stopping keeps its home folder and ends what runs on it.
               </p>
             )}
           </>
         ) : (
           <>
             {resourcesError ? (
-              <Callout severity="error">{resourcesError}</Callout>
+              <Callout
+                severity="error"
+                action={
+                  <Button variant="outline" size="sm" onClick={() => setResourcesTry((n) => n + 1)}>
+                    Retry
+                  </Button>
+                }
+              >
+                {resourcesError}
+              </Callout>
             ) : resources === null ? (
               <p className="text-sm text-text-secondary">Listing machines…</p>
             ) : resources.length === 0 ? (
@@ -433,7 +486,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             )}
           </>
         )}
-        {error && <FieldError role="alert">{error}</FieldError>}
+        {error && <InlineError role="alert">{error}</InlineError>}
       </div>
     );
     primary =
@@ -464,14 +517,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         <AppDialog.Header>
           <AppDialog.Title>
             {added
-              ? `Add ${added.name}`
+              ? `${mode === "create" ? "Creating" : "Adding"} ${added.name}`
               : `Add a cloud machine${provider ? ` on ${provider.name}` : ""}`}
           </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
         <AppDialog.Body>
           {body}
-          {added && error && <FieldError role="alert">{error}</FieldError>}
+          {added && error && <InlineError role="alert">{error}</InlineError>}
         </AppDialog.Body>
         <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} />
       </AppDialog>

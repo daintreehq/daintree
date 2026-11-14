@@ -359,6 +359,60 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
   });
 
+  it("drops a save failure it saw on the way once the stop completes", async () => {
+    const { lifecycle, provider, store } = await setup({ machine: "running" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    vi.mocked(provider.inspect).mockResolvedValueOnce(
+      resource({
+        machine: "stopping",
+        rawState: "archiving",
+        stop: { id: "stop_1", status: "failing", error: "disk busy" },
+      })
+    );
+    let sawFailure = false;
+    const statuses = vi.spyOn(store, "updateBinding");
+    await lifecycle.stopMachine("build");
+    for (const call of statuses.mock.results) {
+      const binding = call.value as { lastError: { code: string } | null } | null;
+      if (binding?.lastError?.code === "stop-failing") sawFailure = true;
+    }
+    expect(sawFailure).toBe(true);
+    const status = lifecycle.statuses()[0]!;
+    expect(status.machine).toBe("stopped");
+    expect(status.lastError).toBeNull();
+  });
+
+  it("lets a good answer supersede a failure to get one, but not a refused start", async () => {
+    const { lifecycle, provider, store } = await setup({ machine: "stopped" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    vi.mocked(provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null)
+    );
+    await lifecycle.refresh("build").catch(() => {});
+    expect(lifecycle.statuses()[0]!.machine).toBe("unknown");
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("not-found");
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+
+    // A start Boat refused for its start limit: reading the machine fine changes nothing.
+    vi.mocked(provider.start).mockRejectedValueOnce(
+      new BoatApiError("rate-limited", "start limit", 429, "start_limit", null)
+    );
+    await lifecycle.startMachine("build").catch(() => {});
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("rate-limited");
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("rate-limited");
+  });
+
   it("moves a running machine's own deadline when its lifetime changes", async () => {
     const { lifecycle, provider, store } = await setup({ machine: "running" });
     await lifecycle.importMachine({

@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { InlineError } from "@/components/ui/field";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -111,7 +112,7 @@ export function CloudProvidersSection() {
   return (
     <SettingsSection
       title="Cloud providers"
-      description="Accounts that let Daintree create cloud machines as hosts, start them when you open them and stop them when you're done"
+      description="Accounts Daintree uses to create cloud machines as hosts, and to start and stop them when you ask"
       action={accounts.length > 0 ? connectButton : undefined}
       id="hosts-cloud-providers"
     >
@@ -132,7 +133,7 @@ export function CloudProvidersSection() {
               ? "Loading cloud accounts"
               : unsupported
                 ? providers[0]!.unsupportedReason
-                : "Connect a Boat account to create machines that start when you open them"}
+                : "Connect a Boat account to create cloud machines and run projects and agents on them"}
           </SettingsEmptyRow>
         ) : (
           accounts.map((account) => {
@@ -148,7 +149,8 @@ export function CloudProvidersSection() {
                 description={
                   <>
                     {provider?.name ?? account.providerId} <FactSeparator /> {scopeLabel(account)}
-                    {account.identity && (
+                    {/* The sign-in, unless the row is already named after it. */}
+                    {account.identity && account.identity !== account.displayName && (
                       <>
                         {" "}
                         <FactSeparator /> {account.identity}
@@ -163,6 +165,17 @@ export function CloudProvidersSection() {
                         {" "}
                         <FactSeparator /> Key ending {account.keyHint}
                       </>
+                    )}{" "}
+                    <FactSeparator />{" "}
+                    {/* When the key last worked, as observed; never a guess that it still does. */}
+                    {account.validation.status === "valid" ? (
+                      <TimeAgo prefix="Key worked " timestamp={account.validation.checkedAt} />
+                    ) : account.validation.status === "invalid" ? (
+                      "Key refused"
+                    ) : account.validation.checkedAt !== null ? (
+                      <TimeAgo prefix="Couldn't check " timestamp={account.validation.checkedAt} />
+                    ) : (
+                      "Not checked yet"
                     )}
                   </>
                 }
@@ -202,7 +215,7 @@ export function CloudProvidersSection() {
                           <Trash2 aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Remove account</TooltipContent>
+                      <TooltipContent side="bottom">{`Remove ${account.displayName} from this device`}</TooltipContent>
                     </Tooltip>
                   </div>
                 }

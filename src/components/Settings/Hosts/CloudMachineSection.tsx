@@ -1,14 +1,19 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { useCloudMachineActions } from "@/components/Hosts/cloud/useCloudMachineActions";
 import {
   canStartMachine,
   canStopMachine,
-  cloudStatusLabel,
+  clockTime,
+  cloudCostFacts,
+  cloudStateWord,
+  durationLabel,
   formatHourly,
+  isObservationStale,
   lifetimeLabel,
   machineSpecLabel,
 } from "@/components/Hosts/cloud/cloudHostLabels";
@@ -25,21 +30,6 @@ function errorText(err: unknown, fallback: string): string {
     : clientErrorText(err, fallback);
 }
 
-function clockTime(iso: string | null): string | null {
-  if (!iso) return null;
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? null
-    : at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-}
-
-/** "30 minutes", "3 hours", "90 minutes": a lifetime none of the choices name. */
-function secondsLabel(seconds: number): string {
-  if (seconds % 3600 === 0) return lifetimeLabel(seconds / 3600);
-  const minutes = Math.round(seconds / 60);
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
 const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
   hours === null ? "never" : String(hours)
 );
@@ -53,10 +43,15 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
   const machines = useCloudMachineActions();
-  const [busy, setBusy] = useState<"refresh" | "retry" | "lifetime" | null>(null);
+  const [busy, setBusy] = useState<"retry" | "lifetime" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lifetimeError, setLifetimeError] = useState<string | null>(null);
+  const now = useNow(status !== null);
   if (!status) return null;
+  // An old reading is the last one, not the machine now: its facts say so.
+  const stale = status.machine !== "unknown" && isObservationStale(status, now);
+  const checkedAt =
+    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
   const provider = snapshot.providers.find((entry) => entry.id === status.providerId);
   const providerName = provider?.name ?? status.providerId;
   const actionError = machines.errorFor(hostId) ?? error;
@@ -73,7 +68,7 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
   const lifetimeValue = presetValue ?? "current";
   const lifetimeOptions = [
     ...(presetValue === null && status.lifetimeSeconds !== null
-      ? [{ value: "current", label: secondsLabel(status.lifetimeSeconds), disabled: true }]
+      ? [{ value: "current", label: durationLabel(status.lifetimeSeconds), disabled: true }]
       : []),
     ...LIFETIME_VALUES.map((value) => ({
       value,
@@ -82,7 +77,7 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
   ];
   const autoStop = clockTime(status.autoStopAt);
 
-  const act = (kind: "refresh" | "retry", work: () => Promise<void>, fallback: string) => {
+  const act = (kind: "retry", work: () => Promise<void>, fallback: string) => {
     setBusy(kind);
     setError(null);
     work().then(
@@ -118,12 +113,29 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           label="Machine"
           description={
             <span data-testid="cloud-machine-state">
-              {cloudStatusLabel(status)}
-              {stateDetail && ` · ${stateDetail}`}
+              {[
+                stale
+                  ? `Last reported ${cloudStateWord(status).toLowerCase()}`
+                  : cloudStateWord(status),
+                stateDetail,
+                ...cloudCostFacts(status),
+              ]
+                .filter((fact): fact is string => Boolean(fact))
+                .join(" · ")}
               {status.machine === "stopped" && status.stoppedAt && (
                 <>
                   {" · "}
-                  <TimeAgo prefix="Stopped " timestamp={Date.parse(status.stoppedAt)} />
+                  <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
+                </>
+              )}
+              {status.observedAt !== null && (
+                <>
+                  {" · "}
+                  <TimeAgo
+                    prefix={status.machine === "unknown" ? "last asked " : "checked "}
+                    timestamp={status.observedAt}
+                    now={now}
+                  />
                 </>
               )}
             </span>
@@ -157,30 +169,26 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
                   Start
                 </Button>
               )}
-              {canStopMachine(status) && (
+              {status.resourceId !== null && (
                 <Button
                   variant="outline"
+                  size="sm"
+                  loading={machines.isPending(hostId)}
+                  // Shared with the rows and menu: a failed check yields to the next good reading.
+                  onClick={() => machines.check(hostId)}
+                >
+                  Check status
+                </Button>
+              )}
+              {canStopMachine(status) && (
+                // Ends what runs there: destructive, and last.
+                <Button
+                  variant="ghost-danger"
                   size="sm"
                   loading={machines.isPending(hostId)}
                   onClick={() => machines.requestStop(hostId, hostName)}
                 >
                   Stop
-                </Button>
-              )}
-              {status.resourceId !== null && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={busy === "refresh"}
-                  onClick={() =>
-                    act(
-                      "refresh",
-                      () => cloudHostsClient.refreshHost(hostId),
-                      "Couldn't ask about the machine"
-                    )
-                  }
-                >
-                  Refresh
                 </Button>
               )}
             </div>
@@ -197,13 +205,14 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
         <SettingsSelect
           label="Stops by itself after"
           description={
-            running
+            (stale && running && checkedAt ? `As last reported ${checkedAt}: ` : "") +
+            (running
               ? autoStop
                 ? status.lifetimeSeconds === null
-                  ? `This run stops by itself ${autoStop}. A change applies from now`
-                  : `This run stops by itself ${autoStop}, moved later while it's in use here${status.keptRunningAt !== null ? ` (last moved ${clockTime(new Date(status.keptRunningAt).toISOString())})` : ""}. A change applies from now`
-                : "This run doesn't stop by itself. A change applies from now"
-              : "Each start sets it: a guard against a machine left running"
+                  ? `This run stops by itself ${autoStop}. A change applies from now.`
+                  : `This run stops by itself ${autoStop}${status.keptRunningAt !== null ? `, pushed back ${clockTime(new Date(status.keptRunningAt).toISOString())}` : ""}. Daintree pushes it back while a window here shows it or its agents are working; a change applies from now.`
+                : "This run doesn't stop by itself. A change applies from now."
+              : "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit.")
           }
           value={lifetimeValue}
           onValueChange={setLifetime}
@@ -215,10 +224,8 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           label="Disk"
           description={
             status.dataExpired
-              ? `${providerName} deleted its saved disk after its retention period`
-              : status.lastSnapshotAt
-                ? `Saved when it stops. Last saved ${clockTime(status.lastSnapshotAt)}`
-                : "Saved when it stops"
+              ? `${providerName} deleted its saved disk after its retention period, so it can't start again`
+              : `${status.lastSnapshotAt ? `Last saved ${clockTime(status.lastSnapshotAt)}` : "No completed save reported yet"}. Files in its home folder are saved when it stops and kept at least 14 days while it's stopped; /tmp, caches and memory aren't.`
           }
         />
         <SettingsRow
@@ -229,12 +236,6 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
               {status.resourceId ? `Machine ${status.resourceId}` : "No machine yet"}
               {status.lastEndpoint && ` · SSH ${status.lastEndpoint}`}
               {status.hostKeyFingerprint && ` · Host key ${status.hostKeyFingerprint}`}
-              {status.observedAt !== null && (
-                <>
-                  {" · "}
-                  <TimeAgo prefix="Checked " timestamp={status.observedAt} />
-                </>
-              )}
             </span>
           }
         />

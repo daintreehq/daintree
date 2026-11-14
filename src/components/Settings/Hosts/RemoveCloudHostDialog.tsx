@@ -3,6 +3,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { InlineError } from "@/components/ui/field";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { clockTime, isObservationStale } from "@/components/Hosts/cloud/cloudHostLabels";
+import { useNow } from "@/hooks/useNow";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
@@ -25,8 +27,16 @@ function errorText(err: unknown, fallback: string): string {
     : clientErrorText(err, fallback);
 }
 
-/** What keeping the machine means, from what was last seen of it. */
-function keepDescription(status: CloudHostStatus, providerName: string): string {
+/** What keeping the machine means, from what was last seen of it, and when that was if it's old. */
+function keepDescription(status: CloudHostStatus, providerName: string, now: number): string {
+  const said = keepState(status, providerName);
+  if (status.machine === "unknown" || !isObservationStale(status, now)) return said;
+  const at =
+    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
+  return `${said} That's as of ${at ?? "the last check"}; it may have changed since.`;
+}
+
+function keepState(status: CloudHostStatus, providerName: string): string {
   const back = status.dataExpired ? "" : " You can add it back from Add host.";
   switch (status.machine) {
     case "running":
@@ -62,6 +72,7 @@ export function RemoveCloudHostDialog({
   const [choice, setChoice] = useState<"keep" | "delete">("keep");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const now = useNow(status !== null);
   // The machine this dialog is about, as it was when it first knew.
   const [openedFor, setOpenedFor] = useState(() =>
     status ? { resourceId: status.resourceId } : null
@@ -106,8 +117,12 @@ export function RemoveCloudHostDialog({
       isOpen
       onClose={onClose}
       variant="destructive"
-      title={`Remove '${name}'?`}
-      description="Windows on it return to this machine, and what this device kept for it is cleared."
+      title={deleting && created ? `Delete '${name}'?` : `Remove '${name}'?`}
+      description={`${
+        deleting && created
+          ? `Its machine and everything on its disk are deleted from ${providerName}, and the host leaves your list.`
+          : "The host leaves your list."
+      } Windows on it return to this machine, and its plugin permissions, history and browser data on this device are cleared.`}
       confirmLabel={deleting ? "Delete machine" : "Remove host"}
       onConfirm={confirm}
       confirmDisabled={!ready}
@@ -132,7 +147,7 @@ export function RemoveCloudHostDialog({
               disabled={busy}
               onChange={() => setChoice("keep")}
               label={`Keep it on ${providerName}`}
-              description={keepDescription(status, providerName)}
+              description={keepDescription(status, providerName, now)}
             />
             <RadioChoiceRow
               name="remove-cloud-host"
@@ -141,7 +156,7 @@ export function RemoveCloudHostDialog({
               disabled={busy}
               onChange={() => setChoice("delete")}
               label="Delete the machine too"
-              description="Its disk is deleted for good. Snapshots you saved yourself stay."
+              description="Its disk goes for good; snapshots you saved yourself stay"
             />
           </RadioChoiceGroup>
         )}

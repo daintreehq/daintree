@@ -53,6 +53,8 @@ export interface FakeBoat {
   sandboxes: Map<string, Sandbox>;
   /** How long provisioning and archiving take. */
   transitionMs: number;
+  /** Sandboxes answered as not found, as after a key or scope change. */
+  hidden: Set<string>;
   stop(): Promise<void>;
 }
 
@@ -92,6 +94,7 @@ export async function startFakeBoat(params: {
     requests,
     sandboxes,
     transitionMs: 1_500,
+    hidden: new Set(),
     async stop() {
       for (const timer of timers) clearTimeout(timer);
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -145,7 +148,7 @@ export async function startFakeBoat(params: {
     req.on("end", () => {
       const url = new URL(req.url ?? "/", "http://fake");
       const route = url.pathname.replace(/^\/api\/v1/, "");
-      let body: unknown = null;
+      let body: unknown;
       try {
         body = raw ? JSON.parse(raw) : null;
       } catch {
@@ -179,7 +182,7 @@ export async function startFakeBoat(params: {
       }
       const method = req.method ?? "GET";
       const match = /^\/sandboxes\/(bx_[a-z0-9]+)(\/[a-z]+)?$/.exec(route);
-      const sandbox = match ? sandboxes.get(match[1]!) : undefined;
+      const sandbox = match && !fake.hidden.has(match[1]!) ? sandboxes.get(match[1]!) : undefined;
       const action = match?.[2] ?? "";
 
       if (method === "GET" && route === "/me") {
