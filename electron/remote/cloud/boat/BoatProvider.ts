@@ -201,8 +201,15 @@ export class BoatProvider implements CloudProvider {
     };
   }
 
-  async list(credentials: ProviderCredentials): Promise<ProviderResource[]> {
-    const sandboxes = await this.clientFor(credentials.apiUrl).listSandboxes(this.ctx(credentials));
+  async list(
+    credentials: ProviderCredentials,
+    options: { label?: string } = {}
+  ): Promise<ProviderResource[]> {
+    const sandboxes = await this.clientFor(credentials.apiUrl).listSandboxes(
+      this.ctx(credentials),
+      50,
+      options.label
+    );
     return sandboxes.map(boatResource);
   }
 

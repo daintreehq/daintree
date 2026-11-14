@@ -25,6 +25,7 @@ export interface CloudHostsRuntime {
 export function initCloudHosts(params: {
   backend: CloudHostsStoreBackend;
   emit(event: RemoteHostsEvent): void;
+  onAccountRemoved?(accountId: string): Promise<void>;
 }): CloudHostsRuntime {
   const store = new CloudHostStore(params.backend);
   const boatUrl = resolveBoatApiUrl(app.isPackaged);
@@ -47,6 +48,7 @@ export function initCloudHosts(params: {
     ),
     providers,
     apiUrlFor: () => boatUrl,
+    onAccountRemoved: params.onAccountRemoved,
   });
   const cloudHosts = new CloudHosts({
     accounts,

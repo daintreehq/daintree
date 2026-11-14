@@ -84,7 +84,8 @@ export interface CloudProvider {
   checkKey(apiKey: string, apiUrl: string, signal?: AbortSignal): Promise<CloudAccountCheckResult>;
   validate(credentials: ProviderCredentials): Promise<{ identity: string | null }>;
   catalog(credentials: ProviderCredentials): Promise<ProviderCatalog>;
-  list(credentials: ProviderCredentials): Promise<ProviderResource[]>;
+  /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
+  list(credentials: ProviderCredentials, options?: { label?: string }): Promise<ProviderResource[]>;
   inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource>;
   create(
     credentials: ProviderCredentials,

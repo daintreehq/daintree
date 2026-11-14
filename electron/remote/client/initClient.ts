@@ -44,6 +44,8 @@ import {
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
+import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
+import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
 import type { CloudHostsStoreBackend } from "../cloud/CloudHostStore.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
@@ -82,7 +84,8 @@ import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection } from "./connection.js";
-import { SshTransport } from "./sshTransport.js";
+import { SshTransport, controlPathFor } from "./sshTransport.js";
+import { createCloudCommandChannel } from "./remoteShell.js";
 import { HostStarts } from "./hostStarts.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
@@ -742,7 +745,11 @@ function transportFor(
     /** The host is being removed or re-pointed: its old distro must not be held again. */
     isRetiring(connection: HostConnection): boolean;
   },
-  ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+  ensureRunning?: (signal: AbortSignal) => Promise<boolean>,
+  cloud?: (
+    bindingId: string,
+    ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+  ) => LinkTransport
 ): LinkTransport {
   let supported: HostConnection;
   try {
@@ -769,6 +776,15 @@ function transportFor(
         ensureRunning,
         runtimeDirNames: WSL_RUNTIME_DIR_NAMES,
       });
+    case "cloud":
+      return cloud
+        ? cloud(supported.bindingId, ensureRunning)
+        : {
+            open: () =>
+              Promise.reject(
+                new UnusableConnectionError("Cloud hosts aren't available here", null)
+              ),
+          };
   }
 }
 
@@ -799,14 +815,51 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
-  const cloud = initCloudHosts({
-    backend: store as unknown as CloudHostsStoreBackend,
-    emit: broadcastLocal,
-  });
   // Remote windows' titles name their host as it is called now.
   setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
   const clientDir = path.join(app.getPath("userData"), "rh");
+  const cloudFiles = new CloudSshFiles(path.join(clientDir, "cloud"), defaultCommandRunner);
+  const cloud = initCloudHosts({
+    backend: store as unknown as CloudHostsStoreBackend,
+    emit: broadcastLocal,
+    onAccountRemoved: (accountId) => cloudFiles.forgetAccount(accountId),
+  });
+  // Bound once the host list and client exist (below); a dial before then is refused.
+  let cloudLifecycle: CloudHostLifecycle | null = null;
+  const requireCloudLifecycle = (): CloudHostLifecycle => {
+    if (!cloudLifecycle) throw new UnusableConnectionError("Cloud hosts aren't ready yet", null);
+    return cloudLifecycle;
+  };
+  // One ssh transport per access generation: a machine's new address or key gets a fresh one.
+  const cloudTransports = new Map<string, { generation: string; transport: SshTransport }>();
+  const cloudTransportFor = (
+    bindingId: string,
+    ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+  ): LinkTransport => ({
+    open: async (signal, options) => {
+      const lifecycle = requireCloudLifecycle();
+      const route = await lifecycle.ensureAccess(bindingId, signal, {
+        fresh: options?.fresh === true,
+      });
+      const generation = lifecycle.accessGeneration(bindingId) ?? "";
+      let entry = cloudTransports.get(bindingId);
+      if (!entry || entry.generation !== generation) {
+        entry = {
+          generation,
+          transport: new SshTransport({
+            target: route.target,
+            clientDir,
+            ensureRunning,
+            sshPath: route.sshPath,
+            sshConfigFiles: [route.configPath],
+          }),
+        };
+        cloudTransports.set(bindingId, entry);
+      }
+      return entry.transport.open(signal, options);
+    },
+  });
   const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
@@ -828,7 +881,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
             // A dial while the host is removed or re-pointed (a notification, an
             // update's reconnect) would hold the old distro after its release.
             { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
-            ensureRunning
+            ensureRunning,
+            cloudTransportFor
           )
       );
     },
@@ -919,6 +973,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const setup: HostSetupService = new HostSetupService({
     run: defaultCommandRunner,
     clientDir,
+    cloudChannel: (bindingId) =>
+      createCloudCommandChannel({
+        resolve: (signal) => requireCloudLifecycle().ensureAccess(bindingId, signal),
+        controlPathFor: (target) => controlPathFor(clientDir, target),
+        run: defaultCommandRunner,
+      }),
+    forgetCloud: async (bindingId) => {
+      cloudTransports.delete(bindingId);
+      await cloudFiles.forget(clientDir, bindingId);
+    },
     platform: process.platform,
     knownConnections: () => registry.list().map((host) => host.connection),
     clientBuild: () => {
@@ -1004,6 +1068,23 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     list: () => registry.list(),
     forget: (hostId) => client.forget({ hostId }),
   });
+  cloudLifecycle = new CloudHostLifecycle({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    files: cloudFiles,
+    clientDir,
+    hosts: {
+      add: (name, connection) => client.add({ name, connection }),
+      get: (hostId) => registry.get(hostId),
+      list: () => registry.list(),
+      forget: (hostId) => client.forget({ hostId }),
+      disconnect: (hostId) => client.disconnect({ hostId }),
+      onChange: (listener) => registry.onChange(listener),
+    },
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  cloud.cloudHosts.attachLifecycle(cloudLifecycle);
+  cloudLifecycle.start();
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
@@ -1030,6 +1111,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterWindowHosts();
       unregisterSetup();
       unregisterBringBack();
+      cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.
       bringBack.dispose();

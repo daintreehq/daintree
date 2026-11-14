@@ -53,6 +53,20 @@ function requireHostId(payload: unknown): string {
   return hostId;
 }
 
+/**
+ * A cloud connection names a binding only the cloud lifecycle makes (through
+ * `cloud-hosts:create` / `import`); taken from a renderer it could point a
+ * host at another host's machine.
+ */
+function refuseCloudConnection(connection: unknown): void {
+  if ((connection as { kind?: unknown } | null | undefined)?.kind !== "cloud") return;
+  throw new AppError({
+    code: "VALIDATION",
+    message: "Cloud connections are made by the cloud host lifecycle",
+    userMessage: "Add a cloud machine from Settings → Hosts → Add host instead.",
+  });
+}
+
 /** This machine as a window's host: what a window that never attached anywhere reports. */
 function localWindowHost(): WindowHostInfo {
   return {
@@ -105,13 +119,17 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     add: op(
       REMOTE_HOSTS_METHOD_CHANNELS.add,
-      async (payload: AddHostPayload): Promise<HostDescriptor> =>
-        requireRemoteService("remoteHostsClient").add(payload)
+      async (payload: AddHostPayload): Promise<HostDescriptor> => {
+        refuseCloudConnection(payload?.connection);
+        return requireRemoteService("remoteHostsClient").add(payload);
+      }
     ),
     update: op(
       REMOTE_HOSTS_METHOD_CHANNELS.update,
-      async (payload: UpdateHostPayload): Promise<HostDescriptor> =>
-        requireRemoteService("remoteHostsClient").update(payload)
+      async (payload: UpdateHostPayload): Promise<HostDescriptor> => {
+        refuseCloudConnection(payload?.connection);
+        return requireRemoteService("remoteHostsClient").update(payload);
+      }
     ),
     forget: op(
       REMOTE_HOSTS_METHOD_CHANNELS.forget,

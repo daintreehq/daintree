@@ -226,7 +226,11 @@ export class BoatClient {
    * Every sandbox in the scope, following the cursor to the end. Past
    * `maxPages` it fails rather than pass a partial list off as complete.
    */
-  async listSandboxes(ctx: BoatRequestContext, maxPages = 50): Promise<BoatSandbox[]> {
+  async listSandboxes(
+    ctx: BoatRequestContext,
+    maxPages = 50,
+    label?: string
+  ): Promise<BoatSandbox[]> {
     const out: BoatSandbox[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < maxPages; page++) {
@@ -235,7 +239,7 @@ export class BoatClient {
         {
           method: "GET",
           path: "/sandboxes",
-          query: { limit: "100", cursor },
+          query: { limit: "100", cursor, label },
           retry: true,
         },
         boatSandboxListSchema

@@ -16,12 +16,7 @@ export function isCloudProviderId(value: unknown): value is CloudProviderId {
   return typeof value === "string" && (CLOUD_PROVIDER_IDS as readonly string[]).includes(value);
 }
 
-const CLOUD_BINDING_ID = /^cb_[a-z0-9]{8,32}$/;
-
-/** The id tying a Remote Host to a provider machine: opaque, never an address. */
-export function isValidCloudBindingId(id: unknown): id is string {
-  return typeof id === "string" && CLOUD_BINDING_ID.test(id);
-}
+export { isValidCloudBindingId } from "./remoteHosts.js";
 
 /** What a provider can do, as semantics rather than a bare "supports start". */
 export interface CloudProviderCapabilities {

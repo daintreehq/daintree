@@ -2,6 +2,8 @@ import { defineIpcNamespace, op } from "../define.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
 import { CLOUD_HOSTS_METHOD_CHANNELS } from "./cloudHosts.preload.js";
 import type {
+  CloudHostCreateRequest,
+  CloudHostImportRequest,
   CloudAccountAddRequest,
   CloudAccountCheckResult,
   CloudAccountSummary,
@@ -81,6 +83,54 @@ export const cloudHostsNamespace = defineIpcNamespace({
       CLOUD_HOSTS_METHOD_CHANNELS.listResources,
       async (payload: { accountId: string }): Promise<CloudResourceSummary[]> =>
         requireRemoteService("cloudHosts").listResources(field(payload, "accountId"))
+    ),
+    createHost: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.createHost,
+      async (payload: CloudHostCreateRequest): Promise<{ hostId: string }> =>
+        requireRemoteService("cloudHosts").createHost(payload)
+    ),
+    importHost: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.importHost,
+      async (payload: CloudHostImportRequest): Promise<{ hostId: string }> =>
+        requireRemoteService("cloudHosts").importHost(payload)
+    ),
+    // A person's Start: the only path that resumes a stopped machine.
+    startHost: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.startHost,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").startHost(field(payload, "hostId"))
+    ),
+    stopHost: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.stopHost,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").stopHost(field(payload, "hostId"))
+    ),
+    retryCreate: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.retryCreate,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").retryCreate(field(payload, "hostId"))
+    ),
+    refreshHost: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.refreshHost,
+      async (payload: { hostId: string }): Promise<void> =>
+        requireRemoteService("cloudHosts").refreshHost(field(payload, "hostId"))
+    ),
+    // Names the machine the person confirmed, so a rebind meanwhile deletes nothing.
+    deleteMachine: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.deleteMachine,
+      async (payload: { hostId: string; resourceId: string | null }): Promise<void> =>
+        requireRemoteService("cloudHosts").deleteMachine(
+          field(payload, "hostId"),
+          field(payload, "resourceId")
+        )
+    ),
+    setLifetime: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.setLifetime,
+      async (payload: { hostId: string; lifetimeHours: number | null }): Promise<void> =>
+        requireRemoteService("cloudHosts").setLifetime(
+          field(payload, "hostId"),
+          field(payload, "lifetimeHours")
+        )
     ),
   },
 });

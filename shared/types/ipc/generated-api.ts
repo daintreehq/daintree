@@ -320,15 +320,27 @@ export interface GeneratedElectronAPI {
     checkAccountKey(
       ...args: IpcInvokeMap["cloud-hosts:check-account-key"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:check-account-key"]["result"]>;
+    createHost(
+      ...args: IpcInvokeMap["cloud-hosts:create-host"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:create-host"]["result"]>;
+    deleteMachine(
+      ...args: IpcInvokeMap["cloud-hosts:delete-machine"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:delete-machine"]["result"]>;
     getCatalog(
       ...args: IpcInvokeMap["cloud-hosts:get-catalog"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:get-catalog"]["result"]>;
     getSnapshot(
       ...args: IpcInvokeMap["cloud-hosts:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:get-snapshot"]["result"]>;
+    importHost(
+      ...args: IpcInvokeMap["cloud-hosts:import-host"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:import-host"]["result"]>;
     listResources(
       ...args: IpcInvokeMap["cloud-hosts:list-resources"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:list-resources"]["result"]>;
+    refreshHost(
+      ...args: IpcInvokeMap["cloud-hosts:refresh-host"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:refresh-host"]["result"]>;
     removeAccount(
       ...args: IpcInvokeMap["cloud-hosts:remove-account"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:remove-account"]["result"]>;
@@ -338,6 +350,18 @@ export interface GeneratedElectronAPI {
     replaceAccountKey(
       ...args: IpcInvokeMap["cloud-hosts:replace-account-key"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:replace-account-key"]["result"]>;
+    retryCreate(
+      ...args: IpcInvokeMap["cloud-hosts:retry-create"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:retry-create"]["result"]>;
+    setLifetime(
+      ...args: IpcInvokeMap["cloud-hosts:set-lifetime"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:set-lifetime"]["result"]>;
+    startHost(
+      ...args: IpcInvokeMap["cloud-hosts:start-host"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:start-host"]["result"]>;
+    stopHost(
+      ...args: IpcInvokeMap["cloud-hosts:stop-host"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:stop-host"]["result"]>;
     validateAccount(
       ...args: IpcInvokeMap["cloud-hosts:validate-account"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:validate-account"]["result"]>;

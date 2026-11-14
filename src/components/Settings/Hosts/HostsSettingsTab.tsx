@@ -19,6 +19,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { CloudProvidersSection } from "./CloudProvidersSection";
+import { AddCloudHostDialog } from "./AddCloudHostDialog";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
 import { bringBackMessage, canBringBack, useHostBringBacks, wakeLabel } from "./hostBringBack";
 import {
@@ -46,6 +47,12 @@ const hostNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivi
 export default function HostsSettingsTab() {
   const { hosts, loaded, loadError, refresh } = useRemoteHosts();
   const [addOpen, setAddOpen] = useState(false);
+  const [cloudAddOpen, setCloudAddOpen] = useState(false);
+  /** A cloud host whose machine just came up: the usual check, install and Host mode steps follow. */
+  const [cloudSetup, setCloudSetup] = useState<HostId | null>(null);
+  const cloudSetupHost = cloudSetup
+    ? (hosts.find((entry) => entry.descriptor.id === cloudSetup)?.descriptor ?? null)
+    : null;
   const [detailHostId, setDetailHostId] = useState<HostId | null>(null);
   const [forgetTarget, setForgetTarget] = useState<{
     id: HostId;
@@ -351,7 +358,39 @@ export default function HostsSettingsTab() {
 
       <DeviceAnswerGroup />
 
-      {addOpen && <AddHostDialog isOpen onClose={() => setAddOpen(false)} />}
+      {addOpen && (
+        <AddHostDialog
+          isOpen
+          onClose={() => setAddOpen(false)}
+          onChooseCloud={() => {
+            setAddOpen(false);
+            setCloudAddOpen(true);
+          }}
+        />
+      )}
+      {cloudAddOpen && (
+        <AddCloudHostDialog
+          isOpen
+          onClose={() => setCloudAddOpen(false)}
+          onReady={({ hostId }) => {
+            setCloudAddOpen(false);
+            setCloudSetup(hostId);
+          }}
+        />
+      )}
+      {cloudSetupHost && (
+        <AddHostDialog
+          isOpen
+          onClose={() => setCloudSetup(null)}
+          existing={{
+            hostId: cloudSetupHost.id,
+            name: cloudSetupHost.name,
+            connection: cloudSetupHost.connection,
+            intent: "setup",
+          }}
+          connectWhenDone
+        />
+      )}
       <ConfirmDialog
         isOpen={forgetTarget !== null}
         onClose={() => setForgetTarget(null)}

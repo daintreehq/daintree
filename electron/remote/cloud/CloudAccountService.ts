@@ -56,6 +56,8 @@ export interface CloudAccountServiceDeps {
   apiUrlFor(providerId: CloudProviderId): string;
   platform?: NodeJS.Platform;
   now?: () => number;
+  /** An account was removed from this device: drop what was kept for it (its ssh key). */
+  onAccountRemoved?(accountId: string): Promise<void>;
 }
 
 /**
@@ -294,6 +296,7 @@ export class CloudAccountService {
     await this.deps.vault.delete(account.id);
     this.deps.store.removeAccount(account.id);
     this.catalogs.delete(account.id);
+    await this.deps.onAccountRemoved?.(account.id).catch(() => {});
   }
 
   async validate(accountId: unknown): Promise<CloudAccountSummary> {

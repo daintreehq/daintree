@@ -10,6 +10,14 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   validateAccount: "cloud-hosts:validate-account",
   getCatalog: "cloud-hosts:get-catalog",
   listResources: "cloud-hosts:list-resources",
+  createHost: "cloud-hosts:create-host",
+  importHost: "cloud-hosts:import-host",
+  startHost: "cloud-hosts:start-host",
+  stopHost: "cloud-hosts:stop-host",
+  retryCreate: "cloud-hosts:retry-create",
+  refreshHost: "cloud-hosts:refresh-host",
+  deleteMachine: "cloud-hosts:delete-machine",
+  setLifetime: "cloud-hosts:set-lifetime",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLOUD_HOSTS_METHOD_CHANNELS;

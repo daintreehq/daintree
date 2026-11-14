@@ -1,4 +1,6 @@
 import type {
+  CloudHostCreateRequest,
+  CloudHostImportRequest,
   CloudAccountAddRequest,
   CloudAccountCheckResult,
   CloudAccountSummary,
@@ -9,6 +11,9 @@ import type {
 } from "../../../shared/types/cloudHosts.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import type { CloudHostStore } from "./CloudHostStore.js";
+import type { CloudHostLifecycle } from "./CloudHostLifecycle.js";
+import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -21,8 +26,6 @@ export interface CloudHostsDeps {
   store: CloudHostStore;
   /** Tells every view the cloud picture changed. */
   emit(snapshot: CloudHostsSnapshot): void;
-  /** Each cloud host's status, from the lifecycle coordinator once it runs. */
-  hostStatuses?: () => CloudHostStatus[];
 }
 
 /**
@@ -33,6 +36,7 @@ export interface CloudHostsDeps {
 export class CloudHosts {
   private readonly stopWatching: () => void;
   private emitQueued = false;
+  private lifecycleRef: CloudHostLifecycle | null = null;
 
   constructor(private readonly deps: CloudHostsDeps) {
     this.stopWatching = deps.store.onChange(() => this.changed());
@@ -42,11 +46,60 @@ export class CloudHosts {
     return this.deps.accounts;
   }
 
+  /** The machine lifecycle, once Remote Hosts has the host list it needs. */
+  attachLifecycle(lifecycle: CloudHostLifecycle): void {
+    this.lifecycleRef = lifecycle;
+    this.changed();
+  }
+
+  get lifecycle(): CloudHostLifecycle {
+    if (!this.lifecycleRef) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "Cloud host lifecycle isn't running",
+        userMessage: "Cloud hosts aren't ready yet. Try again in a moment.",
+      });
+    }
+    return this.lifecycleRef;
+  }
+
+  createHost(request: CloudHostCreateRequest): Promise<{ hostId: HostId }> {
+    return this.lifecycle.create(request);
+  }
+
+  importHost(request: CloudHostImportRequest): Promise<{ hostId: HostId }> {
+    return this.lifecycle.importMachine(request);
+  }
+
+  startHost(hostId: unknown): Promise<void> {
+    return this.lifecycle.startMachine(hostId);
+  }
+
+  stopHost(hostId: unknown): Promise<void> {
+    return this.lifecycle.stopMachine(hostId);
+  }
+
+  retryCreate(hostId: unknown): Promise<void> {
+    return this.lifecycle.retryCreate(hostId);
+  }
+
+  refreshHost(hostId: unknown): Promise<void> {
+    return this.lifecycle.refresh(hostId);
+  }
+
+  deleteMachine(hostId: unknown, resourceId: unknown): Promise<void> {
+    return this.lifecycle.deleteMachine(hostId, resourceId);
+  }
+
+  setLifetime(hostId: unknown, lifetimeHours: unknown): void {
+    this.lifecycle.setLifetime(hostId, lifetimeHours);
+  }
+
   snapshot(): CloudHostsSnapshot {
     return {
       providers: this.deps.accounts.providerInfos(),
       accounts: this.deps.accounts.summaries(),
-      hosts: this.deps.hostStatuses?.() ?? [],
+      hosts: this.lifecycleRef?.statuses() ?? ([] as CloudHostStatus[]),
     };
   }
 

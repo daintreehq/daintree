@@ -1,4 +1,6 @@
 import type {
+  CloudHostCreateRequest,
+  CloudHostImportRequest,
   CloudAccountAddRequest,
   CloudAccountCheckResult,
   CloudAccountSummary,
@@ -26,4 +28,19 @@ export const cloudHostsClient = {
     window.electron.cloudHosts.getCatalog({ accountId, refresh }),
   listResources: (accountId: string): Promise<CloudResourceSummary[]> =>
     window.electron.cloudHosts.listResources({ accountId }),
+  createHost: (request: CloudHostCreateRequest): Promise<{ hostId: string }> =>
+    window.electron.cloudHosts.createHost(request),
+  importHost: (request: CloudHostImportRequest): Promise<{ hostId: string }> =>
+    window.electron.cloudHosts.importHost(request),
+  /** A person's Start: the one call that resumes a stopped machine. */
+  startHost: (hostId: string): Promise<void> => window.electron.cloudHosts.startHost({ hostId }),
+  stopHost: (hostId: string): Promise<void> => window.electron.cloudHosts.stopHost({ hostId }),
+  retryCreate: (hostId: string): Promise<void> =>
+    window.electron.cloudHosts.retryCreate({ hostId }),
+  refreshHost: (hostId: string): Promise<void> =>
+    window.electron.cloudHosts.refreshHost({ hostId }),
+  deleteMachine: (hostId: string, resourceId: string | null): Promise<void> =>
+    window.electron.cloudHosts.deleteMachine({ hostId, resourceId }),
+  setLifetime: (hostId: string, lifetimeHours: number | null): Promise<void> =>
+    window.electron.cloudHosts.setLifetime({ hostId, lifetimeHours }),
 };
