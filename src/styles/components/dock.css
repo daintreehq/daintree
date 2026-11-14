@@ -231,10 +231,11 @@
     border-radius: inherit;
     pointer-events: none;
   }
-  /* Concentric with the chip: its 2px border plus the 3px inset. Pills are
-     fully round, so inherit already fits them. */
+  /* Near-concentric with the chip, whose 2px border plus the 3px inset puts
+     the line 5px in: the scale step 6px below the base radius. Pills are fully
+     round, so inherit already fits them. */
   #dock-container [data-dock-item][aria-expanded="true"]:focus-visible::after {
-    border-radius: max(0px, calc(var(--radius-md) - 5px));
+    border-radius: var(--radius-xs);
   }
 }
 
@@ -256,7 +257,9 @@
     border-radius: inherit;
     pointer-events: none;
   }
+  /* Concentric with the chip: 1px border plus the 3px inset is the 4px
+     between --radius-md and --radius-xs. */
   #dock-container [data-dock-item][aria-expanded="true"]::after {
-    border-radius: max(0px, calc(var(--radius-md) - 4px));
+    border-radius: var(--radius-xs);
   }
 }
