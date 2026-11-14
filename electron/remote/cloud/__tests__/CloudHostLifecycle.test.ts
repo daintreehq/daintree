@@ -117,7 +117,12 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function setup(initial: Partial<ProviderResource> = {}) {
+type Activity = { connected: boolean; busy: boolean; shown: boolean } | null;
+
+async function setup(
+  initial: Partial<ProviderResource> = {},
+  options: { activity?: () => Activity; now?: () => number } = {}
+) {
   const state = { machine: resource(initial) };
   const provider = fakeProvider(state);
   let backendValue: unknown;
@@ -178,6 +183,8 @@ async function setup(initial: Partial<ProviderResource> = {}) {
     },
     changed: () => {},
     sleep: async () => {},
+    activity: options.activity,
+    now: options.now,
   });
   return { lifecycle, provider, store, state, account, hosts, disconnect, files, run };
 }
@@ -562,5 +569,137 @@ describe("CloudHostLifecycle review fixes", () => {
     const [a, b] = await Promise.all([files.publicKey(account.id), files.publicKey(account.id)]);
     expect(a).toBe(b);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CloudHostLifecycle lifetime keeper", () => {
+  const NOW = Date.parse("2026-11-14T12:00:00Z");
+
+  async function keeper(
+    activity: Activity,
+    autoStopInMinutes: number,
+    machine: Partial<ProviderResource> = {}
+  ) {
+    const clock = { now: NOW };
+    const env = await setup(
+      {
+        machine: "running",
+        lifetimeSeconds: 7200,
+        autoStopAt: new Date(NOW + autoStopInMinutes * 60_000).toISOString(),
+        ...machine,
+      },
+      { activity: () => activity, now: () => clock.now }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    vi.mocked(env.provider.renewLifetime).mockResolvedValue(
+      resource({ machine: "running", autoStopAt: new Date(NOW + 7_200_000).toISOString() })
+    );
+    return { ...env, clock };
+  }
+
+  it("moves the deadline later while agents work here and it is near", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 20);
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledWith(expect.anything(), "bx_23456789", 7200);
+    expect(lifecycle.statuses()[0]).toMatchObject({
+      keptRunningAt: NOW,
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+  });
+
+  it("keeps a machine a window shows running too", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: false, shown: true }, 20);
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the deadline alone while it is far off, by half a short lifetime", async () => {
+    const far = await keeper({ connected: true, busy: true, shown: true }, 90);
+    await far.lifecycle.renewDue();
+    expect(far.provider.renewLifetime).not.toHaveBeenCalled();
+    // A one-hour lifetime renews at half of it (30 min), never with most of it left.
+    const short = await keeper({ connected: true, busy: true, shown: true }, 40, {
+      lifetimeSeconds: 3600,
+    });
+    await short.lifecycle.renewDue();
+    expect(short.provider.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("never renews for a machine nobody here uses, or one it can't reach", async () => {
+    for (const activity of [
+      { connected: true, busy: false, shown: false },
+      { connected: false, busy: true, shown: true },
+      null,
+    ]) {
+      const { lifecycle, provider } = await keeper(activity, 5);
+      await lifecycle.renewDue();
+      expect(provider.renewLifetime).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never renews a stopped machine, even one with a deadline still set", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: true }, 5, {
+      machine: "stopped",
+      rawState: "archived",
+    });
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed renewal after a pause, and clears the failure once it works", async () => {
+    const { lifecycle, provider, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    expect(lifecycle.statuses()[0]!.keptRunningAt).toBeNull();
+    clock.now = NOW + 3 * 60_000;
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(2);
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("lets a Stop asked for during a renewal win", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    let release: () => void = () => {};
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return resource({ machine: "running" });
+    });
+    const renewing = lifecycle.renewDue();
+    await vi.waitFor(() => expect(provider.renewLifetime).toHaveBeenCalled());
+    const stopping = lifecycle.stopMachine("build");
+    release();
+    await Promise.all([renewing, stopping]);
+    expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+    expect(vi.mocked(provider.stop).mock.invocationCallOrder[0]!).toBeGreaterThan(
+      vi.mocked(provider.renewLifetime).mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("sends a new lifetime after a renewal under way, never before it", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    let release: () => void = () => {};
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return resource({ machine: "running" });
+    });
+    const renewing = lifecycle.renewDue();
+    await vi.waitFor(() => expect(provider.renewLifetime).toHaveBeenCalledTimes(1));
+    const changing = lifecycle.setLifetime("build", 1);
+    release();
+    await Promise.all([renewing, changing]);
+    const sent = vi.mocked(provider.renewLifetime).mock.calls.map((call) => call[2]);
+    expect(sent).toEqual([7200, 3600]);
   });
 });

@@ -60,7 +60,7 @@ import {
 import { toDisposable } from "../../utils/lifecycle.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { LinkSession } from "../link/session.js";
-import { registerRemoteService } from "../runtime.js";
+import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   forgetRemoteWorkspaceTitles,
   setRemoteHostNameResolver,
@@ -1082,6 +1082,26 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       onChange: (listener) => registry.onChange(listener),
     },
     changed: () => cloud.cloudHosts.changed(),
+    activity: (hostId) => {
+      const state = manager.connectionState(hostId);
+      // Only a summary that came on this link, and lately: one kept from before
+      // a drop or a sleep says nothing about agents now.
+      const metrics = getRemoteService("hostMetrics");
+      const summary = metrics?.latest(hostId) ?? null;
+      const session = manager.get(hostId)?.currentSession ?? null;
+      const receipt = summary ? metrics?.receiptOf(summary) : null;
+      const current =
+        summary !== null &&
+        metrics?.cameOn(summary, session) === true &&
+        receipt != null &&
+        Date.now() - receipt.receivedAt < 60_000;
+      const observed = current ? summary.agentsObserved : null;
+      return {
+        connected: state.status === "connected" || state.status === "driven-elsewhere",
+        busy: observed !== null && observed.working + observed.waiting > 0,
+        shown: bindings.windowsOn(hostId).length > 0,
+      };
+    },
   });
   cloud.cloudHosts.attachLifecycle(cloudLifecycle);
   cloudLifecycle.start();

@@ -40,6 +40,12 @@ const DIAL_OBSERVATION_MS = 15_000;
 /** SSH access is resolved again after this long, or after any start. */
 const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
+/** How often the keeper looks for a lifetime to renew. */
+const KEEPER_INTERVAL_MS = 60_000;
+/** A lifetime is renewed once this little of it is left (or half of it, for a short one). */
+const RENEW_MARGIN_MS = 30 * 60_000;
+/** After a failed renewal, the next try waits this long. */
+const RENEW_RETRY_MS = 2 * 60_000;
 
 const LABEL_MARKER = "daintree";
 /** Failures that are the provider refusing the request: nothing was created. */
@@ -69,6 +75,12 @@ export interface CloudHostLifecycleDeps {
   };
   /** The cloud picture changed outside the store (an operation's stage). */
   changed(): void;
+  /**
+   * What this device sees of a host's use right now: its link, whether its
+   * agents are working or waiting there, and whether a window shows it. Only
+   * Daintree's own observations; passive polling never counts as use.
+   */
+  activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -139,6 +151,11 @@ export class CloudHostLifecycle {
   /** The route last written for each machine this run, so only a changed one retires its master. */
   private readonly writtenRoutes = new Map<string, string>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private keeperTimer: ReturnType<typeof setInterval> | null = null;
+  /** When each machine's lifetime was last renewed or tried, this run. */
+  private readonly renewals = new Map<string, { at: number; ok: boolean }>();
+  private readonly renewInFlight = new Map<string, Promise<void>>();
+  private renewingAll = false;
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
 
@@ -158,12 +175,15 @@ export class CloudHostLifecycle {
     void this.dropOrphanBindings();
     this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
     this.pollTimer.unref?.();
+    this.keeperTimer = setInterval(() => void this.renewDue(), KEEPER_INTERVAL_MS);
+    this.keeperTimer.unref?.();
     void this.reconcileUnfinishedCreates();
   }
 
   dispose(): void {
     this.disposed = true;
     if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.keeperTimer) clearInterval(this.keeperTimer);
     this.stopWatchingHosts?.();
     for (const operation of this.operations.values()) operation.controller.abort();
   }
@@ -226,6 +246,9 @@ export class CloudHostLifecycle {
             ? `${binding.access.user}@${formatSshEndpoint({ host: binding.access.host, port: binding.access.port })}`
             : null,
           hostKeyFingerprint: binding.access ? hostKeyFingerprint(binding.access.hostKey) : null,
+          keptRunningAt: this.renewals.get(binding.id)?.ok
+            ? this.renewals.get(binding.id)!.at
+            : null,
         };
       });
   }
@@ -588,6 +611,7 @@ export class CloudHostLifecycle {
       await running.promise.catch(() => {});
     }
     this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+    await this.settleRenewal(binding.id);
     await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
     await this.operate(binding.id, "stopping", (signal) => this.runStop(binding.id, signal));
   }
@@ -695,6 +719,8 @@ export class CloudHostLifecycle {
       throw invalid("Choose how long the machine may run before it stops by itself.");
     }
     const lifetimeSeconds = lifetimeHours === null ? null : (lifetimeHours as number) * 3600;
+    await this.settleRenewal(binding.id);
+    this.renewals.delete(binding.id);
     this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
     if (
       !binding.resourceId ||
@@ -927,6 +953,7 @@ export class CloudHostLifecycle {
         resource.machine !== "running" ||
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
+      if (restarted) this.renewals.delete(bindingId);
       return {
         ...current,
         access: restarted ? null : current.access,
@@ -1021,6 +1048,91 @@ export class CloudHostLifecycle {
     }
   }
 
+  /**
+   * The lifetime keeper. A machine's provider-side lifetime is the guard
+   * against one left running; while this device is using it (its link is up
+   * and its agents are working or waiting there, or a window shows it), the
+   * guard mustn't cut that work off, so the deadline is moved forward before
+   * it comes. Nothing is renewed for a machine nobody here uses: with the
+   * desktop gone, it stops by itself at the end of its lifetime, saving its
+   * disk. Runs on a timer; exposed for tests.
+   */
+  async renewDue(): Promise<void> {
+    if (this.disposed || !this.deps.activity || this.renewingAll) return;
+    this.renewingAll = true;
+    try {
+      for (const binding of this.deps.store.bindings()) {
+        if (this.disposed) return;
+        if (!this.renewalDue(binding.id)) continue;
+        const attempt = this.renew(binding.id);
+        this.renewInFlight.set(binding.id, attempt);
+        try {
+          await attempt;
+        } finally {
+          if (this.renewInFlight.get(binding.id) === attempt) this.renewInFlight.delete(binding.id);
+        }
+      }
+    } finally {
+      this.renewingAll = false;
+    }
+  }
+
+  /** Whether the machine is in use here, running, idle of operations, and near its deadline. */
+  private renewalDue(bindingId: string): boolean {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding?.resourceId || !binding.hostId || binding.lifetimeSeconds === null) return false;
+    if (binding.intent === "stop" || this.operations.has(binding.id)) return false;
+    if (machineOf(binding) !== "running") return false;
+    const activity = this.deps.activity?.(binding.hostId);
+    if (!activity?.connected || !(activity.busy || activity.shown)) return false;
+    const deadline = Date.parse(binding.observation?.autoStopAt ?? "");
+    if (!Number.isFinite(deadline)) return false;
+    const now = this.now();
+    const margin = Math.min(RENEW_MARGIN_MS, (binding.lifetimeSeconds * 1000) / 2);
+    if (deadline - now > margin) return false;
+    const last = this.renewals.get(binding.id);
+    return !(last && !last.ok && now - last.at < RENEW_RETRY_MS);
+  }
+
+  private async renew(bindingId: string): Promise<void> {
+    const binding = this.deps.store.binding(bindingId)!;
+    const lifetimeSeconds = binding.lifetimeSeconds;
+    const provider = this.deps.accounts.provider(binding.providerId);
+    try {
+      const { credentials } = await this.context(binding);
+      // A stop, a start or a new lifetime while the key was read: that wins.
+      if (!this.renewalDue(bindingId)) return;
+      const renewed = await provider.renewLifetime(
+        credentials,
+        binding.resourceId!,
+        lifetimeSeconds
+      );
+      const current = this.deps.store.binding(bindingId);
+      if (!current || current.intent === "stop" || this.operations.has(bindingId)) return;
+      this.observe(bindingId, renewed);
+      this.renewals.set(bindingId, { at: this.now(), ok: true });
+      // A renewal that failed earlier and now went through is no longer news.
+      this.deps.store.updateBinding(bindingId, (latest) =>
+        latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
+      );
+      this.deps.changed();
+    } catch (error) {
+      if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
+      this.renewals.set(bindingId, { at: this.now(), ok: false });
+      const described = provider.describeError(error);
+      this.recordError(bindingId, {
+        code: "lifetime-renewal",
+        message: `Couldn't keep the machine running past its lifetime: ${described.message} It stops by itself at the deadline unless this succeeds.`,
+        at: described.at,
+      });
+    }
+  }
+
+  /** Lets a renewal under way for the machine finish first, so it can't land after this. */
+  private async settleRenewal(bindingId: string): Promise<void> {
+    await this.renewInFlight.get(bindingId)?.catch(() => {});
+  }
+
   /** Background observation: reads only, at a pace set by what was last seen. */
   private async pollDue(): Promise<void> {
     if (this.disposed) return;
@@ -1063,6 +1175,7 @@ export class CloudHostLifecycle {
       if (!stranded && (binding.hostId === null || listed.has(binding.hostId))) continue;
       this.operations.get(binding.id)?.controller.abort();
       this.deps.store.removeBinding(binding.id);
+      this.renewals.delete(binding.id);
       await this.deps.files.forget(this.deps.clientDir, binding.id).catch(() => {});
     }
   }

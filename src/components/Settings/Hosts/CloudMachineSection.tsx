@@ -199,7 +199,9 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           description={
             running
               ? autoStop
-                ? `This run stops by itself ${autoStop}. A change applies from now`
+                ? status.lifetimeSeconds === null
+                  ? `This run stops by itself ${autoStop}. A change applies from now`
+                  : `This run stops by itself ${autoStop}, moved later while it's in use here${status.keptRunningAt !== null ? ` (last moved ${clockTime(new Date(status.keptRunningAt).toISOString())})` : ""}. A change applies from now`
                 : "This run doesn't stop by itself. A change applies from now"
               : "Each start sets it: a guard against a machine left running"
           }

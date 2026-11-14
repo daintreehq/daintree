@@ -363,8 +363,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 </SelectContent>
               </Select>
               <FieldDescription>
-                A guard against a forgotten machine. Each start renews it; stop the machine yourself
-                when you&apos;re done
+                A guard against a machine left running. While it&apos;s in use from this device,
+                Daintree moves the stop later; stop it yourself when you&apos;re done
               </FieldDescription>
             </Field>
             {chosenType && (

@@ -170,6 +170,7 @@ export type CloudHostErrorCode =
   | "provider-unreachable"
   | "outcome-unknown"
   | "unsupported"
+  | "lifetime-renewal"
   | "failed";
 
 /**
@@ -211,6 +212,8 @@ export interface CloudHostStatus {
   lastEndpoint: string | null;
   /** SHA256 fingerprint of the pinned server key. */
   hostKeyFingerprint: string | null;
+  /** When this device last moved the machine's auto-stop forward because it was in use here. */
+  keptRunningAt: number | null;
 }
 
 /** The machine as it would be created. */

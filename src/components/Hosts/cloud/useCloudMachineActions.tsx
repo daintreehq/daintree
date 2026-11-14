@@ -22,7 +22,7 @@ function hourlyClause(status: CloudHostStatus): string {
 function lifetimeClause(status: CloudHostStatus): string {
   if (status.lifetimeSeconds === null) return "It runs until you stop it.";
   const hours = Math.round(status.lifetimeSeconds / 3600);
-  return `It stops by itself after ${hours === 1 ? "1 hour" : `${hours} hours`} unless you stop it sooner.`;
+  return `It stops by itself after ${hours === 1 ? "1 hour" : `${hours} hours`}, later while it's in use here, or when you stop it.`;
 }
 
 interface StartRequest {
