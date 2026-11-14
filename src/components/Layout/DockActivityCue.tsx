@@ -40,7 +40,7 @@ export function DockActivityCue({ state }: DockActivityCueProps) {
   return (
     <div
       className={cn(
-        "ml-1.5 flex items-center shrink-0",
+        "ml-0.5 flex items-center shrink-0",
         working ? "text-text-secondary" : "text-status-success"
       )}
       data-dock-activity-state={state}
