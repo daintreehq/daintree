@@ -274,7 +274,7 @@ function HostMenuItem({
   const state = machineDown ? cloudStatusLabel(cloud, stale) : described.state;
   // An old reading says how old, wherever the row sits.
   const staleAge =
-    machineDown && stale
+    cloud !== null && stale
       ? cloud.observedAt !== null
         ? `checked ${formatTimeAgo(cloud.observedAt, now)}`
         : "never checked"
@@ -285,7 +285,10 @@ function HostMenuItem({
         .filter(Boolean)
         .join(" · ") || null
     : cloud !== null
-      ? cloudCostFacts(cloud).join(" · ") || described.note
+      ? // An old reading's cost and stop time are the last reported, and say so.
+        (stale
+          ? ["last reported", ...cloudCostFacts(cloud), staleAge].filter(Boolean).join(" · ")
+          : cloudCostFacts(cloud).join(" · ")) || described.note
       : described.note;
   // A link that has gone wrong carries the chip's own warning mark and full
   // ink; connecting and not connected stay quiet, and connected never goes green.

@@ -156,7 +156,7 @@ export function RemoveCloudHostDialog({
               disabled={busy}
               onChange={() => setChoice("delete")}
               label="Delete the machine too"
-              description="Its disk goes for good; snapshots you saved yourself stay"
+              description="Its disk goes for good"
             />
           </RadioChoiceGroup>
         )}

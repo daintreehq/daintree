@@ -736,23 +736,27 @@ export class CloudHostLifecycle {
     const lifetimeSeconds = lifetimeHours === null ? null : (lifetimeHours as number) * 3600;
     await this.settleRenewal(binding.id);
     this.renewals.delete(binding.id);
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
+    const keep = () =>
+      this.deps.store.updateBinding(binding.id, (current) => ({ ...current, lifetimeSeconds }));
     if (
       !binding.resourceId ||
       machineOf(binding) !== "running" ||
       this.operations.has(binding.id)
     ) {
+      keep();
       return;
     }
+    // A running machine's own deadline moves first: a refusal leaves both the
+    // machine and the lifetime Settings shows as they were.
     const { provider, credentials } = await this.context(binding);
+    let resource: ProviderResource;
     try {
-      this.observe(
-        binding.id,
-        await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds)
-      );
+      resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
       throw this.deps.accounts.asAppError(provider, error);
     }
+    keep();
+    this.observe(binding.id, resource);
   }
 
   // --- SSH access ----------------------------------------------------------

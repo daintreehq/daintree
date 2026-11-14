@@ -44,7 +44,13 @@ export function HostConnectionBanner() {
   const variant = useHostConnectionStore(selectHostBannerVariant);
   const cloudSnapshot = useCloudHosts().snapshot;
   const [startingMachine, setStartingMachine] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
+  // A refused start stands until the next try; a failed read yields to any newer good one.
+  const [machineError, setMachineError] = useState<{
+    hostId: string;
+    message: string;
+    at: number;
+    read: boolean;
+  } | null>(null);
   const [checkingMachine, setCheckingMachine] = useState(false);
   const hostId = useHostConnectionStore((s) => s.hostId);
   const cloudMachine = cloudStatusFor(cloudSnapshot, hostId)?.machine ?? null;
@@ -112,37 +118,45 @@ export function HostConnectionBanner() {
     variant !== null &&
     (machineStarting || canStartMachine(cloud) || machineUnknown)
   ) {
+    const failed = (err: unknown, fallback: string, read: boolean) =>
+      setMachineError({
+        hostId,
+        message:
+          isClientAppError(err) && err.userMessage
+            ? err.userMessage
+            : clientErrorText(err, fallback),
+        at: Date.now(),
+        read,
+      });
     const startAndReconnect = () => {
       setStartingMachine(true);
-      setStartError(null);
+      setMachineError(null);
       cloudHostsClient.startHost(hostId).then(
         // Stays "starting" until the link is back (the effect above lets go of it).
         () => reconnectHost(),
         (err: unknown) => {
           setStartingMachine(false);
-          setStartError(
-            isClientAppError(err) && err.userMessage
-              ? err.userMessage
-              : clientErrorText(err, "Couldn't start the machine")
-          );
+          failed(err, "Couldn't start the machine", false);
         }
       );
     };
     const checkMachine = () => {
       setCheckingMachine(true);
-      setStartError(null);
+      setMachineError(null);
       cloudHostsClient.refreshHost(hostId).then(
         () => setCheckingMachine(false),
         (err: unknown) => {
           setCheckingMachine(false);
-          setStartError(
-            isClientAppError(err) && err.userMessage
-              ? err.userMessage
-              : clientErrorText(err, "Couldn't ask about the machine")
-          );
+          failed(err, "Couldn't ask about the machine", true);
         }
       );
     };
+    const shownError =
+      machineError &&
+      machineError.hostId === hostId &&
+      !(machineError.read && cloud.observedAt !== null && cloud.observedAt > machineError.at)
+        ? machineError.message.replace(/\.$/, "")
+        : null;
     // An old reading says when it was made, as a clock time: an age would tick
     // inside a live region and be announced again every time it did.
     const stale = !machineStarting && isObservationStale(cloud, now);
@@ -174,8 +188,9 @@ export function HostConnectionBanner() {
               ? `Couldn't check ${hostName}'s machine`
               : `${hostName}'s machine ${stateWords}`
         }
+        // An error leads, but never replaces what starting costs while Start is offered.
         description={
-          startError ??
+          (shownError ? `${shownError}. ` : "") +
           (machineStarting
             ? "This window reconnects once it's running."
             : machineUnknown

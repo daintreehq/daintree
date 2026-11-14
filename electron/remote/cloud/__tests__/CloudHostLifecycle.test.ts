@@ -413,6 +413,21 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(lifecycle.statuses()[0]!.lastError?.code).toBe("rate-limited");
   });
 
+  it("keeps a running machine's lifetime when the provider refuses the change", async () => {
+    const { lifecycle, provider, store } = await setup({ machine: "running" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const before = lifecycle.statuses()[0]!.lifetimeSeconds;
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("invalid-request", "ttl too long", 400, "invalid_ttl", null)
+    );
+    await expect(lifecycle.setLifetime("build", 24)).rejects.toBeTruthy();
+    expect(lifecycle.statuses()[0]!.lifetimeSeconds).toBe(before);
+  });
+
   it("moves a running machine's own deadline when its lifetime changes", async () => {
     const { lifecycle, provider, store } = await setup({ machine: "running" });
     await lifecycle.importMachine({

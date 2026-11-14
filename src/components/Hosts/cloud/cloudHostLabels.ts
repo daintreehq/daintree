@@ -39,7 +39,12 @@ export function durationLabel(seconds: number): string {
 
 /** What stopping keeps and loses, as the provider describes it, for a Stop confirm. */
 export function stopKeepsSentence(persistence: CloudProviderPersistence): string {
-  return `${persistence.kept} are kept for when you start it again; ${persistence.lost} aren't.`;
+  // A finite retention says so where the stop is decided, not only on the details page.
+  const kept =
+    persistence.retentionDays !== null
+      ? `kept for at least ${persistence.retentionDays} days while it's stopped, and may be deleted after that`
+      : "kept for when you start it again";
+  return `${persistence.kept} are ${kept}; ${persistence.lost} aren't.`;
 }
 
 /** The same promise for a stopped machine's disk, with how long the provider keeps it. */

@@ -30,6 +30,7 @@ import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 import {
   canStartMachine,
   formatHourly,
+  stopKeepsSentence,
   hourlyShort,
   lifetimeLabel,
   machineSpecLabel,
@@ -441,7 +442,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {lifetimeHours === null
                   ? "It runs until you stop it."
                   : `It stops by itself ${lifetimeLabel(lifetimeHours).toLowerCase()} after starting unless it's in use here.`}{" "}
-                Stopping keeps its home folder and ends what runs on it.
+                {`Stopping ends what runs on it. ${stopKeepsSentence(provider.capabilities.persistence)}`}
               </p>
             )}
           </>

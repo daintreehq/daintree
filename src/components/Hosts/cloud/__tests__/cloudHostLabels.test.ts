@@ -9,6 +9,7 @@ import {
   isObservationStale,
   formatHourly,
   lifetimeSentence,
+  stopKeepsSentence,
   machineSpecLabel,
 } from "../cloudHostLabels";
 
@@ -101,6 +102,16 @@ describe("cloud host labels", () => {
     ).toBe(true);
     expect(canStopMachine(status({ machine: "stopped" }))).toBe(false);
     expect(canStopMachine(status({ resourceId: null, machine: "not-created" }))).toBe(false);
+  });
+
+  it("puts a finite retention into the stop promise, and none when the disk is kept", () => {
+    const persistence = { kept: "Files", lost: "caches", saveRetryBilled: false };
+    expect(stopKeepsSentence({ ...persistence, retentionDays: 14 })).toBe(
+      "Files are kept for at least 14 days while it's stopped, and may be deleted after that; caches aren't."
+    );
+    expect(stopKeepsSentence({ ...persistence, retentionDays: null })).toBe(
+      "Files are kept for when you start it again; caches aren't."
+    );
   });
 
   it("says an imported lifetime exactly, never rounded to the hour", () => {
