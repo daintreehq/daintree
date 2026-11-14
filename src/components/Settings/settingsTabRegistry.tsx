@@ -324,6 +324,8 @@ const HOSTS_TAB = {
     "host mode",
     "install",
     "update",
+    "cloud",
+    "boat",
   ],
   sections: [
     {
@@ -332,6 +334,14 @@ const HOSTS_TAB = {
       title: "Remote hosts",
       description: "Add a host, rename it, change its SSH target, update its build or forget it",
       keywords: ["add host", "forget", "rename", "ssh target", "discover", "bonjour"],
+    },
+    {
+      id: "hosts-cloud-providers",
+      section: "Cloud providers",
+      title: "Cloud providers",
+      description:
+        "Connect a Boat account to create cloud machines as hosts that start and stop on demand",
+      keywords: ["boat", "cloud", "api key", "provider", "machine", "vm", "sandbox"],
     },
     {
       id: "host-mode",

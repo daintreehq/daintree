@@ -92,6 +92,7 @@ import { buildForgeCredentialImportPreloadBindings } from "./ipc/handlers/forgeC
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildRemoteHostsPreloadBindings } from "./ipc/handlers/remoteHosts.preload.js";
+import { buildCloudHostsPreloadBindings } from "./ipc/handlers/cloudHosts.preload.js";
 import { buildHostModePreloadBindings } from "./ipc/handlers/hostMode.preload.js";
 import { buildDeviceAnswerPreloadBindings } from "./ipc/handlers/deviceAnswer.preload.js";
 import { buildDriveLeasePreloadBindings } from "./ipc/handlers/driveLease.preload.js";
@@ -2928,6 +2929,7 @@ function buildElectronApi(): ElectronAPI {
       onEvent: (callback: (event: IpcEventMap["remote-hosts:event"]) => void) =>
         _typedOn("remote-hosts:event", callback),
     },
+    cloudHosts: buildCloudHostsPreloadBindings(_unwrappingInvoke),
     hostMode: {
       ...buildHostModePreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["host-mode:event"]) => void) =>

@@ -636,6 +636,42 @@ export interface GeneratedIpcInvokeMap {
     args: [text: string];
     result: void;
   };
+  "cloud-hosts:add-account": {
+    args: [payload: import("../cloudHosts.js").CloudAccountAddRequest];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:check-account-key": {
+    args: [payload: { providerId: string; apiKey: string }];
+    result: import("../cloudHosts.js").CloudAccountCheckResult;
+  };
+  "cloud-hosts:get-catalog": {
+    args: [payload: { accountId: string; refresh?: boolean | undefined }];
+    result: import("../cloudHosts.js").CloudCatalog;
+  };
+  "cloud-hosts:get-snapshot": {
+    args: [];
+    result: import("../cloudHosts.js").CloudHostsSnapshot;
+  };
+  "cloud-hosts:list-resources": {
+    args: [payload: { accountId: string }];
+    result: import("../cloudHosts.js").CloudResourceSummary[];
+  };
+  "cloud-hosts:remove-account": {
+    args: [payload: { accountId: string }];
+    result: void;
+  };
+  "cloud-hosts:rename-account": {
+    args: [payload: { accountId: string; displayName: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:replace-account-key": {
+    args: [payload: { accountId: string; apiKey: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:validate-account": {
+    args: [payload: { accountId: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
   "codex:find-sessions": {
     args: [__0: { cwd: string; codexHome?: string | undefined }];
     result: import("./agentSubagents.js").CodexFolderSessionsResult;

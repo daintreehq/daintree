@@ -313,6 +313,35 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["clipboard:write-text"]["args"]
     ): Promise<IpcInvokeMap["clipboard:write-text"]["result"]>;
   };
+  cloudHosts: {
+    addAccount(
+      ...args: IpcInvokeMap["cloud-hosts:add-account"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:add-account"]["result"]>;
+    checkAccountKey(
+      ...args: IpcInvokeMap["cloud-hosts:check-account-key"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:check-account-key"]["result"]>;
+    getCatalog(
+      ...args: IpcInvokeMap["cloud-hosts:get-catalog"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:get-catalog"]["result"]>;
+    getSnapshot(
+      ...args: IpcInvokeMap["cloud-hosts:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:get-snapshot"]["result"]>;
+    listResources(
+      ...args: IpcInvokeMap["cloud-hosts:list-resources"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:list-resources"]["result"]>;
+    removeAccount(
+      ...args: IpcInvokeMap["cloud-hosts:remove-account"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:remove-account"]["result"]>;
+    renameAccount(
+      ...args: IpcInvokeMap["cloud-hosts:rename-account"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:rename-account"]["result"]>;
+    replaceAccountKey(
+      ...args: IpcInvokeMap["cloud-hosts:replace-account-key"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:replace-account-key"]["result"]>;
+    validateAccount(
+      ...args: IpcInvokeMap["cloud-hosts:validate-account"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:validate-account"]["result"]>;
+  };
   codex: {
     findSessions(
       ...args: IpcInvokeMap["codex:find-sessions"]["args"]

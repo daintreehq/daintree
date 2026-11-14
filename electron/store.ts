@@ -950,6 +950,12 @@ export interface StoreSchema {
     /** Host id → when a window last landed there; "local" is this machine. */
     lastUsed?: Record<string, number>;
   };
+  /**
+   * Cloud accounts (never their keys, which live in the keychain-sealed
+   * credential file) and the bindings that tie a host to a provider machine.
+   * Device-owned; additive key with no numbered migration, validated on load.
+   */
+  cloudHosts?: unknown;
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /**

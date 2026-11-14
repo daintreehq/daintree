@@ -44,6 +44,8 @@ import {
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
+import { initCloudHosts } from "../cloud/initCloudHosts.js";
+import type { CloudHostsStoreBackend } from "../cloud/CloudHostStore.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
@@ -797,6 +799,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
+  const cloud = initCloudHosts({
+    backend: store as unknown as CloudHostsStoreBackend,
+    emit: broadcastLocal,
+  });
   // Remote windows' titles name their host as it is called now.
   setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
@@ -1024,6 +1030,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterWindowHosts();
       unregisterSetup();
       unregisterBringBack();
+      cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.
       bringBack.dispose();
       stopTitleRefresh();

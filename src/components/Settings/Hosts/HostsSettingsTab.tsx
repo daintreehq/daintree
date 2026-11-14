@@ -18,6 +18,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
+import { CloudProvidersSection } from "./CloudProvidersSection";
 import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
 import { bringBackMessage, canBringBack, useHostBringBacks, wakeLabel } from "./hostBringBack";
 import {
@@ -332,6 +333,8 @@ export default function HostsSettingsTab() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <CloudProvidersSection />
 
       <HostsCopySettingsSection
         hosts={[...hosts]
