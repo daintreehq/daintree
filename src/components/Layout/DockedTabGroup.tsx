@@ -887,7 +887,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                     <div
                       className={cn(
-                        "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
+                        "ml-0.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
                         SESSION_COLORS[chipGlyphState]
                       )}
                     >
@@ -923,7 +923,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {displayAgentState && !chipGlyphState && (
                 <span
                   aria-hidden="true"
-                  className={cn("ml-1.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
+                  className={cn("ml-0.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
                 />
               )}
             </button>
@@ -934,7 +934,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           aria-label={`Preview: ${fullTitle} (${pluralize(panels.length, "tab")})`}
           // A column, so the tab panel's flex-1 takes the height under the strip
           // instead of collapsing to its content.
-          className="flex flex-col w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="flex flex-col w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] dock-preview-popover rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"
@@ -1068,7 +1068,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           handleAddTab();
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
+                        className="ml-1 shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
                         aria-label="Duplicate panel as new tab"
                       >
                         <CopyPlus aria-hidden="true" />
@@ -1085,7 +1085,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               variant="ghost"
                               size="icon-xs"
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="shrink-0 focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
+                              className="shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
                               aria-label={
                                 activeTabIsHidden
                                   ? `Show ${hiddenPanels.length} hidden tabs, including active`
