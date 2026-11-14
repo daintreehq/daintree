@@ -148,6 +148,13 @@ interface AddHostDialogProps {
     connection: HostConnection;
     intent?: "update" | "setup";
   } | null;
+  /** Offered while adding: leave this dialog for the cloud machine one instead. */
+  onChooseCloud?: () => void;
+  /**
+   * Set up an existing host that was just added (a new cloud machine): end by
+   * connecting it, as adding a host does, rather than closing.
+   */
+  connectWhenDone?: boolean;
 }
 
 /**
@@ -468,7 +475,13 @@ function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
   );
 }
 
-export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialogProps) {
+export function AddHostDialog({
+  isOpen,
+  onClose,
+  existing = null,
+  onChooseCloud,
+  connectWhenDone = false,
+}: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -478,8 +491,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   // On Windows a host is a WSL distro on this PC; elsewhere a machine reached over ssh.
   // An existing host keeps its own kind: its address is never read as another kind's.
   const viaWsl = (existing?.connection.kind ?? remoteConnectionKind()) === "wsl";
-  const makeConnection = (address: string) =>
-    viaWsl ? wslConnection(address) : sshConnection(address);
+  // A cloud host has no address to type: it is always its own binding.
+  const cloudExisting = existing?.connection.kind === "cloud" ? existing.connection : null;
+  const makeConnection = (address: string): HostConnection =>
+    cloudExisting ?? (viaWsl ? wslConnection(address) : sshConnection(address));
   const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
   // What this dialog adds or updates.
   const connectionFor = () => makeConnection(target.trim());
@@ -946,6 +961,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   };
 
   const finish = () => {
+    if (existing && connectWhenDone && !skipped && probe?.hostModeListening) {
+      connectSaved({ hostId: existing.hostId, name: existing.name });
+      return;
+    }
     if (existing) {
       onClose();
       return;
@@ -1395,6 +1414,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       disabled: busy || target.trim().length === 0 || nameError !== null || duplicate !== null,
       loading: busy,
     };
+    if (onChooseCloud && !existing) {
+      leading = { label: "Create a cloud machine instead", onClick: onChooseCloud, disabled: busy };
+    }
   } else if (step === "check") {
     // Setup starts a WSL distro's Host as a systemd user service, which has
     // nothing to run under without it; a Host already listening needs no setup.
@@ -1455,7 +1477,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             Checking {hostLabel}
           </p>
           <p className="pl-5.5 text-xs text-text-secondary select-text [overflow-wrap:anywhere]">
-            {viaWsl ? `Starting the ${target} distribution` : `Over SSH as ${target}`}
+            {viaWsl
+              ? `Starting the ${target} distribution`
+              : cloudExisting
+                ? "Over SSH to the cloud machine"
+                : `Over SSH as ${target}`}
           </p>
         </div>
       ) : null
@@ -1464,7 +1490,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         {verdict === "unreachable" ? (
           <>
             <Verdict title={copy!.title}>
-              {viaWsl ? "The distribution didn't start." : `SSH as ${target} didn't connect.`}
+              {viaWsl
+                ? "The distribution didn't start."
+                : cloudExisting
+                  ? "SSH to the cloud machine didn't connect."
+                  : `SSH as ${target} didn't connect.`}
             </Verdict>
             {probe.sshError && (
               <pre className="mt-3 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
@@ -1481,7 +1511,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
                 <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
               </p>
-            ) : (
+            ) : cloudExisting ? null : (
               <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
             )}
           </>
@@ -1587,6 +1617,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       };
       // A different build still connects, best effort, with a warning.
       leading = continueAnyway;
+    } else if (verdict === "up-to-date" && existing && connectWhenDone) {
+      primary = {
+        label: "Connect",
+        onClick: () => connectSaved({ hostId: existing.hostId, name: existing.name }),
+        disabled: busy,
+        loading: connecting,
+      };
     } else if (verdict === "up-to-date" && existing) {
       primary = { label: "Done", onClick: onClose };
       secondary = undefined;

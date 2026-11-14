@@ -15,6 +15,7 @@ import {
   parseHostConnection,
   requireHostConnection,
   requireSshTarget,
+  requireSupportedConnection,
   sshTargetOf,
 } from "../connection.js";
 
@@ -118,5 +119,29 @@ describe("host connections", () => {
         message: "Port forwarding over ssh needs an ssh connection; this host is reached over tcp",
       })
     );
+  });
+});
+
+describe("cloud connections", () => {
+  const cloud = { kind: "cloud", bindingId: "cb_0123456789ab" } as const;
+
+  it("parses a binding id and nothing that isn't one", () => {
+    expect(parseHostConnection(cloud)).toEqual(cloud);
+    expect(parseHostConnection({ kind: "cloud", bindingId: "../etc" })).toBeNull();
+    expect(parseHostConnection({ kind: "cloud", bindingId: "203.0.113.10" })).toBeNull();
+    expect(readStoredHostConnection({ connection: cloud })).toEqual(cloud);
+  });
+
+  it("goes wherever ssh does, and never on Windows", () => {
+    expect(requireSupportedConnection(cloud, "darwin")).toEqual(cloud);
+    expect(requireSupportedConnection(cloud, "linux")).toEqual(cloud);
+    expect(() => requireSupportedConnection(cloud, "win32")).toThrow(/aren't supported/);
+  });
+
+  it("is the same host only for the same binding, and never an ssh target", () => {
+    expect(sameHostAccount(cloud, { kind: "cloud", bindingId: "cb_0123456789ab" })).toBe(true);
+    expect(sameHostAccount(cloud, { kind: "cloud", bindingId: "cb_ba9876543210" })).toBe(false);
+    expect(sameHostConnection(cloud, sshConnection("cb_0123456789ab"))).toBe(false);
+    expect(connectionKey(cloud)).toBe("cloud:cb_0123456789ab");
   });
 });

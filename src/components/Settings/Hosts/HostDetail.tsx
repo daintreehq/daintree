@@ -26,6 +26,9 @@ import { takeFirstConnect } from "./hostCopySettingsRequests";
 import type { HostPluginsSectionId } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
+import { CloudMachineSection } from "./CloudMachineSection";
+import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
+import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { HostWakeSetup } from "./HostWakeSetup";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
@@ -125,6 +128,9 @@ export function HostDetail({
   const hostName = descriptor.name;
   const headerOwnsBack = useSettingsSubpage({ title: hostName, parentLabel: "Hosts", onBack });
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const cloudSnapshot = useCloudHosts().snapshot;
+  const cloud = cloudStatusFor(cloudSnapshot, entry.descriptor.id);
+  const isCloud = entry.descriptor.connection.kind === "cloud";
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // Why the update dialog is open, which names it: "Set up…" or "Check for update".
@@ -290,6 +296,9 @@ export function HostDetail({
         </div>
       )}
 
+      {/* The machine first: what it is doing and what it costs decide everything below. */}
+      {isCloud && <CloudMachineSection hostId={descriptor.id} hostName={hostName} />}
+
       <SettingsSection title="Connection">
         <SettingsGroup>
           <SettingsInput
@@ -319,7 +328,7 @@ export function HostDetail({
             />
           ) : wslDistro !== null ? (
             <SettingsRow label="WSL distribution" description={wslDistro} />
-          ) : (
+          ) : isCloud ? null : (
             <SettingsRow
               label="Address"
               description={formatHostConnection(descriptor.connection)}
@@ -336,7 +345,7 @@ export function HostDetail({
             }
             control={
               <div className="flex gap-2">
-                {(bringing || canBringBack(connection)) && (
+                {!isCloud && (bringing || canBringBack(connection)) && (
                   // Wakes it where a wake is set up below, then starts Daintree there if it can.
                   <Button
                     variant="outline"
@@ -539,8 +548,12 @@ export function HostDetail({
       <SettingsSection title="Remove host">
         <SettingsGroup>
           <SettingsRow
-            label={removeOutcome.label}
-            description="Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
+            label={isCloud ? "Remove host" : removeOutcome.label}
+            description={
+              isCloud
+                ? "Choose whether its machine stays in your cloud account or is deleted with it"
+                : "Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
+            }
             error={removeError ?? undefined}
             control={
               <Button variant="ghost-danger" size="sm" onClick={() => setConfirmRemove(true)}>
@@ -551,8 +564,22 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      {confirmRemove && isCloud && (
+        <RemoveCloudHostDialog
+          hostId={descriptor.id}
+          name={hostName}
+          status={cloud}
+          providerName={
+            cloudSnapshot.providers.find(
+              (provider) => provider.id === (cloud?.providerId ?? "boat")
+            )?.name ?? "the provider"
+          }
+          onClose={() => setConfirmRemove(false)}
+          onRemoved={() => onBack(false)}
+        />
+      )}
       <ConfirmDialog
-        isOpen={confirmRemove}
+        isOpen={confirmRemove && !isCloud}
         onClose={() => setConfirmRemove(false)}
         variant="destructive"
         title={`Remove '${hostName}' from this device?`}

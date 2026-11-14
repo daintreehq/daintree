@@ -42,6 +42,7 @@ export {
   CircleStop, // a scheduled run that ended without a verdict — interrupted, stopped, replaced, or exited with no code seen
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first); a canopy row's time in its current state; a composer send held for its pane's next prompt
+  Cloud, // a cloud machine a provider runs as a host — the menu that starts and stops them
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
@@ -79,6 +80,8 @@ export {
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
   Play, // start a schedule's run now, outside its cadence
+  Power, // start a stopped cloud machine — a machine being switched on, not media playing
+  PowerOff, // stop a running cloud machine (its programs end; its disk is kept)
   Plug, // agent (integration that plugs into the host system), including an agent's own branch namespace with no brand mark; also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert

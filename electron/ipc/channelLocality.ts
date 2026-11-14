@@ -1541,6 +1541,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
  */
 export const NAMESPACE_LOCALITY: ReadonlyArray<{ prefix: string; locality: ChannelLocality }> = [
   { prefix: "remote-hosts:", locality: "shell" },
+  { prefix: "cloud-hosts:", locality: "shell" },
   { prefix: "host-mode:", locality: "shell" },
   { prefix: "device-answer:", locality: "shell" },
   { prefix: "file-transfer:", locality: "shell" },

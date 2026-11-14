@@ -87,6 +87,7 @@ import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
+import { registerCloudHostsHandlers } from "./handlers/cloudHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
 import {
   registerDecisionsHandlers,
@@ -325,6 +326,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.
     if (isEitherRemoteRoleSupported()) {
       register(() => registerRemoteHostsHandlers());
+      register(() => registerCloudHostsHandlers());
       register(() => registerHostModeHandlers());
       register(() => registerDeviceAnswerHandlers());
       register(() => registerDriveLeaseHandlers());

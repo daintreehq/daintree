@@ -1,12 +1,14 @@
 import {
   formatHostConnection,
+  cloudConnection,
+  isValidCloudBindingId,
   isValidWslDistroName,
   sshConnection,
   sshTargetOf,
   wslConnection,
   type HostConnection,
 } from "../../../shared/types/remoteHosts.js";
-import { remoteConnectionKindOn } from "../../../shared/config/remoteHostsSupport.js";
+import { isConnectionKindSupportedOn } from "../../../shared/config/remoteHostsSupport.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isValidSshTarget } from "./sshTransport.js";
 
@@ -24,7 +26,7 @@ const WSL_DISTRO_HINT = "Choose a WSL distribution installed on this PC.";
 /** A connection from untrusted input (IPC, the settings file), trimmed; null when unusable. */
 export function parseHostConnection(value: unknown): HostConnection | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as { kind?: unknown; target?: unknown; distro?: unknown };
+  const raw = value as { kind?: unknown; target?: unknown; distro?: unknown; bindingId?: unknown };
   switch (raw.kind) {
     case "ssh": {
       if (typeof raw.target !== "string") return null;
@@ -36,6 +38,8 @@ export function parseHostConnection(value: unknown): HostConnection | null {
       const distro = raw.distro.trim();
       return isValidWslDistroName(distro) ? wslConnection(distro) : null;
     }
+    case "cloud":
+      return isValidCloudBindingId(raw.bindingId) ? cloudConnection(raw.bindingId) : null;
     default:
       return null;
   }
@@ -66,10 +70,12 @@ export function requireSupportedConnection(
   connection: HostConnection,
   platform: NodeJS.Platform = process.platform
 ): HostConnection {
-  if (connection.kind === remoteConnectionKindOn(platform)) return connection;
+  if (isConnectionKindSupportedOn(connection.kind, platform)) return connection;
   const userMessage =
     platform === "win32"
-      ? `${formatHostConnection(connection)} is reached over ssh, which Daintree for Windows doesn't support. Add a WSL distribution instead.`
+      ? connection.kind === "cloud"
+        ? "Cloud machines need Daintree for macOS or Linux. Daintree for Windows reaches hosts through WSL only."
+        : `${formatHostConnection(connection)} is reached over ssh, which Daintree for Windows doesn't support. Add a WSL distribution instead.`
       : `${formatHostConnection(connection)} is a WSL distribution, which only Daintree for Windows can reach.`;
   throw new AppError({
     code: "UNSUPPORTED",
@@ -106,6 +112,8 @@ export function connectionKey(connection: HostConnection): string {
     case "wsl":
       // WSL looks distro names up without regard to case.
       return `wsl:${connection.distro.toLowerCase()}`;
+    case "cloud":
+      return `cloud:${connection.bindingId}`;
     default:
       return `${(connection as { kind: string }).kind}:${formatHostConnection(connection)}`;
   }

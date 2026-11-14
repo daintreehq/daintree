@@ -154,6 +154,7 @@ describe("HostsSettingsTab", () => {
     );
     expect(headings).toEqual([
       "Remote hosts",
+      "Cloud providers",
       "This machine as a host",
       "Answer from another device",
     ]);
