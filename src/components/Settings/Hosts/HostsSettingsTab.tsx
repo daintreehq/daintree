@@ -300,9 +300,13 @@ export default function HostsSettingsTab() {
                     label={descriptor.name}
                     description={
                       <>
-                        {cloud
-                          ? `${providerName(cloud.providerId)} · ${cloud.accountName}`
-                          : formatHostConnection(descriptor.connection)}{" "}
+                        {cloud ? (
+                          <>
+                            {providerName(cloud.providerId)} <FactSeparator /> {cloud.accountName}
+                          </>
+                        ) : (
+                          formatHostConnection(descriptor.connection)
+                        )}{" "}
                         <FactSeparator />{" "}
                         {cloud
                           ? machineSpecLabel(cloud.vcpu, cloud.memoryGB)

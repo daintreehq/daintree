@@ -1,3 +1,4 @@
+import { pluralize } from "@/lib/pluralize";
 import {
   cloudMachineLabel,
   type CloudHostStatus,
@@ -27,14 +28,14 @@ export function hourlyShort(dollars: number | null): string | null {
 
 export function lifetimeLabel(hours: number | null): string {
   if (hours === null) return "Never";
-  return hours === 1 ? "1 hour" : `${hours} hours`;
+  return pluralize(hours, "hour");
 }
 
 /** "2 hours", "30 minutes", "90 minutes": exact, since an imported machine's lifetime needn't be whole hours. */
 export function durationLabel(seconds: number): string {
   if (seconds % 3600 === 0) return lifetimeLabel(seconds / 3600);
   const minutes = Math.round(seconds / 60);
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  return pluralize(minutes, "minute");
 }
 
 /** What stopping keeps and loses, as the provider describes it, for a Stop confirm. */

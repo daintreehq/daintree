@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -125,13 +126,15 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
                 .join(" · ")}
               {status.machine === "stopped" && status.stoppedAt && (
                 <>
-                  {" · "}
+                  {" "}
+                  <FactSeparator />{" "}
                   <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
                 </>
               )}
               {status.observedAt !== null && (
                 <>
-                  {" · "}
+                  {" "}
+                  <FactSeparator />{" "}
                   <TimeAgo
                     prefix={status.machine === "unknown" ? "last asked " : "checked "}
                     timestamp={status.observedAt}
@@ -235,8 +238,18 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           description={
             <span className="select-text break-all font-mono text-2xs">
               {status.resourceId ? `Machine ${status.resourceId}` : "No machine yet"}
-              {status.lastEndpoint && ` · SSH ${status.lastEndpoint}`}
-              {status.hostKeyFingerprint && ` · Host key ${status.hostKeyFingerprint}`}
+              {status.lastEndpoint && (
+                <>
+                  {" "}
+                  <FactSeparator /> SSH {status.lastEndpoint}
+                </>
+              )}
+              {status.hostKeyFingerprint && (
+                <>
+                  {" "}
+                  <FactSeparator /> Host key {status.hostKeyFingerprint}
+                </>
+              )}
             </span>
           }
         />

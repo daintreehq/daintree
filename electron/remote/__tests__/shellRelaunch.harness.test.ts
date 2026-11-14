@@ -673,7 +673,11 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
 
       await r.startShell();
 
-      expect(heard).toEqual([
+      // Cloud hosts announce their picture once at startup for the same reason
+      // (views that read before it started got the empty answer): one event,
+      // and never a connection event.
+      expect(heard.filter((h) => h.event.type === "cloud-changed")).toHaveLength(1);
+      expect(heard.filter((h) => h.event.type !== "cloud-changed")).toEqual([
         {
           event: {
             type: "hosts-changed",

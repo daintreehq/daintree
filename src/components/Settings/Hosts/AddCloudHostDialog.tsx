@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -346,8 +347,13 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {accounts.map((entry) => (
                   <SelectItem key={entry.id} value={entry.id}>
                     {entry.displayName}
-                    {usable.length > 1 &&
-                      ` · ${usable.find((p) => p.id === entry.providerId)?.name ?? entry.providerId}`}
+                    {usable.length > 1 && (
+                      <>
+                        {" "}
+                        <FactSeparator />{" "}
+                        {usable.find((p) => p.id === entry.providerId)?.name ?? entry.providerId}
+                      </>
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>
