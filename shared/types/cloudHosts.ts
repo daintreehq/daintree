@@ -18,10 +18,26 @@ export function isCloudProviderId(value: unknown): value is CloudProviderId {
 
 export { isValidCloudBindingId } from "./remoteHosts.js";
 
+/**
+ * What a stop keeps and loses, in the provider's own terms. The UI words every
+ * promise about a stopped machine from this, never from what one provider does.
+ */
+export interface CloudProviderPersistence {
+  /** What a stop keeps, as a plural noun phrase: "Files in its home folder". */
+  kept: string;
+  /** What a stop loses, as a plural noun phrase: "/tmp, caches and memory". */
+  lost: string;
+  /** The least number of days a stopped machine's disk is kept; null when kept until deleted. */
+  retentionDays: number | null;
+  /** Whether the time a failed save is retried, with the machine still up, is billed. */
+  saveRetryBilled: boolean;
+}
+
 /** What a provider can do, as semantics rather than a bare "supports start". */
 export interface CloudProviderCapabilities {
-  /** Stopping keeps the disk; memory survives only sometimes, so a start may be a cold boot. */
-  persistence: "disk";
+  persistence: CloudProviderPersistence;
+  /** About how long a start or create takes to running, for progress copy; null when unknown. */
+  typicalStartSeconds: number | null;
   /** The provider can stop the machine by itself after a lifetime (an orphan guard). */
   lifetimeGuard: boolean;
   /** How the desktop reaches the machine's sshd. */

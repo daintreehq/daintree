@@ -79,8 +79,10 @@ export default function HostsSettingsTab() {
   const cloudSnapshot = useCloudHosts().snapshot;
   const machines = useCloudMachineActions();
   const [removeCloud, setRemoveCloud] = useState<{ hostId: HostId; name: string } | null>(null);
-  const providerName = (providerId: string) =>
-    cloudSnapshot.providers.find((provider) => provider.id === providerId)?.name ?? providerId;
+  const providerName = (providerId: string | undefined) =>
+    cloudSnapshot.providers.find((provider) => provider.id === providerId)?.name ??
+    providerId ??
+    "the provider";
   // Ages and staleness keep moving while no new reading arrives; only cloud hosts need it.
   const now = useNow(cloudSnapshot.hosts.length > 0);
   // One polite message for the list and a host's details alike, so a start or
@@ -503,9 +505,7 @@ export default function HostsSettingsTab() {
           hostId={removeCloud.hostId}
           name={removeCloud.name}
           status={cloudStatusFor(cloudSnapshot, removeCloud.hostId)}
-          providerName={providerName(
-            cloudStatusFor(cloudSnapshot, removeCloud.hostId)?.providerId ?? "boat"
-          )}
+          providerName={providerName(cloudStatusFor(cloudSnapshot, removeCloud.hostId)?.providerId)}
           onClose={() => setRemoveCloud(null)}
         />
       )}

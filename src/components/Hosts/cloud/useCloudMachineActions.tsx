@@ -8,7 +8,12 @@ import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import type { CloudHostStatus } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { cloudStatusFor, useCloudHosts } from "./cloudHostsState";
-import { clockTime, isObservationStale, lifetimeSentence } from "./cloudHostLabels";
+import {
+  clockTime,
+  isObservationStale,
+  lifetimeSentence,
+  stopKeepsSentence,
+} from "./cloudHostLabels";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -47,7 +52,7 @@ function OperationProgress({
   fallback: string;
 }) {
   const stage = status?.operation?.stage || fallback;
-  // Boat keeps a machine whose save failed running while it retries, unbilled; it says so here.
+  // A provider may keep a machine whose save failed running while it retries; it says so here.
   const retrying = status?.lastError?.code === "stop-failing" ? status.lastError.message : null;
   return (
     <div className="space-y-3" data-testid="cloud-operation-progress">
@@ -163,6 +168,9 @@ export function useCloudMachineActions(): {
 
   const startStatus = startAsk ? cloudStatusFor(snapshot, startAsk.hostId) : null;
   const stopStatus = stopAsk ? cloudStatusFor(snapshot, stopAsk.hostId) : null;
+  const stopProvider = stopStatus
+    ? (snapshot.providers.find((provider) => provider.id === stopStatus.providerId) ?? null)
+    : null;
   const stopBusy = stopAsk !== null && pending.has(stopAsk.hostId);
   const startBusy = startAsk !== null && pending.has(startAsk.hostId);
 
@@ -181,7 +189,7 @@ export function useCloudMachineActions(): {
         description={
           stopBusy
             ? undefined
-            : "Terminals, agents and anything else running on it end, and billing for the machine stops. Files in its home folder are kept for when you start it again; /tmp, caches and memory aren't."
+            : `Terminals, agents and anything else running on it end, and billing for the machine stops.${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
         }
         confirmLabel={stopBusy ? "Stopping…" : "Stop machine"}
         confirmDisabled={stopBusy}

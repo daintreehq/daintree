@@ -340,8 +340,8 @@ const HOSTS_TAB = {
       section: "Cloud providers",
       title: "Cloud providers",
       description:
-        "Connect a Boat account to create cloud machines as hosts that start and stop on demand",
-      keywords: ["boat", "cloud", "api key", "provider", "machine", "vm", "sandbox"],
+        "Connect a cloud provider account to create machines as hosts, start and stop them, and delete them when you're done",
+      keywords: ["boat", "cloud", "api key", "provider", "machine", "vm", "sandbox", "account"],
     },
     {
       id: "host-mode",

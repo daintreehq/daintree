@@ -11,6 +11,7 @@ import {
   clockTime,
   cloudCostFacts,
   cloudStateWord,
+  diskSentence,
   durationLabel,
   formatHourly,
   isObservationStale,
@@ -225,7 +226,7 @@ export function CloudMachineSection({ hostId, hostName }: { hostId: HostId; host
           description={
             status.dataExpired
               ? `${providerName} deleted its saved disk after its retention period, so it can't start again`
-              : `${status.lastSnapshotAt ? `Last saved ${clockTime(status.lastSnapshotAt)}` : "No completed save reported yet"}. Files in its home folder are saved when it stops and kept at least 14 days while it's stopped; /tmp, caches and memory aren't.`
+              : `${status.lastSnapshotAt ? `Last saved ${clockTime(status.lastSnapshotAt)}` : "No completed save reported yet"}.${provider ? ` ${diskSentence(provider.capabilities.persistence)}` : ""}`
           }
         />
         <SettingsRow

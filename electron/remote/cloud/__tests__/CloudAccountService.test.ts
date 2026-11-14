@@ -28,7 +28,8 @@ function fakeProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
       dashboardUrl: "",
       docsUrl: "",
       capabilities: {
-        persistence: "disk",
+        persistence: { kept: "Files", lost: "memory", retentionDays: null, saveRetryBilled: true },
+        typicalStartSeconds: null,
         lifetimeGuard: true,
         route: "direct-ssh",
         pinnedHostKey: true,

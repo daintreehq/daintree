@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -47,8 +53,6 @@ export function CloudProvidersSection() {
   const accounts = snapshot.accounts;
   const providerFor = (account: CloudAccountSummary) =>
     providers.find((provider) => provider.id === account.providerId) ?? null;
-  // Only Boat today; the section is written for any number.
-  const primaryProvider = usable[0] ?? null;
 
   const clearRowError = (accountId: string) =>
     setRowErrors((errors) => {
@@ -95,24 +99,45 @@ export function CloudProvidersSection() {
     );
   };
 
-  const connectButton = primaryProvider ? (
-    <Button
-      variant="outline"
-      size="sm"
-      data-testid="cloud-connect-account"
-      onClick={() => setConnecting({ provider: primaryProvider, replacing: null })}
-    >
-      <Plus aria-hidden="true" />
-      Connect {primaryProvider.name} account
-    </Button>
-  ) : undefined;
+  // One provider connects straight away; several are a choice first.
+  const connectButton =
+    usable.length === 0 ? undefined : usable.length === 1 ? (
+      <Button
+        variant="outline"
+        size="sm"
+        data-testid="cloud-connect-account"
+        onClick={() => setConnecting({ provider: usable[0]!, replacing: null })}
+      >
+        <Plus aria-hidden="true" />
+        Connect account
+      </Button>
+    ) : (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" data-testid="cloud-connect-account">
+            <Plus aria-hidden="true" />
+            Connect account
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {usable.map((provider) => (
+            <DropdownMenuItem
+              key={provider.id}
+              onSelect={() => setConnecting({ provider, replacing: null })}
+            >
+              {provider.name}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
 
   const unsupported = providers.length > 0 && usable.length === 0;
 
   return (
     <SettingsSection
       title="Cloud providers"
-      description="Accounts Daintree uses to create cloud machines as hosts, and to start and stop them when you ask"
+      description="Accounts Daintree uses to create cloud machines as hosts, start and stop them when you ask, and delete them when you're done"
       action={accounts.length > 0 ? connectButton : undefined}
       id="hosts-cloud-providers"
     >
@@ -133,7 +158,7 @@ export function CloudProvidersSection() {
               ? "Loading cloud accounts"
               : unsupported
                 ? providers[0]!.unsupportedReason
-                : "Connect a Boat account to create cloud machines and run projects and agents on them"}
+                : "Connect a cloud provider account to create machines that run projects and agents, then stop or delete them when you're done"}
           </SettingsEmptyRow>
         ) : (
           accounts.map((account) => {

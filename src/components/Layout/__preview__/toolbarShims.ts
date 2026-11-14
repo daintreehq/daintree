@@ -163,6 +163,10 @@ installPreviewShims({
     onEvent: () => () => {},
   }),
   hostMetrics: withFallback({ onEvent: () => () => {} }),
+  // The host chip reads the cloud picture; the inert shim's `undefined` isn't one.
+  cloudHosts: withFallback({
+    getSnapshot: async () => ({ providers: [], accounts: [], hosts: [] }),
+  }),
   mcpServer: withFallback({
     getRuntimeState: async () => ({ enabled: true, state: "ready", port: 0, lastError: null }),
     onRuntimeStateChanged: () => () => {},

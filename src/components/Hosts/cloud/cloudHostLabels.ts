@@ -1,4 +1,8 @@
-import { cloudMachineLabel, type CloudHostStatus } from "@shared/types/cloudHosts";
+import {
+  cloudMachineLabel,
+  type CloudHostStatus,
+  type CloudProviderPersistence,
+} from "@shared/types/cloudHosts";
 
 /** "4 vCPU · 8 GB", or what is known of it. */
 export function machineSpecLabel(vcpu: number | null, memoryGB: number | null): string {
@@ -31,6 +35,20 @@ export function durationLabel(seconds: number): string {
   if (seconds % 3600 === 0) return lifetimeLabel(seconds / 3600);
   const minutes = Math.round(seconds / 60);
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+}
+
+/** What stopping keeps and loses, as the provider describes it, for a Stop confirm. */
+export function stopKeepsSentence(persistence: CloudProviderPersistence): string {
+  return `${persistence.kept} are kept for when you start it again; ${persistence.lost} aren't.`;
+}
+
+/** The same promise for a stopped machine's disk, with how long the provider keeps it. */
+export function diskSentence(persistence: CloudProviderPersistence): string {
+  const kept =
+    persistence.retentionDays !== null
+      ? ` and kept at least ${persistence.retentionDays} days while it's stopped`
+      : "";
+  return `${persistence.kept} are saved when it stops${kept}; ${persistence.lost} aren't.`;
 }
 
 /** A provider's reason as a sentence start: providers write theirs lowercase. */

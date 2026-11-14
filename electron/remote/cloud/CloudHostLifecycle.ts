@@ -43,6 +43,11 @@ const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
 /** How often the keeper looks for a lifetime to renew. */
 const KEEPER_INTERVAL_MS = 60_000;
+
+/** The provider's own name, for messages: this layer never assumes which provider it is. */
+function nameOf(provider: CloudProvider): string {
+  return provider.info(process.platform).name;
+}
 /**
  * What a failed read records (see inspectInto), which the next good answer
  * makes obsolete. Codes a refused start or stop also uses (a start limit is
@@ -346,7 +351,7 @@ export class CloudHostLifecycle {
     return { hostId: descriptor.id };
   }
 
-  /** Sends the create again with the same key: Boat answers with the machine it made, if it made one. */
+  /** Sends the create again with the same key: the provider answers with the machine it made, if it made one. */
   async retryCreate(hostId: unknown): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
     if (binding.resourceId) return;
@@ -361,7 +366,7 @@ export class CloudHostLifecycle {
     const { provider, credentials } = await this.context(binding, signal);
     // A create already sent may have made the machine: look for it (a read) before asking again.
     if (creation.sentAt !== null) {
-      this.stage(bindingId, "Looking for the machine Boat may already have made");
+      this.stage(bindingId, `Looking for the machine ${nameOf(provider)} may already have made`);
       const found = await this.findCreated(bindingId, provider, { ...credentials, signal });
       if (found) {
         this.bindCreated(bindingId, found);
@@ -369,7 +374,7 @@ export class CloudHostLifecycle {
         return;
       }
     }
-    this.stage(bindingId, "Asking Boat for a machine");
+    this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
@@ -392,7 +397,7 @@ export class CloudHostLifecycle {
       });
     } catch (error) {
       const described = provider.describeError(error);
-      // Only Boat's own refusal proves nothing was made; anything else (lost answer,
+      // Only the provider's own refusal proves nothing was made; anything else (lost answer,
       // cancellation, an unreadable reply, a create still being minted) may have.
       const refused = !signal.aborted && DEFINITE_REFUSALS.has(described.code);
       this.recordError(bindingId, {
@@ -400,10 +405,10 @@ export class CloudHostLifecycle {
         code: refused ? described.code : "outcome-unknown",
         message: refused
           ? described.message
-          : "Boat didn't confirm the machine. Retry looks for it before creating another.",
+          : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
       });
       if (refused) {
-        // Nothing was made: a retry needs a fresh key, or Boat replays this refusal.
+        // Nothing was made: a retry needs a fresh key, or the provider replays this refusal.
         this.deps.store.updateBinding(bindingId, (current) => ({
           ...current,
           creation: current.creation
@@ -458,8 +463,7 @@ export class CloudHostLifecycle {
         } else {
           this.recordError(binding.id, {
             code: "outcome-unknown",
-            message:
-              "Setup didn't finish: Boat has no machine for this host yet. Retry to create it.",
+            message: `Setup didn't finish: ${nameOf(provider)} has no machine for this host yet. Retry to create it.`,
             at: this.now(),
           });
         }
@@ -571,8 +575,7 @@ export class CloudHostLifecycle {
     if (resource.dataExpired) {
       const error: CloudHostError = {
         code: "data-expired",
-        message:
-          "Boat deleted this machine's saved disk after its retention period, so it can't start. Nothing was created in its place.",
+        message: `${nameOf(provider)} deleted this machine's saved disk after its retention period, so it can't start. Nothing was created in its place.`,
         at: this.now(),
       };
       this.recordError(bindingId, error);
@@ -669,7 +672,7 @@ export class CloudHostLifecycle {
       await running.promise.catch(() => {});
     }
     let binding = this.deps.store.binding(confirmed.id) ?? confirmed;
-    // A create that reached Boat may have made a machine nothing here has heard
+    // A create that reached the provider may have made a machine nothing here has heard
     // of yet: find it (a read) before the host, and its label, are forgotten.
     if (!binding.resourceId && binding.creation?.sentAt) {
       const { provider, credentials } = await this.context(binding);
@@ -837,7 +840,10 @@ export class CloudHostLifecycle {
       } catch (error) {
         const described = provider.describeError(error);
         if (described.code === "provider-unreachable") {
-          throw new TransportError("Couldn't ask Boat about the machine", described.message);
+          throw new TransportError(
+            `Couldn't ask ${nameOf(provider)} about the machine`,
+            described.message
+          );
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
@@ -871,7 +877,10 @@ export class CloudHostLifecycle {
     } catch (error) {
       const described = provider.describeError(error);
       if (described.code === "provider-unreachable") {
-        throw new TransportError("Couldn't get SSH access from Boat", described.message);
+        throw new TransportError(
+          `Couldn't get SSH access from ${nameOf(provider)}`,
+          described.message
+        );
       }
       const said = `SSH access couldn't be set up: ${described.message}`;
       this.recordError(bindingId, { ...described, code: "ssh-authorization", message: said });
@@ -934,7 +943,7 @@ export class CloudHostLifecycle {
     operation.promise = (async () => {
       try {
         await work(controller.signal);
-        // It worked: anything it recorded on the way (a save Boat retried) is history now.
+        // It worked: anything it recorded on the way (a save the provider retried) is history now.
         this.deps.store.updateBinding(bindingId, (current) =>
           current.lastError && current.lastError.at >= operation.startedAt
             ? { ...current, lastError: null }
@@ -1051,11 +1060,11 @@ export class CloudHostLifecycle {
         if (target === "stopped" && resource.stop?.status === "failing") {
           this.stage(
             bindingId,
-            `Boat is retrying the save: ${resource.stop.error ?? "the disk couldn't be saved yet"}`
+            `${nameOf(provider)} is retrying the save: ${resource.stop.error ?? "the disk couldn't be saved yet"}`
           );
           this.recordError(bindingId, {
             code: "stop-failing",
-            message: `Boat couldn't save the disk yet and keeps the machine running while it retries${resource.stop.error ? ` (${resource.stop.error})` : ""}. It isn't billed for that time.`,
+            message: `${nameOf(provider)} couldn't save the disk yet and keeps the machine running while it retries${resource.stop.error ? ` (${resource.stop.error})` : ""}. ${provider.info(process.platform).capabilities.persistence.saveRetryBilled ? "That time is billed." : "It isn't billed for that time."}`,
             at: this.now(),
           });
         }
@@ -1064,7 +1073,7 @@ export class CloudHostLifecycle {
         const message =
           target === "running"
             ? "The machine didn't come up in time. It may still be starting; check again shortly."
-            : "The machine hasn't finished stopping yet. Boat keeps working on it.";
+            : `The machine hasn't finished stopping yet. ${nameOf(provider)} keeps working on it.`;
         this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
         throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
       }

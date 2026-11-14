@@ -94,7 +94,13 @@ export class BoatProvider implements CloudProvider {
       dashboardUrl: "https://boat.dev/dashboard",
       docsUrl: "https://docs.boat.dev",
       capabilities: {
-        persistence: "disk",
+        persistence: {
+          kept: "Files in its home folder",
+          lost: "/tmp, caches and memory",
+          retentionDays: 14,
+          saveRetryBilled: false,
+        },
+        typicalStartSeconds: 60,
         lifetimeGuard: true,
         route: "direct-ssh",
         pinnedHostKey: true,

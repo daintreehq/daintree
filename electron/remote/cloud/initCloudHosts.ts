@@ -38,16 +38,22 @@ export function initCloudHosts(params: {
     }
     return client;
   };
-  const providers = new Map<CloudProviderId, CloudProvider>([
-    ["boat", new BoatProvider(boatClientFor)],
-  ]);
+  // Each provider is an adapter behind CloudProvider; adding one to CloudProviderId
+  // makes both of these refuse to compile until it has an adapter and an API URL.
+  const adapters: Record<CloudProviderId, CloudProvider> = {
+    boat: new BoatProvider(boatClientFor),
+  };
+  const apiUrls: Record<CloudProviderId, string> = { boat: boatUrl };
+  const providers = new Map<CloudProviderId, CloudProvider>(
+    Object.entries(adapters) as Array<[CloudProviderId, CloudProvider]>
+  );
   const accounts = new CloudAccountService({
     store,
     vault: new KeychainCloudCredentialVault(
       path.join(app.getPath("userData"), "cloud-credentials.json")
     ),
     providers,
-    apiUrlFor: () => boatUrl,
+    apiUrlFor: (providerId) => apiUrls[providerId],
     onAccountRemoved: params.onAccountRemoved,
   });
   const cloudHosts = new CloudHosts({

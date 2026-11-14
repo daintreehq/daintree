@@ -22,6 +22,7 @@ import {
   DEFAULT_CLOUD_LIFETIME_HOURS,
   cloudMachineLabel,
   type CloudCatalog,
+  type CloudProviderInfo,
   type CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
@@ -61,12 +62,26 @@ const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
  * choose to. Once the machine runs, the usual Add host steps (check, install,
  * Host mode, connect) take over through `onReady`.
  */
+/** "Boat usually has a machine running in about a minute. ", or nothing when the provider doesn't say. */
+function typicalStart(provider: CloudProviderInfo): string {
+  const seconds = provider.capabilities.typicalStartSeconds;
+  if (seconds === null) return "";
+  const span = seconds <= 60 ? "about a minute" : `about ${Math.round(seconds / 60)} minutes`;
+  return `${provider.name} usually has a machine running in ${span}. `;
+}
+
 export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDialogProps) {
   const { snapshot } = useCloudHosts();
-  const accounts = snapshot.accounts;
-  const provider = snapshot.providers.find((entry) => entry.unsupportedReason === null) ?? null;
+  const usable = snapshot.providers.filter((entry) => entry.unsupportedReason === null);
+  // Accounts only on providers this machine can use; the machine comes from whichever pays.
+  const accounts = snapshot.accounts.filter((entry) =>
+    usable.some((provider) => provider.id === entry.providerId)
+  );
   const [accountId, setAccountId] = useState<string | null>(accounts[0]?.id ?? null);
   const account = accounts.find((entry) => entry.id === accountId) ?? accounts[0] ?? null;
+  const provider = account
+    ? (usable.find((entry) => entry.id === account.providerId) ?? null)
+    : (usable[0] ?? null);
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
   const [machineType, setMachineType] = useState<string | null>(null);
@@ -81,7 +96,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const [resourceId, setResourceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] = useState<CloudProviderInfo | null>(null);
   /** The host this dialog added; its machine's progress is followed from the cloud snapshot. */
   const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
   const [startRequested, setStartRequested] = useState(false);
@@ -232,12 +247,16 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          Connect a {provider.name} account first. Daintree uses its API key to create, start and
-          stop machines; the account pays for them.
+          Connect a cloud provider account first. Daintree uses its API key to create, start, stop
+          and delete machines; the account pays for them.
         </p>
-        <Button variant="outline" size="sm" onClick={() => setConnecting(true)}>
-          Connect {provider.name} account
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {usable.map((entry) => (
+            <Button key={entry.id} variant="outline" size="sm" onClick={() => setConnecting(entry)}>
+              Connect {entry.name} account
+            </Button>
+          ))}
+        </div>
       </div>
     );
     primary = undefined;
@@ -271,7 +290,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 valueText={operation?.stage || cloudMachineLabel(machine)}
               />
               <p className="text-xs text-text-secondary">
-                {`Boat usually has a machine running in under a minute. Closing this doesn't stop it: the host's row in Settings → Hosts follows it, and setup carries on from there.`}
+                {`${typicalStart(provider)}Closing this doesn't stop it: the host's row in Settings → Hosts follows it, and setup carries on from there.`}
               </p>
             </>
           )
@@ -326,6 +345,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {accounts.map((entry) => (
                   <SelectItem key={entry.id} value={entry.id}>
                     {entry.displayName}
+                    {usable.length > 1 &&
+                      ` · ${usable.find((p) => p.id === entry.providerId)?.name ?? entry.providerId}`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -508,7 +529,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   return (
     <>
       <AppDialog
-        isOpen={isOpen && !connecting}
+        isOpen={isOpen && connecting === null}
         onClose={onClose}
         size="md"
         dismissible={!busy}
@@ -528,11 +549,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         </AppDialog.Body>
         <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} />
       </AppDialog>
-      {connecting && provider && (
+      {connecting && (
         <ConnectCloudAccountDialog
           isOpen
-          onClose={() => setConnecting(false)}
-          provider={provider}
+          onClose={() => setConnecting(null)}
+          provider={connecting}
           onConnected={(connected) => setAccountId(connected.id)}
         />
       )}

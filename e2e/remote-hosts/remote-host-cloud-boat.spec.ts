@@ -270,7 +270,7 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     await openSettings(page);
     await page.locator(SEL.remoteHosts.settingsTab).click();
     const section = page.locator('[id="hosts-cloud-providers"]');
-    await expect(section).toContainText("Connect a Boat account");
+    await expect(section).toContainText("Connect a cloud provider account");
     await shoot(page, "settings-empty-cloud-providers");
 
     await section.getByTestId("cloud-connect-account").click();

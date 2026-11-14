@@ -570,9 +570,8 @@ export function HostDetail({
           name={hostName}
           status={cloud}
           providerName={
-            cloudSnapshot.providers.find(
-              (provider) => provider.id === (cloud?.providerId ?? "boat")
-            )?.name ?? "the provider"
+            cloudSnapshot.providers.find((provider) => provider.id === cloud?.providerId)?.name ??
+            "the provider"
           }
           onClose={() => setConfirmRemove(false)}
           onRemoved={() => onBack(false)}
