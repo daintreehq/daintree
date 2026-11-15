@@ -556,7 +556,8 @@ export async function closeSshMaster(
   run: CommandRunner,
   clientDir: string,
   target: string,
-  timeoutMs: number
+  timeoutMs: number,
+  sshPath: string = sshExecutable()
 ): Promise<void> {
   if (!isValidSshTarget(target)) return;
   let controlPath: string;
@@ -566,7 +567,7 @@ export async function closeSshMaster(
     return;
   }
   usedMasters.delete(masterKey(target, controlPath));
-  await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
+  await run(sshPath, buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
 }
 

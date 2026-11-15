@@ -28,7 +28,12 @@ import {
 } from "../../services/operations/OperationRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CommandRunner } from "./commandRunner.js";
-import { connectionKey, requireHostConnection, requireSupportedConnection } from "./connection.js";
+import {
+  connectionKey,
+  requireHostConnection,
+  requireSupportedConnection,
+  unsupportedConnection,
+} from "./connection.js";
 import { discoverHosts, discoverWslDistros } from "./discovery.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
@@ -75,6 +80,10 @@ export interface HostSetupDeps {
   isRetiring?(connection: HostConnection): boolean;
   /** Holds WSL distros up between setup's commands; released when a host is forgotten. */
   wslKeepalive?: Pick<WslKeepalive, "touch" | "release">;
+  /** How commands reach a cloud machine (see createCloudCommandChannel). */
+  cloudChannel?(bindingId: string): HostCommandChannel;
+  /** Drops what reaching a cloud machine left here: its master and ssh files. */
+  forgetCloud?(bindingId: string): Promise<void>;
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
@@ -471,6 +480,9 @@ export class HostSetupService {
         // The distro may stop once nothing else uses it; its Host goes with it.
         this.deps.wslKeepalive?.release(connection.distro);
         break;
+      case "cloud":
+        await this.deps.forgetCloud?.(connection.bindingId);
+        break;
     }
     await fs.rm(this.cacheDirFor(connection), { recursive: true, force: true }).catch(() => {});
   }
@@ -502,6 +514,11 @@ export class HostSetupService {
               }
             : undefined,
         });
+      }
+      case "cloud": {
+        if (!this.deps.cloudChannel)
+          throw unsupportedConnection(supported, "Setting up a cloud machine");
+        return this.deps.cloudChannel(supported.bindingId);
       }
     }
   }

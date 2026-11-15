@@ -6,6 +6,7 @@ import type {
 } from "./commandRunner.js";
 import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * How setup reaches a host's shell: run one line of `sh`, feed a script its
@@ -115,4 +116,58 @@ export function failureDetail(result: CommandResult, fallback: string): string {
   if (result.timedOut) return `${fallback} (timed out)`;
   const stderr = result.stderr.trim();
   return stderr.length > 0 ? stderr.split("\n").slice(-3).join("\n") : fallback;
+}
+
+/**
+ * A channel to a cloud machine: its ssh route is resolved before each command
+ * (the machine's address and key can change with every start), then the
+ * command runs over the ssh channel that route names. A machine that can't
+ * be reached (stopped, not created, provider unreachable) answers the command
+ * as ssh would, with the reason on stderr, so probe and setup report it as
+ * they report any host ssh couldn't reach.
+ */
+export function createCloudCommandChannel(params: {
+  resolve: (signal?: AbortSignal) => Promise<{ target: string; sshPath: string }>;
+  controlPathFor: (target: string) => string;
+  run: CommandRunner;
+}): HostCommandChannel {
+  const channel = async (options?: CommandOptions): Promise<HostCommandChannel | CommandResult> => {
+    try {
+      const route = await params.resolve(options?.signal);
+      return createSshCommandChannel({
+        target: route.target,
+        controlPath: params.controlPathFor(route.target),
+        run: params.run,
+        sshPath: route.sshPath,
+      });
+    } catch (error) {
+      const detail =
+        (error as { detail?: unknown })?.detail ??
+        formatErrorMessage(error, "The cloud machine couldn't be reached");
+      return {
+        code: 255,
+        stdout: "",
+        stderr:
+          typeof detail === "string" && detail ? detail : "The cloud machine couldn't be reached",
+        spawnError: null,
+        timedOut: false,
+      };
+    }
+  };
+  const isResult = (value: HostCommandChannel | CommandResult): value is CommandResult =>
+    "code" in value;
+  return {
+    async exec(script, options) {
+      const ready = await channel(options);
+      return isResult(ready) ? ready : ready.exec(script, options);
+    },
+    async execWithInput(script, input, options) {
+      const ready = await channel(options);
+      return isResult(ready) ? ready : ready.execWithInput(script, input, options);
+    },
+    async sendFile(localPath, remotePath, options) {
+      const ready = await channel(options);
+      return isResult(ready) ? ready : ready.sendFile(localPath, remotePath, options);
+    },
+  };
 }

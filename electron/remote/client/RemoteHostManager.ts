@@ -1297,7 +1297,9 @@ export class RemoteHostManager {
   }
 
   private isSsh(hostId: HostId): boolean {
-    return this.options.registry.get(hostId)?.connection.kind === "ssh";
+    const kind = this.options.registry.get(hostId)?.connection.kind;
+    // A cloud machine is reached over ssh too, across the same networks.
+    return kind === "ssh" || kind === "cloud";
   }
 
   /** Watch the network while any ssh host's connection is wanted, and only then. */

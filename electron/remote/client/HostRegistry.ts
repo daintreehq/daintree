@@ -101,7 +101,9 @@ function normalizeConnection(value: unknown): HostConnection {
 }
 
 function storedSwitch(value: unknown, connection: HostConnection): boolean {
-  return value === undefined ? connection.kind === "ssh" : value === true;
+  return value === undefined
+    ? connection.kind === "ssh" || connection.kind === "cloud"
+    : value === true;
 }
 
 /** A readable id from the name, falling back to random when nothing usable is left. */
@@ -238,7 +240,7 @@ export class HostRegistry {
       notificationsEnabled: false,
       // A Shell that reaches a host over SSH can already run anything there as
       // that user; a tool run there, or an assistant started there, is no more.
-      assistantControlEnabled: connection.kind === "ssh",
+      assistantControlEnabled: connection.kind === "ssh" || connection.kind === "cloud",
       ...(typeof payload.ownerWorktreeId === "string" && payload.ownerWorktreeId
         ? { ownerWorktreeId: payload.ownerWorktreeId }
         : {}),
@@ -263,6 +265,15 @@ export class HostRegistry {
     }
     if (payload.connection !== undefined) {
       next.connection = normalizeConnection(payload.connection);
+      // A cloud host's connection is its machine binding; it is never re-pointed by hand.
+      if (
+        current.connection.kind === "cloud" &&
+        !sameHostConnection(next.connection, current.connection)
+      ) {
+        throw invalid(
+          "A cloud host stays bound to its machine. Remove it and add the other machine instead."
+        );
+      }
       requireNewAccount(next.connection, hosts, current.id);
       if (!sameHostConnection(next.connection, current.connection)) {
         // A different machine may answer now; what we saw of the old one is not about it.

@@ -148,6 +148,15 @@ export type HostConnection =
       kind: "wsl";
       /** The distro's name as `wsl.exe -l` lists it, e.g. `Ubuntu-24.04`. */
       distro: string;
+    }
+  | {
+      /**
+       * A machine a cloud provider runs, reached over ssh once it is running.
+       * Not an address: the binding names the provider's machine, and how to
+       * reach it is resolved afresh each time it starts (see shared/types/cloudHosts.ts).
+       */
+      kind: "cloud";
+      bindingId: string;
     };
 
 export type HostConnectionKind = HostConnection["kind"];
@@ -158,6 +167,17 @@ export function sshConnection(target: string): HostConnection {
 
 export function wslConnection(distro: string): HostConnection {
   return { kind: "wsl", distro };
+}
+
+export function cloudConnection(bindingId: string): HostConnection {
+  return { kind: "cloud", bindingId };
+}
+
+const CLOUD_BINDING_ID = /^cb_[a-z0-9]{8,32}$/;
+
+/** The binding id of a cloud connection: opaque, never an address. */
+export function isValidCloudBindingId(id: unknown): id is string {
+  return typeof id === "string" && CLOUD_BINDING_ID.test(id);
 }
 
 /**
@@ -178,6 +198,8 @@ export function formatHostConnection(connection: HostConnection): string {
       return connection.target;
     case "wsl":
       return `${connection.distro} (WSL)`;
+    case "cloud":
+      return "Cloud machine";
     default:
       // A kind this build doesn't know (a newer build's settings): name the kind.
       return (connection as { kind: string }).kind;
@@ -204,6 +226,7 @@ export function sameHostConnection(a: HostConnection, b: HostConnection): boolea
   // WSL looks distro names up without regard to case.
   if (a.kind === "wsl" && b.kind === "wsl")
     return a.distro.toLowerCase() === b.distro.toLowerCase();
+  if (a.kind === "cloud" && b.kind === "cloud") return a.bindingId === b.bindingId;
   return false;
 }
 
@@ -272,13 +295,17 @@ export function readStoredHostConnection(entry: {
   sshTarget?: unknown;
 }): HostConnection | null {
   const connection = entry.connection as
-    { kind?: unknown; target?: unknown; distro?: unknown } | null | undefined;
+    { kind?: unknown; target?: unknown; distro?: unknown; bindingId?: unknown } | null | undefined;
   if (connection && typeof connection === "object") {
     if (connection.kind === "ssh" && typeof connection.target === "string") {
       return sshConnection(connection.target);
     }
     if (connection.kind === "wsl" && typeof connection.distro === "string") {
       return wslConnection(connection.distro);
+    }
+    const binding = (connection as { bindingId?: unknown }).bindingId;
+    if (connection.kind === "cloud" && typeof binding === "string") {
+      return cloudConnection(binding);
     }
     return null;
   }

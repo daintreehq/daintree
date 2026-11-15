@@ -209,6 +209,7 @@ export const SETTING_CATALOG = {
       // Dev servers run on the host, so a user Stop is recorded where the panel's server lives.
       devPreviewUserStopped: hostPerProject,
       remoteHosts: device,
+      cloudHosts: device,
       hostMode: device,
       // This machine's own listener and the devices paired to it.
       deviceAnswer: device,

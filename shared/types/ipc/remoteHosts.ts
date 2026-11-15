@@ -521,4 +521,6 @@ export type RemoteHostsEvent =
    * A host was removed from this device. Every view drops what it kept under
    * the host's id (history, layout, toggles): no later host is given that id.
    */
-  | { type: "host-forgotten"; hostId: HostId };
+  | { type: "host-forgotten"; hostId: HostId }
+  /** Cloud accounts or a cloud host's machine changed: the whole cloud picture, credential-free. */
+  | { type: "cloud-changed"; snapshot: import("../cloudHosts.js").CloudHostsSnapshot };
