@@ -2,7 +2,7 @@
 # accounts live in each developer's ~/.config/spotexec/config.toml.
 #
 #   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
-#   sx test-all                              the whole unit suite, sharded like CI
+#   sx test-all                              the whole unit suite on 9 VMs (~4 min warm)
 #   sx typecheck / sx lint / sx check        each on a whole VM
 version = 1
 timeout = "15m"
@@ -64,14 +64,27 @@ npm run prepare --workspaces --if-present && mkdir -p .tmp && echo "$key" > "$st
 [tasks.test]
 run = "npx vitest run {args}"
 
+# `sx test-all` gets a VM per part, with all of its CPUs (Vitest caps itself at
+# 8 workers). perf-liveness takes about 3.5 minutes on its own VM whatever the
+# split, and 8 unit shards finish inside that: warm, the suite takes 3.6
+# minutes on 9 VMs, where 16 shards take 3.5 on 17 and two parts per VM 4.3.
+# 18 instances let two runs from one machine overlap.
+[runners.test-fleet]
+extends = "aws"
+extends_type = "aws-spot"
+max_slots = 1
+max_instances = 18
+
 [tasks.unit]
 run = "npx vitest run --shard={shard}/{shards} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts {args}"
 shards = 8
+pool = ["test-fleet"]
 timeout = "30m"
 
 # Spawns a child per perf scenario; CI gives it its own job too.
 [tasks.perf-liveness]
 run = "npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts"
+pool = ["test-fleet"]
 timeout = "30m"
 
 [tasks.test-all]
