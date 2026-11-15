@@ -67,6 +67,17 @@
     color: ButtonText;
   }
 
+  /* A dock chip's title is the task, not the agent, so its brand mark is the
+     chip's only agent identity rather than decoration beside a label: it takes
+     button ink as the toolbar's do. The tray pills' icons, drawn in secondary
+     ink, greyed out the same way the menu marks above did. */
+  #dock-container :is(button, [role="button"]) .brand-mark {
+    color: ButtonText;
+  }
+  #dock-container button svg:is(.text-text-primary, .text-text-secondary, .text-text-muted) {
+    color: ButtonText !important;
+  }
+
   /* Every other control on the canvas home is a 1px ButtonText frame here, so
      the launch anchor takes the 2px the `contrast` variant takes elsewhere:
      with backgrounds discarded, weight is the only thing left to lead with. */

@@ -515,13 +515,13 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                   )
                 )}
 
-                {/* State icon (compact spacing from title) */}
+                {/* State icon */}
                 {shownAgentState && StateIcon && (
                   <Tooltip open={stateTip.open} onOpenChange={stateTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                       <div
                         className={cn(
-                          "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
+                          "ml-0.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
                           SESSION_COLORS[shownAgentState]
                         )}
                       >
@@ -555,7 +555,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                 {displayAgentState && !shownAgentState && (
                   <span
                     aria-hidden="true"
-                    className={cn("ml-1.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
+                    className={cn("ml-0.5 shrink-0", DOCK_STATE_GLYPH_CLASS)}
                   />
                 )}
               </button>
@@ -565,7 +565,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
 
         <PopoverContent
           aria-label={`Preview: ${fullTitle}`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] dock-preview-popover rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"

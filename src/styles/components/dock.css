@@ -90,11 +90,30 @@
   }
 }
 
-/* Forced colours drops box-shadow; redraw the tray edge as a border. */
+/* The tray under both contrast modes is one capsule of count segments, drawn
+ * the way the toolbar's stats capsule is: it owns the frame, and its pills drop
+ * the per-button frame these modes add, which boxed each one inside it and
+ * doubled the edge at the tray's end. The open pill keeps its own edge below. */
+@media (prefers-contrast: more) {
+  .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) {
+    box-shadow: inset 0 0 0 1px var(--color-text-secondary);
+  }
+  #dock-container .dock-status-tray button {
+    border-width: 0;
+  }
+}
+
+/* Forced colours drops box-shadow; redraw the tray edge as an inset outline,
+ * which, unlike a border, adds nothing to the tray's height. The id outranks
+ * forced-colors.css's 1px frame on every button, at (0,1,1). */
 @media (forced-colors: active) {
   .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) {
     box-shadow: none;
-    border: 1px solid CanvasText;
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+  #dock-container .dock-status-tray button {
+    border-width: 0;
   }
 }
 
@@ -157,6 +176,16 @@
   }
 }
 
+/* ── Chip preview popover ──
+ * The preview opens upward but its shadow falls downward, onto the rail it
+ * came from, greying the chips beside the open one and most of the open
+ * chip's own lift. Clipping the shadow at the popover's bottom edge keeps its
+ * lift over the grid and leaves the dock unshadowed. The negative insets only
+ * have to outreach the deepest shadow layer, dark or light theme. */
+.dock-preview-popover {
+  clip-path: inset(-160px -160px 0 -160px);
+}
+
 /* ── Open chip and open pill under the contrast modes ──
  * At rest the open state is a neutral lift (fill, brighter text, the popover's
  * own edge). When the user asks for more contrast the edge carries the state on
@@ -165,8 +194,24 @@
  * pill takes an inset outline instead. The two queries stay separate: macOS
  * fires only the first, Windows swaps in system colours. */
 @media (prefers-contrast: more) {
+  /* This mode frames every button in text-secondary from the base layer, but
+     a chip's own border utility outranks that, so a resting chip came out
+     frameless beside a framed launcher and chevron. */
+  #dock-container [data-dock-item] {
+    border-color: var(--color-text-secondary);
+  }
+  /* ...except a waiting chip under the highlights setting, whose edge is the
+     setting's whole signal. */
+  #dock-container [data-dock-item].dock-chip-waiting {
+    border-color: var(--color-activity-waiting);
+  }
   #dock-container [data-dock-item][aria-expanded="true"] {
     border-color: var(--color-text-primary);
+  }
+  /* The mode widens the ring to 3px; inset by all of it, so the rail's scroll
+     clip doesn't shave the outer pixel off top and bottom. */
+  #dock-container [data-dock-item]:focus-visible {
+    outline-offset: -3px;
   }
   .dock-status-tray button[aria-expanded="true"]:not(:focus-visible) {
     outline: 1px solid var(--color-text-primary);
@@ -185,6 +230,12 @@
     border: 1px solid var(--color-text-primary);
     border-radius: inherit;
     pointer-events: none;
+  }
+  /* Near-concentric with the chip, whose 2px border plus the 3px inset puts
+     the line 5px in: the scale step 6px below the base radius. Pills are fully
+     round, so inherit already fits them. */
+  #dock-container [data-dock-item][aria-expanded="true"]:focus-visible::after {
+    border-radius: var(--radius-xs);
   }
 }
 
@@ -205,5 +256,10 @@
     border: 1px solid CanvasText;
     border-radius: inherit;
     pointer-events: none;
+  }
+  /* Concentric with the chip: 1px border plus the 3px inset is the 4px
+     between --radius-md and --radius-xs. */
+  #dock-container [data-dock-item][aria-expanded="true"]::after {
+    border-radius: var(--radius-xs);
   }
 }

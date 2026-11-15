@@ -55,18 +55,23 @@ export function DockScrollChevron({
         // the chevron lands on the chip beneath it.
         "forced-colors:bg-none forced-colors:bg-[Canvas]",
         // ...and an edge on its inner side, so the chip it cuts reads as cut.
+        // Both contrast modes back it solid, so the fade's runway would only
+        // be dead width there: the edge sits just past the button instead.
         side === "left"
-          ? "forced-colors:border-r forced-colors:border-[CanvasText]"
-          : "forced-colors:border-l forced-colors:border-[CanvasText]",
+          ? "forced-colors:border-r forced-colors:border-[CanvasText] contrast-more:border-r contrast-more:border-text-secondary contrast-more:pr-1.5 forced-colors:pr-1.5"
+          : "forced-colors:border-l forced-colors:border-[CanvasText] contrast-more:border-l contrast-more:border-text-secondary contrast-more:pl-1.5 forced-colors:pl-1.5",
         // Solid under the button and faded only past it: a chip showing
-        // through the chevron reads as part of it.
+        // through the chevron reads as part of it. The fade is long enough that
+        // a cut-off title has gone quiet before it reaches the arrow; with the
+        // waiting ring the whole chevron stays within the rail's 60px
+        // scroll padding.
         side === "left"
           ? attention
             ? "left-0 bg-[linear-gradient(to_right,var(--dock-bg)_2.75rem,transparent)] pr-4"
-            : "left-0 bg-[linear-gradient(to_right,var(--dock-bg)_1.75rem,transparent)] pr-4"
+            : "left-0 bg-[linear-gradient(to_right,var(--dock-bg)_1.75rem,transparent)] pr-6"
           : attention
             ? "right-0 bg-[linear-gradient(to_left,var(--dock-bg)_2.75rem,transparent)] pl-4"
-            : "right-0 bg-[linear-gradient(to_left,var(--dock-bg)_1.75rem,transparent)] pl-4",
+            : "right-0 bg-[linear-gradient(to_left,var(--dock-bg)_1.75rem,transparent)] pl-6",
         visible ? "opacity-100" : "opacity-0"
       )}
     >
@@ -81,7 +86,7 @@ export function DockScrollChevron({
             className={cn(
               "flex items-center gap-1 p-1.5 text-text-secondary hover:text-text-primary",
               side === "right" && "flex-row-reverse",
-              "rounded-[var(--radius-md)] transition-colors",
+              "rounded-[var(--radius-md)] transition-[color] duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               visible ? "pointer-events-auto" : "pointer-events-none"
             )}
