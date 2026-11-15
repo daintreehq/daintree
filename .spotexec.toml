@@ -3,7 +3,7 @@
 #
 #   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
 #   sx test-all                              the whole unit suite on 9 VMs (~4 min warm)
-#   sx typecheck / sx lint / sx check        each on a whole VM
+#   sx typecheck / sx lint / sx check        typecheck, lint and guards each on a whole VM
 version = 1
 timeout = "15m"
 env_allow = ["NODE_OPTIONS", "TZ"]
@@ -99,17 +99,25 @@ run = '''projects=$(node -e 'import("./scripts/typecheck.mjs").then(m => console
 exclusive = true
 timeout = "30m"
 
+# Each ESLint thread builds its own typed program: CI's 2 threads suit its
+# 16 GB runners; 4 peak around 15.5 GB and take lint from 8 minutes to under 3
+# once warm.
 [tasks.lint]
-run = "ESLINT_CONCURRENCY=2 npm run lint:ratchet"
+run = "ESLINT_CONCURRENCY=4 npm run lint:ratchet"
 exclusive = true
 timeout = "30m"
 
 [tasks.guards]
-run = "npm run check:guards && npm run format:check"
+run = "npm run check:guards"
 exclusive = true
 timeout = "30m"
 
-# `npm run check`, split across three VMs.
+# Prettier over the whole repo, three of guards' seven minutes when they ran together.
+[tasks.format]
+run = "npm run format:check"
+timeout = "30m"
+
+# `npm run check`, split across four parts.
 [tasks.check]
-parallel = ["typecheck", "lint", "guards"]
+parallel = ["typecheck", "lint", "guards", "format"]
 fail_fast = false
