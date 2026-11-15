@@ -1,0 +1,102 @@
+# Runs heavy commands on remote runners with spotexec (`sx`). Runners and
+# accounts live in each developer's ~/.config/spotexec/config.toml.
+#
+#   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
+#   sx test-all                              the whole unit suite, sharded like CI
+#   sx typecheck / sx lint / sx check        each on a whole VM
+version = 1
+timeout = "15m"
+env_allow = ["NODE_OPTIONS", "TZ"]
+
+[sync]
+mode = "auto"
+writeback = "always"
+exclude = [".env*", "*.pem", "*.key"]
+# Perf provenance, guards and scripts ask git about the checkout (rev-parse,
+# status, ls-files).
+git_seed = true
+
+# Mirrors .github/actions/install: the same cached paths, keyed on the same
+# inputs.
+[deps]
+lockfiles = [
+  "package-lock.json",
+  "package.json",
+  ".npmrc",
+  "packages/*/package.json",
+  "scripts/postinstall.cjs",
+  "scripts/patchNodePty*.cjs",
+  "electron/native/*/binding.gyp",
+  "electron/native/*/package.json",
+  "electron/native/*/src/**",
+]
+# Electron's npm package fetches its binary on first use; one unit test runs it.
+# CI skips onnxruntime-node's CUDA download the same way.
+install = "ONNXRUNTIME_NODE_INSTALL=skip npm ci && node scripts/ci/verify-electron-install.mjs"
+cache_dirs = [
+  "node_modules",
+  "packages/*/node_modules",
+  "electron/native/*/build",
+  "electron/native/*/bin",
+]
+timeout = "20m"
+
+[container]
+dockerfile = ".spotexec/Dockerfile"
+
+# Builds the workspace packages before every run, as CI's install step does:
+# their dist/ isn't cached (it follows the sources, not the lockfile), and
+# tests import it and typecheck reads its declarations. The build takes half a
+# minute on a slot, so it is skipped while the slot's last build still matches
+# every non-test file (.spotexec/prepare-key.mjs). The stamp is ignored output
+# in the slot, like dist/, so a slot never trusts another slot's build.
+[setup]
+run = '''
+stamp=.tmp/spotexec-prepare.sha
+key=$(node .spotexec/prepare-key.mjs) || exit 1
+fresh=1
+for d in packages/*/; do grep -q '"prepare"' "$d/package.json" 2>/dev/null && [ ! -d "$d/dist" ] && fresh=0; done
+[ "$fresh" = 1 ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ] && exit 0
+rm -f "$stamp"
+npm run prepare --workspaces --if-present && mkdir -p .tmp && echo "$key" > "$stamp"
+'''
+
+[tasks.test]
+run = "npx vitest run {args}"
+
+[tasks.unit]
+run = "npx vitest run --shard={shard}/{shards} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts {args}"
+shards = 8
+timeout = "30m"
+
+# Spawns a child per perf scenario; CI gives it its own job too.
+[tasks.perf-liveness]
+run = "npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts"
+timeout = "30m"
+
+[tasks.test-all]
+parallel = ["unit", "perf-liveness"]
+fail_fast = false
+
+# Each takes a whole VM, as each gets its own runner in CI. `npm run typecheck`
+# runs three tsc projects at once, which peak past the 16 GB of an 8-vCPU VM,
+# so the projects run one at a time here (every one, even after a failure).
+[tasks.typecheck]
+run = '''projects=$(node -e 'import("./scripts/typecheck.mjs").then(m => console.log(m.PROJECTS.map(p => p.name).join(" ")))') && [ -n "$projects" ] || { echo "[typecheck] no projects found"; exit 1; }; status=0; for p in $projects; do s=$SECONDS; node scripts/typecheck.mjs --only "$p" && echo "[typecheck] $p ok ($((SECONDS - s))s)" || { echo "[typecheck] $p failed"; status=1; }; done; exit $status'''
+exclusive = true
+timeout = "30m"
+
+[tasks.lint]
+run = "ESLINT_CONCURRENCY=2 npm run lint:ratchet"
+exclusive = true
+timeout = "30m"
+
+[tasks.guards]
+run = "npm run check:guards && npm run format:check"
+exclusive = true
+timeout = "30m"
+
+# `npm run check`, split across three VMs.
+[tasks.check]
+parallel = ["typecheck", "lint", "guards"]
+fail_fast = false
