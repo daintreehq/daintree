@@ -318,12 +318,14 @@ function BatchTabs({
   const sameTitles = summaries.every((s) => s.title === summaries[0]!.title);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     const index = runs.findIndex((run) => run.runId === selectedId);
-    let next = index;
-    if (event.key === "ArrowDown") next = Math.min(runs.length - 1, index + 1);
-    else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = runs.length - 1;
-    else return;
+    const targets: Record<string, number> = {
+      ArrowDown: Math.min(runs.length - 1, index + 1),
+      ArrowUp: Math.max(0, index - 1),
+      Home: 0,
+      End: runs.length - 1,
+    };
+    const next = targets[event.key];
+    if (next === undefined) return;
     event.preventDefault();
     const id = runs[next]!.runId;
     onSelect(id);

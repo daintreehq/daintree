@@ -128,6 +128,7 @@ const runOf = (runId: string) => useBulkCreateRunStore.getState().runs[runId]!;
 function installBridge() {
   const published: BulkWorktreeRunSnapshot[] = [];
   let onCommand: ((command: BulkWorktreeRunCommand) => void) | null = null;
+  let onChanged: ((change: { runs: BulkWorktreeRunSnapshot[] }) => void) | null = null;
   const dismissed: string[] = [];
   (window as unknown as { electron: unknown }).electron = {
     bulkWorktreeRuns: {
@@ -144,12 +145,20 @@ function installBridge() {
           onCommand = null;
         };
       },
+      onChanged: (callback: (change: { runs: BulkWorktreeRunSnapshot[] }) => void) => {
+        onChanged = callback;
+        return () => {
+          onChanged = null;
+        };
+      },
     },
   };
   return {
     published,
     dismissed,
     send: (command: BulkWorktreeRunCommand) => onCommand?.(command),
+    /** Main's push of every run it holds, as after a dismissal from another view. */
+    change: (runs: BulkWorktreeRunSnapshot[]) => onChanged?.({ runs }),
     lastFor: (runId: string) => published.filter((s) => s.runId === runId).at(-1),
   };
 }
@@ -249,8 +258,14 @@ describe("bulk create runner", () => {
       ["cancelled", "wt-3"],
       ["cancelled", undefined],
     ]);
+    // One quiet inbox entry once it settles, saying what the cancel left behind.
+    expect(mockNotify).toHaveBeenCalledTimes(1);
     expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "3 of 4 worktrees created." })
+      expect.objectContaining({
+        priority: "low",
+        title: "Worktree creation cancelled",
+        message: "3 of 4 created (3 not fully set up) · 1 not created.",
+      })
     );
     expect(cancelBulkCreateRun(runId)).toBe(false);
   });

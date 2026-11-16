@@ -426,7 +426,8 @@ async function installGatedCreates(app: ElectronApplication, cwd: string): Promi
         __bulkShotGate: { released: number; waiting: Array<() => void>; made: number };
       };
       g.__bulkShotGate = { released: 0, waiting: [], made: 0 };
-      const replace = (channel: string, handler: (event: unknown, payload: any) => unknown) => {
+      type Payload = { branchName: string; options: { newBranch: string } };
+      const replace = (channel: string, handler: (event: unknown, payload: Payload) => unknown) => {
         ipcMain.removeHandler(channel);
         ipcMain.handle(channel, handler as never);
       };
