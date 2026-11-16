@@ -1303,23 +1303,24 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill bursts
   });
 
   it("a root exit refuses a census read while its shell was alive", () => {
-    const lineage: LineageKillSource & { takeKillCensus: ReturnType<typeof vi.fn> } = {
+    const takeKillCensus = vi
+      .fn<() => KillCensus | null>()
+      .mockReturnValueOnce(makeCensus([[P(2002), 1, "npm"]]))
+      .mockReturnValueOnce(makeCensus([[P(2002), 1, "replacement"]]));
+    const lineage: LineageKillSource = {
       registerRoot: () => {},
       markRootClosing: () => {},
       // The ledger's own probe still vouches for the orphan; the census decides.
       getVerifiedOrphanPids: (_root, _covered, census) =>
         !census || census.startTimeOf(P(2002)) === "npm" ? [P(2002)] : [],
-      takeKillCensus: vi.fn(),
+      takeKillCensus,
     };
-    lineage.takeKillCensus
-      .mockReturnValueOnce(makeCensus([[P(2002), 1, "npm"]]))
-      .mockReturnValueOnce(makeCensus([[P(2002), 1, "replacement"]]));
     const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
 
     killer.captureTree();
     killer.reapAfterRootExit();
 
-    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(takeKillCensus).toHaveBeenCalledTimes(2);
     expect(killSpy).not.toHaveBeenCalled();
   });
 
