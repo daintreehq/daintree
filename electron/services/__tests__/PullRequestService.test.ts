@@ -2846,6 +2846,37 @@ describe("PullRequestService", () => {
     });
   });
 
+  it("a repeat start() while polling joins the first check instead of resolving at once (#17060)", async () => {
+    mockForgeProviderResolved();
+    const { pullRequestService } = await import("../PullRequestService.js");
+    pullRequestService.initialize("/repo", "test-project-id");
+    let finishCheck: () => void = () => {};
+    vi.spyOn(
+      pullRequestService as unknown as { checkForPRs: () => Promise<void> },
+      "checkForPRs"
+    ).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        })
+    );
+
+    const first = pullRequestService.start(0);
+    let repeatSettled = false;
+    void pullRequestService.start(0).then(() => {
+      repeatSettled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(repeatSettled).toBe(false);
+
+    finishCheck();
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(repeatSettled).toBe(true);
+
+    pullRequestService.destroy();
+  });
+
   describe("revalidation cadence while blurred (#17060)", () => {
     const WINDOW_MS = 30 * 60 * 1000;
     const STEP_MS = 1000;

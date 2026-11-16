@@ -157,6 +157,8 @@ class PullRequestService {
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
+  // The current start()'s first check, which a repeat start() joins.
+  private initialCheck: Promise<void> = Promise.resolve();
 
   get isEnabled(): boolean {
     return this.nextRetryAt === 0 || Date.now() >= this.nextRetryAt;
@@ -774,7 +776,8 @@ class PullRequestService {
    * synchronised PR refetch burst. Pass `startupDelayMs = 0` to check
    * immediately (focus-restore / resume(), which is not a crash-recovery
    * path). The returned promise resolves after the (delayed) first check, or
-   * immediately if stop()/reset() cancels the pending delay.
+   * immediately if stop()/reset() cancels the pending delay. A repeat call
+   * while polling joins that same first check.
    */
   public start(startupDelayMs?: number): Promise<void> {
     if (this.isPolling) {
@@ -782,7 +785,7 @@ class PullRequestService {
       // the project-switch hot path, where each sync log write adds main-thread
       // I/O. Diagnostic only, so keep it at debug.
       logDebug("PullRequestService already polling");
-      return Promise.resolve();
+      return this.initialCheck;
     }
 
     if (!this.cwd) {
@@ -806,10 +809,11 @@ class PullRequestService {
     });
 
     if (delay <= 0) {
-      return this.runInitialCheck();
+      this.initialCheck = this.runInitialCheck();
+      return this.initialCheck;
     }
 
-    return new Promise<void>((resolve) => {
+    this.initialCheck = new Promise<void>((resolve) => {
       this.startupDelayResolve = resolve;
       this.startupDelayTimer = setTimeout(() => {
         this.startupDelayTimer = null;
@@ -817,6 +821,7 @@ class PullRequestService {
         void this.runInitialCheck().finally(resolve);
       }, delay);
     });
+    return this.initialCheck;
   }
 
   /**
