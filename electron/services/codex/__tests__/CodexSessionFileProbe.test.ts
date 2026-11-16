@@ -1,4 +1,14 @@
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  open,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -461,6 +471,81 @@ describe("probeCodexSessionFile", () => {
       status: "unknown",
       reason: "unverified",
     });
+  });
+
+  it("reads a first record carrying large base instructions, and refuses one past the cap", async () => {
+    const large = await writeRollout(
+      ROOT_ID,
+      sessionMeta(ROOT_ID, { base_instructions: "x".repeat(200 * 1024) })
+    );
+    const accepted = runner(await lsofFor([{ fd: "37", access: "u", name: large }]));
+    await expect(
+      probeCodexSessionFile(100, { platform: "darwin", run: accepted })
+    ).resolves.toMatchObject({ status: "observed", sessionId: ROOT_ID });
+
+    const oversized = await writeRollout(
+      ROOT_ID,
+      sessionMeta(ROOT_ID, { base_instructions: "x".repeat(300 * 1024) })
+    );
+    const refused = runner(await lsofFor([{ fd: "37", access: "u", name: oversized }]));
+    await expect(probeCodexSessionFile(100, { platform: "darwin", run: refused })).resolves.toEqual(
+      { status: "unknown", reason: "unverified" }
+    );
+  });
+
+  it("reads only the opening of a long rollout whose first record is short", async () => {
+    const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID), {
+      rest: `${'{"type":"event_msg"}\n'.repeat(50_000)}`,
+    });
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file }]));
+    const probe = await open(file);
+    const handlePrototype = Object.getPrototypeOf(probe) as FileHandle;
+    await probe.close();
+    const read = vi.spyOn(handlePrototype, "read");
+
+    try {
+      await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toMatchObject({
+        status: "observed",
+      });
+      // Production reads positionally: (buffer, offset, length, position).
+      const requested = read.mock.calls.reduce((total, call) => {
+        const length = (call as unknown[])[2];
+        return total + (typeof length === "number" ? length : 0);
+      }, 0);
+      expect(requested).toBeGreaterThan(0);
+      expect(requested).toBeLessThan(64 * 1024);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("pieces together a first record the filesystem hands over in short reads", async () => {
+    const file = await writeRollout(
+      ROOT_ID,
+      sessionMeta(ROOT_ID, { base_instructions: "y".repeat(40 * 1024) }),
+      { rest: '{"type":"event_msg"}\n' }
+    );
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file }]));
+    const probe = await open(file);
+    const handlePrototype = Object.getPrototypeOf(probe) as FileHandle;
+    await probe.close();
+    const original = handlePrototype.read as (...args: unknown[]) => Promise<unknown>;
+    const read = vi.spyOn(handlePrototype, "read").mockImplementation(function (
+      this: FileHandle,
+      ...args: unknown[]
+    ) {
+      const [buffer, offset, length, position] = args;
+      return original.call(this, buffer, offset, Math.min(Number(length), 1_000), position);
+    } as never);
+
+    try {
+      await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toMatchObject({
+        status: "observed",
+        sessionId: ROOT_ID,
+      });
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("drops the listing when the process it listed was replaced under it", async () => {
