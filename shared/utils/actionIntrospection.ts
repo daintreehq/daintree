@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { ActionManifestEntry } from "../types/actions.js";
 import {
   ACTIONS_LIST_DEFAULT_LIMIT,
   ACTIONS_LIST_MAX_LIMIT,
