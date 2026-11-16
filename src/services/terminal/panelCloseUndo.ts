@@ -295,12 +295,23 @@ async function findCapturedSession(
   step: CloseStep,
   closed: ClosedPanel
 ): Promise<AgentSessionRecord | "hidden" | null> {
-  const deadline = (closed.expiredAt ?? step.closedAt) + CAPTURE_WAIT_MS;
-  for (;;) {
-    const found = pickCapture(await listSessions(step.projectId), step, closed);
-    if (found !== null || Date.now() >= deadline) return found;
-    // Out of sight, the wait stops: the close waits for the person instead.
-    if ((await waitForRecordedSession(deadline - Date.now())) || isViewHidden()) return "hidden";
+  // Out of sight at any point, even briefly, and the lookup stops: the close
+  // waits for the person's next press instead.
+  let wentHidden = isViewHidden();
+  const onVisibility = () => {
+    if (document.hidden) wentHidden = true;
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  try {
+    const deadline = (closed.expiredAt ?? step.closedAt) + CAPTURE_WAIT_MS;
+    for (;;) {
+      const found = pickCapture(await listSessions(step.projectId), step, closed);
+      if (wentHidden || isViewHidden()) return "hidden";
+      if (found !== null || Date.now() >= deadline) return found;
+      if (await waitForRecordedSession(deadline - Date.now())) return "hidden";
+    }
+  } finally {
+    document.removeEventListener("visibilitychange", onVisibility);
   }
 }
 

@@ -638,6 +638,30 @@ describe("after the trash lets an agent go", () => {
     expect(kept?.groups[0]?.panelIds).toEqual(["resumed-1", "second"]);
   });
 
+  it("notices the view left and came back while the journal was being read", async () => {
+    seed("agent", { agent: true });
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+    let answer: (records: AgentSessionRecord[]) => void = () => undefined;
+    listSessions.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+
+    const pending = undoLastClose();
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalled());
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden.mockRestore();
+    answer([record({ sessionId: "own", terminal: { id: "agent", spawnedAt: 1 } })]);
+
+    await expect(pending).resolves.toBe(false);
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("agent");
+  });
+
   it("notices the view left and came back while it waited", async () => {
     seed("agent", { agent: true });
     userClose(["agent"]);

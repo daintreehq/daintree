@@ -128,12 +128,19 @@ export function hasEditsSinceClose(target: Element, seq: number): boolean {
 }
 
 /**
- * Hands a press the undo-close key already took back to the editor holding
- * `target`, for its own undo. A native field's undo can't be run from here.
+ * Hands a press the undo-close key already took back to the field holding
+ * `target`, for its own undo: an editor's command, or for a native field the
+ * frame's Undo, the same one the Edit menu runs.
  */
-export function undoEditorText(target: Element | null): void {
+export function undoFieldText(target: Element | null): void {
   const editor = target?.closest(".cm-editor");
-  if (editor) editors.get(editor)?.undo();
+  if (editor) {
+    editors.get(editor)?.undo();
+    return;
+  }
+  if (isTextField(target) && typeof document.execCommand === "function") {
+    document.execCommand("undo");
+  }
 }
 
 /** Test seam: forget every close and checkpoint. */

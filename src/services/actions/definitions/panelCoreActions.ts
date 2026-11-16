@@ -10,7 +10,7 @@ import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { fieldOutranksClose, takeUndoCloseKeyPress } from "@/services/terminal/undoCloseKey";
-import { undoEditorText } from "@/services/terminal/closeUndoOrder";
+import { undoFieldText } from "@/services/terminal/closeUndoOrder";
 import { isForegroundDispatch } from "./dispatchSource";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
@@ -417,7 +417,7 @@ export function registerPanelCoreActions(
               yieldsTo: (step) => fieldOutranksClose(pressedIn, step.seq),
               // Only while the keyboard is still where the key was pressed.
               onYield: () => {
-                if (document.activeElement === pressedIn) undoEditorText(pressedIn);
+                if (document.activeElement === pressedIn) undoFieldText(pressedIn);
               },
             }
           : {}

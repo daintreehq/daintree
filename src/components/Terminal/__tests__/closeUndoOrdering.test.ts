@@ -20,6 +20,7 @@ import {
   nextCloseSeq,
   resetCloseUndoOrderForTests,
   trackNativeFieldEdits,
+  undoFieldText,
 } from "@/services/terminal/closeUndoOrder";
 
 const views: EditorView[] = [];
@@ -198,6 +199,23 @@ describe("native text fields", () => {
     undoField(field, "older");
     expect(hasEditsSinceClose(field, close)).toBe(false);
     field.remove();
+  });
+
+  it("hands a taken press to a native field's own undo", () => {
+    const field = mountField();
+    field.focus();
+    const execCommand = vi.fn(() => true);
+    Reflect.set(document, "execCommand", execCommand);
+    try {
+      undoFieldText(field);
+      expect(execCommand).toHaveBeenCalledWith("undo");
+      execCommand.mockClear();
+      undoFieldText(document.body);
+      expect(execCommand).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(document, "execCommand");
+      field.remove();
+    }
   });
 
   it("hands over once the app resets the field, and orders typing after that afresh", () => {
