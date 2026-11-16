@@ -18,7 +18,11 @@ import {
   type UsePromptHistoryPaletteOptions,
 } from "@/hooks/usePromptHistoryPalette";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
-import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview";
+import {
+  excerptPreview,
+  findPreviewMatches,
+  mapPreviewRangesToPrompt,
+} from "@/utils/promptHistoryPreview";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { GLOBAL_ASSISTANT_HISTORY_ID } from "@/store/commandHistoryStore";
@@ -140,6 +144,7 @@ export function PromptHistoryRow({
 interface PromptHistoryPreviewProps {
   item: PromptHistoryItem;
   query: string;
+  matches: readonly FuseResultMatch[] | undefined;
   projectName?: string | null;
 }
 
@@ -148,14 +153,27 @@ interface PromptHistoryPreviewProps {
  * query's literal matches marked, and what the history recorded about the send.
  * Outside the listbox and not live, so arrow presses keep announcing the row.
  */
-export function PromptHistoryPreview({ item, query, projectName }: PromptHistoryPreviewProps) {
+export function PromptHistoryPreview({
+  item,
+  query,
+  matches,
+  projectName,
+}: PromptHistoryPreviewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const q = query.trim();
-  // Literal hits only: the search's fuzzy ranges index the one-line preview, not this text.
-  const ranges = useMemo(
-    () => (q ? findPreviewMatches(item.prompt, q, undefined) : undefined),
-    [item.prompt, q]
-  );
+  const fuzzyRanges = matches?.find((m) => m.key === "preview")?.indices;
+  // Literal hits in the raw text; a typo, which only the scorer's ranges over the
+  // one-line preview explain, is carried back to where they sit in the prompt.
+  const ranges = useMemo(() => {
+    if (!q) return undefined;
+    const literal = findPreviewMatches(item.prompt, q, undefined);
+    if (literal) return literal;
+    return mapPreviewRangesToPrompt(
+      item.prompt,
+      item.preview,
+      findPreviewMatches(item.preview, q, fuzzyRanges)
+    );
+  }, [item.prompt, item.preview, q, fuzzyRanges]);
   const firstMatch = ranges?.reduce<number | null>(
     (first, [start]) => (first === null || start < first ? start : first),
     null
@@ -319,10 +337,11 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         <PromptHistoryPreview
           item={item}
           query={query}
+          matches={matchesById.get(item.id)}
           projectName={projectNames?.get(item.projectId)}
         />
       ) : null,
-    [query, projectNames]
+    [query, matchesById, projectNames]
   );
 
   const handleKeyDown = useCallback(

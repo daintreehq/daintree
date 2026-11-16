@@ -3,7 +3,11 @@ import { describe, expect, it, vi, beforeAll, afterAll, afterEach } from "vitest
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 import type { PromptHistoryItem } from "@/hooks/usePromptHistoryPalette";
-import { PREVIEW_MAX_CHARS, toPromptPreview } from "@/utils/promptHistoryPreview";
+import {
+  PREVIEW_MAX_CHARS,
+  mapPreviewRangesToPrompt,
+  toPromptPreview,
+} from "@/utils/promptHistoryPreview";
 import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 
@@ -289,10 +293,11 @@ describe("PromptHistoryPalette", () => {
     const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
     seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
     const input = renderPalette();
-    // The scope hint is the first of the description's ids; the preview hint follows it.
     const describe = () =>
-      document.getElementById(input.getAttribute("aria-describedby")?.split(" ")[0] ?? "")
-        ?.textContent ?? "";
+      (input.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
     const before = describe();
     expect(before).toMatch(/R/);
     await act(async () => {
@@ -304,84 +309,206 @@ describe("PromptHistoryPalette", () => {
   });
 
   describe("selected prompt preview", () => {
-    const brief = "Fix the flaky retry test\n\n- check the backoff\n- run it ten times";
+    const brief =
+      "Fix the flaky retry test\n\n- check the backoff\n- run it ten times\n\n" +
+      `${"Keep the diff small and leave the backoff alone. ".repeat(6)}final backoff sentinel`;
+    const history = {
+      [PROJECT]: [
+        entry("a", "summarise the diff", 1),
+        entry("b", brief, 2),
+        entry("c", "add a dark mode toggle", 3),
+      ],
+    };
 
     function preview(): HTMLElement | null {
       return document.querySelector<HTMLElement>('[role="region"][aria-label="Selected prompt"]');
     }
+    function previewText(): string | undefined {
+      return preview()?.querySelector("p")?.textContent;
+    }
+    function marks(): string[] {
+      return [...preview()!.querySelectorAll("[data-highlight]")].map((el) => el.textContent ?? "");
+    }
+    function selectedOptionId(): string | null {
+      return document.querySelector('[role="option"][aria-selected="true"]')?.id ?? null;
+    }
 
-    it("shows the selected prompt in full with its line breaks, and follows the selection", async () => {
-      seed({
-        [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)],
-      });
+    it("shows the selected prompt in full with its line breaks, and follows the arrow keys", async () => {
+      seed(history);
       const input = renderPalette();
-      expect(preview()?.textContent).toContain("summarise the diff");
+      expect(previewText()).toBe("summarise the diff");
 
-      await act(async () => {
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-      });
-      const text = preview()!.querySelector("p")!;
-      expect(text.textContent).toBe(brief);
-      expect(text.className).toContain("whitespace-pre-wrap");
+      const key = (k: string) =>
+        act(async () => {
+          fireEvent.keyDown(input, { key: k });
+        });
+      await key("ArrowDown");
+      expect(previewText()).toBe(brief);
+      await key("ArrowDown");
+      expect(previewText()).toBe("add a dark mode toggle");
+      await key("ArrowUp");
+      expect(previewText()).toBe(brief);
+      expect(selectedOptionId()).toBe(input.getAttribute("aria-activedescendant"));
     });
 
     it("follows the pointer too", async () => {
-      seed({
-        [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)],
-      });
+      seed(history);
       renderPalette();
-      const options = document.querySelectorAll('[role="option"]');
-      await act(async () => {
-        fireEvent.pointerMove(options[1]!);
-      });
-      expect(preview()?.querySelector("p")?.textContent).toBe(brief);
+      const hover = (i: number) =>
+        act(async () => {
+          fireEvent.pointerMove(document.querySelectorAll('[role="option"]')[i]!);
+        });
+      await hover(2);
+      expect(previewText()).toBe("add a dark mode toggle");
+      await hover(1);
+      expect(previewText()).toBe(brief);
+      await hover(0);
+      expect(previewText()).toBe("summarise the diff");
     });
 
-    it("marks the query's matches in the full text", async () => {
-      seed({ [PROJECT]: [entry("a", brief, 1)] });
+    it("marks every match of the query in the full text, and none once it is cleared", async () => {
+      seed(history);
       const input = renderPalette();
       await type(input, "backoff");
-      const marks = [...preview()!.querySelectorAll("[data-highlight]")].map(
-        (el) => el.textContent
-      );
-      expect(marks).toEqual(["backoff"]);
+      expect(previewText()).toBe(brief);
+      expect(marks()).toEqual(Array(8).fill("backoff"));
+      await type(input, "sentinel");
+      expect(marks()).toEqual(["sentinel"]);
+      await type(input, "");
+      expect(marks()).toEqual([]);
     });
 
-    it("names the project only across all projects, and how many terminals it went to", async () => {
+    it("marks where a typo'd search matched, in the raw text", async () => {
+      seed({ [PROJECT]: [entry("a", brief, 1)] });
+      const input = renderPalette();
+      await type(input, "bakoff");
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+      expect(marks().length).toBeGreaterThan(0);
+      expect(marks().every((m) => brief.toLowerCase().includes(m.toLowerCase()))).toBe(true);
+    });
+
+    it("scrolls to the first match when the search starts, and back to the top on a new selection", async () => {
+      const offsetTop = vi
+        .spyOn(HTMLElement.prototype, "offsetTop", "get")
+        .mockImplementation(function (this: HTMLElement) {
+          return this.hasAttribute("data-highlight") ? 400 : 0;
+        });
+      try {
+        seed(history);
+        const input = renderPalette();
+        const scroller = document.getElementById("prompt-history-preview-scroll")!;
+        scroller.scrollTop = 0;
+        await type(input, "sentinel");
+        expect(scroller.scrollTop).toBeGreaterThan(300);
+        await type(input, "");
+        expect(scroller.scrollTop).toBe(0);
+      } finally {
+        offsetTop.mockRestore();
+      }
+    });
+
+    it("pages the preview with Page Up and Page Down from the search field", async () => {
+      seed(history);
+      const input = renderPalette();
+      const scroller = document.getElementById("prompt-history-preview-scroll")!;
+      Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+      const scrollBy = vi.fn();
+      scroller.scrollBy = scrollBy;
+      let notCancelled = true;
+      await act(async () => {
+        notCancelled = fireEvent.keyDown(input, { key: "PageDown" });
+      });
+      expect(notCancelled).toBe(false);
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "PageUp" });
+      });
+      expect(scrollBy.mock.calls.map(([arg]) => Math.sign(arg.top))).toEqual([1, -1]);
+    });
+
+    it("names the selected prompt's own project across all projects, and how many terminals it went to", async () => {
       useProjectStore.setState({
-        projects: [{ id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 }],
+        projects: [
+          { id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 },
+          { id: OTHER, name: "Helios", path: "/b", emoji: "☀️", lastOpened: 0 },
+        ],
       });
       seed({
         [PROJECT]: [{ ...entry("a", "summarise the diff", 1), armedIds: ["t1", "t2", "t3"] }],
+        [OTHER]: [{ ...entry("b", "add a dark mode toggle", 2), armedIds: ["t1"] }],
       });
       const input = renderPalette();
-      expect(preview()?.textContent).not.toContain("Daintree");
+      expect(preview()?.textContent).not.toMatch(/Daintree|Helios/);
       expect(preview()?.textContent).toContain("3 terminals");
       await act(async () => {
         fireEvent.keyDown(input, { key: "r", metaKey: true });
       });
       expect(preview()?.textContent).toContain("Daintree");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(preview()?.textContent).toContain("Helios");
+      expect(preview()?.textContent).not.toMatch(/Daintree|terminals|Sent to/);
     });
 
-    it("is absent when nothing matches", async () => {
-      seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
+    it("keeps the project and counts in the option's accessible name", async () => {
+      useProjectStore.setState({
+        projects: [{ id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 }],
+      });
+      seed({ [PROJECT]: [{ ...entry("a", brief, 1), armedIds: ["t1", "t2"] }] });
       const input = renderPalette();
-      await type(input, "zzzzqqqq");
-      expect(preview()).toBeNull();
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "r", metaKey: true });
+      });
+      const option = document.querySelector('[role="option"]')!;
+      expect(option.textContent).toMatch(/Daintree.*4 lines.*2 terminals/);
     });
 
-    it("still recalls the selected prompt on Enter", async () => {
+    it("describes the preview from the search field, with and without a scope hint", async () => {
+      const describedBy = () =>
+        document
+          .querySelector('[role="combobox"]')!
+          .getAttribute("aria-describedby")!
+          .split(" ")
+          .map((id) => document.getElementById(id)?.textContent);
+      seed(history);
+      renderPalette();
+      expect(describedBy()).toHaveLength(2);
+      expect(describedBy().every((text) => text)).toBe(true);
+      expect(describedBy().join(" ")).toMatch(/Page Down/);
+      cleanup();
+
+      const { GLOBAL_ASSISTANT_HISTORY_ID } = await import("@/store/commandHistoryStore");
+      seed({ [GLOBAL_ASSISTANT_HISTORY_ID]: [entry("g", "which agents are waiting on me", 1)] });
+      renderPalette({ projectId: GLOBAL_ASSISTANT_HISTORY_ID });
+      expect(describedBy()).toHaveLength(1);
+      expect(describedBy()[0]).toMatch(/Page Down/);
+    });
+
+    it("is absent when nothing matches, and back once the query clears", async () => {
+      seed(history);
+      const input = renderPalette();
+      expect(preview()).not.toBeNull();
+      await type(input, "zzzzqqqq");
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(0);
+      expect(preview()).toBeNull();
+      await type(input, "");
+      expect(preview()).not.toBeNull();
+    });
+
+    it("recalls the selected prompt on Enter", async () => {
       const { useTerminalInputStore } = await import("@/store/terminalInputStore");
       useTerminalInputStore.setState({ draftInputs: new Map() });
-      seed({ [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)] });
+      seed(history);
       const input = renderPalette();
       await act(async () => {
         fireEvent.keyDown(input, { key: "ArrowDown" });
       });
+      expect(previewText()).toBe(brief);
       await act(async () => {
         fireEvent.keyDown(input, { key: "Enter" });
       });
       expect(useTerminalInputStore.getState().getDraftInput("t1", PROJECT)).toBe(brief);
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
     });
   });
 
@@ -634,5 +761,19 @@ describe("PromptHistoryRow", () => {
     const text = optionText(container);
     expect(text.indexOf("retry")).toBeGreaterThanOrEqual(0);
     expect(text.indexOf("retry")).toBeLessThan(60);
+  });
+});
+
+describe("mapPreviewRangesToPrompt", () => {
+  it("finds a collapsed fragment across the line break it replaced", () => {
+    const prompt = "```ts\nretry the\nbackoff job\n```";
+    const { text } = toPromptPreview(prompt);
+    const at = text.indexOf("the backoff");
+    expect(mapPreviewRangesToPrompt(prompt, text, [[at, at + 10]])).toEqual([[12, 22]]);
+  });
+
+  it("escapes regex characters and returns nothing for no ranges", () => {
+    expect(mapPreviewRangesToPrompt("a (b) c", "a (b) c", [[2, 4]])).toEqual([[2, 4]]);
+    expect(mapPreviewRangesToPrompt("a", "a", undefined)).toBeUndefined();
   });
 });

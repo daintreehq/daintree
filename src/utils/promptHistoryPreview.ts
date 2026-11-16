@@ -129,3 +129,31 @@ export function findPreviewMatches(
   const fuzzy = fuzzyRanges?.filter(([s, e]) => e - s >= 2);
   return fuzzy?.length ? [...fuzzy] : undefined;
 }
+
+/**
+ * Where the search's fuzzy ranges over the one-line preview sit in the raw
+ * prompt, for the full-text pane: each matched fragment is looked up in the
+ * prompt with its whitespace runs allowed to be line breaks, since the preview
+ * collapsed them. A fragment that straddles dropped fence lines is not found
+ * and is simply not marked.
+ */
+export function mapPreviewRangesToPrompt(
+  prompt: string,
+  preview: string,
+  ranges: readonly MatchRange[] | undefined
+): MatchRange[] | undefined {
+  if (!ranges?.length) return undefined;
+  const found: MatchRange[] = [];
+  for (const [start, end] of ranges) {
+    const fragment = preview.slice(start, end + 1).trim();
+    if (!fragment) continue;
+    const pattern = fragment
+      .split(/\s+/)
+      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s+");
+    for (const hit of prompt.matchAll(new RegExp(pattern, "gi"))) {
+      found.push([hit.index, hit.index + hit[0].length - 1]);
+    }
+  }
+  return found.length ? found : undefined;
+}
