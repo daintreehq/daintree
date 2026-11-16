@@ -1,28 +1,29 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type { ProjectPortalLink, ProjectSettings } from "@shared/types";
+import type { ProjectPortalLink, ProjectPortalLinksChangePayload } from "@shared/types";
 
-const { changeMock, getSettingsMock, storeState } = vi.hoisted(() => ({
+const { changeMock, getSettingsMock } = vi.hoisted(() => ({
   changeMock: vi.fn(),
   getSettingsMock: vi.fn(),
-  storeState: {
-    current: { projectId: null, settings: null } as {
-      projectId: string | null;
-      settings: ProjectSettings | null;
-    },
-  },
 }));
 
-vi.mock("@/store/projectSettingsStore", () => ({
+vi.mock("@/store/projectSettingsStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/projectSettingsStore")>()),
   changeProjectPortalLinks: changeMock,
-  useProjectSettingsStore: (selector: (state: typeof storeState.current) => unknown) =>
-    selector(storeState.current),
 }));
-vi.mock("@/clients", () => ({ projectClient: { getSettings: getSettingsMock } }));
+vi.mock("@/clients", () => ({
+  projectClient: { getSettings: getSettingsMock, detectRunners: vi.fn() },
+  invalidateProjectSettingsCache: vi.fn(),
+}));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { ProjectPortalLinksSection } from "../ProjectPortalLinksSection";
+import {
+  cleanupProjectSettingsStore,
+  patchCachedProjectPortalLinks,
+  useProjectSettingsStore,
+} from "@/store/projectSettingsStore";
 
 const staging: ProjectPortalLink = {
   id: "a",
@@ -31,19 +32,30 @@ const staging: ProjectPortalLink = {
   addedByAssistant: true,
 };
 
-function inputs(container: HTMLElement) {
-  return [...container.querySelectorAll("input")];
+function input(container: HTMLElement, index: number): HTMLInputElement {
+  const found = container.querySelectorAll("input")[index];
+  if (!found) throw new Error(`no input ${index}`);
+  return found;
+}
+
+/** Main's answer to a change, landing in the store as the real change does. */
+function mainAnswers(links: ProjectPortalLink[], link: ProjectPortalLink) {
+  changeMock.mockImplementationOnce(async (payload: ProjectPortalLinksChangePayload) => {
+    patchCachedProjectPortalLinks(payload.projectId, links);
+    return { saved: true, links, link };
+  });
 }
 
 beforeEach(() => {
-  storeState.current = {
+  useProjectSettingsStore.setState({
     projectId: "proj-1",
     settings: { runCommands: [], portalLinks: [staging] },
-  };
+  });
 });
 
 afterEach(() => {
   cleanup();
+  cleanupProjectSettingsStore();
   vi.clearAllMocks();
 });
 
@@ -57,13 +69,15 @@ describe("ProjectPortalLinksSection (#17091)", () => {
     expect(getSettingsMock).not.toHaveBeenCalled();
   });
 
-  it("adds a link by hand, as the user", async () => {
-    changeMock.mockResolvedValueOnce({ saved: true, links: [], link: staging });
-    const { container, getByRole } = render(<ProjectPortalLinksSection projectId="proj-1" />);
-    const [title, url] = inputs(container);
+  it("adds a link by hand, as the user, and lists it", async () => {
+    const ci: ProjectPortalLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
+    mainAnswers([staging, ci], ci);
+    const { container, getByRole, getByText } = render(
+      <ProjectPortalLinksSection projectId="proj-1" />
+    );
 
-    fireEvent.change(title, { target: { value: "CI" } });
-    fireEvent.change(url, { target: { value: "http://10.0.0.5:8080" } });
+    fireEvent.change(input(container, 0), { target: { value: "CI" } });
+    fireEvent.change(input(container, 1), { target: { value: "http://10.0.0.5:8080" } });
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Add" }));
     });
@@ -73,10 +87,11 @@ describe("ProjectPortalLinksSection (#17091)", () => {
       actor: "user",
       change: { op: "add", title: "CI", url: "http://10.0.0.5:8080" },
     });
-    expect((title as HTMLInputElement).value).toBe("");
+    expect(getByText("CI")).toBeTruthy();
+    expect(input(container, 0).value).toBe("");
   });
 
-  it("keeps the draft and says why when main refuses it", async () => {
+  it("keeps the draft, ties the refusal to the field and moves there", async () => {
     changeMock.mockResolvedValueOnce({
       saved: false,
       code: "invalid-url",
@@ -85,25 +100,33 @@ describe("ProjectPortalLinksSection (#17091)", () => {
     const { container, getByRole, getByText } = render(
       <ProjectPortalLinksSection projectId="proj-1" />
     );
-    const [title, url] = inputs(container);
 
-    fireEvent.change(title, { target: { value: "Files" } });
-    fireEvent.change(url, { target: { value: "ftp://files.example.com" } });
+    fireEvent.change(input(container, 0), { target: { value: "Files" } });
+    fireEvent.change(input(container, 1), { target: { value: "ftp://files.example.com" } });
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Add" }));
     });
 
+    const url = input(container, 1);
     expect(getByText("The URL must use http:// or https://")).toBeTruthy();
-    expect((title as HTMLInputElement).value).toBe("Files");
+    expect(input(container, 0).value).toBe("Files");
+    expect(url.getAttribute("aria-invalid")).toBe("true");
+    const described = (url.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "");
+    expect(described.some((text) => text.includes("The URL must use http://"))).toBe(true);
+    expect(document.activeElement).toBe(url);
   });
 
   it("edits a link as the user, taking it over from the Assistant", async () => {
-    changeMock.mockResolvedValueOnce({ saved: true, links: [], link: staging });
-    const { container, getByRole } = render(<ProjectPortalLinksSection projectId="proj-1" />);
+    const renamed: ProjectPortalLink = { id: "a", title: "Staging EU", url: staging.url };
+    mainAnswers([renamed], renamed);
+    const { container, getByRole, getByText, queryByText } = render(
+      <ProjectPortalLinksSection projectId="proj-1" />
+    );
 
     fireEvent.click(getByRole("button", { name: "Edit Staging" }));
-    const editTitle = inputs(container)[2];
-    fireEvent.change(editTitle, { target: { value: "Staging EU" } });
+    fireEvent.change(input(container, 2), { target: { value: "Staging EU" } });
     await act(async () => {
       fireEvent.click(getByRole("button", { name: "Save" }));
     });
@@ -113,15 +136,28 @@ describe("ProjectPortalLinksSection (#17091)", () => {
       actor: "user",
       change: { op: "update", id: "a", title: "Staging EU", url: "https://staging.example.com/" },
     });
+    expect(getByText("Staging EU")).toBeTruthy();
+    expect(queryByText("Added by Assistant")).toBeNull();
   });
 
   it("reads another project's links for the page, since the store holds only this view's", async () => {
-    storeState.current = { projectId: "proj-1", settings: { runCommands: [] } };
     getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging] });
 
     const { findByText } = render(<ProjectPortalLinksSection projectId="proj-2" />);
 
     expect(await findByText("Staging")).toBeTruthy();
     expect(getSettingsMock).toHaveBeenCalledWith("proj-2");
+  });
+
+  it("drops a failed read's error once the page shows a project it can read", async () => {
+    getSettingsMock.mockRejectedValueOnce(new Error("disk unreadable"));
+    const { findByText, queryByText, rerender } = render(
+      <ProjectPortalLinksSection projectId="proj-2" />
+    );
+    expect(await findByText("Couldn't load the links")).toBeTruthy();
+
+    rerender(<ProjectPortalLinksSection projectId="proj-1" />);
+
+    expect(queryByText("Couldn't load the links")).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import {
   toNonRendererOwnedTools,
 } from "../helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../mcpExternalTierAllowlist.js";
+import { BUILT_IN_ACTION_IDS } from "../actionIds.js";
 
 describe("normalizeHelpAssistantTier", () => {
   it("passes the current tool sets through", () => {
@@ -122,8 +123,9 @@ describe("toNonRendererOwnedTools", () => {
   });
 
   it("offers the project link tools to the Assistant at core, and to no worker pane (#17091)", () => {
-    const linkTools = CORE_TIER_TOOLS.filter((id) => id.startsWith("portal.projectLinks."));
+    const linkTools = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("portal.projectLinks."));
     expect(linkTools.length).toBeGreaterThan(0);
+    expect(linkTools.filter((id) => !CORE_TIER_TOOLS.includes(id as never))).toEqual([]);
     for (const tier of HELP_ASSISTANT_TIERS) {
       const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);
       expect(

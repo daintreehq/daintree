@@ -147,26 +147,35 @@ describe("applyProjectPortalLinkChange (#17091)", () => {
     ).toMatchObject({ saved: false, code: "invalid-url" });
   });
 
-  it("hands a link the user edits over to the user", () => {
-    const result = applyProjectPortalLinkChange(
-      [assistantLink],
-      { op: "update", id: "mine", title: "Staging" },
+  it("hands a link the user edits over to the user, out of the Assistant's reach", () => {
+    const edited = applyProjectPortalLinkChange(
+      [assistantLink, userLink],
+      { op: "update", id: "mine", title: "Staging EU" },
       "user",
       ids()
     );
-    expect(result.saved && result.link).toEqual({
-      id: "mine",
-      title: "Staging",
-      url: "https://staging.example.com/",
-    });
+    if (!edited.saved) throw new Error(edited.message);
+    expect(edited.links).toEqual([
+      { id: "mine", title: "Staging EU", url: "https://staging.example.com/" },
+      userLink,
+    ]);
+
+    for (const change of [
+      { op: "update", id: "mine", title: "Back" } as const,
+      { op: "remove", id: "mine" } as const,
+    ]) {
+      expect(applyProjectPortalLinkChange(edited.links, change, "assistant", ids())).toMatchObject({
+        saved: false,
+        code: "not-added-by-assistant",
+      });
+    }
   });
 
   it("undoes the Assistant's add only while the link is still the Assistant's", () => {
     const undo = { op: "remove", id: "mine", onlyIfAddedByAssistant: true } as const;
-    expect(applyProjectPortalLinkChange([assistantLink], undo, "user", ids())).toMatchObject({
-      saved: true,
-      links: [],
-    });
+    expect(
+      applyProjectPortalLinkChange([userLink, assistantLink], undo, "user", ids())
+    ).toMatchObject({ saved: true, links: [userLink] });
     const takenOver = { ...assistantLink, addedByAssistant: undefined };
     expect(applyProjectPortalLinkChange([takenOver], undo, "user", ids())).toMatchObject({
       saved: false,

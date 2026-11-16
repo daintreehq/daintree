@@ -7,7 +7,7 @@ import type {
   RunCommand,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
-import { projectClient } from "@/clients";
+import { invalidateProjectSettingsCache, projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { mergeBrowserAllowedHosts } from "@shared/utils/urlUtils";
 import { logError } from "@/utils/logger";
@@ -333,6 +333,28 @@ export async function changeProjectPortalLinks(
   const result = await projectClient.changePortalLinks(payload);
   if (result.saved) patchCachedProjectPortalLinks(payload.projectId, result.links);
   return result;
+}
+
+/**
+ * Re-read the project's Portal links from main into the cached settings. A
+ * change made from another view of the same project, or from that project's
+ * other window, reaches only its own renderer, so a launchpad shown here reads
+ * main's list first. Dropped when the cached settings changed while the read
+ * was out: whatever changed them is at least as new.
+ */
+export async function refreshCachedProjectPortalLinks(projectId: string): Promise<void> {
+  const state = useProjectSettingsStore.getState();
+  if (state.projectId !== projectId || !state.settings) return;
+  const revision = settingsRevision;
+  invalidateProjectSettingsCache(projectId);
+  const settings = await projectClient.getSettings(projectId);
+  if (settingsRevision !== revision) return;
+  const current = useProjectSettingsStore.getState();
+  if (current.projectId !== projectId || !current.settings) return;
+  const links = settings.portalLinks ?? [];
+  const cached = current.settings.portalLinks ?? [];
+  if (JSON.stringify(links) === JSON.stringify(cached)) return;
+  patchCachedProjectPortalLinks(projectId, links);
 }
 
 /** Cleanup function for project switch */

@@ -11,12 +11,14 @@ vi.mock("@/clients", () => ({
     getSettings: getSettingsMock,
     detectRunners: detectRunnersMock,
   },
+  invalidateProjectSettingsCache: vi.fn(),
 }));
 
 import {
   cleanupProjectSettingsStore,
   patchCachedProjectPortalLinks,
   patchCachedProjectSettings,
+  refreshCachedProjectPortalLinks,
   prePopulateProjectSettings,
   useProjectSettingsStore,
 } from "../projectSettingsStore";
@@ -364,19 +366,43 @@ describe("projectSettingsStore", () => {
     });
 
     it("replaces the cached links with the list main saved, even an empty one", () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
       useProjectSettingsStore.setState({
         projectId: "project-a",
         settings: { runCommands: [], devServerCommand: "dev", portalLinks: [staging] },
       });
 
-      patchCachedProjectPortalLinks("project-a", []);
-      patchCachedProjectPortalLinks("project-b", [staging]);
+      patchCachedProjectPortalLinks("project-a", [prod, staging]);
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([prod, staging]);
 
+      patchCachedProjectPortalLinks("project-b", [staging]);
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([prod, staging]);
+
+      patchCachedProjectPortalLinks("project-a", []);
       expect(useProjectSettingsStore.getState().settings).toEqual({
         runCommands: [],
         devServerCommand: "dev",
         portalLinks: [],
       });
+    });
+
+    it("reads main's links for a launchpad, unless the cache changed while it read", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [] },
+      });
+      getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging] });
+      await refreshCachedProjectPortalLinks("project-a");
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
+
+      // A change lands while the read is out: the read predates it.
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      const refresh = refreshCachedProjectPortalLinks("project-a");
+      patchCachedProjectPortalLinks("project-a", []);
+      read.resolve({ runCommands: [], portalLinks: [staging] });
+      await refresh;
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([]);
     });
 
     it("applies links saved during the initial load once that load lands", async () => {

@@ -1,28 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
-import type { ProjectPortalLinksChangeResult } from "@shared/types";
+import type { ProjectPortalLink } from "@shared/types";
+import type { NotifyPayload } from "@/lib/notify";
 import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
-const { changeMock, getSettingsMock, notifyMock } = vi.hoisted(() => ({
+const { changeMock, getSettingsMock, notifyMock, dispatchMock } = vi.hoisted(() => ({
   changeMock: vi.fn(),
   getSettingsMock: vi.fn(),
-  notifyMock: vi.fn(),
+  notifyMock: vi.fn<(payload: NotifyPayload) => string>(),
+  dispatchMock: vi.fn(),
 }));
 
 vi.mock("@/store/projectSettingsStore", () => ({ changeProjectPortalLinks: changeMock }));
 vi.mock("@/clients", () => ({ projectClient: { getSettings: getSettingsMock } }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { registerProjectPortalLinkActions } from "../projectPortalLinkActions";
 import { UnactionableTargetError } from "../../unactionableTarget";
 
-const staging = {
+const staging: ProjectPortalLink = {
   id: "link-1",
   title: "Staging",
   url: "https://staging.example.com/",
-  addedByAssistant: true as const,
+  addedByAssistant: true,
 };
+const prod: ProjectPortalLink = { id: "link-2", title: "Prod", url: "https://prod.example.com/" };
 
 function define(id: string): AnyActionDefinition {
   const actions: ActionRegistry = new Map();
@@ -35,19 +39,33 @@ function define(id: string): AnyActionDefinition {
 const run = (id: string, args: unknown, ctx: Partial<ActionContext>) =>
   define(id).run(args, ctx as ActionContext);
 
+function notice(index: number): NotifyPayload {
+  const call = notifyMock.mock.calls[index];
+  if (!call) throw new Error(`no notice ${index}`);
+  return call[0];
+}
+
+function noticeAction(index: number, label: string) {
+  const action = notice(index).actions?.find((candidate) => candidate.label === label);
+  if (!action) throw new Error(`no ${label} action`);
+  return action;
+}
+
 const assistant: Partial<ActionContext> = {
   projectId: "proj-1",
   dispatchSource: "agent",
   hostCallerOrigin: "assistant",
 };
 
-function saved(result: Partial<ProjectPortalLinksChangeResult> = {}) {
-  return { saved: true, links: [staging], link: staging, ...result };
-}
+const writes: Array<[string, unknown]> = [
+  ["portal.projectLinks.add", { title: "X", url: "https://x.example.com" }],
+  ["portal.projectLinks.update", { id: "link-1", title: "X" }],
+  ["portal.projectLinks.remove", { id: "link-1" }],
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  changeMock.mockResolvedValue(saved());
+  changeMock.mockResolvedValue({ saved: true, links: [staging], link: staging });
 });
 
 describe("portal.projectLinks (#17091)", () => {
@@ -65,7 +83,10 @@ describe("portal.projectLinks (#17091)", () => {
     });
     expect(result).toEqual({ link: staging });
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock.mock.calls[0][0].message).toContain("staging.example.com");
+    expect(notice(0).message).toContain("staging.example.com");
+    // Kept in the inbox, so an add made while the window is blurred isn't lost.
+    expect(notice(0).transient).not.toBe(true);
+    expect(noticeAction(0, "Manage links").actionId).toBe("app.settings.openTab");
   });
 
   it("undoes the Assistant's add only while the link is still the Assistant's", async () => {
@@ -81,7 +102,7 @@ describe("portal.projectLinks (#17091)", () => {
       message: "theirs",
     });
 
-    notifyMock.mock.calls[0][0].action.onClick();
+    void noticeAction(0, "Undo").onClick();
     await vi.waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(2));
 
     expect(changeMock).toHaveBeenCalledWith({
@@ -89,36 +110,47 @@ describe("portal.projectLinks (#17091)", () => {
       actor: "user",
       change: { op: "remove", id: "link-1", onlyIfAddedByAssistant: true },
     });
-    expect(notifyMock.mock.calls[1][0].title).toBe("Link kept");
+    expect(notice(1).title).toBe("Link kept");
   });
 
-  it("refuses every agent that isn't the Daintree Assistant, before writing", async () => {
-    for (const ctx of [
-      { projectId: "proj-1", dispatchSource: "agent" as const },
-      { projectId: "proj-1", dispatchSource: "plugin" as const },
-    ]) {
-      await expect(
-        run("portal.projectLinks.add", { title: "X", url: "https://x.example.com" }, ctx)
-      ).rejects.toBeInstanceOf(UnactionableTargetError);
-      await expect(run("portal.projectLinks.remove", { id: "link-1" }, ctx)).rejects.toBeInstanceOf(
-        UnactionableTargetError
-      );
+  it.each(writes)(
+    "refuses %s to every agent that isn't the Assistant, before writing",
+    async (id, args) => {
+      for (const ctx of [
+        { projectId: "proj-1", dispatchSource: "agent" as const },
+        { projectId: "proj-1", dispatchSource: "plugin" as const },
+      ]) {
+        await expect(run(id, args, ctx)).rejects.toBeInstanceOf(UnactionableTargetError);
+      }
+      expect(changeMock).not.toHaveBeenCalled();
     }
-    expect(changeMock).not.toHaveBeenCalled();
+  );
+
+  it.each(writes)("writes %s as the Assistant for the Assistant", async (id, args) => {
+    await run(id, args, assistant);
+
+    expect(changeMock).toHaveBeenCalledTimes(1);
+    expect(changeMock.mock.calls[0]?.[0]).toMatchObject({
+      projectId: "proj-1",
+      actor: "assistant",
+    });
   });
 
-  it("changes a link for the user without marking it or raising an Undo", async () => {
-    await run(
+  it("routes a person's change as the user's, raising no Undo", async () => {
+    changeMock.mockResolvedValueOnce({ saved: true, links: [prod], link: prod });
+
+    const result = await run(
       "portal.projectLinks.update",
-      { id: "link-1", title: "Staging EU" },
+      { id: "link-2", title: "Prod" },
       { projectId: "proj-1", dispatchSource: "user" }
     );
 
     expect(changeMock).toHaveBeenCalledWith({
       projectId: "proj-1",
       actor: "user",
-      change: { op: "update", id: "link-1", title: "Staging EU" },
+      change: { op: "update", id: "link-2", title: "Prod" },
     });
+    expect(result).toEqual({ link: { ...prod, addedByAssistant: false } });
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
@@ -130,6 +162,7 @@ describe("portal.projectLinks (#17091)", () => {
         { dispatchSource: "agent", hostCallerOrigin: "assistant" }
       )
     ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(changeMock).not.toHaveBeenCalled();
 
     changeMock.mockResolvedValueOnce({
       saved: false,
@@ -142,29 +175,16 @@ describe("portal.projectLinks (#17091)", () => {
   });
 
   it("lists the project's links with each marker as a boolean", async () => {
-    getSettingsMock.mockResolvedValueOnce({
-      runCommands: [],
-      portalLinks: [staging, { id: "link-2", title: "Prod", url: "https://prod.example.com/" }],
-    });
+    getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging, prod] });
 
     const result = await run("portal.projectLinks.list", undefined, assistant);
 
     expect(getSettingsMock).toHaveBeenCalledWith("proj-1");
-    expect(result).toEqual({
-      links: [
-        staging,
-        { id: "link-2", title: "Prod", url: "https://prod.example.com/", addedByAssistant: false },
-      ],
-    });
+    expect(result).toEqual({ links: [staging, { ...prod, addedByAssistant: false }] });
   });
 
   it("keeps every tool off the palette and away from plugins", () => {
-    for (const id of [
-      "portal.projectLinks.list",
-      "portal.projectLinks.add",
-      "portal.projectLinks.update",
-      "portal.projectLinks.remove",
-    ]) {
+    for (const id of ["portal.projectLinks.list", ...writes.map(([write]) => write)]) {
       const definition = define(id);
       expect(definition.denyPluginDispatch).toBe(true);
       expect(definition.palette?.mode).toBe("hidden");

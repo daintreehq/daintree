@@ -8,7 +8,11 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { projectClient } from "@/clients";
 import { changeProjectPortalLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
-import type { ProjectPortalLink, ProjectPortalLinkChange } from "@shared/types";
+import type {
+  ProjectPortalLink,
+  ProjectPortalLinkChange,
+  ProjectPortalLinkRefusal,
+} from "@shared/types";
 import {
   MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH,
   MAX_PROJECT_PORTAL_LINK_URL_LENGTH,
@@ -25,6 +29,8 @@ interface Draft {
 }
 
 const EMPTY_DRAFT: Draft = { title: "", url: "" };
+
+type ChangeOutcome = "saved" | "dropped" | "failed" | ProjectPortalLinkRefusal;
 
 /**
  * The project's own Portal launchpad links, added here by hand or by the
@@ -51,6 +57,9 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+  const editTitleRef = useRef<HTMLInputElement>(null);
+  const editUrlRef = useRef<HTMLInputElement>(null);
   // Bumped whenever the page moves to a project, so anything still in flight
   // for an earlier one is dropped.
   const visitRef = useRef(0);
@@ -64,9 +73,12 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     setEditing(null);
     setEditError(null);
     setRowError(null);
+    setLoadError(null);
   }, [projectId]);
 
   useEffect(() => {
+    // A read that failed for the page's earlier source says nothing about this one.
+    setLoadError(null);
     if (readFromStore) return;
     const visit = visitRef.current;
     setLoadError(null);
@@ -85,28 +97,33 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
 
   const links = storeLinks ?? (loaded?.projectId === projectId ? loaded.links : NO_LINKS);
 
+  /**
+   * One change through main. Resolves to "saved", to why main refused it, to
+   * "failed" when it never got an answer, or to "dropped" when the page moved
+   * to another project while it was out.
+   */
   const change = async (
     next: ProjectPortalLinkChange,
     onRefused: (message: string) => void
-  ): Promise<boolean> => {
-    if (pendingRef.current) return false;
+  ): Promise<ChangeOutcome> => {
+    if (pendingRef.current) return "dropped";
     pendingRef.current = true;
     setPending(true);
     const visit = visitRef.current;
     try {
       const result = await changeProjectPortalLinks({ projectId, actor: "user", change: next });
-      if (visitRef.current !== visit) return false;
+      if (visitRef.current !== visit) return "dropped";
       if (!result.saved) {
         onRefused(result.message);
-        return false;
+        return result.code;
       }
       setLoaded({ projectId, links: result.links });
-      return true;
+      return "saved";
     } catch (error) {
-      if (visitRef.current !== visit) return false;
+      if (visitRef.current !== visit) return "dropped";
       logError("Failed to change the project's Portal links", error);
       onRefused(formatErrorMessage(error, "The links are as they were."));
-      return false;
+      return "failed";
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -115,10 +132,15 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
 
   const add = async () => {
     setAddError(null);
-    const saved = await change({ op: "add", title: draft.title, url: draft.url }, setAddError);
-    if (!saved) return;
-    setDraft(EMPTY_DRAFT);
-    titleInputRef.current?.focus();
+    const outcome = await change({ op: "add", title: draft.title, url: draft.url }, setAddError);
+    if (outcome === "dropped") return;
+    if (outcome === "saved") {
+      setDraft(EMPTY_DRAFT);
+      titleInputRef.current?.focus();
+      return;
+    }
+    // On the field to fix, so the problem it now carries is read out.
+    (outcome === "invalid-title" ? titleInputRef : urlInputRef).current?.focus();
   };
 
   const startEdit = (link: ProjectPortalLink) => {
@@ -130,11 +152,14 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
   const saveEdit = async () => {
     if (!editing) return;
     setEditError(null);
-    const saved = await change(
+    const outcome = await change(
       { op: "update", id: editing.id, title: editing.draft.title, url: editing.draft.url },
       setEditError
     );
-    if (saved) setEditing(null);
+    if (outcome === "saved") setEditing(null);
+    else if (outcome !== "dropped") {
+      (outcome === "invalid-title" ? editTitleRef : editUrlRef).current?.focus();
+    }
   };
 
   const remove = async (link: ProjectPortalLink) => {
@@ -152,7 +177,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     <SettingsSection
       id="project-portal-links"
       title="Portal links"
-      description="Addresses offered in this project's Portal launchpad, above the chat services, such as its staging site or CI dashboard. Kept on this machine, never in the repo."
+      description="Addresses offered in this project's Portal launchpad, above the chat services, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
     >
       {loadError && (
         <SettingsLoadErrorBanner
@@ -176,6 +201,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                 maxLength={MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
+                aria-invalid={addError ? true : undefined}
                 onChange={(e) => setDraft({ ...draft, title: e.target.value })}
                 onKeyDown={submitOnEnter(() => void add())}
                 placeholder="Name, such as Staging…"
@@ -183,10 +209,13 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                 readOnly={pending}
               />
               <Input
+                ref={urlInputRef}
                 type="url"
                 value={draft.url}
                 maxLength={MAX_PROJECT_PORTAL_LINK_URL_LENGTH}
                 aria-label="Link URL"
+                aria-describedby={descriptionId}
+                aria-invalid={addError ? true : undefined}
                 onChange={(e) => setDraft({ ...draft, url: e.target.value })}
                 onKeyDown={submitOnEnter(() => void add())}
                 placeholder="https://…"
@@ -212,13 +241,16 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
               label={`Edit ${link.title}`}
               layout="stacked"
               error={editError}
-              control={({ labelId }) => (
+              control={({ labelId, descriptionId }) => (
                 <div className="flex flex-wrap gap-2">
                   <Input
+                    ref={editTitleRef}
                     type="text"
                     value={editing.draft.title}
                     maxLength={MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH}
                     aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    aria-invalid={editError ? true : undefined}
                     onChange={(e) =>
                       setEditing({ ...editing, draft: { ...editing.draft, title: e.target.value } })
                     }
@@ -227,10 +259,13 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                     readOnly={pending}
                   />
                   <Input
+                    ref={editUrlRef}
                     type="url"
                     value={editing.draft.url}
                     maxLength={MAX_PROJECT_PORTAL_LINK_URL_LENGTH}
                     aria-label="Link URL"
+                    aria-describedby={descriptionId}
+                    aria-invalid={editError ? true : undefined}
                     onChange={(e) =>
                       setEditing({ ...editing, draft: { ...editing.draft, url: e.target.value } })
                     }

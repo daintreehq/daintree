@@ -16,7 +16,10 @@ import {
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
 import { useProjectStore } from "@/store/projectStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import {
+  refreshCachedProjectPortalLinks,
+  useProjectSettingsStore,
+} from "@/store/projectSettingsStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject } from "@/store/viewWorkspace";
 import { DevServerDashboard } from "./DevServerDashboard";
@@ -143,6 +146,17 @@ export function PortalDock() {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const isBlankTab = activeTabId !== null && activeTab && !activeTab.url;
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
+  const projectSettingsCached = useProjectSettingsStore(
+    (s) => viewProjectId !== null && s.projectId === viewProjectId && s.settings !== null
+  );
+  // A link changed from another view of this project reached only that view's
+  // cache, so the launchpad reads main's list each time it is shown.
+  useEffect(() => {
+    if (!showLaunchpad || viewProjectId === null || !projectSettingsCached) return;
+    refreshCachedProjectPortalLinks(viewProjectId).catch((error: unknown) =>
+      logError("Failed to refresh the project's Portal links", error)
+    );
+  }, [showLaunchpad, viewProjectId, projectSettingsCached]);
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
   // Main reports history as soon as it shows a tab, which can land just ahead

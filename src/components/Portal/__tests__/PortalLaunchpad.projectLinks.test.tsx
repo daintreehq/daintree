@@ -48,11 +48,13 @@ describe("PortalLaunchpad project links (#17091)", () => {
   });
 
   it("marks only the links the Assistant added", () => {
-    const { getAllByText } = render(
+    const { getByText } = render(
       <PortalLaunchpad links={[]} projectLinks={[staging, prod]} onOpenUrl={vi.fn()} />
     );
 
-    expect(getAllByText("Assistant")).toHaveLength(1);
+    const rowText = (title: string) => getByText(title).closest("li")?.textContent ?? "";
+    expect(rowText("Staging")).toContain("Assistant");
+    expect(rowText("Production")).not.toContain("Assistant");
   });
 
   it("shows a project's links with no chat service, instead of the empty state", () => {

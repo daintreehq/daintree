@@ -1174,7 +1174,24 @@ describe("ProjectSettingsManager caching", () => {
       expect((await readFromDisk()).portalLinks).toEqual(added.links);
     });
 
-    it("keeps the stored links through a save carrying another list", async () => {
+    it("keeps the stored links through saves that carry none or another list", async () => {
+      const added = await manager.changePortalLinks(projectId, "assistant", {
+        op: "add",
+        title: "Staging",
+        url: "https://staging.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        portalLinks: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+      });
+
+      expect((await readFromDisk()).portalLinks).toEqual(added.links);
+    });
+
+    it("keeps a removal through a save built from a copy read before it", async () => {
       const added = await manager.changePortalLinks(projectId, "assistant", {
         op: "add",
         title: "Staging",
