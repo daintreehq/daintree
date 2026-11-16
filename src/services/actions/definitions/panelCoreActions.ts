@@ -11,6 +11,7 @@ import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { fieldOutranksClose, takeUndoCloseKeyPress } from "@/services/terminal/undoCloseKey";
 import { undoFieldText } from "@/services/terminal/closeUndoOrder";
+import { undoCloseMenuStep } from "@/services/terminal/undoCloseMenu";
 import { isForegroundDispatch } from "./dispatchSource";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
@@ -401,12 +402,22 @@ export function registerPanelCoreActions(
     denyPluginDispatch: true,
     run: async (_args: unknown, ctx) => {
       // Read before any await: both belong to this press.
-      const viaTextUndo = takeUndoCloseKeyPress();
+      const viaKey = takeUndoCloseKeyPress();
       const pressedIn = document.activeElement;
       // Undo takes back what the person did, so only the person can ask.
       if (!isForegroundDispatch(ctx.dispatchSource)) return;
+      // Edit > Undo, chosen while it named a close (#17108): the text-undo
+      // key's own item, so it follows the key's rules.
+      const viaMenu = ctx.dispatchSource === "menu";
+      const viaTextUndo = viaKey || viaMenu;
       // A close still waiting to commit isn't in the history yet.
       flushOptimisticCloses();
+      // The label was read before the choice reached here. Typing newer than
+      // the close since, or the close gone, and Undo is the field's again.
+      if (viaMenu && undoCloseMenuStep() === null) {
+        undoFieldText(pressedIn);
+        return;
+      }
       const { undoLastClose } = await import("@/services/terminal/panelCloseUndo");
       // Pressed as text undo, a close with nothing left falls through to an
       // older one only while nothing newer than that one waits in the focused

@@ -2782,6 +2782,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "menu:set-undo-close": {
+    args: [state: import("../menu.js").UndoCloseMenuState];
+    result: void;
+  };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
     result: void;

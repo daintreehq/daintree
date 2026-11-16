@@ -81,6 +81,7 @@ export { useWorktreeActions } from "./useWorktreeActions";
 export type { WorktreeActions } from "./useWorktreeActions";
 
 export { useMenuActions } from "./useMenuActions";
+export { useUndoCloseMenuLabel } from "./useUndoCloseMenuLabel";
 
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";

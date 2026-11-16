@@ -2,7 +2,7 @@ import { isMac } from "@/lib/platform";
 import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleOwner";
 import { hasEditsSinceClose } from "./closeUndoOrder";
 import { flushOptimisticCloses } from "./optimisticPanelClose";
-import { peekUndoCloseStep } from "./panelCloseHistory";
+import { peekUndoCloseStep, type CloseStep } from "./panelCloseHistory";
 
 export const UNDO_CLOSE_ACTION_ID = "panel.undoClose";
 
@@ -62,8 +62,23 @@ export function undoCloseTakesKey(
   if (target.closest(`[${PLUGIN_STYLE_OWNER_ATTRIBUTE}]`) !== null) return false;
   // A close still waiting to commit is the newest one to take back.
   flushOptimisticCloses();
+  return undoCloseStepFor(target, inTerminal, textUndoKey) !== null;
+}
+
+/**
+ * The close the undo-close key would reopen from `target`, or `null` when the
+ * key stays with what holds focus: {@link undoCloseTakesKey} without its
+ * flush, so asking commits nothing. A close still waiting to commit isn't
+ * counted until it does.
+ */
+export function undoCloseStepFor(
+  target: Element,
+  inTerminal: boolean,
+  textUndoKey: boolean
+): CloseStep | null {
+  if (target.closest(`[${PLUGIN_STYLE_OWNER_ATTRIBUTE}]`) !== null) return null;
   const step = peekUndoCloseStep();
-  if (step === null) return false;
-  if (inTerminal || !textUndoKey) return true;
-  return !fieldOutranksClose(target, step.seq);
+  if (step === null) return null;
+  if (inTerminal || !textUndoKey) return step;
+  return fieldOutranksClose(target, step.seq) ? null : step;
 }
