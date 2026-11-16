@@ -34,9 +34,8 @@ vi.mock("../LocalCommitsDropdown", async () => {
   };
 });
 
-const { LazyLocalCommitsDropdown, preloadLocalCommitsDropdown } = await import(
-  "../LazyLocalCommitsDropdown"
-);
+const { LazyLocalCommitsDropdown, preloadLocalCommitsDropdown } =
+  await import("../LazyLocalCommitsDropdown");
 
 async function flush() {
   await act(async () => {

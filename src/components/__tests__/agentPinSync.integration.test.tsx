@@ -399,10 +399,7 @@ vi.mock("@/components/Settings/SettingsSwitch", () => ({
 // launcher keeps its active row in view through it on every selection move.
 Element.prototype.scrollIntoView = vi.fn();
 
-import {
-  DockLaunchButton,
-  preloadDockLaunchPalette,
-} from "@/components/Layout/DockLaunchButton";
+import { DockLaunchButton, preloadDockLaunchPalette } from "@/components/Layout/DockLaunchButton";
 
 // The launcher's palette is its own chunk; loaded once so it renders with the trigger.
 beforeAll(() => preloadDockLaunchPalette());
