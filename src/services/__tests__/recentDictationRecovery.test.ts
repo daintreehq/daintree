@@ -7,11 +7,9 @@ const focus = vi.hoisted(() => ({
   assistantLast: false,
 }));
 
-vi.mock("@/services/VoiceRecordingService", () => ({
-  voiceRecordingService: {
-    getFocusedComposerTarget: (assistant: boolean) =>
-      assistant ? focus.assistantTarget : focus.target,
-  },
+vi.mock("@/services/voiceDictationTarget", () => ({
+  resolveFocusedComposerTarget: (assistant: boolean) =>
+    assistant ? focus.assistantTarget : focus.target,
 }));
 vi.mock("@/lib/composerSurface", () => ({ wasAssistantLastFocused: () => focus.assistantLast }));
 vi.mock("@/store/macroFocusStore", () => ({ isAssistantFocused: () => false }));

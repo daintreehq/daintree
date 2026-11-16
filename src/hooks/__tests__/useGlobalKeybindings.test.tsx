@@ -25,6 +25,7 @@ function parseComboLite(combo: string) {
 }
 
 const mocks = vi.hoisted(() => ({
+  noteVoiceShortcutKeydown: vi.fn(),
   panelState: { focusedId: null as string | null },
   keybindingService: {
     resolveKeybinding: vi.fn(),
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
     // By default every action fires on just its effective combo; tests that
     // need a second binding (Windows' Ctrl+F4) set their own.
     getTriggerCombos: vi.fn<(actionId: string) => string[]>(() => []),
+    getEffectiveCombos: vi.fn<(actionId: string) => string[]>(() => []),
     getChordCompletions: vi.fn<
       () => Array<{ actionId: string; secondKey: string; description: string }>
     >(() => []),
@@ -96,6 +98,11 @@ vi.mock("@/services/KeybindingService", () => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
+}));
+
+vi.mock("@/services/voiceRecordingRuntime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/voiceRecordingRuntime")>()),
+  noteVoiceShortcutKeydown: mocks.noteVoiceShortcutKeydown,
 }));
 
 vi.mock("../../store", () => ({
@@ -2646,4 +2653,58 @@ describe("useGlobalKeybindings — Mod+L inside a code viewer", () => {
 
     expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("useGlobalKeybindings — a voice key's press for the voice service (#17031)", () => {
+  function pressBoundTo(actionId: string) {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "d",
+          code: "KeyD",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+  }
+
+  it.each(["voiceInput.toggle", "voiceInput.toggleAssistant", "voiceInput.rewriteSelection"])(
+    "hands %s's press over before dispatching it, so a hold can end on release",
+    (actionId) => {
+      pressBoundTo(actionId);
+
+      expect(mocks.noteVoiceShortcutKeydown).toHaveBeenCalledTimes(1);
+      expect(mocks.noteVoiceShortcutKeydown.mock.calls[0]![0]).toMatchObject({ code: "KeyD" });
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        actionId,
+        undefined,
+        expect.anything()
+      );
+      expect(mocks.noteVoiceShortcutKeydown.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.actionService.dispatch.mock.invocationCallOrder[0]!
+      );
+    }
+  );
+
+  it.each(["voiceInput.stopAndSend", "terminal.close"])(
+    "hands no press over for %s, which starts no recording",
+    (actionId) => {
+      pressBoundTo(actionId);
+
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        actionId,
+        undefined,
+        expect.anything()
+      );
+      expect(mocks.noteVoiceShortcutKeydown).not.toHaveBeenCalled();
+    }
+  );
 });

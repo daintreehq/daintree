@@ -19,7 +19,6 @@ import {
   shiftPausePositions,
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
-import { panelHasComposer } from "@/components/Terminal/terminalComposer";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isPtyPanel } from "@shared/types/panel";
@@ -76,18 +75,29 @@ import {
   VOICE_STOP_AUDIO_LOST_CODE,
   type VoiceCleanupFailure,
   type VoiceCorrectionModel,
+  type VoiceInputSettings,
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
   type VoiceTranscriptionProvider,
 } from "@shared/types";
 import {
+  clearSpokenSendHandlers,
+  getLoadedVoiceRecordingService,
+  getSpokenSendHandler,
+  isVoiceInputConfigured,
+  matchesVoiceStartShortcut,
+  onSpokenSend,
+  setInitializedVoiceRecordingService,
+  type PendingVoiceShortcutPress,
+} from "@/services/voiceRecordingRuntime";
+import {
   TRANSCRIPTION_ITEM_FAILED_CODE,
   VOICE_WORKSPACE_NAME_MAX_LENGTH,
 } from "@shared/types/voice";
 import type { HostId } from "@shared/types/remoteHosts";
 import type { VoiceCorrectionVerdict, VoiceStopReason } from "@shared/types/voiceSessionSummary";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { resolveAssistantTarget, resolveDictationTarget } from "@/services/voiceDictationTarget";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { registerEscapeFallback } from "@/lib/escapeStack";
@@ -99,7 +109,6 @@ import {
   voiceContext,
   type VoiceContext,
 } from "@/services/canopyReplyDictation";
-import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -234,9 +243,6 @@ function viewWorkspaceName(): string | undefined {
 }
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
   "Dictation stopped because it started in another window or project.";
-
-const spokenSendKey = (panelId: string, projectId: string | undefined) =>
-  `${projectId ?? ""}\0${panelId}`;
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
@@ -873,6 +879,9 @@ class VoiceRecordingService {
   private selectedDeviceId = "";
   private selectedDeviceLabel = "";
   private recordingMode: VoiceRecordingMode = "tap-or-hold";
+  // Whether the settings last read here have dictation on, so the keydown
+  // listener can turn every other keystroke away on one field read.
+  private configured = false;
   // The voice shortcut press that is down right now, outside toggle mode.
   // `claimed` once that press started (or resumed) a recording, so only its
   // release can end it. Cleared on release, stop, window blur, or Escape.
@@ -999,7 +1008,6 @@ class VoiceRecordingService {
   // The composer showing each panel's draft, which owns its send, keyed by
   // panel and draft scope: an isolated composer on the same terminal keeps a
   // draft of its own and must not take the pane's send.
-  private spokenSendHandlers = new Map<string, (options?: VoiceSendOptions) => void>();
   private pendingRewrites = new Set<PendingRewrite>();
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
@@ -1025,9 +1033,11 @@ class VoiceRecordingService {
   private pauseStopsAt: number | null = null;
   private idleStopsAt: number | null = null;
 
-  initialize(): void {
+  /** `settings`, when the caller has just read them, stand in for a fresh read. */
+  initialize(settings?: VoiceInputSettings): void {
     if (this.initialized) return;
     this.initialized = true;
+    setInitializedVoiceRecordingService(this);
     logDebug(`${LOG_PREFIX} Initializing service`);
 
     const voiceInput = window.electron?.voiceInput;
@@ -1683,24 +1693,12 @@ class VoiceRecordingService {
     const handleShortcutKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") this.escapeRepeat = e.repeat;
       if (e.repeat) return;
-      // Every combo that starts recording has to arm the release, or a second
-      // override combo would start push-to-talk that its keyup can't stop.
-      const matches = [
-        ...keybindingService.getEffectiveCombos("voiceInput.toggle"),
-        ...keybindingService.getEffectiveCombos("voiceInput.toggleAssistant"),
-        ...keybindingService.getEffectiveCombos("voiceInput.rewriteSelection"),
-      ].some((combo) => keybindingService.matchesEvent(e, combo));
-      if (!matches) return;
-      this.noteShortcutPress(e.timeStamp);
-      if (this.recordingMode === "toggle") return;
-      const claimed = this.claimedAt !== null && this.claimedAt >= e.timeStamp;
-      this.claimedAt = null;
-      this.heldPress = {
-        code: e.code,
-        pressedAt: performance.now(),
-        claimed,
-        speechChunks: 0,
-      };
+      // Every keystroke passes through here, so with dictation off it costs one
+      // read. The keybinding resolver hands a voice key over instead then
+      // (`noteVoiceShortcutKeydown`), for the start it dispatches to adopt.
+      if (!this.configured) return;
+      if (!matchesVoiceStartShortcut(e)) return;
+      this.recordShortcutPress(e.code, e.timeStamp, performance.now());
     };
     window.addEventListener("keydown", handleShortcutKeyDown, { capture: true });
     this.unsubscribers.push(() =>
@@ -1734,15 +1732,20 @@ class VoiceRecordingService {
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
 
-    void this.refreshConfiguration();
+    if (settings) this.applySettings(settings);
+    else void this.refreshConfiguration();
   }
 
   async refreshConfiguration(): Promise<boolean> {
-    const settings = await window.electron.voiceInput.getSettings();
+    return this.applySettings(await window.electron.voiceInput.getSettings());
+  }
+
+  private applySettings(settings: VoiceInputSettings): boolean {
     // "Configured" means the selected provider has its own API key. The cleanup
     // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
-    const isConfigured = settings.enabled && hasProviderKey;
+    const isConfigured = isVoiceInputConfigured(settings);
+    this.configured = isConfigured;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
@@ -2280,6 +2283,33 @@ class VoiceRecordingService {
       );
     }
     return stopping;
+  }
+
+  private recordShortcutPress(code: string, timeStamp: number, pressedAt: number): void {
+    this.noteShortcutPress(timeStamp);
+    if (this.recordingMode === "toggle") return;
+    const claimed = this.claimedAt !== null && this.claimedAt >= timeStamp;
+    this.claimedAt = null;
+    this.heldPress = { code, pressedAt, claimed, speechChunks: 0 };
+  }
+
+  /** Whether this view's keydown listener records voice key presses itself. */
+  recordsShortcutPresses(): boolean {
+    return this.configured;
+  }
+
+  /**
+   * A voice key pressed before this view's listener could record it: the
+   * service was still loading, or dictation was off here when it went down.
+   * One already released was a tap, and leaves the recording running.
+   */
+  adoptShortcutPress(press: PendingVoiceShortcutPress | null): void {
+    if (!press) return;
+    if (press.released) {
+      this.noteShortcutPress(press.timeStamp);
+      return;
+    }
+    this.recordShortcutPress(press.code, press.timeStamp, press.pressedAt);
   }
 
   /** Hand the press that is down right now to the recording it started. */
@@ -5704,54 +5734,11 @@ class VoiceRecordingService {
 
   /** The pane as a dictation target, or null when it has no composer to show the words. */
   getDictationTarget(panelId: string): VoiceRecordingTarget | null {
-    const panel = usePanelStore.getState().panelsById[panelId];
-    if (!panel) return null;
-    const armed = useFleetArmingStore.getState().armedIds;
-    if (
-      !panelHasComposer(panel, {
-        hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-        isFleetArmed: armed.has(panelId),
-        fleetSize: armed.size,
-      })
-    ) {
-      return null;
-    }
-
-    const currentProject = useProjectStore.getState().currentProject;
-    const worktree = panel.worktreeId
-      ? getCurrentViewStore().getState().worktrees.get(panel.worktreeId)
-      : undefined;
-
-    return {
-      panelId: panel.id,
-      panelTitle: panel.title,
-      projectId: currentProject?.id,
-      projectName: currentProject?.name,
-      worktreeId: panel.worktreeId,
-      worktreeLabel: worktree?.isMainWorktree ? worktree?.name : worktree?.branch || worktree?.name,
-    };
+    return resolveDictationTarget(panelId);
   }
 
   private getAssistantTarget(): VoiceRecordingTarget | null {
-    // The ACTIVE lane (#12108): dictation is aimed at the session on screen,
-    // not at whichever one happens to be running in the background.
-    const terminalId = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
-    if (!terminalId) return null;
-
-    // Guard the brief window where the assistant terminal has been trashed (or
-    // not yet committed to panelStore) but helpPanelStore.terminalId is still
-    // set — mirrors getFocusedPanelTarget(). A missing/trashed panel means the
-    // assistant is starting or tearing down, so dictation must not target it.
-    const panelEntry = usePanelStore.getState().panelsById[terminalId];
-    if (!panelEntry || panelEntry.location === "trash") return null;
-
-    const currentProject = useProjectStore.getState().currentProject;
-    return {
-      panelId: terminalId,
-      panelTitle: "Daintree Assistant",
-      projectId: currentProject?.id,
-      projectName: currentProject?.name,
-    };
+    return resolveAssistantTarget();
   }
 
   /**
@@ -6531,13 +6518,7 @@ class VoiceRecordingService {
     projectId: string | undefined,
     handler: (options?: VoiceSendOptions) => void
   ): () => void {
-    const key = spokenSendKey(panelId, projectId);
-    this.spokenSendHandlers.set(key, handler);
-    return () => {
-      if (this.spokenSendHandlers.get(key) === handler) {
-        this.spokenSendHandlers.delete(key);
-      }
-    };
+    return onSpokenSend(panelId, projectId, handler);
   }
 
   /** Whether the session panel's Send has a composer to send from. */
@@ -6573,9 +6554,7 @@ class VoiceRecordingService {
     const { activeTarget, status } = useVoiceRecordingStore.getState();
     if (!activeTarget || !isActiveVoiceSession(status)) return { unsent: "no_session" };
     if (status === "finishing") return { unsent: "session_finishing" };
-    const send = this.spokenSendHandlers.get(
-      spokenSendKey(activeTarget.panelId, activeTarget.projectId)
-    );
+    const send = getSpokenSendHandler(activeTarget.panelId, activeTarget.projectId);
     return send ? { send } : { unsent: "composer_unavailable" };
   }
 
@@ -6612,7 +6591,7 @@ class VoiceRecordingService {
       return;
     }
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
-    const handler = this.spokenSendHandlers.get(spokenSendKey(panelId, projectId));
+    const handler = getSpokenSendHandler(panelId, projectId);
     // A Canopy reply off screen, or on its way off as Canopy closes, has
     // nothing to send from: its words stay in its draft and the dictation
     // goes on (#14778).
@@ -6678,7 +6657,8 @@ class VoiceRecordingService {
     this.resetChunking();
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
-    this.spokenSendHandlers.clear();
+    clearSpokenSendHandlers();
+    if (getLoadedVoiceRecordingService() === this) setInitializedVoiceRecordingService(null);
     this.discardedSessionIds.clear();
     this.discardedSessionPanels.clear();
     for (const unsub of this.unsubscribers) {
@@ -7019,7 +6999,10 @@ export const voiceRecordingService = new VoiceRecordingService();
 // singleton. Without cleanup, the old singleton's ipcRenderer.on listeners
 // stay alive and forward every event twice, causing text duplication.
 if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
+  // Nothing else initializes the replacement: the runtime loaded the old one.
+  if (import.meta.hot.data.initialized === true) voiceRecordingService.initialize();
+  import.meta.hot.dispose((data: { initialized?: boolean }) => {
+    data.initialized = getLoadedVoiceRecordingService() === voiceRecordingService;
     voiceRecordingService.destroy();
   });
 }

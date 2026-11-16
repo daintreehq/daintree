@@ -4716,6 +4716,101 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     for (const listener of keyupListeners) listener({ code: "Period" });
     expect(stopSpy).toHaveBeenCalledTimes(1);
   });
+
+  // A voice key the keybinding resolver saw while this listener couldn't
+  // record it: the service was still loading, or dictation was off here (#17031).
+  describe("a press handed over by the keybinding resolver (#17031)", () => {
+    async function loadService() {
+      const electron = buildPttElectronStub();
+      const { windowListeners } = setupGlobals(electron);
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+      voiceRecordingService.initialize();
+      await vi.waitFor(() => {
+        expect(voiceRecordingService.recordsShortcutPresses()).toBe(true);
+      });
+      const releaseKey = (code: string) => {
+        for (const listener of windowListeners["keyup"] ?? []) listener({ code });
+      };
+      return { voiceRecordingService, stopSpy, releaseKey };
+    }
+
+    it("ends a push-to-talk recording when the adopted key comes back up", async () => {
+      const { voiceRecordingService, stopSpy, releaseKey } = await loadService();
+
+      voiceRecordingService.adoptShortcutPress({
+        code: "Period",
+        timeStamp: 0,
+        pressedAt: performance.now(),
+        released: false,
+      });
+      await startFromPress(voiceRecordingService);
+      releaseKey("Period");
+
+      expect(stopSpy).toHaveBeenCalledWith(
+        "Dictation stopped.",
+        expect.objectContaining({ preserveLiveText: true })
+      );
+    });
+
+    it("leaves the recording running for a press already released while it loaded", async () => {
+      const { voiceRecordingService, stopSpy, releaseKey } = await loadService();
+
+      voiceRecordingService.adoptShortcutPress({
+        code: "Period",
+        timeStamp: 0,
+        pressedAt: performance.now(),
+        released: true,
+      });
+      await startFromPress(voiceRecordingService);
+      releaseKey("Period");
+
+      expect(stopSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("matches no keystroke against the voice keys while dictation is off here (#17031)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: false,
+      openaiApiKey: "sk-key",
+      recordingMode: "push-to-talk",
+    });
+    const { windowListeners } = setupGlobals(electron);
+    const { keybindingService } = await import("@/services/KeybindingService");
+    const matchesEvent = vi.mocked(keybindingService.matchesEvent);
+    const getEffectiveCombos = vi.mocked(keybindingService.getEffectiveCombos);
+    matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
+    );
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+    await Promise.resolve();
+    matchesEvent.mockClear();
+    getEffectiveCombos.mockClear();
+
+    const downEvent = {
+      code: "Period",
+      key: ".",
+      repeat: false,
+      metaKey: true,
+      shiftKey: false,
+      altKey: false,
+      ctrlKey: false,
+    };
+    for (const listener of windowListeners["keydown"] ?? []) listener(downEvent);
+
+    expect(voiceRecordingService.recordsShortcutPresses()).toBe(false);
+    expect(getEffectiveCombos).not.toHaveBeenCalled();
+    expect(matchesEvent).not.toHaveBeenCalled();
+    await startFromPress(voiceRecordingService);
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("VoiceRecordingService — a session another view owns (#14601)", () => {

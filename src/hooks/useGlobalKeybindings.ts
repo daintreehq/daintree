@@ -23,6 +23,7 @@ import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
+import { isVoiceStartAction, noteVoiceShortcutKeydown } from "@/services/voiceRecordingRuntime";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
@@ -461,6 +462,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
           // redirects runs its interactive sibling here too (git.commit →
           // Review Hub) instead of failing its own validation.
           const dispatchId = resolveInteractiveActionId(result.match.actionId);
+          // Before the dispatch awaits anything, so a hold is on record for the
+          // start even while the voice service is still loading.
+          if (isVoiceStartAction(dispatchId)) noteVoiceShortcutKeydown(e);
           void actionService
             .dispatch(dispatchId, undefined, {
               source: "keybinding",

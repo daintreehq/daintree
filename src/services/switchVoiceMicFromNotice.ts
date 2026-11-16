@@ -1,6 +1,6 @@
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { loadVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import type { VoiceMicNotice } from "@/store/voiceRecordingStore";
 
-export function switchVoiceMicFromNotice(notice: VoiceMicNotice): Promise<void> {
-  return voiceRecordingService.switchToMicFromNotice(notice);
+export async function switchVoiceMicFromNotice(notice: VoiceMicNotice): Promise<void> {
+  return (await loadVoiceRecordingService()).switchToMicFromNotice(notice);
 }

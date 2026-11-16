@@ -5,6 +5,7 @@
  * reaches the other's.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 
 vi.mock("@/lib/trustedTypesPolicy", () => ({
   createTrustedHTML: (s: string) => s,
@@ -170,6 +171,12 @@ async function sendFrom(view: EditorView, text: string) {
     runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
   });
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("HybridInputBar — Canopy's reply beside the pane's own composer", () => {
   it("offers the reply a mic of its own, and a plain isolated composer none", async () => {

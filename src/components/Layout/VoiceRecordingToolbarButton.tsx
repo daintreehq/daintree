@@ -21,7 +21,7 @@ import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
 import { OwnVoiceSessionPanel } from "./OwnVoiceSessionPanel";
 import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { withVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { isCanopyReplyTarget } from "@/services/canopyReplyDictation";
 import { useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
@@ -40,6 +40,7 @@ import type {
   VoiceSessionSnapshot,
 } from "@shared/types";
 import { ElsewhereVoiceSessionPanel } from "./ElsewhereVoiceSessionPanel";
+import { VOICE_SLOT_CLASS, VoiceRecordingPlaceholder } from "./VoiceRecordingToolbarSlot";
 import { getElsewhereLevel } from "@/services/voiceElsewhereLevel";
 
 // The level meter's envelope: a rise fast enough that a syllable registers at
@@ -61,11 +62,6 @@ const MAX_FRAME_GAP = 0.25; // sec
 const WAVE_WEIGHTS = [0.6, 1, 0.8, 0.65] as const;
 // Listening under reduced motion: one still shape at full ink.
 const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
-
-// One width for every state the slot shows — placeholder, locked, elsewhere,
-// and the mic with its waveform — so starting or ending a session never moves
-// the right-aligned items.
-const VOICE_SLOT_CLASS = "h-8 w-11";
 
 function VoiceLockedButton({
   label,
@@ -207,7 +203,9 @@ function VoiceElsewhereIndicator({
               size="icon"
               data-toolbar-item={dataToolbarItem}
               onClick={() => {
-                void voiceRecordingService.revealSessionElsewhere(session.sessionId);
+                withVoiceRecordingService((voice) =>
+                  voice.revealSessionElsewhere(session.sessionId)
+                );
               }}
               className={cn("toolbar-icon-button relative text-text-secondary", VOICE_SLOT_CLASS)}
               aria-label={`${title}. Click to go there.`}
@@ -236,7 +234,9 @@ function VoiceElsewhereIndicator({
   const isPaused = snapshot.phase === "paused";
   const canPause = isPaused || snapshot.phase === "recording";
   const togglePause = () => {
-    if (canPause) void voiceRecordingService.setSessionElsewherePaused(sessionId, !isPaused);
+    if (canPause) {
+      withVoiceRecordingService((voice) => voice.setSessionElsewherePaused(sessionId, !isPaused));
+    }
   };
   return (
     // Keyed by session, so a panel left open never carries into the next one.
@@ -266,12 +266,12 @@ function VoiceElsewhereIndicator({
           stopShortcut={shortcut}
           onGoToTarget={() => {
             leave();
-            void voiceRecordingService.revealSessionElsewhere(sessionId);
+            withVoiceRecordingService((voice) => voice.revealSessionElsewhere(sessionId));
           }}
           onTogglePause={togglePause}
           onStop={() => {
             close();
-            void voiceRecordingService.stopSessionElsewhereById(sessionId);
+            withVoiceRecordingService((voice) => voice.stopSessionElsewhereById(sessionId));
           }}
         />
       )}
@@ -471,20 +471,6 @@ function VoiceWave({
   );
 }
 
-function VoiceRecordingPlaceholder() {
-  // Reserves the slot footprint so right-aligned toolbar items don't shift
-  // when a session starts/stops. Matches DevServerPlaceholder's pattern.
-  // No data-toolbar-item — the placeholder is non-interactive and must not
-  // appear in the toolbar's roving tabindex (Toolbar.getToolbarItems filters
-  // by offsetParent, which opacity-0 does NOT null out).
-  return (
-    <div
-      className={cn("toolbar-icon-button relative opacity-0 pointer-events-none", VOICE_SLOT_CLASS)}
-      aria-hidden="true"
-    />
-  );
-}
-
 export function VoiceRecordingToolbarButton({
   "data-toolbar-item": dataToolbarItem,
 }: {
@@ -588,7 +574,7 @@ export function VoiceRecordingToolbarButton({
               size="icon"
               data-toolbar-item={dataToolbarItem}
               onClick={() => {
-                void voiceRecordingService.focusActiveTarget();
+                withVoiceRecordingService((voice) => voice.focusActiveTarget());
               }}
               className={cn(
                 "toolbar-icon-button toolbar-live-control relative gap-1",
@@ -637,7 +623,7 @@ export function VoiceRecordingToolbarButton({
       waveMode={waveMode}
       isPaused={isPaused}
       canPause={isRecording || isPaused}
-      onTogglePause={() => voiceRecordingService.togglePause()}
+      onTogglePause={() => withVoiceRecordingService((voice) => voice.togglePause())}
       shortcut={shortcut}
       pauseShortcut={pauseShortcut}
       hover={hover}
@@ -649,18 +635,20 @@ export function VoiceRecordingToolbarButton({
           stopShortcut={shortcut}
           onGoToTarget={() => {
             leave();
-            void voiceRecordingService.goToActiveTarget();
+            withVoiceRecordingService((voice) => voice.goToActiveTarget());
           }}
-          onTogglePause={() => voiceRecordingService.togglePause()}
+          onTogglePause={() => withVoiceRecordingService((voice) => voice.togglePause())}
           sendShortcut={sendShortcut}
           onStop={() => {
             // The stop takes the keyboard back to the dictation, as its key does.
             leave();
-            void voiceRecordingService.stopActiveSession();
+            withVoiceRecordingService((voice) => voice.stopActiveSession());
           }}
           onSend={() => {
             close();
-            void voiceRecordingService.stopAndSend({ asker: "session_panel_send" });
+            withVoiceRecordingService((voice) =>
+              voice.stopAndSend({ asker: "session_panel_send" })
+            );
           }}
         />
       )}

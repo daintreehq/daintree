@@ -7,7 +7,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { VOICE_ORBIT_MIN_OPACITY } from "@/utils/terminalTheme";
 import { useVoiceRecordingStore, type CanopyReplyRow } from "@/store/voiceRecordingStore";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { withVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import type { VoiceInputError } from "@shared/types";
 import {
   COMPOSER_CONTROL_FOCUS_CLASS,
@@ -139,6 +139,17 @@ export function VoiceInputButton({
   const trackRef = useRef<HTMLSpanElement>(null);
   const iconRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number>(0);
+  // The panel the button serves now, null once it has gone: a click that has
+  // to load the service first starts nothing when the button has moved on to
+  // another tab's panel, or away.
+  const servedPanelRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    servedPanelRef.current = panelId;
+    return () => {
+      servedPanelRef.current = null;
+    };
+  }, [panelId]);
 
   useEffect(() => {
     if (!isOrbiting) return;
@@ -252,11 +263,11 @@ export function VoiceInputButton({
     // rather than a stop. The dictation key stops and keeps the text; Escape
     // (handled by the service) cancels and discards it.
     if (isPaused) {
-      voiceRecordingService.togglePause();
+      withVoiceRecordingService((voice) => voice.togglePause());
       return;
     }
 
-    void voiceRecordingService.toggle({
+    const target = {
       panelId,
       panelTitle,
       projectId,
@@ -267,6 +278,9 @@ export function VoiceInputButton({
       ...(terminalId !== undefined ? { terminalId } : {}),
       ...(otherHostId !== undefined ? { otherHostId } : {}),
       ...(canopyRow !== undefined ? { canopyRow } : {}),
+    };
+    withVoiceRecordingService((voice) => {
+      if (servedPanelRef.current === target.panelId) void voice.toggle(target);
     });
   }, [
     disabled,

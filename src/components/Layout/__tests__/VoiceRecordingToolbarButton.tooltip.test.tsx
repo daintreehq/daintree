@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { Profiler } from "react";
 import fs from "fs/promises";
 import path from "path";
@@ -13,6 +15,7 @@ import { readToolbarSource } from "./toolbarSource";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+const SLOT_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarSlot.tsx");
 
 const focusActiveTarget = vi.fn();
 const revealSessionElsewhere = vi.fn();
@@ -101,6 +104,12 @@ vi.mock("@/lib/tooltipShortcut", () => ({
     </span>
   ),
 }));
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceRecordingToolbarButton — a short tooltip over the session panel (#14920)", () => {
   beforeEach(() => {
@@ -715,10 +724,15 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
 
 describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   let source: string;
+  let slotSource: string;
   let toolbar: string;
 
   beforeEach(async () => {
-    [source, toolbar] = await Promise.all([fs.readFile(BUTTON_PATH, "utf-8"), readToolbarSource()]);
+    [source, slotSource, toolbar] = await Promise.all([
+      fs.readFile(BUTTON_PATH, "utf-8"),
+      fs.readFile(SLOT_PATH, "utf-8"),
+      readToolbarSource(),
+    ]);
   });
 
   describe("footprint reservation prevents layout shift", () => {
@@ -785,7 +799,10 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // data-toolbar-item would absorb arrow-key focus while being
       // aria-hidden + non-interactive. DevServerPlaceholder follows the
       // same rule — it has no data-toolbar-item either.
-      const placeholderBlock = source.match(/function VoiceRecordingPlaceholder[\s\S]*?\n\}/)?.[0];
+      // The placeholder lives with the slot, which shows it before the button loads.
+      const placeholderBlock = slotSource.match(
+        /function VoiceRecordingPlaceholder[\s\S]*?\n\}/
+      )?.[0];
       expect(placeholderBlock).toBeDefined();
       // Look only at the rendered JSX, not the explanatory comments above it.
       const placeholderJsx = placeholderBlock!.match(/return\s*\(([\s\S]*?)\);/)?.[1];

@@ -1,6 +1,6 @@
 import { isActiveVoiceSession, type RecentDictation } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { resolveFocusedComposerTarget } from "@/services/voiceDictationTarget";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -72,9 +72,7 @@ export function resolveRecentDictationDestination(): RecentDictationDestination 
   // menu that holds the keyboard now.
   const target = reply?.ok
     ? reply.target
-    : voiceRecordingService.getFocusedComposerTarget(
-        isAssistantFocused() || wasAssistantLastFocused()
-      );
+    : resolveFocusedComposerTarget(isAssistantFocused() || wasAssistantLastFocused());
   if (!target) return { ok: false, reason: "focus an agent's input first" };
   const { panelId } = target;
   const title = target.panelTitle?.trim() || "that panel";

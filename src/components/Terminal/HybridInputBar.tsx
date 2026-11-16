@@ -105,7 +105,7 @@ import {
   type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
 import { useKeyLabels } from "@/lib/keyboardLayout";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { getLoadedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import {
   registerInputController,
   selectHomeFocusTarget,
@@ -1697,7 +1697,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       // One for words a dictated send holds back still lands on them (#14804).
-      voiceRecordingService.discardPendingCorrections(voiceId, voiceSend?.sessions);
+      getLoadedVoiceRecordingService()?.discardPendingCorrections(voiceId, voiceSend?.sessions);
       const view = departed ? null : editorViewRef.current;
       const latest = latestRef.current;
       const doc =
@@ -1722,7 +1722,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const keepDraft = split
         ? () => {
             if (editorAheadOfStore()) return;
-            const kept = voiceRecordingService.keepHeldBackDictation(split);
+            const kept = getLoadedVoiceRecordingService()?.keepHeldBackDictation(split) ?? null;
             if (kept === null) return;
             applyEditorValue(kept, {
               selection: EditorSelection.create([EditorSelection.cursor(kept.length)]),
@@ -1740,7 +1740,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? draftUnchangedSince(readStored, readStored)
         : guardSentDraft(latest?.projectId);
       const isDraftUnchanged = split
-        ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
+        ? () =>
+            unchanged() ||
+            (!editorAheadOfStore() &&
+              getLoadedVoiceRecordingService()?.holdsBackFrom(split) === true)
         : unchanged;
 
       // A chip whose path the text no longer spells is left out, as the editor's own are.
@@ -2060,7 +2063,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </span>
       ) : null;
 
-    const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
+    const handleDictationEscape = () =>
+      getLoadedVoiceRecordingService()?.handleEscape(voiceId) ?? false;
     const dictationCancelConfirm = useDictationCancelConfirm(voiceId);
 
     const collapseEditor = () => setIsExpanded(false);
@@ -2437,7 +2441,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (!view || !latest || latest.disabled) return false;
           // The snapshot is what goes out; a correction landing during the
           // submit would rewrite the draft under it (#14611).
-          voiceRecordingService.discardPendingCorrections(voiceId);
+          getLoadedVoiceRecordingService()?.discardPendingCorrections(voiceId);
           const snapshot = view.state.doc.toString();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),

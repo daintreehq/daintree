@@ -845,7 +845,7 @@ describe("VoiceRecordingService — a send request that goes nowhere leaves a li
       // Lands two words in the draft, too short to send by voice.
       complete("deploy staging", "item-a", true);
       // Then with no composer to send from, three more.
-      Reflect.get(voiceRecordingService, "spokenSendHandlers").clear();
+      (await import("../voiceRecordingRuntime")).clearSpokenSendHandlers();
       complete("rotate production credentials", "item-b", true);
 
       const lines = await refusals();

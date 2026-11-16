@@ -3,6 +3,10 @@ import { keybindingService } from "@/services/KeybindingService";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import {
+  noteVoiceShortcutKeydown,
+  takePendingVoiceShortcutPress,
+} from "@/services/voiceRecordingRuntime";
 import { logError } from "@/utils/logger";
 
 const WINDOW_KEYS = ["canopy.toggle", "voiceInput.toggle", "voiceInput.stopAndSend"] as const;
@@ -97,6 +101,7 @@ async function runWindowKey(actionId: WindowKey): Promise<void> {
     if (actionId === "canopy.toggle") {
       returnToLastProjectWindow();
     } else if (actionId === "voiceInput.toggle") {
+      voiceRecordingService.adoptShortcutPress(takePendingVoiceShortcutPress());
       await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
     } else {
       await voiceRecordingService.stopAndSend();
@@ -150,6 +155,9 @@ export function startCanopyWindowKeys(): () => void {
     if (!handled) return;
     event.preventDefault();
     event.stopPropagation();
+    // Dictation turned on in a project window since this one read its
+    // settings leaves the service's own listener deaf to this press.
+    if (actionId === "voiceInput.toggle") noteVoiceShortcutKeydown(event);
     if (isWindowKey(actionId)) void runWindowKey(actionId);
   };
   window.addEventListener("keydown", onKeyDown, { capture: true });
