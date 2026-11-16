@@ -78,6 +78,8 @@ import type {
   SetDecisionsModelThresholdPayload,
 } from "../../../shared/types/decisionsModel.js";
 import type {
+  CancelDecisionQuestionPayload,
+  DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionPayload,
@@ -281,6 +283,10 @@ const getQuestionContentSchema = z
   .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
   .strict();
 
+const cancelQuestionSchema = z
+  .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
+  .strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -384,6 +390,23 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionQuestionSummaries(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    // A person withdrawing a pane's question from its view (#17099). `host`,
+    // so a Remote Host's pane has its question withdrawn by the Host that
+    // asked it; scoped like the reads, to the asking view's project from the
+    // request's context. Never starts Decisions.
+    cancelQuestion: opValidated(
+      CHANNELS.DECISIONS_CANCEL_QUESTION,
+      cancelQuestionSchema,
+      async (ctx, payload: CancelDecisionQuestionPayload): Promise<DecisionQuestionCancelResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.cancelDecisionQuestion(ctx.projectId, payload);
       },
       { withContext: true }
     ),

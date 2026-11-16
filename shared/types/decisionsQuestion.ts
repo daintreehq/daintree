@@ -12,6 +12,29 @@ export interface GetDecisionQuestionSummariesPayload {
   questionIds: string[];
 }
 
+/** A person withdrawing one of a pane's questions from that pane's view (#17099). */
+export interface CancelDecisionQuestionPayload {
+  terminalId: string;
+  questionId: string;
+}
+
+/**
+ * A person's cancel. `cancelled`: the store records it cancelled, either
+ * dropped here because it was never sent or already withdrawn.
+ * `cancelling`: the withdrawal is committed and goes to the relay, and the
+ * question is cancelled once the relay confirms it. `refused`: it isn't
+ * waiting any more (answered, expired, or never published), or the store
+ * holds no such question for this pane. `off` and `not-running` as for a read.
+ */
+export type DecisionQuestionCancelResult =
+  | { result: "cancelled" }
+  | { result: "cancelling" }
+  | { result: "refused"; reason: DecisionQuestionCancelRefusal }
+  | { result: "off" }
+  | { result: "not-running" };
+
+export type DecisionQuestionCancelRefusal = "answered" | "expired" | "publish-failed" | "not-found";
+
 /** The question's state in the local store: the library's `LocalStatus`. */
 export type DecisionQuestionStatus =
   | "queued"

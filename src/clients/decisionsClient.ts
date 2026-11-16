@@ -5,6 +5,7 @@ import type {
   DecisionsAttentionList,
 } from "@shared/types/decisionsAttention";
 import type {
+  DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionSummariesResult,
 } from "@shared/types/decisionsQuestion";
@@ -85,6 +86,14 @@ export const decisionsClient = {
     questionIds: string[]
   ): Promise<DecisionQuestionSummariesResult> =>
     window.electron.decisions.getQuestionSummaries({ terminalId, questionIds }),
+
+  /**
+   * Withdraws one of a pane's questions, on the machine that owns the pane:
+   * dropped there when it was never sent, otherwise withdrawn on every phone
+   * once the relay confirms it. Nothing is typed into the terminal.
+   */
+  cancelQuestion: (terminalId: string, questionId: string): Promise<DecisionQuestionCancelResult> =>
+    window.electron.decisions.cancelQuestion({ terminalId, questionId }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

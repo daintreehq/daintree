@@ -171,6 +171,9 @@ export const CHANNEL_LEASE_POLICY = {
   "copytree:inject": "driver",
   "copytree:progress": "free",
   "copytree:test-config": "free",
+  // A person managing a question in their Decisions inbox, as a phone does: no
+  // terminal, file or layout changes, and the pane that asked may be gone (#17099).
+  "decisions:cancel-question": "free",
   "decisions:get-pane-state": "free",
   "decisions:get-question-content": "free",
   "decisions:get-question-summaries": "free",

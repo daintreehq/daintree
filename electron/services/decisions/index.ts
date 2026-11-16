@@ -21,7 +21,12 @@ import {
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import { events } from "../events.js";
 import { setAnswerAttention } from "../runAnswerAttentionSource.js";
-import { enrollHost, verifiedDevices, type RelayConfig } from "@daintreehq/decisions-client";
+import {
+  BridgeError,
+  enrollHost,
+  verifiedDevices,
+  type RelayConfig,
+} from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import {
   DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH,
@@ -84,6 +89,8 @@ import type {
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
 import type {
+  CancelDecisionQuestionPayload,
+  DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionPayload,
@@ -824,6 +831,32 @@ export function getDecisionQuestionSummaries(
     }),
     { result: "not-running" }
   );
+}
+
+/**
+ * A person withdrawing one of a pane's questions from that pane's view
+ * (#17099), for the view of the project the pane belongs to. Never makes or
+ * starts the service. A connection that ended, or a store that stopped,
+ * under the cancel answers as not running.
+ */
+export async function cancelDecisionQuestion(
+  projectId: string | null,
+  payload: CancelDecisionQuestionPayload
+): Promise<DecisionQuestionCancelResult> {
+  const running = service;
+  if (running === null) return { result: "not-running" };
+  try {
+    return await running.cancelQuestion(projectId, payload);
+  } catch (error) {
+    if (error instanceof BridgeError && error.code === "not_found") {
+      return { result: "refused", reason: "not-found" };
+    }
+    const ended =
+      (error instanceof BridgeError && error.code === "forbidden") ||
+      (error instanceof Error && error.name === "RetiredAttemptError");
+    if (ended) return { result: "not-running" };
+    throw error;
+  }
 }
 
 /**
