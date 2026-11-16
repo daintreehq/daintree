@@ -86,7 +86,7 @@ import {
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
 import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
-import { helpSessionService } from "./services/HelpSessionService.js";
+import { loadedHelpSessionService } from "./services/helpSessionRuntime.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { setCanopyBrowserWindowFactory } from "./window/canopyWindow.js";
@@ -713,10 +713,9 @@ if (!gotTheLock) {
       // revoke-and-kill path below and take the assistant's sub-agents and
       // background shells with it. Injected here rather than imported by
       // electron/window/ so the eviction controller stays free of both services.
-      // The static import is free: PtyClient already value-imports
-      // HelpSessionService, so it is in the eager graph either way.
+      // Until the service loads there is no assistant to protect.
       assistantBackendsForProject: (projectId) =>
-        helpSessionService.getAssistantBackends(projectId),
+        loadedHelpSessionService()?.getAssistantBackends(projectId) ?? [],
       // The liveness half. PtyClient's spawn registry is main-local and
       // synchronous — written by spawn() before the host round-trip, dropped on
       // exit and on kill — so it is authoritative from the assistant's first
@@ -825,10 +824,13 @@ if (!gotTheLock) {
         // pin is finished.) Called directly, not through a dynamic import, so
         // the capture placeholder is written before this hook returns and the
         // reload is scheduled. A later eviction of the same view finds the
-        // sessions already revoked or joins the in-flight capture.
-        helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
-          console.warn("[main] revokeByWebContentsId failed during crash:", err);
-        });
+        // sessions already revoked or joins the in-flight capture. A service
+        // that never loaded holds no session to capture.
+        loadedHelpSessionService()
+          ?.revokeByWebContentsId(wc.id)
+          .catch((err) => {
+            console.warn("[main] revokeByWebContentsId failed during crash:", err);
+          });
         void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
           peekGlobalAssistantService()?.detachWebContents(wc.id)
         );
@@ -846,7 +848,7 @@ if (!gotTheLock) {
         if (win.isDestroyed() || wc.isDestroyed()) return;
         // A view back from a crash or a reload may take its project's
         // assistant over again, panel open or not (#13511).
-        helpSessionService.noteViewReady();
+        loadedHelpSessionService()?.noteViewReady();
         const wCtx = windowRegistry.getByWindowId(win.id);
         if (wCtx) {
           distributePortsToView(win, wCtx, wc, getPtyClient());

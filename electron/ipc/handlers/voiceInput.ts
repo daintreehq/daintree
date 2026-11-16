@@ -7,10 +7,10 @@ import type {
   VoiceSessionEvent,
   VoiceTranscriptionService,
 } from "../../services/VoiceTranscriptionService.js";
-import {
+import type {
   VoiceCorrectionService,
-  type VoiceCorrectionRequest,
-  type VoiceCorrectionSettings,
+  VoiceCorrectionRequest,
+  VoiceCorrectionSettings,
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -51,13 +51,12 @@ import {
   type UtteranceRelease,
 } from "../../services/voiceUtteranceCommands.js";
 import {
-  correctionInstructionsFor,
   isVoiceCleanupModel,
   isVoiceCleanupProvider,
   VOICE_CLEANUP_AI_MODEL,
   VOICE_CLEANUP_MODELS_BY_PROVIDER,
-  type CorrectionWorktreeContext,
-} from "../../../shared/config/voiceCorrection.js";
+} from "../../../shared/config/voiceCorrectionPolicy.js";
+import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorrection.js";
 import { cleanupApiKey, hasCleanupKey } from "../../../shared/config/voiceProviders.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
@@ -119,7 +118,6 @@ import {
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
-import { readVoiceOpeningCommand } from "../../services/voiceOpeningCommand.js";
 import {
   planSpokenCommand,
   voiceCommandKeyterms,
@@ -850,6 +848,20 @@ export function getVoiceSettings(): VoiceInputSettings {
   return merged;
 }
 
+// Cleanup, its prompts and file-link detection load with the first voice
+// session that uses them, never while handlers register at boot.
+async function getCorrectionService(): Promise<VoiceCorrectionService> {
+  if (correctionService) return correctionService;
+  const { VoiceCorrectionService } = await import("../../services/VoiceCorrectionService.js");
+  return (correctionService ??= new VoiceCorrectionService());
+}
+
+/** Whether a model's cleanup rules say what code names are: Luna's never learned of them. */
+async function cleanupReadsCodeNames(model: string): Promise<boolean> {
+  const { correctionInstructionsFor } = await import("../../../shared/config/voiceCorrection.js");
+  return correctionInstructionsFor(model).core.includes("<code_names>");
+}
+
 async function getService(): Promise<VoiceTranscriptionService> {
   if (service) return service;
   if (!servicePromise) {
@@ -1368,8 +1380,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
       const settings = getVoiceSettings();
       if (!mayCorrect(settings)) return false;
-      correctionService ??= new VoiceCorrectionService();
-      correctionService.preconnect(settings.correctionProvider);
+      void getCorrectionService()
+        .then((correction) => correction.preconnect(settings.correctionProvider))
+        .catch((error: unknown) => {
+          logDebug("[VoiceInput] Cleanup preconnect failed", voiceErrorLogFields(error));
+        });
       return true;
     };
     const prep = session.correctionPrep;
@@ -1616,8 +1631,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // or the key removed since the start sends nothing.
       const settings = getVoiceSettings();
       if (session.ended || !mayCorrect(settings)) return;
-      correctionService ??= new VoiceCorrectionService();
-      await correctionService.warm(
+      const correction = await getCorrectionService();
+      if (session.ended) return;
+      await correction.warm(
         correctionSettingsFor(
           settings,
           projectInfo,
@@ -1643,7 +1659,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     startedAt: number,
     terminalId: string | undefined
   ): Promise<VoiceStartOutcome> => {
-    const svc = await getService();
+    // Its transcripts look for spoken file references through the cleanup
+    // service, so that loads beside the transcriber rather than after it. A
+    // cleanup service that fails to load costs file links, not the session.
+    const [svc] = await Promise.all([
+      getService(),
+      getCorrectionService().catch((error: unknown) => {
+        logWarn("[VoiceInput] Cleanup service failed to load", voiceErrorLogFields(error));
+      }),
+    ]);
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
     if (session.sender.isDestroyed()) endSession(session, "cancelled");
@@ -1712,25 +1736,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // cleanup can use it. It rides beside the context rather than in it, so
     // the warm-up never waits on git, and the whole read, finding the worktree
     // included, is held to its budget.
-    const diffNames: Promise<string[]> =
-      keytermTarget.projectPath &&
-      session.intent === "dictation" &&
-      mayCorrect(settings) &&
-      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
-        ? withinBudget(
-            resolveFileLinkCwd(
-              session.projectId,
-              terminalId,
-              keytermTarget.projectPath,
-              deps.ptyClient
-            )
-              .then((cwd) => (cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []))
-              .catch((): string[] => []),
-            [],
-            "Worktree diff read",
-            DIFF_NAMES_READ_BUDGET_MS
+    const diffNamesRoot =
+      keytermTarget.projectPath && session.intent === "dictation" && mayCorrect(settings)
+        ? keytermTarget.projectPath
+        : null;
+    const diffNames: Promise<string[]> = diffNamesRoot
+      ? cleanupReadsCodeNames(settings.correctionModel)
+          .then((reads) =>
+            reads
+              ? withinBudget(
+                  resolveFileLinkCwd(session.projectId, terminalId, diffNamesRoot, deps.ptyClient)
+                    .then((cwd) =>
+                      cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []
+                    )
+                    .catch((): string[] => []),
+                  [],
+                  "Worktree diff read",
+                  DIFF_NAMES_READ_BUDGET_MS
+                )
+              : []
           )
-        : Promise.resolve([]);
+          .catch((): string[] => [])
+      : Promise.resolve([]);
     const sessionContext: Promise<CorrectionSessionContext> = Promise.all([
       dictationContext,
       paneReads ?? NO_PANE_KEYTERM_READS,
@@ -2312,8 +2339,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     const keyterms = taggedKeyterms ? recordAssembledTerms(taggedKeyterms) : null;
     const providerStartAt = performance.now();
-    // Its transcripts look for spoken file references through it.
-    correctionService ??= new VoiceCorrectionService();
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
@@ -2852,18 +2877,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       ));
     }
     // Only a command the target lists now, so the renderer names a token, never a file.
-    const openingCommandRead = readVoiceOpeningCommand(
-      commandTarget?.vocabulary.entries ?? [],
-      request.openingCommandToken
+    // Its YAML and TOML parsers load here, not at boot.
+    const openingCommandRead = import("../../services/voiceOpeningCommand.js").then(
+      ({ readVoiceOpeningCommand }) =>
+        readVoiceOpeningCommand(
+          commandTarget?.vocabulary.entries ?? [],
+          request.openingCommandToken
+        )
     );
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
     const { terminalOutput, agentReply } = terminalContext;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
     // Read where the repository names were, and only for rules that say what
-    // code names are: Luna's never learned of them.
+    // code names are.
     const codeNames =
-      context.codeNameRoot &&
-      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
+      context.codeNameRoot && (await cleanupReadsCodeNames(settings.correctionModel))
         ? await readCodeNames(
             context.codeNameRoot,
             [...context.repositoryNames, ...(await context.diffNames)],
@@ -2911,7 +2939,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       signal?: AbortSignal;
     } = {}
   ): Promise<CorrectReply> => {
-    const svc = (correctionService ??= new VoiceCorrectionService());
     // The request is its passage's alone. Only the view that sent it going
     // away cancels it, since the reply would reach no one: no session starting
     // or ending, the passage's own included, ever does.
@@ -2925,7 +2952,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (signal?.aborted) lifetime.abort();
     signal?.addEventListener("abort", cancel, { once: true });
     try {
-      const prepared = await (options.prepared ?? prepareCleanup(ctx, request, settings));
+      const [svc, prepared] = await Promise.all([
+        getCorrectionService(),
+        options.prepared ?? prepareCleanup(ctx, request, settings),
+      ]);
       if (lifetime.signal.aborted) {
         return {
           action: "no_change",
@@ -3004,16 +3034,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputRewritePayload,
     settings: VoiceInputSettings
   ): Promise<VoiceRewriteOutcome> => {
-    if (!correctionService) {
-      correctionService = new VoiceCorrectionService();
-    }
+    const correction = await getCorrectionService();
     const hostPane = hostPaneOf(ctx.projectId);
     const projectInfo = hostPane
       ? projectInfoOf(
           await readHostPaneProject(hostPane, { timeoutMs: HOST_PROJECT_READ_BUDGET_MS })
         )
       : getProjectInfo(ctx.projectId);
-    return correctionService.rewrite(request, {
+    return correction.rewrite(request, {
       model: settings.correctionModel,
       apiKey: cleanupApiKey(settings),
       customDictionary: dictionaryTerms(settings.dictionary),

@@ -2,6 +2,15 @@
 export const DEFAULT_FILE_EDITOR_MAX_BYTES = 2 * 1024 * 1024;
 
 /**
+ * Largest file a `contributes.fileEditors` entry may claim. Above this the
+ * renderer holds the whole document in a CodeMirror buffer plus a draft copy,
+ * so the ceiling is a memory bound, not a product limit — the built-in
+ * Markdown editor asks for 2 MiB. Kept here rather than beside the manifest
+ * schema so the file-document IPC handler can bound reads without loading it.
+ */
+export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
+
+/**
  * One `contributes.fileEditors` entry (#12323, #13809): an editor the host
  * file panel offers for matching files. Exactly one of `slot` / `view`.
  *

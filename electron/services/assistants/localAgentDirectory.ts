@@ -4,7 +4,7 @@ import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { LocalAgentDirectory, type ResumableLane } from "../agentDirectory.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getPendingHelpHibernationStore } from "../PendingHelpHibernationStore.js";
-import { helpSessionService } from "../HelpSessionService.js";
+import { loadedHelpSessionService } from "../helpSessionRuntime.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getAssistantConfirmations } from "./assistantConfirmations.js";
 import { readAssistantIdentity } from "../assistantIdentity.js";
@@ -23,9 +23,10 @@ export function getLocalAgentDirectory(): LocalAgentDirectory {
   directory ??= new LocalAgentDirectory({
     hostId: LOCAL_HOST_ID,
     now: () => Date.now(),
-    listRunningLanes: () => helpSessionService.listRunningLanes(),
+    // No lane runs before the session service loads.
+    listRunningLanes: () => loadedHelpSessionService()?.listRunningLanes() ?? [],
     getRunningLaneSession: (projectId, slot) =>
-      helpSessionService.getRunningLaneSession(projectId, slot),
+      loadedHelpSessionService()?.getRunningLaneSession(projectId, slot) ?? null,
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     // Read fresh: a cached inventory can describe a run that has since been replaced.
     readTerminals: async () => {

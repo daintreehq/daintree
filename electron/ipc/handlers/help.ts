@@ -3,6 +3,10 @@ import { defineIpcNamespace, op } from "../define.js";
 import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
+import {
+  loadedHelpSessionService,
+  whenHelpSessionServiceLoads,
+} from "../../services/helpSessionRuntime.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { webContents } from "electron";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
@@ -61,11 +65,6 @@ async function getHelpSessionService(): Promise<typeof HelpSessionServiceModule>
     cachedHelpSessionService = await import("../../services/HelpSessionService.js");
   }
   return cachedHelpSessionService;
-}
-
-/** The session service if something has loaded it; nothing can be detached before then. */
-function helpSessionServiceIfLoaded(): HelpSessionServiceModule.HelpSessionService | null {
-  return cachedHelpSessionService?.helpSessionService ?? null;
 }
 
 async function handleGetFolderPath(): Promise<string | null> {
@@ -891,7 +890,7 @@ function installDetachedAssistantAdoption(): () => void {
   // lease back after its view attaches.
   let offLease: (() => void) | null = null;
   return installDetachedAdoption({
-    detachedProjects: () => helpSessionServiceIfLoaded()?.detachedProjectIds() ?? [],
+    detachedProjects: () => loadedHelpSessionService()?.detachedProjectIds() ?? [],
     // A window here whose renderer crashed or is reloading keeps its id, but
     // has nothing to run the assistant's calls yet; its load finishing runs
     // this again (`noteViewReady`).
@@ -901,7 +900,7 @@ function installDetachedAssistantAdoption(): () => void {
         .filter((endpoint) => endpoint.kind === "remote-view" || localViewIsUp(endpoint.handle)),
     drivingEndpointId: (projectId) =>
       peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
-    detachedSlots: (projectId) => helpSessionServiceIfLoaded()?.detachedSlots(projectId) ?? [],
+    detachedSlots: (projectId) => loadedHelpSessionService()?.detachedSlots(projectId) ?? [],
     adopt: async (projectId, slot, endpoint) => {
       const { helpSessionService } = await getHelpSessionService();
       const view = isRemoteEndpointHandle(endpoint.handle)
@@ -932,7 +931,7 @@ function installDetachedAssistantAdoption(): () => void {
     adopted: (endpoint, projectId, slot, adopted) => {
       // A window here going is its WebContents going, which main already
       // follows; a remote view's endpoint is watched from here.
-      const service = helpSessionServiceIfLoaded();
+      const service = loadedHelpSessionService();
       if (service && endpoint.kind === "remote-view") {
         trackRemoteViewSessions(service, endpoint, projectId);
       }
@@ -953,20 +952,15 @@ function installDetachedAssistantAdoption(): () => void {
         watchLease();
         listener();
       });
-      // An assistant left with no view while someone already drives its project.
-      let disposed = false;
+      // An assistant left with no view while someone already drives its
+      // project. Watched from the moment the service loads, which is before it
+      // can hold an assistant, so nothing is missed by not loading it here.
       let offDetached: (() => void) | null = null;
-      void getHelpSessionService()
-        .then(({ helpSessionService }) => {
-          if (!disposed) offDetached = helpSessionService.addLaneDetachedListener(listener);
-        })
-        .catch((err: unknown) => {
-          logger.warn("Watching for assistants left with no view failed", {
-            reason: formatErrorMessage(err, "subscribe failed"),
-          });
-        });
+      const cancelWatch = whenHelpSessionServiceLoads((helpSessionService) => {
+        offDetached = helpSessionService.addLaneDetachedListener(listener);
+      });
       return () => {
-        disposed = true;
+        cancelWatch();
         offRegistry();
         offLease?.();
         offLease = null;

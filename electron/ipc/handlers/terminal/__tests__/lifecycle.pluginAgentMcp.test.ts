@@ -249,6 +249,18 @@ import {
   clearPluginAgentRegistryForTests,
   registerPluginAgents,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);

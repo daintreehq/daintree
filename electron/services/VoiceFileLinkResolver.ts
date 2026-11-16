@@ -4,7 +4,7 @@ import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import {
   VOICE_DICTATION_AI_MODEL,
   VOICE_DICTATION_REASONING_EFFORT,
-} from "../../shared/config/voiceCorrection.js";
+} from "../../shared/config/voiceCorrectionPolicy.js";
 
 const P = "[VoiceFileLinkResolver]";
 const NL_CONFIDENCE_THRESHOLD = 0.67;

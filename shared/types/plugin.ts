@@ -62,6 +62,7 @@ import type {
 } from "./plugin/fileEditors.js";
 export {
   DEFAULT_FILE_EDITOR_MAX_BYTES,
+  FILE_EDITOR_MAX_BYTES_CEILING,
   HOST_FILE_EDITOR_CHOICE,
   isFileEditorChoiceKey,
   fileEditorChoiceId,

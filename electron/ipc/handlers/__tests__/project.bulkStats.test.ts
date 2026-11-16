@@ -172,6 +172,18 @@ import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
 } from "../../../services/__tests__/helpers/assistantProjectionParity.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 // Disposes the stats/fleet pollers after each test; see the helper for why
 // dropping the disposer is what produced this file's CI flake. Still returns

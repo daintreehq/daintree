@@ -5,7 +5,7 @@ import type { AgentId } from "../../../shared/types/agent.js";
 import type { DriveLeaseHolder, HostDriverObservation } from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
+import { loadedHelpSessionService } from "../../services/helpSessionRuntime.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
@@ -127,8 +127,9 @@ export async function observeAgents(
     terminals,
     undefined,
     shelves?.getActiveSnoozes(),
-    (id) => helpSessionService.isPanelVisible(id),
-    (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+    // As the switcher reads them: an unloaded session service has no panel or lane.
+    (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
+    (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
     handBacks ? (id, spawnedAt) => handBacks.getRecord(id, spawnedAt) : undefined,
     shelves?.getAll(),
     canopyRefinementFor,

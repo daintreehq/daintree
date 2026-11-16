@@ -22,9 +22,7 @@ import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { installDatabaseBackupNotice } from "../services/databaseBackupNotice.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-// Free for eager import: PtyClient already value-imports HelpSessionService,
-// so this static edge adds zero boot cost — keep it that way.
-import { helpSessionService } from "../services/HelpSessionService.js";
+import { whenHelpSessionServiceLoads } from "../services/helpSessionRuntime.js";
 import {
   markPerformance,
   startEventLoopLagMonitor,
@@ -1421,32 +1419,31 @@ export async function initGlobalServices(
 
   if (windowRegistry) {
     const registryRef = windowRegistry;
-    // Wire `helpSessionService.mcpRegistry` synchronously by construction (no
-    // import, no await). The renderer can call `help:provision-session` as
-    // soon as IPC handlers are registered (a few hundred ms before the first
-    // deferred task runs); without this wire-up, `ensureMcpServerReady()`
-    // would no-op on the null registry and the assistant would launch with a
-    // stub `.mcp.json` missing the daintree entry. The setter is just a
-    // reference store — no MCP SDK loaded.
-    helpSessionService.setMcpRegistry(registryRef);
-    // Wired here with the reader itself lazy, for the same reason: the first
-    // provision can land before any deferred task has run.
-    helpSessionService.setProjectMetadataReader(async (projectId, projectPath) => {
-      const { readHelpSessionProjectFacts } =
-        await import("../services/helpSessionProjectMetadataReader.js");
-      return readHelpSessionProjectFacts(
-        projectId,
-        projectPath,
-        () => getCliAvailabilityServiceRef()?.getAvailability() ?? null
-      );
+    // Registered now and applied as the service loads, before whatever loaded
+    // it can provision. The renderer can call `help:provision-session` as soon
+    // as IPC handlers are registered (a few hundred ms before the first
+    // deferred task runs); without the registry, `ensureMcpServerReady()`
+    // would no-op and the assistant would launch with a stub `.mcp.json`
+    // missing the daintree entry. Neither setter loads the MCP SDK.
+    whenHelpSessionServiceLoads((helpSessionService) => {
+      helpSessionService.setMcpRegistry(registryRef);
+      helpSessionService.setProjectMetadataReader(async (projectId, projectPath) => {
+        const { readHelpSessionProjectFacts } =
+          await import("../services/helpSessionProjectMetadataReader.js");
+        return readHelpSessionProjectFacts(
+          projectId,
+          projectPath,
+          () => getCliAvailabilityServiceRef()?.getAvailability() ?? null
+        );
+      });
+      // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
+      // that revokes provisional session tokens minted by a launch that hung
+      // and was abandoned without the renderer revoking. The renderer watchdog
+      // is the primary fix; this catches the residual case (renderer crash /
+      // view torn down mid-launch). The timer is unref'd, so it never holds the
+      // process up.
+      helpSessionService.startOrphanSweep();
     });
-
-    // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
-    // that revokes provisional session tokens minted by a launch that hung and
-    // was abandoned without the renderer revoking. The renderer watchdog is the
-    // primary fix; this catches the residual case (renderer crash / view torn
-    // down mid-launch). The timer is unref'd, so it never holds the process up.
-    helpSessionService.startOrphanSweep();
 
     // Load the pending-hibernation file and wire it into HelpSessionService.
     // Floated, not awaited: the deadline is the user's first project switch
@@ -1462,7 +1459,9 @@ export async function initGlobalServices(
         await import("../services/PendingHelpHibernationStore.js");
       const pendingStore = getPendingHelpHibernationStore();
       await pendingStore.load();
-      helpSessionService.setPendingHibernationStore(pendingStore);
+      whenHelpSessionServiceLoads((helpSessionService) =>
+        helpSessionService.setPendingHibernationStore(pendingStore)
+      );
       return pendingStore;
     })().catch((err) => {
       console.warn("[MAIN] Failed to wire pending-hibernation store:", err);

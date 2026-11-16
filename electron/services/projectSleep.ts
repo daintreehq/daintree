@@ -2,7 +2,6 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { projectStore } from "./ProjectStore.js";
 import { getHibernationService } from "./HibernationService.js";
-import { helpSessionService } from "./HelpSessionService.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import {
   gracefulTeardownAndJournalProject,
@@ -226,6 +225,7 @@ async function runSleep(
     //
     // Best-effort: losing the resume entry must not fail the sleep.
     try {
+      const { helpSessionService } = await import("./HelpSessionService.js");
       await helpSessionService.revokeByProjectId(projectId);
     } catch (revokeError) {
       logError("project-sleep-help-revoke-failed", revokeError, { projectId });

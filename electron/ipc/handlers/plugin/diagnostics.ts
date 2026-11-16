@@ -14,8 +14,6 @@ import type {
   PluginManifestValidationResult,
   PluginManifestIssue,
 } from "../../../../shared/types/ipc/pluginValidation.js";
-import { getPluginManifestSchema } from "../../../schemas/plugin.js";
-import { collectManifestAdvisories } from "../../../schemas/pluginManifestAdvisories.js";
 import { collectPluginIconIssues } from "../../../services/plugin/pluginIconAssets.js";
 import { PLUGIN_METHOD_CHANNELS } from "../plugin.preload.js";
 import { stripUtf8Bom } from "../../../utils/stripUtf8Bom.js";
@@ -240,6 +238,12 @@ export async function handleValidateManifest(
     ? "location"
     : "declared-scope";
 
+  // The manifest schema is dozens of Zod modules; registering this handler at
+  // boot must not evaluate them.
+  const [{ getPluginManifestSchema }, { collectManifestAdvisories }] = await Promise.all([
+    import("../../../schemas/plugin.js"),
+    import("../../../schemas/pluginManifestAdvisories.js"),
+  ]);
   const parsed = getPluginManifestSchema(origin).safeParse(json);
   const rawName = (json as { name?: unknown } | null)?.name;
   const pluginId = typeof rawName === "string" && rawName.length > 0 ? rawName : null;

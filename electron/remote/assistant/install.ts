@@ -4,7 +4,10 @@ import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { getLocalAgentDirectory } from "../../services/assistants/localAgentDirectory.js";
 import { events } from "../../services/events.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
+import {
+  loadedHelpSessionService,
+  whenHelpSessionServiceLoads,
+} from "../../services/helpSessionRuntime.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
@@ -59,13 +62,32 @@ declare module "../runtime.js" {
 }
 
 /**
+ * The session service's lookups, read without loading it: Remote Hosts starts
+ * at launch, and a help session id exists only once the service has minted
+ * it, so until then each answers as it would for an unknown session.
+ */
+const helpSessions = {
+  getScheduledRunOf: (sessionId: string) =>
+    loadedHelpSessionService()?.getScheduledRunOf(sessionId) ?? null,
+  getSessionLane: (sessionId: string) =>
+    loadedHelpSessionService()?.getSessionLane(sessionId) ?? null,
+  getRunningLaneSession: (projectId: string, slot: number) =>
+    loadedHelpSessionService()?.getRunningLaneSession(projectId, slot) ?? null,
+  getWebContentsIdForSessionId: (sessionId: string) =>
+    loadedHelpSessionService()?.getWebContentsIdForSessionId(sessionId) ?? null,
+  getSessionAgent: (sessionId: string) =>
+    loadedHelpSessionService()?.getSessionAgent(sessionId) ?? null,
+  listRunningLanes: () => loadedHelpSessionService()?.listRunningLanes() ?? [],
+};
+
+/**
  * Whether a help session belongs to no view yet because this machine's own
  * schedule started it (#16169): main's, like the global assistant, until one
  * of this machine's views takes it over. One a remote Shell's view holds
  * never counts.
  */
 function isOwnScheduledWithoutView(helpSessionId: string, handle: number): boolean {
-  return handle === NO_VIEW_HANDLE && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+  return handle === NO_VIEW_HANDLE && helpSessions.getScheduledRunOf(helpSessionId) !== null;
 }
 
 /** How long a host's project listing may take to name a worker's project before it goes unnamed. */
@@ -81,7 +103,7 @@ function noteHostCallAnswer(
   answer: Parameters<NonNullable<HostCallRuntimeDeps["noteAnswered"]>>[0],
   listHostProjects: ((hostId: HostId) => Promise<readonly HostProjectSummary[]>) | undefined
 ): void {
-  const runId = helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
+  const runId = helpSessions.getScheduledRunOf(answer.helpSessionId)?.runId;
   if (runId === undefined) return;
   if (workerLaunchesIn(answer.tool, answer.args, answer.structured).terminalIds.length === 0) {
     return;
@@ -126,9 +148,9 @@ function noteHostCallAnswer(
  * has taken over yet (#16169).
  */
 function localRunOf(helpSessionId: string): OpenRun | null {
-  const lane = helpSessionService.getSessionLane(helpSessionId);
+  const lane = helpSessions.getSessionLane(helpSessionId);
   if (lane === null) return null;
-  const running = helpSessionService.getRunningLaneSession(lane.projectId, lane.slot);
+  const running = helpSessions.getRunningLaneSession(lane.projectId, lane.slot);
   if (running === null || running.sessionId !== helpSessionId) return null;
   // An assistant a remote Shell's view runs here is that Shell's, never this one's.
   const handle = running.projectViewWebContentsId;
@@ -243,7 +265,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       return projectStore.getProjectById(projectId) !== null;
     },
     openSession: async (spec) => {
-      const { mcpServerService } = await import("../../services/McpServerService.js");
+      const [{ mcpServerService }, { helpSessionService }] = await Promise.all([
+        import("../../services/McpServerService.js"),
+        import("../../services/HelpSessionService.js"),
+      ]);
       await helpSessionService.ensureAssistantControl();
       return mcpServerService.openRelaySession({
         tier: spec.tier,
@@ -288,17 +313,17 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   // shows it, never the focused one, and not at all while none does.
   const askingWindow = (helpSessionId: string): number | null => {
     const webContentsId = isGlobalAssistantId(
-      helpSessionService.getSessionLane(helpSessionId)?.projectId ?? ""
+      helpSessions.getSessionLane(helpSessionId)?.projectId ?? ""
     )
       ? (peekGlobalAssistantService()?.presenterWebContentsId(
           // The Canopy window shows the assistant but mounts no approval dialog.
           (id) => !isProjectlessAppView(id)
         ) ?? null)
-      : helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+      : helpSessions.getWebContentsIdForSessionId(helpSessionId);
     return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
   };
   const runtime = new HostCallRuntime({
-    getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
+    getSessionLane: (helpSessionId) => helpSessions.getSessionLane(helpSessionId),
     callerRun: localRunOf,
     client: () => getRemoteService("hostControlLinkClient") ?? null,
     hosts: () => deps.observeHosts(),
@@ -308,12 +333,12 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // From provisioning, before the run is confirmed: the view a session was opened in.
     // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
-      const lane = helpSessionService.getSessionLane(helpSessionId);
+      const lane = helpSessions.getSessionLane(helpSessionId);
       if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
-      const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+      const handle = helpSessions.getWebContentsIdForSessionId(helpSessionId);
       // A live session with no view answers null here; a schedule's is this machine's own.
       if (handle === null) {
-        return lane !== null && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+        return lane !== null && helpSessions.getScheduledRunOf(helpSessionId) !== null;
       }
       return !isRemoteEndpointHandle(handle);
     },
@@ -336,7 +361,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // the host's (#15698), for the tool it called (#16752).
     confirmationsSkipped: (helpSessionId, calledActionId) =>
       readAssistantConfirmationsSkipped(
-        helpSessionService.getSessionAgent(helpSessionId),
+        helpSessions.getSessionAgent(helpSessionId),
         calledActionId
       ),
     // A host's settings, read and changed by name with no view there (#14167).
@@ -383,17 +408,22 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   });
   // A help session that won't run again holds nothing it made in another
   // project; one relaunched onto a new PTY is the same assistant and keeps it.
-  const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
-    // Its watches were the earlier run's, whichever way it ended (#14463).
-    runtime.retireWatches(sessionId);
-    if (reason === "relaunched") return;
-    local.endHelpSession(sessionId);
-    runtime.endHelpSession(sessionId);
+  // Watched from the moment the service loads, before it can hold a session.
+  let offSessionEnded: (() => void) | null = null;
+  const cancelSessionWatch = whenHelpSessionServiceLoads((helpSessionService) => {
+    offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
+      // Its watches were the earlier run's, whichever way it ended (#14463).
+      runtime.retireWatches(sessionId);
+      if (reason === "relaunched") return;
+      local.endHelpSession(sessionId);
+      runtime.endHelpSession(sessionId);
+    });
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
   return () => {
-    offSessionEnded();
+    cancelSessionWatch();
+    offSessionEnded?.();
     unregisterCallRelay();
     unregisterRuntime();
     runtime.dispose();
@@ -434,10 +464,10 @@ export function installRetiredSendsNotice(
   };
   const attempt = (): void => {
     if (disposed || inFlight) return;
-    const run = helpSessionService
+    const run = helpSessions
       .listRunningLanes()
       .filter((lane) => lane.attached !== false)
-      .map((lane) => helpSessionService.getRunningLaneSession(lane.projectId, lane.slot))
+      .map((lane) => helpSessions.getRunningLaneSession(lane.projectId, lane.slot))
       .map((running) => (running ? localRunOf(running.sessionId) : null))
       .find((found): found is OpenRun => found !== null);
     if (!run) return;

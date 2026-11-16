@@ -23,6 +23,8 @@ import {
   compareToBaseline,
   formatBaseline,
   scanForbiddenModules,
+  FORBIDDEN_EAGER_PATTERNS,
+  MAIN_ON_DEMAND_PATTERNS,
 } from "./import-budget-lib.mjs";
 import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
@@ -97,7 +99,10 @@ function buildReport() {
   }
   const violations = scanSyncViolations(modules, ROOT);
   return {
-    forbidden: scanForbiddenModules(modules),
+    forbidden: scanForbiddenModules(modules, [
+      ...FORBIDDEN_EAGER_PATTERNS,
+      ...MAIN_ON_DEMAND_PATTERNS,
+    ]),
     moduleCount: modules.size,
     count: modules.size,
     modules: [...modules].sort(),

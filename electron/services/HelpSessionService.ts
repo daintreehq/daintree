@@ -50,6 +50,7 @@ import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
+import { publishHelpSessionService } from "./helpSessionRuntime.js";
 import {
   ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,
   ASSISTANT_AGENT_DIR_KEY_PATTERN,
@@ -3161,3 +3162,4 @@ export class HelpSessionService {
 
 export const helpSessionService = new HelpSessionService();
 setScheduledRunOfSession((sessionId) => helpSessionService.getScheduledRunOf(sessionId));
+publishHelpSessionService(helpSessionService);

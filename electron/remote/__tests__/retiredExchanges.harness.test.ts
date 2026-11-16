@@ -101,6 +101,18 @@ import type { LinkSession } from "../link/session.js";
 import { harnessState } from "./harness/harnessState.js";
 import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../services/persistence/migrations");

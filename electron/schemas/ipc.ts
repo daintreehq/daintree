@@ -17,7 +17,7 @@ import {
   VOICE_RECENT_PROMPTS_MAX,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
-} from "../../shared/config/voiceCorrection.js";
+} from "../../shared/config/voiceCorrectionPolicy.js";
 import {
   VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
   VOICE_WORKSPACE_NAME_MAX_LENGTH,
