@@ -75,6 +75,7 @@ function makeDelegate(): WorkerAnalysisDelegate {
     onBootComplete: vi.fn(),
     onPtyResponse: vi.fn(),
     getProcessState: () => null,
+    onProcessTreeRefresh: () => () => {},
     getAgentContext: () => ({ agentLive: false, agentState: undefined }),
     onMirrorGeometry: vi.fn(),
     onViewport: vi.fn(),
@@ -914,5 +915,164 @@ describe("WorkerAnalysisBackend feed accounting", () => {
       backend.resyncGeometry(120, 40);
       expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
     });
+  });
+});
+
+describe("WorkerAnalysisBackend process-state mirror (#17043)", () => {
+  type ProcessState = { hasActiveChildren: boolean; cpuUsage: number };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function processStateBackend(initial: ProcessState | null) {
+    const delivered: HostToWorkerMessage[] = [];
+    const control = { sendSucceeds: true };
+    let current = initial;
+    const listeners = new Set<() => void>();
+    const getProcessState = vi.fn(() => current);
+    const delegate: WorkerAnalysisDelegate = {
+      ...makeDelegate(),
+      getProcessState,
+      onProcessTreeRefresh: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const pool: AnalysisPoolHost = {
+      post: (_id, msg) => {
+        if (control.sendSucceeds) delivered.push(msg);
+        return control.sendSucceeds;
+      },
+      request: () => Promise.resolve(null),
+      unregister: () => {},
+    };
+    const backend = new WorkerAnalysisBackend(makeSpec("t1"), delegate, pool);
+    backend.init();
+    return {
+      backend,
+      control,
+      listeners,
+      getProcessState,
+      delivered,
+      pushes: () =>
+        delivered.filter((m) => m.type === "process-state") as Array<
+          Extract<HostToWorkerMessage, { type: "process-state" }>
+        >,
+      refresh: () => {
+        for (const listener of Array.from(listeners)) listener();
+      },
+      setState: (next: ProcessState | null) => {
+        current = next;
+      },
+    };
+  }
+
+  const monitor = { agentId: "claude", initialState: "idle", skipInitialStateEmit: false } as const;
+
+  it("pushes the first reading, then only readings that changed", () => {
+    const { backend, pushes, refresh, setState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    // The worker's own default is {true, 0}; the first push still goes.
+    expect(pushes()).toHaveLength(1);
+
+    refresh();
+    refresh();
+    expect(pushes()).toHaveLength(1);
+
+    setState({ hasActiveChildren: true, cpuUsage: 12.5 });
+    refresh();
+    setState({ hasActiveChildren: false, cpuUsage: 12.5 });
+    refresh();
+    refresh();
+    expect(pushes().map((m) => [m.hasActiveChildren, m.cpuUsage])).toEqual([
+      [true, 0],
+      [true, 12.5],
+      [false, 12.5],
+    ]);
+  });
+
+  it("does no process-state work between census refreshes", async () => {
+    vi.useFakeTimers();
+    const { backend, pushes, getProcessState } = processStateBackend({
+      hasActiveChildren: false,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    getProcessState.mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(getProcessState).not.toHaveBeenCalled();
+    expect(pushes()).toHaveLength(1);
+    backend.release();
+  });
+
+  it("never subscribes when the host has no validator to mirror", () => {
+    const { backend, listeners, delivered } = processStateBackend(null);
+    backend.startMonitor(monitor);
+
+    expect(listeners.size).toBe(0);
+    expect(delivered.find((m) => m.type === "monitor-start")).toMatchObject({
+      hasProcessValidator: false,
+    });
+    expect(delivered.some((m) => m.type === "process-state")).toBe(false);
+  });
+
+  it("retries an undelivered reading on the next refresh", () => {
+    const { backend, control, pushes, refresh, setState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    setState({ hasActiveChildren: false, cpuUsage: 0 });
+    control.sendSucceeds = false;
+    refresh();
+    control.sendSucceeds = true;
+
+    refresh();
+
+    expect(pushes().map((m) => m.hasActiveChildren)).toEqual([true, false]);
+  });
+
+  it("starts each monitor and each rebuilt slot from a fresh push", () => {
+    const { backend, listeners, pushes } = processStateBackend({
+      hasActiveChildren: false,
+      cpuUsage: 3,
+    });
+    backend.startMonitor(monitor);
+    backend.stopMonitor();
+    expect(listeners.size).toBe(0);
+
+    backend.startMonitor(monitor);
+    expect(listeners.size).toBe(1);
+    expect(pushes()).toHaveLength(2);
+
+    // The replacement session starts from its own default, whatever the old one held.
+    backend.handleWorkerLost();
+    expect(listeners.size).toBe(1);
+    expect(pushes()).toHaveLength(3);
+  });
+
+  it.each([
+    ["release", (b: WorkerAnalysisBackend) => b.release()],
+    ["detach", (b: WorkerAnalysisBackend) => b.handleDetached()],
+  ] as const)("drops its census subscription on %s", (_label, end) => {
+    const { backend, listeners, pushes, refresh, setState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    expect(listeners.size).toBe(1);
+
+    end(backend);
+    setState({ hasActiveChildren: false, cpuUsage: 50 });
+    refresh();
+
+    expect(listeners.size).toBe(0);
+    expect(pushes()).toHaveLength(1);
   });
 });

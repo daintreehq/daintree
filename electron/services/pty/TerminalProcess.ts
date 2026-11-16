@@ -786,6 +786,8 @@ export class TerminalProcess {
           cpuUsage: validator.getDescendantsCpuUsage?.() ?? 0,
         };
       },
+      onProcessTreeRefresh: (listener) =>
+        this.deps.processTreeCache?.onRefresh(listener) ?? (() => {}),
       getAgentContext: () => ({
         agentLive: this.isAgentLive,
         agentState: this.terminalInfo.agentState,
@@ -1617,6 +1619,8 @@ export class TerminalProcess {
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
       hasAgentProcess: (agentId) => tp.hasAgentProcess(agentId),
+      onProcessTreeRefresh: (listener) =>
+        tp.deps.processTreeCache?.onRefresh(listener) ?? (() => {}),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
       handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };
@@ -1936,6 +1940,7 @@ export class TerminalProcess {
   }
 
   private noteOutputProgress(lines: readonly string[]): void {
+    this.identityWatcher.noteScreenChange();
     const now = Date.now();
     if (this.outputProgress.observe(lines, now)) {
       this.terminalInfo.lastOutputChangeAt = now;

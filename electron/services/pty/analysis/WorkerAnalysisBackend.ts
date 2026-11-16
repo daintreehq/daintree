@@ -21,11 +21,6 @@ import type {
   WorkerToHostMessage,
 } from "../analysisWorkerProtocol.js";
 
-// Cadence for mirroring host process-tree state (CPU / child liveness) into
-// the worker's ProcessStateValidator. The underlying ProcessTreeCache refresh
-// is ~1.5s, so 2s keeps the mirror as fresh as the source without hot-path cost.
-const PROCESS_STATE_PUSH_INTERVAL_MS = 2000;
-
 // Flow control on the analysis feed (worker_threads postMessage queues
 // unbounded in the receiver, so a saturated worker would otherwise accumulate
 // data messages without limit). Units are string length — the same measure the
@@ -73,6 +68,11 @@ export interface WorkerAnalysisDelegate {
   onBootComplete(timestamp: number): void;
   onPtyResponse(data: string): void;
   getProcessState(): { hasActiveChildren: boolean; cpuUsage: number } | null;
+  /**
+   * Called after each census refresh, the only time process state can change;
+   * returns the unsubscribe.
+   */
+  onProcessTreeRefresh(listener: () => void): () => void;
   getAgentContext(): { agentLive: boolean; agentState?: AgentState };
   /** The grid the worker's mirror reported for this terminal (#11719). */
   onMirrorGeometry(cols: number, rows: number, replayInFlight: boolean): void;
@@ -150,7 +150,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   private lastCols: number;
   private lastRows: number;
   private currentScrollback: number;
-  private processPushTimer: NodeJS.Timeout | null = null;
+  // The worker's validator mirrors process state pushed on census refreshes,
+  // and only a value that differs from the last one delivered crosses over.
+  private processStateSubscription: (() => void) | null = null;
+  private lastPushedProcessState: { hasActiveChildren: boolean; cpuUsage: number } | null = null;
   // Flow control: string-length units posted-but-unacked, and the coalesced
   // hold accumulated while above the high watermark.
   private outstandingFeedBytes = 0;
@@ -456,16 +459,18 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (this.inactive() || this.monitorSpec) return;
     this.monitorSpec = opts;
     this.postAgentContext();
+    const processState = this.delegate.getProcessState();
     this.pool.post(this.spec.terminalId, {
       type: "monitor-start",
       terminalId: this.spec.terminalId,
       agentId: opts.agentId,
       initialState: opts.initialState,
       skipInitialStateEmit: opts.skipInitialStateEmit,
-      hasProcessValidator: this.delegate.getProcessState() !== null,
+      hasProcessValidator: processState !== null,
       pollingIntervalMs: this.pollingIntervalMs,
     });
-    this.startProcessStatePush();
+    // Without a validator in the worker there is nothing to mirror into.
+    if (processState !== null) this.startProcessStatePush(processState);
   }
 
   stopMonitor(): void {
@@ -766,6 +771,8 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
         hasProcessValidator: this.delegate.getProcessState() !== null,
         pollingIntervalMs: this.pollingIntervalMs,
       });
+      // The fresh session starts from its own default, not what the old one held.
+      this.lastPushedProcessState = null;
       this.pushProcessState();
     }
   }
@@ -806,31 +813,41 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     });
   }
 
-  private pushProcessState(): void {
-    const state = this.delegate.getProcessState();
+  private pushProcessState(
+    state: { hasActiveChildren: boolean; cpuUsage: number } | null = this.delegate.getProcessState()
+  ): void {
     if (!state) return;
-    this.pool.post(this.spec.terminalId, {
+    const last = this.lastPushedProcessState;
+    if (
+      last !== null &&
+      last.hasActiveChildren === state.hasActiveChildren &&
+      last.cpuUsage === state.cpuUsage
+    ) {
+      return;
+    }
+    const posted = this.pool.post(this.spec.terminalId, {
       type: "process-state",
       terminalId: this.spec.terminalId,
       hasActiveChildren: state.hasActiveChildren,
       cpuUsage: state.cpuUsage,
     });
+    // An undelivered value is retried on the next refresh.
+    if (posted) this.lastPushedProcessState = state;
   }
 
-  private startProcessStatePush(): void {
-    if (this.processPushTimer) return;
-    this.pushProcessState();
-    this.processPushTimer = setInterval(() => {
+  private startProcessStatePush(initial: { hasActiveChildren: boolean; cpuUsage: number }): void {
+    if (this.processStateSubscription) return;
+    this.lastPushedProcessState = null;
+    this.pushProcessState(initial);
+    this.processStateSubscription = this.delegate.onProcessTreeRefresh(() => {
       if (this.inactive() || !this.monitorSpec) return;
       this.pushProcessState();
-    }, PROCESS_STATE_PUSH_INTERVAL_MS);
-    this.processPushTimer.unref();
+    });
   }
 
   private stopProcessStatePush(): void {
-    if (this.processPushTimer) {
-      clearInterval(this.processPushTimer);
-      this.processPushTimer = null;
-    }
+    this.processStateSubscription?.();
+    this.processStateSubscription = null;
+    this.lastPushedProcessState = null;
   }
 }

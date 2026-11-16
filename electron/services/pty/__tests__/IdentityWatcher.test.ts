@@ -3,7 +3,9 @@ import {
   FOREGROUND_PROBE_FOLLOW_UP_MS,
   FOREGROUND_PROBE_KEEPWARM_MS,
   FOREGROUND_PROBE_REFUTATION_MS,
+  SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS,
   SHELL_IDENTITY_FALLBACK_POLL_MS,
+  SHELL_IDENTITY_FALLBACK_UNLATCHED_POLL_MAX_MS,
   AGENT_INPUT_GRACE_MS,
   IdentityWatcher,
   type IdentityWatcherDelegate,
@@ -44,6 +46,9 @@ interface FakeDelegateState {
 function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
   delegate: IdentityWatcherDelegate;
   state: FakeDelegateState;
+  /** A census refresh landing, as ProcessTreeCache announces one. */
+  refreshTree: () => void;
+  treeListeners: Set<() => void>;
 } {
   const state: FakeDelegateState = {
     isExited: false,
@@ -63,6 +68,7 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     detectionCalls: [],
     ...overrides,
   };
+  const treeListeners = new Set<() => void>();
 
   const delegate: IdentityWatcherDelegate = {
     terminalId: "fake-term-12345678",
@@ -93,6 +99,10 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     getLastCommand: () => state.lastCommand,
     getPtyDescendantCount: () => state.ptyDescendantCount,
     hasAgentProcess: () => state.agentProcessPresent,
+    onProcessTreeRefresh: (listener) => {
+      treeListeners.add(listener);
+      return () => treeListeners.delete(listener);
+    },
     readForegroundProcessGroupSnapshot: () => state.foreground,
     handleAgentDetection: (result) => {
       state.detectionCalls.push({
@@ -103,7 +113,10 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     },
   };
 
-  return { delegate, state };
+  const refreshTree = () => {
+    for (const listener of Array.from(treeListeners)) listener();
+  };
+  return { delegate, state, refreshTree, treeListeners };
 }
 
 describe("IdentityWatcher", () => {
@@ -2207,7 +2220,7 @@ describe("IdentityWatcher", () => {
         injectShellCommandEvidence: vi.fn(),
         clearShellCommandEvidence: clear,
       } as unknown as ProcessDetector;
-      const { delegate, state } = createFakeDelegate({
+      const { delegate, state, refreshTree } = createFakeDelegate({
         processDetector: fakeDetector,
         visibleLines: ["codex", "Codex ready"],
         cursorLine: "Codex ready",
@@ -2222,7 +2235,7 @@ describe("IdentityWatcher", () => {
           () => state.foreground && { ...state.foreground, sampledAt: Date.now() }
         );
       const watcher = new IdentityWatcher(delegate);
-      return { delegate, state, clear, probe, watcher };
+      return { delegate, state, clear, probe, watcher, refreshTree };
     }
 
     async function commit(watcher: IdentityWatcher, command = "codex") {
@@ -2277,7 +2290,7 @@ describe("IdentityWatcher", () => {
     });
 
     it("demotes from a cold cache: the stale read holds, the fresh one decides", async () => {
-      const { state, probe, watcher, clear } = makeCommittedAgent();
+      const { state, probe, watcher, clear, refreshTree } = makeCommittedAgent();
       await commit(watcher);
 
       // The agent exits. The first read lands on a cache that went stale
@@ -2287,6 +2300,8 @@ describe("IdentityWatcher", () => {
       state.visibleLines = ["Codex exited", "user@host daintree % "];
       state.cursorLine = "user@host daintree % ";
       state.ptyDescendantCount = 0;
+      watcher.noteScreenChange();
+      refreshTree();
 
       await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
@@ -2306,10 +2321,11 @@ describe("IdentityWatcher", () => {
     }
 
     it("re-probes an unchanged refuted candidate once per refutation window", async () => {
-      const { state, probe, watcher, clear } = makeCommittedAgent();
+      const { state, probe, watcher, clear, refreshTree } = makeCommittedAgent();
       await commit(watcher);
       probe.mockClear();
       showAgentPromptLookalike(state);
+      watcher.noteScreenChange();
       await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(probe).toHaveBeenCalledTimes(1);
 
@@ -2326,21 +2342,24 @@ describe("IdentityWatcher", () => {
 
       // A change in the tree reopens the candidate on the next tick.
       state.ptyDescendantCount = 2;
+      refreshTree();
       await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(probe).toHaveBeenCalledTimes(2);
       watcher.dispose();
     });
 
     it("demotes promptly when a refuted candidate turns into a real exit", async () => {
-      const { state, watcher, clear } = makeCommittedAgent();
+      const { state, watcher, clear, refreshTree } = makeCommittedAgent();
       await commit(watcher);
       showAgentPromptLookalike(state);
+      watcher.noteScreenChange();
       await vi.advanceTimersByTimeAsync(VERIFY_MS);
 
       // The agent exits inside the refutation window: its child leaves the
       // tree and the shell takes the foreground back.
       state.ptyDescendantCount = 0;
       state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      refreshTree();
       await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
@@ -2418,18 +2437,21 @@ describe("IdentityWatcher", () => {
       const { state, probe, watcher, clear } = makeCommittedAgent();
       await commit(watcher);
       showAgentPromptLookalike(state);
+      watcher.noteScreenChange();
       await vi.advanceTimersByTimeAsync(VERIFY_MS);
 
       // The lookalike scrolls away, then a real prompt arrives in chunks the
       // output matcher never saw whole — same tree, shell back in front.
       state.visibleLines = ["Codex ready", "working..."];
       state.cursorLine = "working...";
+      watcher.noteScreenChange();
       await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
       probe.mockClear();
       state.foreground = { shellPgid: 123, foregroundPgid: 123 };
       state.ptyDescendantCount = 1;
       state.visibleLines = ["Codex exited", "user@host daintree % "];
       state.cursorLine = "user@host daintree % ";
+      watcher.noteScreenChange();
       await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
 
       expect(probe).toHaveBeenCalled();
@@ -2727,6 +2749,163 @@ describe("IdentityWatcher", () => {
       vi.mocked(getTrailingNonBlankLines).mockClear();
       watcher.observeOutput(agentRepaint(50));
       expect(getTrailingNonBlankLines).not.toHaveBeenCalled();
+      watcher.dispose();
+    });
+  });
+
+  describe("idle backoff (#17043)", () => {
+    // Each poll reads the descendant count exactly once, so its calls count polls.
+    function makeSettledAgent(overrides: Partial<FakeDelegateState> = {}) {
+      const fake = createFakeDelegate({
+        visibleLines: ["codex", "Codex ready"],
+        cursorLine: "Codex ready",
+        ptyDescendantCount: 1,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+        ...overrides,
+      });
+      const pollTimes: number[] = [];
+      const polls = vi.spyOn(fake.delegate, "getPtyDescendantCount").mockImplementation(() => {
+        pollTimes.push(Date.now());
+        return fake.state.ptyDescendantCount;
+      });
+      const watcher = new IdentityWatcher(fake.delegate);
+      // Run a settled watcher's next poll, so the one after is a full ceiling away.
+      const stepPastPoll = async () => {
+        const last = pollTimes[pollTimes.length - 1] ?? Date.now();
+        await vi.advanceTimersByTimeAsync(
+          Math.max(1, last + SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS + 1 - Date.now())
+        );
+        polls.mockClear();
+      };
+      return { ...fake, polls, watcher, stepPastPoll };
+    }
+
+    async function settle(watcher: IdentityWatcher, command = "codex") {
+      watcher.onShellSubmit(command);
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+
+    it("backs a quiet committed agent off to the idle ceiling", async () => {
+      const { polls, watcher, state } = makeSettledAgent();
+      await settle(watcher);
+      expect(watcher.isFallbackCommitted).toBe(true);
+      polls.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A sanity poll still runs, but nowhere near the 300 a 200 ms tick costs.
+      expect(polls).toHaveBeenCalled();
+      expect(polls.mock.calls.length).toBeLessThanOrEqual(
+        60_000 / SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS
+      );
+      expect(state.detectionCalls).toEqual([
+        expect.objectContaining({ agentType: "codex", isBusy: true }),
+      ]);
+      watcher.dispose();
+    });
+
+    it("backs off a command with no identity once the commit window has passed", async () => {
+      const { polls, watcher } = makeSettledAgent({ visibleLines: ["running"], cursorLine: "" });
+      await settle(watcher, "echo hi");
+      expect(watcher.pendingFallbackIdentity).toBeNull();
+      polls.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(polls.mock.calls.length).toBeLessThanOrEqual(
+        60_000 / SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS
+      );
+      watcher.dispose();
+    });
+
+    it.each([
+      ["output", (w: IdentityWatcher) => w.observeOutput("still thinking")],
+      ["a screen digest", (w: IdentityWatcher) => w.noteScreenChange()],
+      ["a census refresh", (_w: IdentityWatcher, refreshTree: () => void) => refreshTree()],
+    ] as const)("%s pulls a backed-off poll back to the base cadence", async (_label, wake) => {
+      const { polls, watcher, refreshTree, stepPastPoll } = makeSettledAgent();
+      await settle(watcher);
+      await stepPastPoll();
+
+      wake(watcher, refreshTree);
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(polls).toHaveBeenCalledTimes(1);
+      watcher.dispose();
+    });
+
+    it("resets the backoff on output but not on a census refresh that changed nothing", async () => {
+      const { polls, watcher, refreshTree, stepPastPoll } = makeSettledAgent();
+      await settle(watcher);
+      await stepPastPoll();
+
+      refreshTree();
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(polls).toHaveBeenCalledTimes(1);
+      polls.mockClear();
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS - 1);
+      expect(polls).not.toHaveBeenCalled();
+
+      watcher.observeOutput("still thinking");
+      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      // The output's own poll, then a follow-up at the base cadence.
+      expect(polls).toHaveBeenCalledTimes(2);
+      watcher.dispose();
+    });
+
+    it("keeps an unlatched agent's probe reads inside the probe's hard age", async () => {
+      const { delegate, watcher } = makeSettledAgent({ foreground: null });
+      const readsAt: number[] = [];
+      vi.spyOn(delegate, "readForegroundProcessGroupSnapshot").mockImplementation(() => {
+        readsAt.push(Date.now());
+        return null;
+      });
+      await settle(watcher);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      const gaps = readsAt.slice(1).map((at, i) => at - readsAt[i]);
+      expect(Math.max(...gaps)).toBeLessThanOrEqual(SHELL_IDENTITY_FALLBACK_UNLATCHED_POLL_MAX_MS);
+      expect(gaps.some((gap) => gap > SHELL_IDENTITY_FALLBACK_POLL_MS)).toBe(true);
+      watcher.dispose();
+    });
+
+    it("subscribes to the census once per arming and drops it on stop", async () => {
+      const { watcher, treeListeners } = makeSettledAgent();
+      watcher.onShellSubmit("codex");
+      watcher.onShellSubmit("codex");
+      expect(treeListeners.size).toBe(1);
+
+      watcher.stop();
+      expect(treeListeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      watcher.onShellSubmit("codex");
+      expect(treeListeners.size).toBe(1);
+      watcher.dispose();
+      expect(treeListeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not chain a poll that stopped the watcher and leaves a re-arm alone", async () => {
+      const { state, watcher, polls, treeListeners, stepPastPoll } = makeSettledAgent();
+      await settle(watcher);
+      await stepPastPoll();
+      // The exit lands mid-poll; the poll stops the watcher and the next
+      // command re-arms it from inside the same tick.
+      state.isExited = true;
+      vi.spyOn(watcher, "stop").mockImplementationOnce(function (this: IdentityWatcher) {
+        IdentityWatcher.prototype.stop.call(this);
+        state.isExited = false;
+        this.onShellSubmit("claude");
+      });
+      watcher.noteScreenChange();
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(vi.getTimerCount()).toBe(1);
+      expect(treeListeners.size).toBe(1);
+      polls.mockClear();
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(polls).toHaveBeenCalledTimes(1);
       watcher.dispose();
     });
   });
