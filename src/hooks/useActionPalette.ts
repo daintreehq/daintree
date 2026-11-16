@@ -749,7 +749,16 @@ export function useActionPalette(): UseActionPaletteReturn {
     if (selectedIndex >= 0) {
       runAction(results[selectedIndex]!);
     }
-  }, [argSession, argRows, argSelectedIndex, pickArgRow, isStale, results, selectedIndex, runAction]);
+  }, [
+    argSession,
+    argRows,
+    argSelectedIndex,
+    pickArgRow,
+    isStale,
+    results,
+    selectedIndex,
+    runAction,
+  ]);
 
   const pinAction = useCallback((item: ActionPaletteItem): boolean => {
     if (item.danger === "confirm") {

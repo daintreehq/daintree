@@ -280,25 +280,22 @@ export function useSendToAgentPalette() {
     return result;
   }, [panelIds, panelsById, isOpen, showAgentTaskTitles, worktrees]);
 
-  const filterFn = useCallback(
-    (allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
-      const q = query.trim().toLowerCase();
-      if (!q) return allItems;
-      // Indexed on the first search, not whenever the target list changes:
-      // the list is rebuilt while the palette sits closed too.
-      const ranked = searchFuseIndex(allItems, FUSE_OPTIONS, query).map((r) => r.item);
-      // Fuse scores by position, so the tail of a long worktree name
-      // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
-      // substring hit there is appended below the ranked results rather than
-      // turning location scoring off, which would rerank the titles.
-      const seen = new Set(ranked);
-      const tails = allItems.filter(
-        (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
-      );
-      return tails.length > 0 ? [...ranked, ...tails] : ranked;
-    },
-    []
-  );
+  const filterFn = useCallback((allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allItems;
+    // Indexed on the first search, not whenever the target list changes:
+    // the list is rebuilt while the palette sits closed too.
+    const ranked = searchFuseIndex(allItems, FUSE_OPTIONS, query).map((r) => r.item);
+    // Fuse scores by position, so the tail of a long worktree name
+    // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
+    // substring hit there is appended below the ranked results rather than
+    // turning location scoring off, which would rerank the titles.
+    const seen = new Set(ranked);
+    const tails = allItems.filter(
+      (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
+    );
+    return tails.length > 0 ? [...ranked, ...tails] : ranked;
+  }, []);
 
   const canNavigate = useCallback((item: SendToAgentItem) => !item.isInputLocked, []);
 

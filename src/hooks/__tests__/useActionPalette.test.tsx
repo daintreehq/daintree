@@ -1981,9 +1981,9 @@ describe("useActionPalette", () => {
       const execute = result.current.executeAction;
 
       act(() => result.current.setQuery("depl"));
-      await waitFor(() => expect(result.current.results.map((r) => r.id)).toEqual([
-        "plugin.acme.deploy",
-      ]));
+      await waitFor(() =>
+        expect(result.current.results.map((r) => r.id)).toEqual(["plugin.acme.deploy"])
+      );
       expect(result.current.executeAction).toBe(execute);
 
       act(() => execute(result.current.results[0]!));
