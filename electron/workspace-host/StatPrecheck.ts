@@ -29,7 +29,7 @@ const RECURSIVE_FULL_STATUS_MAX_AGE_MS = 300_000;
 // Sentinel for "this git path doesn't exist". Used so the baseline can
 // stably record absence (packed-refs, detached HEAD's branch ref) and still
 // match on the next stat pass without forcing a real git check.
-const STAT_ABSENT_SENTINEL = -1;
+export const STAT_ABSENT_SENTINEL = -1;
 
 interface GitFileStatBaseline {
   index: number;

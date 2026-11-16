@@ -121,6 +121,7 @@ import {
   type PluginSetupOutcome,
 } from "./WorktreeSetupCoordinator.js";
 import { StatusAdmissionController } from "./StatusAdmissionController.js";
+import { SharedBaseRefResolver } from "./SharedBaseRefResolver.js";
 import {
   ACTIVE_WORKSPACE_POLLING_POLICY,
   type WorkspacePollingPolicy,
@@ -500,6 +501,8 @@ export class WorkspaceService {
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
   });
   private readonly statusAdmission = new StatusAdmissionController();
+  // One base-ref resolution per repository rather than per linked worktree.
+  private readonly sharedBaseRefs = new SharedBaseRefResolver();
   /** When the last automatic focus revalidation ran; see FOCUS_REFRESH_THROTTLE_MS. */
   private lastFocusRefreshAt = 0;
   private mainBranch: string = "main";
@@ -1808,7 +1811,8 @@ export class WorkspaceService {
       this.mainBranch,
       this.pollQueue,
       ++this.worktreeGeneration,
-      this.statusAdmission
+      this.statusAdmission,
+      this.sharedBaseRefs
     );
 
     if (claimedIssue) {
@@ -5623,6 +5627,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.sharedBaseRefs.clear();
     clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
@@ -5790,6 +5795,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.sharedBaseRefs.clear();
     clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     this.authFailureConfirmedNotified.clear();

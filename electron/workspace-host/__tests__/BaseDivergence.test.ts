@@ -18,6 +18,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
 }));
 
 import { BaseDivergence, type BaseDivergenceHost } from "../BaseDivergence.js";
+import { SharedBaseRefResolver } from "../SharedBaseRefResolver.js";
 import type { StatPrecheck } from "../StatPrecheck.js";
 
 function makeHost(overrides: Partial<BaseDivergenceHost> = {}): BaseDivergenceHost {
@@ -102,6 +103,13 @@ function installRepo(fixture: RepoFixture): void {
     }
     throw new Error(`unexpected git invocation: ${args.join(" ")}`);
   });
+}
+
+/** How many times a run asked git for exactly these leading arguments. */
+function gitCalls(...prefix: string[]): number {
+  return mockGitRaw.mock.calls.filter((call) =>
+    prefix.every((arg, i) => (call[0] as string[])[i] === arg)
+  ).length;
 }
 
 /** The `rev-list` ranges a run actually asked for, in order. */
@@ -374,6 +382,85 @@ describe("BaseDivergence", () => {
     const second = await divergence.compute(false);
     expect(second?.baseCompareRef).toBe("main");
     expect(second?.behindCount).toBe(1);
+  });
+
+  describe("linked worktrees sharing a repository", () => {
+    const commonDir = "/test/repo/.git";
+
+    function makeSiblingStatPrecheck(): StatPrecheck {
+      return {
+        resolveCommonDirAsync: vi.fn().mockResolvedValue(commonDir),
+        // No per-worktree config and no shared config file to scan, so every
+        // sibling reads the same effective config.
+        statMtime: vi.fn(async (path: string) =>
+          path.endsWith("config.worktree") || path === join(commonDir, "config") ? -1 : 1_000
+        ),
+      } as unknown as StatPrecheck;
+    }
+
+    function makeSibling(name: string, shared: SharedBaseRefResolver): BaseDivergence {
+      return new BaseDivergence(
+        makeHost({ branch: `feature/${name}`, path: `/test/${name}` }),
+        makeSiblingStatPrecheck(),
+        shared
+      );
+    }
+
+    beforeEach(() => {
+      mockGetGitDir.mockImplementation(async (path: string) =>
+        join(commonDir, "worktrees", path.split("/").pop()!)
+      );
+    });
+
+    it("resolves the base ref once and reads each worktree's own upstream", async () => {
+      installRepo({
+        remotes: ["origin", "upstream"],
+        remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+        symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+        revList: { "upstream/main...HEAD": "4\t1\n" },
+        revParsePair: "abc\ndef\n",
+      });
+      const shared = new SharedBaseRefResolver();
+      const siblings = ["a", "b", "c"].map((name) => makeSibling(name, shared));
+
+      const results = await Promise.all(siblings.map((sibling) => sibling.compute(true)));
+
+      expect(gitCalls("remote")).toBe(1);
+      expect(gitCalls("for-each-ref")).toBe(1);
+      expect(gitCalls("rev-parse", "--symbolic-full-name", "main@{upstream}")).toBe(1);
+      expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(3);
+      expect(revListRanges()).toEqual([
+        "upstream/main...HEAD",
+        "upstream/main...HEAD",
+        "upstream/main...HEAD",
+      ]);
+      for (const result of results) {
+        expect(result).toMatchObject({ baseCompareRef: "upstream/main", behindCount: 4 });
+      }
+      for (const sibling of siblings) expect(sibling.baseRemote).toBe("upstream");
+    });
+
+    it("asks only for the missing upstream again when its retry comes due", async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        installRepo({
+          remoteBaseRefs: ["refs/remotes/origin/main"],
+          revList: { "origin/main...HEAD": "0\t1\n" },
+        });
+        const divergence = makeSibling("a", new SharedBaseRefResolver());
+        await divergence.compute(true);
+        expect(divergence.upstreamRef).toBeNull();
+
+        now += 30_000;
+        await divergence.compute(true);
+
+        expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(2);
+        expect(gitCalls("remote")).toBe(1);
+      } finally {
+        clock.mockRestore();
+      }
+    });
   });
 
   describe("remote resolution", () => {

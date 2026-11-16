@@ -1062,6 +1062,22 @@ describe("WorktreeStoreProvider worktree-tick handler", () => {
     expect(state.workingTreeChangedAtById.get("wt-1")).toBe(300);
   });
 
+  it("carries a quiet fetch's start and finish to the row", async () => {
+    const store = await renderProvider();
+    update(makeWorktree({ lastFetchedAt: 100 }), 1);
+
+    tick(makeWorktree({ lastFetchedAt: 100, isFetchInFlight: true }), 2);
+    expect(store.getState().worktrees.get("wt-1")).toMatchObject({
+      lastFetchedAt: 100,
+      isFetchInFlight: true,
+    });
+
+    tick(makeWorktree({ lastFetchedAt: 200 }), 3);
+    const row = store.getState().worktrees.get("wt-1");
+    expect(row?.lastFetchedAt).toBe(200);
+    expect(row?.isFetchInFlight).toBeUndefined();
+  });
+
   it("re-merges against the host snapshot, not a row the renderer edited locally", async () => {
     // A full update re-applies the host's auto-detected issue over a local
     // clear (an issue detach); a tick standing in for it must do the same.
