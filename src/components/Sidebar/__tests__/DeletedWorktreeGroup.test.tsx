@@ -77,6 +77,7 @@ vi.mock("@/store/terminalPendingDestructiveActionStore", async (importOriginal) 
 });
 
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { useWorktreeSelectionStore, type DeletedWorktree } from "@/store/worktreeStore";
@@ -148,19 +149,21 @@ beforeEach(() => {
 
 // Patches a panel the way the status buffer does: a fresh object in a fresh
 // `panelsById`, with every bucket array left as it was.
-function streamOutput(id: string, line: number): void {
+function patchPanel(id: string, fields: Partial<PtyPanelData>): void {
   act(() => {
-    usePanelStore.setState((state) => ({
-      panelsById: {
-        ...state.panelsById,
-        [id]: {
-          ...state.panelsById[id]!,
-          activityHeadline: `line ${line}`,
-          activityStatus: "working",
-          lastCommand: `make ${line}`,
-        } as never,
-      },
-    }));
+    usePanelStore.setState((state) => {
+      const panel = state.panelsById[id];
+      if (!panel || !isPtyPanel(panel)) throw new Error(`no PTY panel ${id}`);
+      return { panelsById: { ...state.panelsById, [id]: { ...panel, ...fields } } };
+    });
+  });
+}
+
+function streamOutput(id: string, line: number): void {
+  patchPanel(id, {
+    activityHeadline: `line ${line}`,
+    activityStatus: "working",
+    lastCommand: `make ${line}`,
   });
 }
 
@@ -306,6 +309,69 @@ describe("DeletedWorktreeGroup", () => {
     fireEvent.click(screen.getByRole("button", { expanded: false }));
 
     expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+  });
+
+  // A flat membership would read this move as no change at all: the same
+  // terminals in the same order, only filed under another member.
+  it("re-files a terminal rescued from one member into another, on the store write alone", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    renderGroup();
+    expect(screen.getByRole("list", { name: /feature\/alpha/ })).toBeTruthy();
+    sortableProps.mockClear();
+
+    act(() => {
+      setPanels([
+        { id: "t1", worktreeId: "wt-2" },
+        { id: "t2", worktreeId: "wt-2" },
+      ]);
+    });
+
+    expect(screen.queryByRole("list", { name: /feature\/alpha/ })).toBeNull();
+    const beta = screen.getByRole("list", { name: /feature\/beta/ });
+    expect(beta.textContent).toContain("t1");
+    expect(beta.textContent).toContain("t2");
+    expect(sortableProps).toHaveBeenCalledWith({ terminalId: "t1", worktreeId: "wt-2" });
+  });
+
+  it("keeps a panel that stops being a terminal in the count but out of the rail", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+    ]);
+    renderGroup();
+
+    act(() => {
+      setPanels([
+        { id: "t1", worktreeId: "wt-1", kind: "browser" },
+        { id: "t2", worktreeId: "wt-2" },
+      ]);
+    });
+
+    expect(screen.getByRole("button", { expanded: false }).textContent).toContain("2 panels");
+    expect(screen.queryByRole("list", { name: /feature\/alpha/ })).toBeNull();
+  });
+
+  it("previews the panels as they are when the clear is clicked", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1", title: "Old name" },
+      { id: "t2", worktreeId: "wt-2", title: "shell" },
+    ]);
+    renderGroup();
+    const before = rootRenders.count;
+    patchPanel("t1", { title: "New name", detectedAgentId: "claude", agentState: "working" });
+    expect(rootRenders.count).toBe(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 panels" }));
+
+    const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+    expect(pending?.preview?.[0]).toEqual({
+      worktreeId: "wt-1",
+      worktreeTitle: "feature/alpha",
+      terminals: [{ terminalId: "t1", terminalTitle: "New name", hasRunningAgent: true }],
+    });
   });
 
   it("shrinks live when a terminal is rescued out of a member", () => {

@@ -9,7 +9,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -88,7 +88,7 @@ import { WorktreeCard } from "../../WorktreeCard";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 
-const WORKTREE = {
+const WORKTREE: WorktreeState = {
   id: "wt-1",
   worktreeId: "wt-1",
   path: "/repo/wt-1",
@@ -96,8 +96,9 @@ const WORKTREE = {
   branch: "feature/login",
   isCurrent: false,
   isMainWorktree: false,
+  worktreeChanges: null,
   lastActivityTimestamp: Date.now() - 60_000,
-} as unknown as WorktreeState;
+};
 
 function panel(id: string, worktreeId: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -111,12 +112,12 @@ function panel(id: string, worktreeId: string, fields: Partial<PtyPanelData> = {
     cols: 80,
     rows: 24,
     ...fields,
-  } as unknown as PtyPanelData;
+  };
 }
 
 function seed(panels: PtyPanelData[]): void {
   const panelIdsByWorktreeId: Record<string, string[]> = {};
-  for (const p of panels) (panelIdsByWorktreeId[p.worktreeId!] ??= []).push(p.id);
+  for (const p of panels) (panelIdsByWorktreeId[p.worktreeId ?? ""] ??= []).push(p.id);
   usePanelStore.setState({
     panelIds: panels.map((p) => p.id),
     panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
@@ -126,20 +127,22 @@ function seed(panels: PtyPanelData[]): void {
 
 // The status buffer's write: a fresh panel object in a fresh `panelsById`,
 // every bucket array left as it was.
-function streamOutput(id: string, line: number): void {
+function patchPanel(id: string, fields: Partial<PtyPanelData>): void {
   act(() => {
-    usePanelStore.setState((state) => ({
-      panelsById: {
-        ...state.panelsById,
-        [id]: {
-          ...state.panelsById[id]!,
-          activityHeadline: `line ${line}`,
-          activityStatus: "working",
-          lastCommand: `make ${line}`,
-          heldDurationMs: line * 2000,
-        } as never,
-      },
-    }));
+    usePanelStore.setState((state) => {
+      const current = state.panelsById[id];
+      if (!current || !isPtyPanel(current)) throw new Error(`no PTY panel ${id}`);
+      return { panelsById: { ...state.panelsById, [id]: { ...current, ...fields } } };
+    });
+  });
+}
+
+function streamOutput(id: string, line: number): void {
+  patchPanel(id, {
+    activityHeadline: `line ${line}`,
+    activityStatus: "working",
+    lastCommand: `make ${line}`,
+    heldDurationMs: line * 2000,
   });
 }
 
@@ -206,23 +209,30 @@ describe("WorktreeCard under streaming output", () => {
     expect(screen.getByText("make 2")).toBeTruthy();
   });
 
-  it("re-renders when an agent's state changes", () => {
+  it("re-renders for a change of membership, and shows it", () => {
     seed([panel("agent", "wt-1", { detectedAgentId: "claude", agentState: "working" })]);
     renderCard();
     act(() => {
       vi.advanceTimersByTime(300);
     });
     const before = cardRenders.count;
+    const trigger = () => screen.getByRole("button", { name: /^Terminals for worktree/ });
+    expect(trigger().getAttribute("aria-describedby")).toBeTruthy();
+    const summary = () =>
+      document.getElementById(trigger().getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(summary()).toMatch(/\b1\b/);
 
     act(() => {
       usePanelStore.setState((state) => ({
-        panelsById: {
-          ...state.panelsById,
-          agent: { ...state.panelsById.agent!, agentState: "waiting" } as never,
-        },
+        panelsById: { ...state.panelsById, shell: panel("shell", "wt-1") },
+        panelIdsByWorktreeId: { "wt-1": ["agent", "shell"] },
       }));
+    });
+    act(() => {
+      vi.advanceTimersByTime(300);
     });
 
     expect(cardRenders.count).toBeGreaterThan(before);
+    expect(summary()).toMatch(/\b2\b/);
   });
 });

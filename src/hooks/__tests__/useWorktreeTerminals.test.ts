@@ -398,7 +398,7 @@ describe("aggregateAgentStates (#6650)", () => {
       for (let i = 0; i < 3; i++) {
         patch("shell", {
           activityHeadline: `line ${i}`,
-          activityStatus: i % 2 === 0 ? "working" : "idle",
+          activityStatus: i % 2 === 0 ? "working" : "success",
           activityType: "interactive",
           lastCommand: `make ${i}`,
         });
@@ -423,6 +423,7 @@ describe("aggregateAgentStates (#6650)", () => {
       const before = result.current;
       expect(before.terminalIds).toEqual(["agent"]);
       expect(before.counts.byState.working).toBe(1);
+      expect(before.dominantAgentState).toBe("working");
 
       patch("agent", { agentState: "waiting" });
       advance(300);
@@ -442,6 +443,13 @@ describe("aggregateAgentStates (#6650)", () => {
       advance(300);
       expect(result.current.terminalIds).toEqual(["agent", "shell"]);
       expect(result.current.counts.total).toBe(2);
+
+      act(() => {
+        usePanelStore.setState({ panelIdsByWorktreeId: { "wt-s": ["shell"] } });
+      });
+      advance(300);
+      expect(result.current.terminalIds).toEqual(["shell"]);
+      expect(result.current.dominantAgentState).toBeNull();
     });
   });
 });
