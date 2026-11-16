@@ -2,7 +2,9 @@
 // Holds the renderer's emitted startup chunks to the Radix overlay deferral
 // (#17028): tooltips, popovers, menus and selects load through
 // `src/components/ui/radix-deferred.ts` on first gesture, so none of their
-// packages may ride in a chunk the renderer loads before first paint.
+// packages, nor what only they pull in (Floating UI, aria-hidden,
+// react-remove-scroll), may ride in a chunk the renderer loads before first
+// paint.
 // `@radix-ui/react-dismissable-layer` is the sanctioned exception: AppDialog's
 // `DialogDismissSurface` needs it synchronously, and `vite.config.ts` groups it
 // with the eager `vendor-radix-utils` so it doesn't carry the overlays along.
@@ -47,23 +49,45 @@ const DEFERRED_RADIX_MODULE = new RegExp(
   `(^|/)node_modules/@radix-ui/(${DEFERRED_RADIX_PACKAGES.join("|")})/`
 );
 const FLOATING_UI_MODULE = /(^|\/)node_modules\/@floating-ui\//;
+/** What only the popover, menu and select overlays pull in from outside `@radix-ui`. */
+const OVERLAY_ONLY_PACKAGES = ["aria-hidden", "react-remove-scroll", "react-remove-scroll-bar"];
+const OVERLAY_ONLY_MODULE = new RegExp(`(^|/)node_modules/(${OVERLAY_ONLY_PACKAGES.join("|")})/`);
 const RADIX_DEFERRED_BARREL = "src/components/ui/radix-deferred.ts";
+
+const stripQuery = (id) => id.replace(/[?#].*$/, "");
 
 /** @param {string} id a repo-relative module id from the build's module lists */
 export function deferredOverlayFamily(id) {
   if (DEFERRED_RADIX_MODULE.test(id)) return "a deferred Radix overlay";
   if (FLOATING_UI_MODULE.test(id)) return "Floating UI";
+  if (OVERLAY_ONLY_MODULE.test(id)) return "an overlay-only dependency";
   if (id === RADIX_DEFERRED_BARREL) return "the deferred Radix barrel";
   return null;
+}
+
+const LINK_TAG = /<link\b([^>]*)>/gi;
+const ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+
+/** Attribute names are case-insensitive and the first occurrence wins, as in an HTML parser. */
+function linkAttributes(source) {
+  const attributes = new Map();
+  for (const [, name, doubleQuoted, singleQuoted, bare] of source.matchAll(ATTRIBUTE)) {
+    const key = name.toLowerCase();
+    if (!attributes.has(key)) attributes.set(key, doubleQuoted ?? singleQuoted ?? bare ?? "");
+  }
+  return attributes;
 }
 
 /** `<link rel="modulepreload" href="./assets/x.js">` → `assets/x.js`, the key the module lists use. */
 export function modulePreloadFiles(html) {
   const files = [];
-  for (const [tag] of html.matchAll(/<link\b[^>]*>/g)) {
-    if (!/\brel=["']?modulepreload\b/.test(tag)) continue;
-    const href = tag.match(/\bhref=["']?([^"'\s>]+)/)?.[1];
-    if (href) files.push(href.replace(/^(\.?\/)+/, "").replace(/[?#].*$/, ""));
+  for (const [, source] of html.matchAll(LINK_TAG)) {
+    const attributes = linkAttributes(source);
+    const rel = (attributes.get("rel") ?? "").toLowerCase().split(/\s+/);
+    const href = attributes.get("href");
+    if (rel.includes("modulepreload") && href) {
+      files.push(stripQuery(href.replace(/^(\.?\/)+/, "")));
+    }
   }
   return files;
 }
@@ -82,8 +106,19 @@ export function checkRadixOverlayBundles({ manifest, modulesByFile, seeds, prelo
   if (entryKey === null) return ["the manifest has no renderer entry chunk"];
   const problems = [];
   if (seeds.length === 0) problems.push("the build named no first-render seeds");
+  // The lists are only evidence if they hold what the walk starts from.
+  if (modulesByFile[manifest[entryKey].file]?.length === 0) {
+    problems.push(`the entry chunk ${manifest[entryKey].file} lists no modules`);
+  }
   for (const seed of seeds) {
-    if (!manifest[seed]) problems.push(`first-render seed ${seed} is not in the manifest`);
+    if (!manifest[seed]) {
+      problems.push(`first-render seed ${seed} is not in the manifest`);
+      continue;
+    }
+    const members = modulesByFile[manifest[seed].file];
+    if (Array.isArray(members) && !members.some((id) => stripQuery(id) === seed)) {
+      problems.push(`first-render seed ${seed} is missing from its own chunk's module list`);
+    }
   }
   // The first-render preload plugin always links the entry's closure, so an
   // empty list means the HTML wasn't read right, not that nothing preloads.
@@ -95,7 +130,7 @@ export function checkRadixOverlayBundles({ manifest, modulesByFile, seeds, prelo
       problems.push(`${label}: no module list for ${file}`);
       return;
     }
-    for (const id of new Set(members.map((member) => member.replace(/[?#].*$/, "")))) {
+    for (const id of new Set(members.map(stripQuery))) {
       const family = deferredOverlayFamily(id);
       if (family) problems.push(`${label}: ${family} in ${file} — ${id}`);
     }
