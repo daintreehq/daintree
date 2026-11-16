@@ -384,7 +384,17 @@ describe("PromptHistoryPalette", () => {
       await type(input, "bakoff");
       expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
       expect(marks().length).toBeGreaterThan(0);
-      expect(marks().every((m) => brief.toLowerCase().includes(m.toLowerCase()))).toBe(true);
+      // Each marked fragment sits inside a "backoff", never on unrelated text.
+      const prompt = previewText()!;
+      let from = 0;
+      for (const mark of marks()) {
+        const at = prompt.indexOf(mark, from);
+        expect(at).toBeGreaterThanOrEqual(from);
+        expect(prompt.slice(Math.max(0, at - 6), at + mark.length + 6).toLowerCase()).toContain(
+          "backoff"
+        );
+        from = at + mark.length;
+      }
     });
 
     it("scrolls to the first match when the search starts, and back to the top on a new selection", async () => {
@@ -405,6 +415,17 @@ describe("PromptHistoryPalette", () => {
       } finally {
         offsetTop.mockRestore();
       }
+    });
+
+    it("starts a newly selected prompt at the top, with the query unchanged", async () => {
+      seed(history);
+      const input = renderPalette();
+      const scroller = document.getElementById("prompt-history-preview-scroll")!;
+      scroller.scrollTop = 250;
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(scroller.scrollTop).toBe(0);
     });
 
     it("pages the preview with Page Up and Page Down from the search field", async () => {
@@ -765,15 +786,39 @@ describe("PromptHistoryRow", () => {
 });
 
 describe("mapPreviewRangesToPrompt", () => {
-  it("finds a collapsed fragment across the line break it replaced", () => {
+  it("carries a range across the line break and dropped fences it was collapsed over", () => {
     const prompt = "```ts\nretry the\nbackoff job\n```";
     const { text } = toPromptPreview(prompt);
     const at = text.indexOf("the backoff");
     expect(mapPreviewRangesToPrompt(prompt, text, [[at, at + 10]])).toEqual([[12, 22]]);
   });
 
-  it("escapes regex characters and returns nothing for no ranges", () => {
-    expect(mapPreviewRangesToPrompt("a (b) c", "a (b) c", [[2, 4]])).toEqual([[2, 4]]);
+  it("handles CRLF breaks and leading blank lines", () => {
+    const prompt = "\r\n\r\nfix  the\r\nlogin bug";
+    const { text } = toPromptPreview(prompt);
+    const at = text.indexOf("login");
+    const [range] = mapPreviewRangesToPrompt(prompt, text, [[at, at + 4]])!;
+    const [from, to] = range!;
+    expect(prompt.slice(from, to + 1)).toBe("login");
+  });
+
+  it("marks a prompt that is nothing but fences", () => {
+    const prompt = "```\n```";
+    const { text } = toPromptPreview(prompt);
+    expect(mapPreviewRangesToPrompt(prompt, text, [[0, 2]])).toEqual([[0, 2]]);
+  });
+
+  it("returns exactly the ranges it was given, in linear time, however repetitive the prompt", () => {
+    const prompt = "x y ".repeat(5000).trim();
+    const { text } = toPromptPreview(prompt);
+    const ranges = Array.from({ length: 2000 }, (_, i): [number, number] => [i * 4, i * 4 + 2]);
+    const mapped = mapPreviewRangesToPrompt(prompt, text, ranges)!;
+    expect(mapped).toHaveLength(2000);
+    expect(mapped[1999]).toEqual([7996, 7998]);
+  });
+
+  it("gives up rather than mark the wrong text when the preview isn't this prompt's", () => {
+    expect(mapPreviewRangesToPrompt("fix the bug", "something else", [[0, 2]])).toBeUndefined();
     expect(mapPreviewRangesToPrompt("a", "a", undefined)).toBeUndefined();
   });
 });

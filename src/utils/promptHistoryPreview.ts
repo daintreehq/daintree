@@ -132,10 +132,10 @@ export function findPreviewMatches(
 
 /**
  * Where the search's fuzzy ranges over the one-line preview sit in the raw
- * prompt, for the full-text pane: each matched fragment is looked up in the
- * prompt with its whitespace runs allowed to be line breaks, since the preview
- * collapsed them. A fragment that straddles dropped fence lines is not found
- * and is simply not marked.
+ * prompt, for the full-text pane. `toPromptPreview` drops fence lines and
+ * collapses whitespace, so this replays that walk keeping each kept character's
+ * offset in the prompt. Linear in the prompt, and it gives up (no marks) rather
+ * than guess if its replay does not reproduce the preview it was handed.
  */
 export function mapPreviewRangesToPrompt(
   prompt: string,
@@ -143,17 +143,43 @@ export function mapPreviewRangesToPrompt(
   ranges: readonly MatchRange[] | undefined
 ): MatchRange[] | undefined {
   if (!ranges?.length) return undefined;
-  const found: MatchRange[] = [];
-  for (const [start, end] of ranges) {
-    const fragment = preview.slice(start, end + 1).trim();
-    if (!fragment) continue;
-    const pattern = fragment
-      .split(/\s+/)
-      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("\\s+");
-    for (const hit of prompt.matchAll(new RegExp(pattern, "gi"))) {
-      found.push([hit.index, hit.index + hit[0].length - 1]);
+
+  const segments: { start: number; text: string }[] = [];
+  let lineStart = 0;
+  for (const line of prompt.split(/\r?\n/)) {
+    if (line.trim() !== "") segments.push({ start: lineStart, text: line });
+    lineStart = prompt.indexOf("\n", lineStart + line.length) + 1 || prompt.length;
+  }
+  const kept = segments.filter((segment) => !FENCE_LINE.test(segment.text));
+  const walk = kept.length > 0 ? kept : [{ start: 0, text: prompt }];
+
+  let text = "";
+  const offsets: number[] = [];
+  let gap = -1;
+  for (const { start, text: line } of walk) {
+    if (text && gap < 0) gap = start;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (/\s/.test(ch)) {
+        if (text && gap < 0) gap = start + i;
+        continue;
+      }
+      if (gap >= 0) {
+        text += " ";
+        offsets.push(gap);
+        gap = -1;
+      }
+      text += ch;
+      offsets.push(start + i);
     }
+  }
+  if (text !== preview) return undefined;
+
+  const found: MatchRange[] = [];
+  for (const [s, e] of ranges) {
+    const from = offsets[s];
+    const to = offsets[Math.min(e, offsets.length - 1)];
+    if (from !== undefined && to !== undefined) found.push([from, to]);
   }
   return found.length ? found : undefined;
 }
