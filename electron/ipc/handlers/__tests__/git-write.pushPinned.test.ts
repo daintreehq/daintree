@@ -42,7 +42,10 @@ vi.mock("../../../services/getSoundService.js", () => ({
  * against the same repository, with the repository moved in between, which is
  * the only way to show what an approved push actually publishes.
  */
-vi.mock("../../../utils/hardenedGit.js", () => ({
+// The rest stays real: the commit's conflict scan reads staged blobs through
+// a raw spawn that takes its env and config from here.
+vi.mock("../../../utils/hardenedGit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/hardenedGit.js")>()),
   validateCwd: vi.fn(),
   createHardenedGit: vi.fn(async (cwd: string) => withCommitHook(hermeticSimpleGit(cwd))),
   createAuthenticatedGit: vi.fn(async (cwd: string) => withPushHook(hermeticSimpleGit(cwd))),

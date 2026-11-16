@@ -1,10 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import childProcess, { execFileSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
-import { scanStagedFilesForConflictMarkers } from "../conflictMarkerScan.js";
+import { STAGED_FILE_SIZE_CAP, scanStagedFilesForConflictMarkers } from "../conflictMarkerScan.js";
 
 // Real git, no simple-git mock: the bug is what git does when asked to read a
 // gitlink as a blob, which a mock cannot reproduce.
@@ -43,10 +44,25 @@ function stageGitlink(modulePath: string, sha: string): void {
 }
 
 async function scan(): Promise<void> {
-  await scanStagedFilesForConflictMarkers(await createHardenedGit(repoDir));
+  await scanStagedFilesForConflictMarkers(await createHardenedGit(repoDir), repoDir);
 }
 
+// Counts the `cat-file` processes a scan starts, which must not grow with the
+// number of staged files. The scanner's spawn binds `spawn` by name.
+let catFileSpawns = 0;
+const originalSpawn = childProcess.spawn;
+
+beforeAll(() => {
+  (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
+    if (Array.isArray(args[1]) && args[1].includes("cat-file")) catFileSpawns++;
+    return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
+  }) as typeof originalSpawn;
+  syncBuiltinESMExports();
+});
+
 afterAll(() => {
+  (childProcess as { spawn: typeof originalSpawn }).spawn = originalSpawn;
+  syncBuiltinESMExports();
   for (const dir of scratchDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -124,10 +140,47 @@ describe("scanStagedFilesForConflictMarkers (real git)", () => {
     write("root.txt", CONFLICTED);
     git(["add", "src/clean.ts", "root.txt"]);
 
-    const client = await createHardenedGit(path.join(repoDir, "src"));
-    await expect(scanStagedFilesForConflictMarkers(client)).rejects.toThrow(
-      /conflict markers found in root\.txt/
-    );
+    const src = path.join(repoDir, "src");
+    await expect(
+      scanStagedFilesForConflictMarkers(await createHardenedGit(src), src)
+    ).rejects.toThrow(/conflict markers found in root\.txt/);
+  });
+
+  it("reads every staged file in two cat-file runs, however many there are", async () => {
+    for (let i = 0; i < 30; i++) write(`src/file-${String(i).padStart(2, "0")}.ts`, `clean ${i}\n`);
+    write("src/file-30.ts", CONFLICTED);
+    git(["add", "src"]);
+
+    const before = catFileSpawns;
+    await expect(scan()).rejects.toThrow(/conflict markers found in src\/file-30\.ts/);
+    expect(catFileSpawns - before).toBe(2);
+  });
+
+  it("never reads a blob past the size cap", async () => {
+    write("huge.txt", CONFLICTED + "a".repeat(STAGED_FILE_SIZE_CAP));
+    git(["add", "huge.txt"]);
+
+    const before = catFileSpawns;
+    await expect(scan()).resolves.toBeUndefined();
+    // The sizing run only: nothing was left to read.
+    expect(catFileSpawns - before).toBe(1);
+  });
+
+  it("scans a blob exactly at the cap beside unusual names and shared content", async () => {
+    write("edge.txt", CONFLICTED + "a".repeat(STAGED_FILE_SIZE_CAP - CONFLICTED.length));
+    write("-dash é.txt", "clean\n");
+    write("same-a.txt", "same\n");
+    write("same-b.txt", "same\n");
+    git(["add", "-A"]);
+
+    await expect(scan()).rejects.toThrow(/conflict markers found in edge\.txt/);
+  });
+
+  it("finds a marker in an executable file", async () => {
+    write("run.sh", "#!/bin/sh\n=======\n");
+    git(["add", "run.sh"]);
+    git(["update-index", "--chmod=+x", "run.sh"]);
+    await expect(scan()).rejects.toThrow(/conflict markers found in run\.sh/);
   });
 
   it("scans the first commit of an unborn branch", async () => {

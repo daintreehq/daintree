@@ -28,7 +28,7 @@ import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
 import { cloneIgnoredDirectories } from "./worktreeClone.js";
-import { FileDiffCache } from "./fileDiffCache.js";
+import { FileDiffCache, type GitDiffFreshness, type GitDiffProbe } from "./fileDiffCache.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -5096,11 +5096,9 @@ export class WorkspaceService {
 
       const absolutePath = resolve(cwd, normalizedPath);
 
-      // Only a continuation read consults the cache: a first read is usually
-      // the only one (the diff panes never page), and the freshness probe
-      // costs a git spawn of its own. Paging thus computes the diff twice —
-      // once for the first window, once to fill the cache — instead of once
-      // per window.
+      // Only a continuation read consults the cache. A first read is usually
+      // the only one (the diff panes never page), so it fills the cache only
+      // once its diff turns out not to fit one window.
       const continuation = (offset ?? 0) > 0;
       const cacheKeyFor = (source: "file" | "git"): string =>
         FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true, side);
@@ -5110,10 +5108,14 @@ export class WorkspaceService {
         sendWindow(cached);
         return true;
       };
-      const serve = (diff: string, key: string, freshness: string | null): void => {
-        const bytes = Buffer.from(diff, "utf-8");
+      const serve = (
+        bytes: Buffer,
+        key: string,
+        freshness: string | null,
+        probe: GitDiffProbe | null = null
+      ): void => {
         if (freshness !== null && bytes.byteLength > windowBytes) {
-          this.fileDiffCache.set(key, freshness, bytes);
+          this.fileDiffCache.set(key, freshness, bytes, probe);
         }
         sendWindow(bytes);
       };
@@ -5153,9 +5155,10 @@ export class WorkspaceService {
         const { readFile } = await import("fs/promises");
         // Taken before the read: a write that lands after it changes the key,
         // so the next window recomputes instead of serving what this read saw.
+        // An lstat, so a first read takes it too and can fill the cache.
         const fileKey = cacheKeyFor("file");
-        const freshness = continuation ? await FileDiffCache.fileFreshness(absolutePath) : null;
-        if (serveFromCache(fileKey, freshness)) return;
+        const freshness = await FileDiffCache.fileFreshness(absolutePath);
+        if (continuation && serveFromCache(fileKey, freshness)) return;
         // A newly added submodule is `added` with a path that is the
         // submodule's own checkout, so there is no file to inline. Git already
         // knows how to describe it (`new file mode 160000`), so fall through to
@@ -5190,16 +5193,20 @@ export class WorkspaceService {
 
           const diff = newFileDiff(gitPath, buffer.toString("utf-8"), entry.mode);
 
-          serve(diff, fileKey, freshness);
+          serve(Buffer.from(diff, "utf-8"), fileKey, freshness);
           return;
         }
       }
 
       const gitKey = cacheKeyFor("git");
-      const freshness = continuation
-        ? await FileDiffCache.gitFreshness(git, cwd, gitPath, absolutePath)
-        : null;
-      if (serveFromCache(gitKey, freshness?.key ?? null)) return;
+      const takeFreshness = () =>
+        FileDiffCache.gitFreshness(
+          git,
+          cwd,
+          gitPath,
+          absolutePath,
+          this.fileDiffCache.probe(gitKey)
+        );
 
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
@@ -5214,40 +5221,54 @@ export class WorkspaceService {
       // HEAD that moves away and back mid-diff cannot pass off a patch against
       // the other commit as fresh. The staged side leaves it off when HEAD is
       // unborn: `--cached` alone then diffs the index against the empty tree.
-      const baseRefArgs =
-        side === "unstaged"
-          ? []
-          : side === "staged"
-            ? ["--cached", ...(freshness ? [freshness.head] : [])]
-            : [freshness?.head ?? "HEAD"];
-      const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
-        capped.diff([
-          ...baseRefArgs,
-          "--no-ext-diff",
-          "--no-textconv",
-          "--no-color",
-          "--submodule=short",
-          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-          "--",
-          normalizedPath,
-        ])
-      );
-      if (diff === null) {
-        sendSentinel("FILE_TOO_LARGE");
-        return;
+      const trackedDiff = async (
+        freshness: GitDiffFreshness | null
+      ): Promise<{ sentinel: string } | { bytes: Buffer }> => {
+        const baseRefArgs =
+          side === "unstaged"
+            ? []
+            : side === "staged"
+              ? ["--cached", ...(freshness ? [freshness.head] : [])]
+              : [freshness?.head ?? "HEAD"];
+        const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
+          capped.diff([
+            ...baseRefArgs,
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            "--",
+            normalizedPath,
+          ])
+        );
+        if (diff === null) return { sentinel: "FILE_TOO_LARGE" };
+        if (isBinaryDiffOutput(diff)) return { sentinel: "BINARY_FILE" };
+        if (!diff.trim()) return { sentinel: "NO_CHANGES" };
+        return { bytes: Buffer.from(diff, "utf-8") };
+      };
+
+      let freshness = continuation ? await takeFreshness() : null;
+      if (serveFromCache(gitKey, freshness?.key ?? null)) return;
+      let result = await trackedDiff(freshness);
+
+      // A first read probes only once its diff outgrows one window. That diff
+      // ran before the key existed, so it can't be cached under it: take the
+      // key, then diff again pinned to it — the cost a second window would
+      // otherwise pay, paid here so that every later window is a cache hit.
+      if (!continuation && "bytes" in result && result.bytes.byteLength > windowBytes) {
+        freshness = await takeFreshness();
+        if (freshness !== null) {
+          if (serveFromCache(gitKey, freshness.key)) return;
+          result = await trackedDiff(freshness);
+        }
       }
 
-      if (isBinaryDiffOutput(diff)) {
-        sendSentinel("BINARY_FILE");
+      if ("sentinel" in result) {
+        sendSentinel(result.sentinel);
         return;
       }
-
-      if (!diff.trim()) {
-        sendSentinel("NO_CHANGES");
-        return;
-      }
-
-      serve(diff, gitKey, freshness?.key ?? null);
+      serve(result.bytes, gitKey, freshness?.key ?? null, freshness?.probe ?? null);
     } catch (error) {
       this.sendEvent({
         type: "get-file-diff-result",

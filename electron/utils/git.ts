@@ -267,12 +267,12 @@ export function invalidateStagingDiffStatCache(cwd: string): void {
 
 /**
  * Resolve per-file line stats for staging-view paths. Issues a single
- * `git diff --numstat` call per mode (staged vs unstaged), parses with the
- * shared `parseNumstat`, and caches the resulting map for ~5s keyed by cwd
- * and head OID. Empty `paths` returns an empty map without spawning git.
+ * `git diff --numstat -z` call per mode (staged vs unstaged), keyed by
+ * repo-relative path, and caches the resulting map for ~5s keyed by cwd and
+ * head OID. Empty `paths` returns an empty map without spawning git.
  *
- * Binary files surface as `{ insertions: null, deletions: null }`, matching
- * `parseNumstat`'s `-\t-` handling. Errors are swallowed and yield an empty
+ * Binary files surface as `{ insertions: null, deletions: null }`, from
+ * numstat's `-\t-` placeholders. Errors are swallowed and yield an empty
  * map — callers leave the entries' churn `null`.
  */
 export async function getPerFileDiffStats(
@@ -293,35 +293,16 @@ export async function getPerFileDiffStats(
   // partially-staged files don't get their churn double-counted: lines that
   // are already staged should appear only in the staged row, not also under
   // unstaged. The staged side keeps `--cached` (index vs HEAD).
+  // `-z` with `--no-relative` prints each path verbatim and relative to the
+  // repository root, the same key `status.files[].path` carries.
+  const base = ["--no-ext-diff", "--no-renames", "--no-relative", "--numstat", "-z"];
   const args =
-    mode === "staged"
-      ? ["--no-ext-diff", "--no-renames", "--numstat", "--cached", "--", ...paths]
-      : ["--no-ext-diff", "--no-renames", "--numstat", "--", ...paths];
+    mode === "staged" ? [...base, "--cached", "--", ...paths] : [...base, "--", ...paths];
 
   try {
-    const toplevel = (await git.revparse(["--show-toplevel"])).trim();
-    if (!toplevel) return new Map();
-    // Normalize to forward slashes on both sides so the absolute-to-relative
-    // re-keying works on Windows, where `realpath` returns backslashes
-    // but `status.files[].path` uses forward slashes.
-    const gitRoot = (await fs.realpath(toplevel)).replace(/\\/g, "/");
-    const diffOutput = await git.diff(args);
-    const byAbsolutePath = parseNumstat(diffOutput, gitRoot);
-
-    // Re-key by repo-relative path (matching status.files[].path). Callers
-    // don't carry absolute paths through the staging handler.
-    const byRelative = new Map<string, DiffStat>();
-    const rootPrefix = gitRoot.endsWith("/") ? gitRoot : `${gitRoot}/`;
-    for (const [absolutePath, stats] of byAbsolutePath) {
-      const normalized = absolutePath.replace(/\\/g, "/");
-      const relative = normalized.startsWith(rootPrefix)
-        ? normalized.slice(rootPrefix.length)
-        : normalized;
-      byRelative.set(relative, stats);
-    }
-
-    STAGING_DIFF_STAT_CACHE.set(cacheKey, byRelative);
-    return byRelative;
+    const byPath = parseNumstatZ(await git.diff(args));
+    STAGING_DIFF_STAT_CACHE.set(cacheKey, byPath);
+    return byPath;
   } catch (error) {
     logWarn("Failed to read per-file diff stats; continuing without churn", {
       cwd,
@@ -733,8 +714,15 @@ async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
   return resolveHeadOidFromGitDir(gitDir);
 }
 
-/** {@link resolveHeadOidFromFs} for a caller that has already resolved the git dir. */
-export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string | null> {
+/**
+ * {@link resolveHeadOidFromFs} for a caller that has already resolved the git
+ * dir, and optionally its common dir, which then stands in for the cached
+ * `commondir` pointer.
+ */
+export async function resolveHeadOidFromGitDir(
+  gitDir: string,
+  commonDirOverride?: string
+): Promise<string | null> {
   let head: string;
   try {
     head = (await readFileBounded(resolve(gitDir, "HEAD"), "utf-8")).trim();
@@ -748,7 +736,7 @@ export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string |
   // (refs/bisect, per-worktree refs) keeps the subprocess path. Malformed
   // refnames are rejected rather than resolved as paths.
   if (!refName.startsWith("refs/heads/") || !isSafeRefName(refName)) return null;
-  const commonDir = await resolveCommonDirForGitDir(gitDir);
+  const commonDir = commonDirOverride ?? (await resolveCommonDirForGitDir(gitDir));
   try {
     const loose = (await readFileBounded(resolve(commonDir, refName), "utf-8")).trim();
     return OID_RE.test(loose) ? loose : null;
