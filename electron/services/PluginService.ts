@@ -20,10 +20,10 @@ import { createRequire as nodeCreateRequire } from "node:module";
 
 // ajv and ajv-formats are CJS-only with deep `module.exports = Class` exports.
 // NodeNext module resolution can't resolve these from ESM, so use createRequire
-// which is the canonical Node.js interop for CJS-in-ESM.
+// which is the canonical Node.js interop for CJS-in-ESM. They are required on
+// the first action input schema, not here: this module loads before the first
+// window is interactive, and most sessions never validate a plugin action.
 const req = nodeCreateRequire(import.meta.url);
-const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
-const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
 
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
@@ -5144,6 +5144,8 @@ export class PluginService {
       let validator = this.actionValidators.get(channel);
       if (!validator) {
         if (!this.ajv) {
+          const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
+          const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
           this.ajv = new Ajv();
           addFormats(this.ajv);
         }

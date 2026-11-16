@@ -16,7 +16,7 @@ import type {
   FileDocumentSavePayload,
   FileDocumentSaveResult,
 } from "../../../shared/types/ipc/fileDocument.js";
-import { FILE_EDITOR_MAX_BYTES_CEILING } from "../../schemas/plugin.js";
+import { FILE_EDITOR_MAX_BYTES_CEILING } from "../../../shared/types/plugin/fileEditors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 const readPayloadSchema = z.object({

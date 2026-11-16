@@ -12,6 +12,7 @@ import {
   CONTEXT_PROVIDER_RESERVED_PREFIXES,
 } from "../../../shared/utils/pluginContextReference.js";
 import { isSafePluginAssetPath } from "./common.js";
+import { FILE_EDITOR_MAX_BYTES_CEILING } from "../../../shared/types/plugin/fileEditors.js";
 
 /** Most `paths` patterns one `fileEditors` entry may declare. */
 export const FILE_EDITOR_MAX_PATH_PATTERNS = 20;
@@ -280,13 +281,7 @@ export const WorktreeDeleteNotesContributionSchema = z
   })
   .strict();
 
-/**
- * Largest file a `contributes.fileEditors` entry may claim. Above this the
- * renderer holds the whole document in a CodeMirror buffer plus a draft copy,
- * so the ceiling is a memory bound, not a product limit — the built-in
- * Markdown editor asks for 2 MiB.
- */
-export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
+export { FILE_EDITOR_MAX_BYTES_CEILING };
 
 /**
  * `fileEditors` manifest entry (#12323, #13809). Two forms, exactly one of
