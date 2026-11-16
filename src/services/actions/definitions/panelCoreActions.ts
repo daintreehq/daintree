@@ -395,6 +395,8 @@ export function registerPanelCoreActions(
     danger: "safe",
     scope: "renderer",
     keywords: ["reopen", "restore", "trash", "closed", "undo"],
+    // Undo takes back a person's own close; a plugin closed nothing of theirs.
+    denyPluginDispatch: true,
     run: async (_args: unknown, ctx) => {
       // Undo takes back what the person did, so only the person can ask.
       if (!isForegroundDispatch(ctx.dispatchSource)) return;

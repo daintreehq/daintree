@@ -17,6 +17,7 @@ import { notify } from "@/lib/notify";
 import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
 import {
   setCurrentProjectAwaitingCloneAccessor,
+  setCurrentProjectIdAccessor,
   setProjectPathIndexAccessor,
 } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
@@ -1874,6 +1875,8 @@ setProjectPathIndexAccessor(() => {
 setCurrentProjectAwaitingCloneAccessor(() =>
   isAwaitingClone(useProjectStore.getState().currentProject)
 );
+
+setCurrentProjectIdAccessor(() => useProjectStore.getState().currentProject?.id ?? null);
 
 // Break circular dependency by injecting project ID getter. Falls back to the
 // view's own workspace id so a scratch view — which has no Project row, and so

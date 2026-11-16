@@ -97,6 +97,8 @@ function setProject(id: string) {
 beforeEach(async () => {
   await usePanelStore.getState().reset();
   history.resetPanelCloseHistoryForTests();
+  // The store orchestrator connects it in the app.
+  history.connectPanelCloseHistory(usePanelStore);
   setProject("proj-1");
   useWorktreeSelectionStore.setState({
     activeWorktreeId: "wt-1",
@@ -116,6 +118,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
   Reflect.deleteProperty(window, "electron");
+  history.connectPanelCloseHistory(null);
 });
 
 describe("panel close history", () => {
@@ -156,6 +159,15 @@ describe("panel close history", () => {
     seed("c");
     history.userCloseCommit("keybinding", ["c"], () => usePanelStore.getState().trashPanel("c"))();
     expect(history.peekUndoCloseStep()?.panels.map((panel) => panel.id)).toEqual(["c"]);
+  });
+
+  it("records nothing before a panel store is connected", () => {
+    history.connectPanelCloseHistory(null);
+    seed("a");
+    userClose(["a"]);
+    expect(locationOf("a")).toBe("trash");
+    history.connectPanelCloseHistory(usePanelStore);
+    expect(history.peekUndoCloseStep()).toBeNull();
   });
 
   it("records nothing when the commit never trashed the panel", () => {

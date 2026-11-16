@@ -188,14 +188,15 @@ async function listSessions(projectId: string | null): Promise<AgentSessionRecor
 
 function waitForRecordedSession(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    let unsubscribe: (() => void) | undefined;
+    // Both are bound before either can fire: the timer and the event only
+    // call back on a later task.
     const done = () => {
       clearTimeout(timer);
       unsubscribe?.();
       resolve();
     };
     const timer = setTimeout(done, Math.max(0, ms));
-    unsubscribe = window.electron?.events?.on("agent-session:recorded", done);
+    const unsubscribe = window.electron?.events?.on("agent-session:recorded", done);
   });
 }
 

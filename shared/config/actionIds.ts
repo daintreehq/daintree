@@ -686,6 +686,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.paste",
   // Replays a person's own message from their pane (#16746).
   "terminal.resendLastMessage",
+  // Takes back a person's own close (#17107); a plugin closed nothing of theirs.
+  "panel.undoClose",
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",

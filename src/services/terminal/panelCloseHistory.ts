@@ -1,8 +1,9 @@
 import type { ActionSource } from "@shared/types/actions";
 import { isPtyPanel } from "@shared/types/panel";
-import { usePanelStore } from "@/store/panelStore";
-import { useProjectStore } from "@/store/projectStore";
+import type { usePanelStore } from "@/store/panelStore";
+import { getCurrentProjectId } from "@/store/storeAccessors";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
+import { logWarn } from "@/utils/logger";
 import { isForegroundDispatch } from "@/services/actions/definitions/dispatchSource";
 import { nextCloseSeq, trackNativeFieldEdits } from "./closeUndoOrder";
 
@@ -59,15 +60,25 @@ interface CloseSnapshot {
   focusId: string | null;
 }
 
+type PanelStoreApi = Pick<typeof usePanelStore, "getState" | "subscribe">;
+type PanelState = ReturnType<PanelStoreApi["getState"]>;
+
 let steps: CloseStep[] = [];
 let unsubscribe: (() => void) | null = null;
+// Handed over by the store orchestrator rather than imported: every close
+// path records here, and a static store import would drag the store's client
+// graph into each of their tests.
+let panelStore: PanelStoreApi | null = null;
 
-function currentProjectId(): string | null {
-  return useProjectStore.getState().currentProject?.id ?? null;
+/** Connects the history to this view's panel store; `null` disconnects it. */
+export function connectPanelCloseHistory(api: PanelStoreApi | null): void {
+  unsubscribe?.();
+  unsubscribe = null;
+  panelStore = api;
+  setSteps(api === null ? [] : steps);
 }
 
-function snapshotClose(panelIds: readonly string[]): CloseSnapshot | null {
-  const state = usePanelStore.getState();
+function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSnapshot | null {
   const closing = new Set(panelIds);
   const panels: ClosedPanel[] = [];
   for (const id of panelIds) {
@@ -127,7 +138,7 @@ function snapshotClose(panelIds: readonly string[]): CloseSnapshot | null {
 
 // A panel restored another way (the trash pill, Cmd+Shift+T, Canopy) leaves
 // the history; one the trash let go stays only if a conversation can resume.
-function reconcile(state: ReturnType<typeof usePanelStore.getState>): void {
+function reconcile(state: PanelState): void {
   let changed = false;
   const next: CloseStep[] = [];
   for (const step of steps) {
@@ -162,15 +173,15 @@ function setSteps(next: CloseStep[]): void {
   if (steps.length === 0) {
     unsubscribe?.();
     unsubscribe = null;
-  } else if (unsubscribe === null) {
-    unsubscribe = usePanelStore.subscribe((state, previous) => {
+  } else if (unsubscribe === null && panelStore !== null) {
+    unsubscribe = panelStore.subscribe((state, previous) => {
       if (state.panelsById !== previous.panelsById) reconcile(state);
     });
   }
 }
 
-function record(seq: number, snapshot: CloseSnapshot): void {
-  const { panelsById } = usePanelStore.getState();
+function record(store: PanelStoreApi, seq: number, snapshot: CloseSnapshot): void {
+  const { panelsById } = store.getState();
   // A remove-on-exit or dialog panel is discarded rather than trashed: there
   // is nothing of it to bring back.
   const panels = snapshot.panels.filter((closed) => panelsById[closed.id]?.location === "trash");
@@ -178,7 +189,7 @@ function record(seq: number, snapshot: CloseSnapshot): void {
   const step: CloseStep = {
     seq,
     closedAt: Date.now(),
-    projectId: currentProjectId(),
+    projectId: getCurrentProjectId(),
     panels,
     groups: snapshot.groups,
     focusId: panels.some((closed) => closed.id === snapshot.focusId)
@@ -195,12 +206,25 @@ function record(seq: number, snapshot: CloseSnapshot): void {
  * nothing.
  */
 export function prepareUserClose(panelIds: readonly string[]): (commit: () => void) => void {
+  const store = panelStore;
+  if (store === null) return (commit) => commit();
   const seq = nextCloseSeq();
   trackNativeFieldEdits();
-  const snapshot = snapshotClose(panelIds);
+  // Whatever goes wrong here, the close itself still happens.
+  let snapshot: CloseSnapshot | null = null;
+  try {
+    snapshot = snapshotClose(store.getState(), panelIds);
+  } catch (error) {
+    logWarn("Couldn't record a close for undo", { error });
+  }
   return (commit) => {
     commit();
-    if (snapshot !== null) record(seq, snapshot);
+    if (snapshot === null) return;
+    try {
+      record(store, seq, snapshot);
+    } catch (error) {
+      logWarn("Couldn't record a close for undo", { error });
+    }
   };
 }
 
@@ -220,7 +244,7 @@ export function userCloseCommit(
 
 /** The newest close in this project that may still come back. */
 export function peekUndoCloseStep(): CloseStep | null {
-  const projectId = currentProjectId();
+  const projectId = getCurrentProjectId();
   return steps.find((step) => step.projectId === projectId) ?? null;
 }
 
