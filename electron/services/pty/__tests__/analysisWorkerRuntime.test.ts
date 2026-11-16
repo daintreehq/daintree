@@ -466,7 +466,7 @@ describe("AnalysisWorkerRuntime", () => {
       timedRuntime.startMemorySampling(2000);
       // Re-arming while running must not double the cadence.
       timedRuntime.startMemorySampling(2000);
-      vi.advanceTimersByTime(6100);
+      vi.advanceTimersByTime(2000 + 2 * QUIET_MEMORY_SAMPLE_INTERVAL_MS + 100);
 
       const samples = timed.filter((m) => m.type === "memory-sample");
       expect(samples).toHaveLength(3);
@@ -481,49 +481,52 @@ describe("AnalysisWorkerRuntime", () => {
       vi.useRealTimers();
     });
 
-    it("stretches a quiet worker's cadence while saving and snaps back on heap activity (#12515)", () => {
-      vi.useFakeTimers();
-      try {
-        const timed: WorkerToHostMessage[] = [];
-        const timedRuntime = new AnalysisWorkerRuntime(
-          (msg) => timed.push(msg),
-          () => ({ heapUsed: 7, external: 3 })
-        );
-        const samples = () => timed.filter((m) => m.type === "memory-sample").length;
-        timedRuntime.handleMessage({
-          type: "power-policy",
-          level: "saving",
-          observationLevel: "saving",
-        });
-        expect(getPtyPowerLevel()).toBe("saving");
+    it.each(["active", "saving"] as const)(
+      "stretches a quiet worker's cadence while %s and snaps back on heap activity (#12515, #17043)",
+      (level) => {
+        vi.useFakeTimers();
+        try {
+          const timed: WorkerToHostMessage[] = [];
+          const timedRuntime = new AnalysisWorkerRuntime(
+            (msg) => timed.push(msg),
+            () => ({ heapUsed: 7, external: 3 })
+          );
+          const samples = () => timed.filter((m) => m.type === "memory-sample").length;
+          timedRuntime.handleMessage({
+            type: "power-policy",
+            level,
+            observationLevel: level,
+          });
+          expect(getPtyPowerLevel()).toBe(level);
 
-        timedRuntime.startMemorySampling(2000);
-        vi.advanceTimersByTime(2000);
-        expect(samples()).toBe(1);
+          timedRuntime.startMemorySampling(2000);
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(1);
 
-        // Quiet since the last sample → the next one waits the quiet cadence.
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 1);
-        expect(samples()).toBe(1);
-        vi.advanceTimersByTime(1);
-        expect(samples()).toBe(2);
+          // Quiet since the last sample → the next one waits the quiet cadence.
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 1);
+          expect(samples()).toBe(1);
+          vi.advanceTimersByTime(1);
+          expect(samples()).toBe(2);
 
-        // Metadata ticks never count as heap activity.
-        timedRuntime.handleMessage({ type: "focus", terminalId: "t-none" });
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
-        expect(samples()).toBe(3);
+          // Metadata ticks never count as heap activity.
+          timedRuntime.handleMessage({ type: "focus", terminalId: "t-none" });
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+          expect(samples()).toBe(3);
 
-        // Heap-affecting traffic returns the next interval to the base cadence.
-        timedRuntime.handleMessage({ type: "free", terminalId: "t-none" });
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
-        expect(samples()).toBe(4);
-        vi.advanceTimersByTime(2000);
-        expect(samples()).toBe(5);
+          // Heap-affecting traffic returns the next interval to the base cadence.
+          timedRuntime.handleMessage({ type: "free", terminalId: "t-none" });
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+          expect(samples()).toBe(4);
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(5);
 
-        timedRuntime.stopMemorySampling();
-      } finally {
-        resetPtyPowerLevelForTesting();
-        vi.useRealTimers();
+          timedRuntime.stopMemorySampling();
+        } finally {
+          resetPtyPowerLevelForTesting();
+          vi.useRealTimers();
+        }
       }
-    });
+    );
   });
 });
