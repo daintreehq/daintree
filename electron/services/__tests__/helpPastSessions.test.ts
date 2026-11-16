@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "fs/promises";
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "fs/promises";
 import os from "os";
 import path from "path";
 import {
@@ -15,6 +25,33 @@ import {
   HUB_STARTED_ASSISTANT_GREETING,
 } from "../../../shared/config/helpAssistantGreeting.js";
 import { HELP_PAST_SESSIONS_LIMIT } from "../../../shared/types/ipc/help.js";
+
+// Pass-through, so a test can fix the order a folder lists in and see which
+// transcripts were opened.
+const fsHooks = vi.hoisted(() => ({
+  reorder: null as ((names: string[]) => string[]) | null,
+  opened: [] as string[],
+  beforeOpen: null as ((file: string) => Promise<void>) | null,
+}));
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  const readdir = async (...args: unknown[]): Promise<unknown> => {
+    const names = await (actual.readdir as (...a: unknown[]) => Promise<unknown>)(...args);
+    return fsHooks.reorder && Array.isArray(names) ? fsHooks.reorder(names as string[]) : names;
+  };
+  const open = async (...args: Parameters<typeof actual.open>) => {
+    fsHooks.opened.push(String(args[0]));
+    await fsHooks.beforeOpen?.(String(args[0]));
+    return actual.open(...args);
+  };
+  return { ...actual, readdir, open };
+});
+
+beforeEach(() => {
+  fsHooks.reorder = null;
+  fsHooks.opened.length = 0;
+  fsHooks.beforeOpen = null;
+});
 
 const A = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
 const B = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
@@ -157,6 +194,18 @@ describe("listClaudeHelpSessions", () => {
     await mkdir(slugDir, { recursive: true });
   });
 
+  /** A transcript last written `seconds` after the epoch. */
+  async function writeTranscriptAt(
+    sessionId: string,
+    content: string,
+    seconds: number,
+    dir = slugDir
+  ) {
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+    await writeFile(filePath, content);
+    await utimes(filePath, seconds, seconds);
+  }
+
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
@@ -228,6 +277,127 @@ describe("listClaudeHelpSessions", () => {
       const read = await listClaudeHelpSessions(sessionPath, projectsRoot);
       expect(read.sessions.map((s) => s.title)).toEqual(["Readable"]);
       expect(read.complete).toBe(false);
+    });
+
+    it("never opens a transcript older than the rows the cap keeps", async () => {
+      await writeTranscriptAt(A, transcript(prompt("Newest")), 3);
+      await writeTranscriptAt(C, transcript(prompt("Middle")), 2);
+      await writeTranscriptAt(B, transcript(prompt("Locked")), 1);
+      await chmod(path.join(slugDir, `${B}.jsonl`), 0o000);
+
+      // An unreadable file the listing had to open would mark it incomplete.
+      expect(await listClaudeHelpSessions(sessionPath, projectsRoot, 2)).toEqual({
+        sessions: [
+          { agentId: "claude", sessionId: A, title: "Newest", updatedAt: 3_000 },
+          { agentId: "claude", sessionId: C, title: "Middle", updatedAt: 2_000 },
+        ],
+        complete: true,
+      });
+    });
+
+    it("opens past the cap when a newer transcript can't be read", async () => {
+      await writeTranscriptAt(A, transcript(prompt("Locked")), 3);
+      await writeTranscriptAt(B, transcript(prompt("Older")), 1);
+      await chmod(path.join(slugDir, `${A}.jsonl`), 0o000);
+      // The afterEach above restores B only.
+      try {
+        const read = await listClaudeHelpSessions(sessionPath, projectsRoot, 1);
+        expect(read.sessions.map((s) => s.title)).toEqual(["Older"]);
+        expect(read.complete).toBe(false);
+      } finally {
+        await chmod(path.join(slugDir, `${A}.jsonl`), 0o644);
+      }
+    });
+  });
+
+  it("reads a transcript as long as it is when opened, not when the folder was listed", async () => {
+    const filePath = path.join(slugDir, `${A}.jsonl`);
+    await writeFile(filePath, transcript(prompt("Opening question")));
+    // The live conversation names itself between the listing and the read.
+    fsHooks.beforeOpen = async (file) => {
+      if (file === filePath) {
+        await appendFile(filePath, transcript(line({ type: "ai-title", aiTitle: "Named later" })));
+      }
+    };
+
+    const read = await listClaudeHelpSessions(sessionPath, projectsRoot);
+    expect(read.sessions.map((s) => s.title)).toEqual(["Named later"]);
+  });
+
+  it("lists newest first and keeps only the newest rows the cap allows", async () => {
+    await writeTranscriptAt(A, transcript(prompt("Oldest")), 1);
+    await writeTranscriptAt(B, transcript(prompt("Newest")), 3);
+    await writeTranscriptAt(C, transcript(prompt("Middle")), 2);
+
+    expect(
+      (await listClaudeHelpSessions(sessionPath, projectsRoot)).sessions.map((s) => s.title)
+    ).toEqual(["Newest", "Middle", "Oldest"]);
+    expect(
+      (await listClaudeHelpSessions(sessionPath, projectsRoot, 2)).sessions.map((s) => s.title)
+    ).toEqual(["Newest", "Middle"]);
+  });
+
+  it("fills the cap from older conversations when newer ones were never used", async () => {
+    await writeTranscriptAt(A, transcript(prompt(HELP_ASSISTANT_GREETING)), 4);
+    await writeTranscriptAt(B, transcript(prompt(HELP_ASSISTANT_GREETING)), 3);
+    await writeTranscriptAt(C, transcript(prompt("Real question")), 1);
+
+    expect(await listClaudeHelpSessions(sessionPath, projectsRoot, 1)).toEqual({
+      sessions: [{ agentId: "claude", sessionId: C, title: "Real question", updatedAt: 1_000 }],
+      complete: true,
+    });
+  });
+
+  it("orders equal times by session id, as the merged listing does", async () => {
+    await writeTranscriptAt(C, transcript(prompt("Third id")), 5);
+    await writeTranscriptAt(A, transcript(prompt("First id")), 5);
+    await writeTranscriptAt(B, transcript(prompt("Second id")), 5);
+    // Listed in the opposite order, so only the id can put A first.
+    fsHooks.reorder = (names) => [...names].sort().reverse();
+
+    const read = await listClaudeHelpSessions(sessionPath, projectsRoot, 2);
+    expect(read.sessions.map((s) => s.sessionId)).toEqual([A, B]);
+  });
+
+  describe.skipIf(process.platform === "win32")("a session path with two spellings", () => {
+    let linkPath: string;
+    let linkSlugDir: string;
+    let resolvedSlugDir: string;
+
+    beforeEach(async () => {
+      linkPath = path.join(root, "linked-session");
+      await symlink(sessionPath, linkPath, "dir");
+      linkSlugDir = path.join(projectsRoot, claudeProjectSlug(linkPath));
+      await mkdir(linkSlugDir, { recursive: true });
+      resolvedSlugDir = path.join(projectsRoot, claudeProjectSlug(await realpath(sessionPath)));
+      await mkdir(resolvedSlugDir, { recursive: true });
+    });
+
+    it("lists a conversation once, from the first spelling that holds a real one", async () => {
+      // The path as given comes first, so its copy is the row even though the
+      // resolved spelling's copy is newer.
+      await writeTranscriptAt(A, transcript(prompt("As given")), 1, linkSlugDir);
+      await writeTranscriptAt(A, transcript(prompt("Resolved")), 9, resolvedSlugDir);
+      await writeTranscriptAt(B, transcript(prompt("Between")), 5, resolvedSlugDir);
+
+      const read = await listClaudeHelpSessions(linkPath, projectsRoot, 1);
+      expect(read.sessions).toEqual([
+        { agentId: "claude", sessionId: B, title: "Between", updatedAt: 5_000 },
+      ]);
+      const all = await listClaudeHelpSessions(linkPath, projectsRoot);
+      expect(all.sessions.map((s) => s.title)).toEqual(["Between", "As given"]);
+    });
+
+    it("falls back to the other spelling when the first holds only the greeting", async () => {
+      await writeTranscriptAt(A, transcript(prompt(HELP_ASSISTANT_GREETING)), 1, linkSlugDir);
+      await writeTranscriptAt(A, transcript(prompt("Resolved")), 9, resolvedSlugDir);
+      // Newer than A's first copy, older than the one that becomes its row.
+      await writeTranscriptAt(B, transcript(prompt("Between")), 5, resolvedSlugDir);
+
+      const read = await listClaudeHelpSessions(linkPath, projectsRoot, 1);
+      expect(read.sessions).toEqual([
+        { agentId: "claude", sessionId: A, title: "Resolved", updatedAt: 9_000 },
+      ]);
     });
   });
 
@@ -404,6 +574,51 @@ describe("listHelpPastSessions", () => {
       );
       expect(claudeOnly.sessions.map((s) => s.sessionId)).toEqual([A]);
       expect(claudeOnly.unreadable).toEqual(["codex"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("opens only the newest transcripts a long Claude history needs, and knows it was cut", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "help-past-claude-cap-"));
+    try {
+      const sessionPath = path.join(root, "s");
+      await mkdir(sessionPath);
+      const slugDir = path.join(root, "projects", claudeProjectSlug(sessionPath));
+      await mkdir(slugDir, { recursive: true });
+      const extra = 6;
+      const ids = Array.from(
+        { length: HELP_PAST_SESSIONS_LIMIT + extra },
+        (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+      );
+      for (const [i, id] of ids.entries()) {
+        const filePath = path.join(slugDir, `${id}.jsonl`);
+        await writeFile(filePath, transcript(prompt(`Question ${i}`)));
+        await utimes(filePath, i + 1, i + 1);
+      }
+      const list = () =>
+        listHelpPastSessions(
+          { claude: sessionPath, codex: [] },
+          {
+            claudeProjectsRoot: path.join(root, "projects"),
+            listCodexSessions: async () => ({ status: "ok", sessions: [] }),
+          }
+        );
+
+      const cut = await list();
+      expect(cut.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+      expect(cut.sessions[0]?.title).toBe(`Question ${ids.length - 1}`);
+      expect(cut.sessions.at(-1)?.title).toBe(`Question ${extra}`);
+      expect(cut.truncated).toBe(true);
+      // The cap's rows and one more to prove the cut; none of the older ones.
+      expect([...fsHooks.opened].sort()).toEqual(
+        ids.slice(extra - 1).map((id) => path.join(slugDir, `${id}.jsonl`))
+      );
+
+      for (const id of ids.slice(0, extra)) await rm(path.join(slugDir, `${id}.jsonl`));
+      const whole = await list();
+      expect(whole.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+      expect(whole.truncated).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

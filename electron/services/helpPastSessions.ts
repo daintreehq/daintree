@@ -169,11 +169,13 @@ export function summarizeClaudeTranscript(
 }
 
 async function readEdges(
-  filePath: string,
-  size: number
+  filePath: string
 ): Promise<{ head: string; tail: string; complete: boolean }> {
   const handle = await open(filePath, "r");
   try {
+    // Sized now, not when the folder was listed: the live conversation's
+    // transcript grows in between, and its newest title is in the tail.
+    const { size } = await handle.stat();
     const readAt = async (position: number, length: number): Promise<string> => {
       const buffer = Buffer.alloc(length);
       const { bytesRead } = await handle.read(buffer, 0, length, position);
@@ -208,14 +210,60 @@ function isAbsent(error: unknown): boolean {
 }
 
 export interface ClaudeHelpSessionsRead {
+  /** Newest first. */
   sessions: HelpPastSession[];
-  /** False when a project folder or transcript that exists couldn't be read. */
+  /**
+   * False when a project folder or transcript that exists couldn't be read.
+   * Only transcripts the listing had to open count: one older than every row
+   * it keeps is never opened, so it can't fail the listing either.
+   */
   complete: boolean;
+}
+
+/** Runs `task` over `items` with at most READ_CONCURRENCY in flight. */
+async function eachBounded<T>(
+  items: readonly T[],
+  task: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      await task(items[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, items.length) }, worker));
+}
+
+/** Newest first; equal times by id, the order the merged listing caps in. */
+function newerFirst(a: { at: number; id: string }, b: { at: number; id: string }): number {
+  return b.at - a.at || a.id.localeCompare(b.id);
+}
+
+interface TranscriptFile {
+  filePath: string;
+  mtimeMs: number;
+}
+
+/**
+ * One conversation's transcripts, one per spelling of the session path that
+ * holds it, in spelling order: the first that summarises is its row.
+ */
+interface TranscriptGroup {
+  sessionId: string;
+  files: TranscriptFile[];
+  /** The newest of its files' times: no row the group yields is newer. */
+  newest: number;
 }
 
 export async function listClaudeHelpSessions(
   sessionPath: string,
-  projectsRoot: string
+  projectsRoot: string,
+  /**
+   * The most rows wanted. Transcripts are opened newest first and only until
+   * this many rows are in hand, so a long history costs what the cap does.
+   */
+  limit = Number.POSITIVE_INFINITY
 ): Promise<ClaudeHelpSessionsRead> {
   // Claude records the cwd as the process saw it, which may be the resolved
   // spelling of the path main handed it.
@@ -229,31 +277,7 @@ export async function listClaudeHelpSessions(
     if (!isAbsent(error)) complete = false;
   }
 
-  const sessions = new Map<string, HelpPastSession>();
-  const summarizeInto = async (dir: string, name: string): Promise<void> => {
-    if (!name.endsWith(TRANSCRIPT_SUFFIX)) return;
-    const sessionId = name.slice(0, -TRANSCRIPT_SUFFIX.length);
-    if (!CLAUDE_SESSION_ID.test(sessionId) || sessions.has(sessionId)) return;
-    const filePath = path.join(dir, name);
-    try {
-      // lstat: a symlink planted in the store is not a transcript we follow.
-      const stats = await lstat(filePath);
-      if (!stats.isFile() || stats.size === 0) return;
-      const { head, tail, complete } = await readEdges(filePath, stats.size);
-      const summary = summarizeClaudeTranscript(head, tail, complete);
-      if (!summary) return;
-      sessions.set(sessionId, {
-        agentId: "claude",
-        sessionId,
-        title: summary.title,
-        updatedAt: stats.mtimeMs,
-      });
-    } catch (error) {
-      // Removed mid-scan is one fewer conversation; unreadable is one hidden.
-      if (!isAbsent(error)) complete = false;
-    }
-  };
-
+  const groups = new Map<string, TranscriptGroup>();
   for (const spelling of spellings) {
     const dir = path.join(projectsRoot, claudeProjectSlug(spelling));
     let names: string[];
@@ -265,15 +289,84 @@ export async function listClaudeHelpSessions(
       if (!isAbsent(error)) complete = false;
       continue;
     }
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      for (let name = names[next++]; name !== undefined; name = names[next++]) {
-        await summarizeInto(dir, name);
+    const sessionIds = names
+      .filter((name) => name.endsWith(TRANSCRIPT_SUFFIX))
+      .map((name) => name.slice(0, -TRANSCRIPT_SUFFIX.length))
+      .filter((sessionId) => CLAUDE_SESSION_ID.test(sessionId));
+    const found: Array<{ sessionId: string; file: TranscriptFile } | undefined> = [];
+    await eachBounded(sessionIds, async (sessionId, index) => {
+      const filePath = path.join(dir, `${sessionId}${TRANSCRIPT_SUFFIX}`);
+      try {
+        // lstat: a symlink planted in the store is not a transcript we follow.
+        const stats = await lstat(filePath);
+        if (!stats.isFile() || stats.size === 0) return;
+        found[index] = { sessionId, file: { filePath, mtimeMs: stats.mtimeMs } };
+      } catch (error) {
+        // Removed mid-scan is one fewer conversation; unreadable is one hidden.
+        if (!isAbsent(error)) complete = false;
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, names.length) }, worker));
+    });
+    for (const entry of found) {
+      if (!entry) continue;
+      const group = groups.get(entry.sessionId);
+      if (group) {
+        group.files.push(entry.file);
+        group.newest = Math.max(group.newest, entry.file.mtimeMs);
+      } else {
+        groups.set(entry.sessionId, {
+          sessionId: entry.sessionId,
+          files: [entry.file],
+          newest: entry.file.mtimeMs,
+        });
+      }
+    }
   }
-  return { sessions: [...sessions.values()], complete };
+
+  const summarize = async (group: TranscriptGroup): Promise<HelpPastSession | null> => {
+    for (const file of group.files) {
+      try {
+        const { head, tail, complete: whole } = await readEdges(file.filePath);
+        const summary = summarizeClaudeTranscript(head, tail, whole);
+        if (!summary) continue;
+        return {
+          agentId: "claude",
+          sessionId: group.sessionId,
+          title: summary.title,
+          updatedAt: file.mtimeMs,
+        };
+      } catch (error) {
+        if (!isAbsent(error)) complete = false;
+      }
+    }
+    return null;
+  };
+
+  // A group's row is never newer than its newest file, so once `limit` rows
+  // are in hand and the next group can't outrank the last of them, nothing
+  // older can either. Until then, each round opens at most as many groups as
+  // rows are still missing.
+  const order = [...groups.values()].sort((a, b) =>
+    newerFirst({ at: a.newest, id: a.sessionId }, { at: b.newest, id: b.sessionId })
+  );
+  const rows: HelpPastSession[] = [];
+  const rank = (row: HelpPastSession) => ({ at: row.updatedAt, id: row.sessionId });
+  let next = 0;
+  while (next < order.length) {
+    if (rows.length >= limit) {
+      const last = rows[limit - 1]!;
+      const candidate = order[next]!;
+      if (newerFirst({ at: candidate.newest, id: candidate.sessionId }, rank(last)) > 0) break;
+    }
+    const round = order.slice(
+      next,
+      next + Math.min(READ_CONCURRENCY, Math.max(1, limit - rows.length))
+    );
+    next += round.length;
+    const found = await Promise.all(round.map(summarize));
+    for (const row of found) if (row) rows.push(row);
+    rows.sort((a, b) => newerFirst(rank(a), rank(b)));
+  }
+  return { sessions: rows.slice(0, limit), complete };
 }
 
 export function codexHelpSessionsFrom(result: CodexFolderSessionsResult): HelpPastSession[] {
@@ -355,9 +448,13 @@ export async function listHelpPastSessions(
   deps: ListHelpPastSessionsDeps
 ): Promise<HelpPastSessionsListing> {
   const [claude, ...codexByPath] = await Promise.all([
-    listClaudeHelpSessions(paths.claude, deps.claudeProjectsRoot).catch(
-      (): ClaudeHelpSessionsRead => ({ sessions: [], complete: false })
-    ),
+    // One row past the cap: enough to know the merged list is cut without
+    // opening a transcript that can't be shown.
+    listClaudeHelpSessions(
+      paths.claude,
+      deps.claudeProjectsRoot,
+      HELP_PAST_SESSIONS_LIMIT + 1
+    ).catch((): ClaudeHelpSessionsRead => ({ sessions: [], complete: false })),
     ...paths.codex.map((codexPath) => readCodexHelpSessions(codexPath, paths, deps)),
   ]);
   // A conversation resumed into the newer directory can be reported under both.

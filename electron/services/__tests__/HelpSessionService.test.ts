@@ -112,6 +112,7 @@ function cleanSyncResult(
 ): import("../AssistantContentMirror.js").AssistantContentSyncResult {
   return {
     copied: 0,
+    unchanged: 0,
     removed: 0,
     truncated: false,
     omittedSkills: [],
@@ -884,6 +885,47 @@ describe("HelpSessionService", () => {
           if (name !== "host-inventory.md") expect(content.split(START)).toHaveLength(2);
         }
       });
+
+      it("rewrites neither prompt file on a relaunch with the same snapshot", async () => {
+        snapshot = withProjects(["alpha"]);
+        install();
+        const first = await service.provisionSession(globalInput());
+        if (!first) throw new Error("expected result");
+        const before = await fs.readFile(path.join(first.sessionPath, "CLAUDE.md"), "utf-8");
+        for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+          await fs.utimes(path.join(first.sessionPath, name), 1_000, 1_000);
+        }
+
+        const second = await service.provisionSession(globalInput());
+        if (!second) throw new Error("expected result");
+
+        for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+          const file = path.join(second.sessionPath, name);
+          expect((await fs.stat(file)).mtimeMs, name).toBe(1_000_000);
+        }
+        const after = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
+        expect(after).toBe(before);
+        expect(after.startsWith("# Global Help")).toBe(true);
+      });
+
+      it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+        "replaces a prompt file it can't read with the global assistant's own",
+        async () => {
+          snapshot = withProjects(["alpha"]);
+          install();
+          const first = await service.provisionSession(globalInput());
+          if (!first) throw new Error("expected result");
+          const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+          await fs.chmod(claudePath, 0o000);
+
+          const second = await service.provisionSession(globalInput());
+          if (!second) throw new Error("expected result");
+
+          const claude = await fs.readFile(claudePath, "utf-8");
+          expect(claude.startsWith("# Global Help")).toBe(true);
+          expect(claude).toContain("`id-alpha`");
+        }
+      );
 
       it("gives a Codex run the block and the sidecar it is told to read when reopened", async () => {
         snapshot = withProjects(["alpha"]);
@@ -5742,6 +5784,101 @@ describe("HelpSessionService", () => {
       // A Claude lane of the same project is still handed the plugin's notes.
       await service.provisionSession(provisionInput());
       expect(mockResolveAssistantPluginKnowledge).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a relaunch with nothing changed (#17076)", () => {
+    const LONG_AGO_S = 1_000;
+    const ownFiles = ["CLAUDE.md", "AGENTS.md", ".mcp.json", path.join(".claude", "settings.json")];
+
+    async function backdate(sessionPath: string, names: string[]): Promise<void> {
+      for (const name of names) {
+        await fs.utimes(path.join(sessionPath, name), LONG_AGO_S, LONG_AGO_S);
+      }
+    }
+
+    it("rewrites none of the session's own files", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const before = await Promise.all(
+        ownFiles.map((name) => fs.readFile(path.join(first.sessionPath, name), "utf-8"))
+      );
+      await backdate(first.sessionPath, ownFiles);
+
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected second provision");
+
+      for (const [i, name] of ownFiles.entries()) {
+        const file = path.join(second.sessionPath, name);
+        expect((await fs.stat(file)).mtimeMs, name).toBe(LONG_AGO_S * 1000);
+        expect(await fs.readFile(file, "utf-8"), name).toBe(before[i]);
+      }
+    });
+
+    it("brings a stale prompt file's blocks current and leaves the other alone", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+      // A block an older build left behind, and one that went missing.
+      const stale = (await fs.readFile(claudePath, "utf-8")).replace(
+        /<!-- DAINTREE_ASSISTANT_SCRATCH_START -->[\s\S]*?<!-- DAINTREE_ASSISTANT_SCRATCH_END -->\n/,
+        ""
+      );
+      await fs.writeFile(
+        claudePath,
+        `${stale}\n<!-- DAINTREE_MESSAGING_START -->\nold inbox rules\n<!-- DAINTREE_MESSAGING_END -->\n`
+      );
+      await backdate(first.sessionPath, ["AGENTS.md"]);
+
+      await service.provisionSession(provisionInput());
+
+      const claude = await fs.readFile(claudePath, "utf-8");
+      expect(claude).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_START -->");
+      expect(claude).not.toContain("old inbox rules");
+      expect(
+        (await fs.stat(path.join(first.sessionPath, "AGENTS.md"))).mtimeMs,
+        "AGENTS.md had nothing to change"
+      ).toBe(LONG_AGO_S * 1000);
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "puts back a settings file's mode without rewriting it",
+      async () => {
+        const first = await service.provisionSession(provisionInput());
+        if (!first) throw new Error("expected first provision");
+        const settings = path.join(first.sessionPath, ".claude", "settings.json");
+        await fs.chmod(settings, 0o644);
+        await backdate(first.sessionPath, [path.join(".claude", "settings.json")]);
+
+        await service.provisionSession(provisionInput());
+
+        const stats = await fs.stat(settings);
+        expect(stats.mode & 0o777).toBe(0o600);
+        expect(stats.mtimeMs).toBe(LONG_AGO_S * 1000);
+      }
+    );
+
+    it("hashes the bundled template again only when one of its files changes", async () => {
+      const templateClaude = path.join(helpFolder, "CLAUDE.md");
+      // A whole-second mtime, so putting it back below restores it exactly.
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
+      await service.provisionSession(provisionInput());
+      const readFile = vi.spyOn(fs, "readFile");
+      const templateReads = () =>
+        readFile.mock.calls.filter(([file]) => file === templateClaude).length;
+
+      await service.provisionSession(provisionInput());
+      expect(templateReads()).toBe(0);
+
+      // Same length, and its mtime put back: only the change time shows it.
+      await fs.writeFile(templateClaude, "# Hel!", "utf-8");
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
+      expect((await fs.stat(templateClaude)).mtimeMs).toBe(LONG_AGO_S * 1000);
+      const third = await service.provisionSession(provisionInput());
+      if (!third) throw new Error("expected third provision");
+      expect(templateReads()).toBeGreaterThan(0);
+      const claude = await fs.readFile(path.join(third.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(stripManagedAddenda(claude)).toBe("# Hel!");
     });
   });
 
