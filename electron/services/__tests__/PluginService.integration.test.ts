@@ -1197,13 +1197,16 @@ describe("PluginService integration — file decoration provider contributions",
     const service = new PluginService(tmpDir, "0.0.0");
     await initializeAndActivate(service);
 
+    // The last one: loading announced the declared scope before activation
+    // invalidated its own.
     const call = vi
       .mocked(broadcastToRenderer)
-      .mock.calls.find(
+      .mock.calls.filter(
         ([channel, evt]) =>
           channel === "events:push" &&
           (evt as { name?: string }).name === "plugin:decorations-changed"
-      );
+      )
+      .at(-1);
     expect(call).toBeDefined();
     const payload = (call![1] as { payload: { scope: string; paths?: string[] } }).payload;
     // Over-cap drops `paths` entirely — a scope-wide invalidation — so the
@@ -1329,7 +1332,23 @@ describe("PluginService integration — file decoration provider contributions",
 
     const service = new PluginService(tmpDir, "0.0.0");
     vi.mocked(broadcastToRenderer).mockClear();
-    await service.initialize();
+    // The renderer answers an announcement with a `plugin.list()` pull, so the
+    // plugin must already be listed when it goes out.
+    const listedAtAnnouncement: boolean[] = [];
+    vi.mocked(broadcastToRenderer).mockImplementation((_channel, event) => {
+      if ((event as { name?: string }).name === "plugin:decorations-changed") {
+        listedAtAnnouncement.push(
+          service.listPlugins().some((p) => p.instanceId === "acme.load-decor")
+        );
+      }
+    });
+    try {
+      await service.initialize();
+    } finally {
+      vi.mocked(broadcastToRenderer).mockImplementation(() => {});
+    }
+    expect(listedAtAnnouncement.length).toBeGreaterThan(0);
+    expect(listedAtAnnouncement.every(Boolean)).toBe(true);
 
     const decorationBroadcasts = vi
       .mocked(broadcastToRenderer)

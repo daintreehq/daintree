@@ -546,6 +546,46 @@ describe("usePluginRuntimeStore", () => {
     );
   });
 
+  it("answers a burst of announcements with one pull and one trailing pull", async () => {
+    let announce: ((payload: { scope: string }) => void) | undefined;
+    installBridge({
+      list: listMock,
+      onProvenanceChanged: onProvenanceChangedMock,
+      onDecorationsChanged: (cb: (payload: { scope: string }) => void) => {
+        announce = cb;
+        return () => {};
+      },
+    });
+    listMock.mockResolvedValue([]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    let resolveFirst: ((plugins: LoadedPluginInfo[]) => void) | undefined;
+    listMock.mockImplementationOnce(
+      () =>
+        new Promise<LoadedPluginInfo[]>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    const loaded = [
+      makePlugin({ id: "acme.a", decorationScopes: ["a:*"] }),
+      makePlugin({ id: "acme.b", decorationScopes: ["b:*"] }),
+      makePlugin({ id: "acme.c", decorationScopes: ["c:*"] }),
+    ];
+    listMock.mockResolvedValue(loaded);
+
+    announce?.({ scope: "a:*" });
+    announce?.({ scope: "b:*" });
+    announce?.({ scope: "c:*" });
+    expect(listMock).toHaveBeenCalledTimes(2);
+
+    resolveFirst?.(loaded.slice(0, 1));
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual(["a:*", "b:*", "c:*"])
+    );
+    expect(listMock).toHaveBeenCalledTimes(3);
+  });
+
   it("offers nothing from a per-project package's own row, only from its instances", async () => {
     const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
     const link = { id: "l", pattern: "x", actionId: "acme.ledger.open" };

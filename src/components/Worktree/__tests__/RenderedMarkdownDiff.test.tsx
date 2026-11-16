@@ -52,7 +52,7 @@ vi.mock("remark-gfm", async (importOriginal) => {
   return {
     default: function countedRemarkGfm(this: unknown, ...args: unknown[]) {
       gfmParses.count++;
-      return (actual.default as (...a: unknown[]) => unknown).apply(this, args);
+      return Reflect.apply(actual.default, this, args) as unknown;
     },
   };
 });

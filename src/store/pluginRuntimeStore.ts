@@ -110,6 +110,10 @@ function decorationScopeMatches(scope: string, pattern: string): boolean {
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
+// Announcements arrive in bursts (several plugins loading at once), each
+// before the snapshot that would make the next one known. One pull at a time,
+// with a single trailing pull for whatever arrived while it was out.
+let announcementPull: "idle" | "running" | "queued" = "idle";
 // Monotonic pull sequence: rapid provenance events can interleave list()
 // round-trips, and a slow older response must not overwrite a newer set.
 let pullSeq = 0;
@@ -235,6 +239,22 @@ async function pullPluginRuntimeSnapshot(
   }
 }
 
+function pullForAnnouncement(
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
+): void {
+  if (announcementPull !== "idle") {
+    announcementPull = "queued";
+    return;
+  }
+  announcementPull = "running";
+  void pullPluginRuntimeSnapshot(set, get).finally(() => {
+    const again = announcementPull === "queued";
+    announcementPull = "idle";
+    if (again && initialized) pullForAnnouncement(set, get);
+  });
+}
+
 /**
  * Subscribe to provenance updates once. Returns true when this call is what
  * established the subscription, i.e. the caller still owes the first pull.
@@ -288,7 +308,7 @@ function ensureSubscribed(
       ? plugin.onDecorationsChanged(({ scope }) => {
           const known = get().fileDecorationScopes;
           if (known.some((pattern) => decorationScopeMatches(scope, pattern))) return;
-          void pullPluginRuntimeSnapshot(set, get);
+          pullForAnnouncement(set, get);
         })
       : undefined;
   unsubscribe = () => {
@@ -324,6 +344,7 @@ export function _resetPluginRuntimeStoreForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   initialized = false;
+  announcementPull = "idle";
   pullSeq = 0;
   committedSeq = 0;
   usePluginRuntimeStore.setState({

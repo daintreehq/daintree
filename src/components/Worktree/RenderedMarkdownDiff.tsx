@@ -597,9 +597,10 @@ export function RenderedMarkdownDiff({
       (entries) => {
         const keys: string[] = [];
         for (const entry of entries) {
-          const key = entry.isIntersecting
-            ? (entry.target as HTMLElement).dataset.stageKey
-            : undefined;
+          const key =
+            entry.isIntersecting && entry.target instanceof HTMLElement
+              ? entry.target.dataset.stageKey
+              : undefined;
           if (key) keys.push(key);
         }
         if (keys.length > 0) admit(keys);
