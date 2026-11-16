@@ -1,13 +1,35 @@
-import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
-import Fuse, { type IFuseOptions, type FuseResultMatch } from "fuse.js";
+import {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useDeferredValue,
+} from "react";
+import type { IFuseOptions, FuseResultMatch } from "fuse.js";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
+import { searchFuseIndex } from "@/lib/fuseIndex";
 
 export type { FuseResultMatch };
+
+/** Rows and their match ranges from one pass, so the two always answer the same query. */
+export interface PaletteSearchResult<T> {
+  items: T[];
+  matchesById: Map<string, readonly FuseResultMatch[]>;
+}
 
 export interface UseSearchablePaletteOptions<T> {
   items: T[];
   fuseOptions?: IFuseOptions<T>;
   filterFn?: (items: T[], query: string) => T[];
+  /**
+   * Like `filterFn`, but also returns the match ranges it found, for callers
+   * that highlight rows from their own search. Running that search a second
+   * time for the ranges doubled the work on every keystroke. Takes precedence
+   * over `filterFn` and `fuseOptions`.
+   */
+  searchFn?: (items: T[], query: string) => PaletteSearchResult<T>;
   /**
    * Cap on rendered results. Pass a function to vary the cap by query — the
    * action palette uncaps its empty-query browse inventory while keeping the
@@ -36,6 +58,14 @@ export interface UseSearchablePaletteOptions<T> {
    * Enter reads the *previous* query's ranking and launches the wrong item.
    */
   deferFiltering?: boolean | "auto";
+  /**
+   * Whether the built-in Fuse search (`fuseOptions`) may run. Defaults to the
+   * palette being open when `paletteId` is set — a closed palette keeps its
+   * host mounted for the exit animation and must not index or search behind
+   * it — and to true otherwise, since a caller without one owns its own
+   * visibility and should pass it here.
+   */
+  searchEnabled?: boolean;
 }
 
 /**
@@ -81,6 +111,7 @@ export function useSearchablePalette<T>(
     items,
     fuseOptions,
     filterFn,
+    searchFn,
     maxResults = DEFAULT_MAX_RESULTS,
     canNavigate,
     resetOnResultsChange = true,
@@ -88,6 +119,7 @@ export function useSearchablePalette<T>(
     includeMatches = false,
     getItemId = defaultGetItemId,
     deferFiltering = "auto",
+    searchEnabled: searchEnabledOption,
   } = options;
 
   const storeIsOpen = usePaletteStore(
@@ -95,6 +127,12 @@ export function useSearchablePalette<T>(
   );
   const [localIsOpen, setLocalIsOpen] = useState(false);
   const isOpen = paletteId != null ? storeIsOpen : localIsOpen;
+  const searchEnabled = searchEnabledOption ?? (paletteId != null ? isOpen : true);
+  // Only this palette's own requests: another palette opening must not
+  // re-render this one.
+  const openRequestId = usePaletteStore((state) =>
+    paletteId != null && state.activePaletteId === paletteId ? state.openRequestId : 0
+  );
 
   const [query, setQuery] = useState("");
   // Lag the filtering work behind the input so keystrokes stay responsive.
@@ -114,21 +152,20 @@ export function useSearchablePalette<T>(
     return fuseOptions;
   }, [fuseOptions, includeMatches]);
 
-  const fuse = useMemo(() => {
-    if (!effectiveFuseOptions) return null;
-    return new Fuse(items, effectiveFuseOptions);
-  }, [items, effectiveFuseOptions]);
-
   const { results, totalResults, matchesById } = useMemo(() => {
     let filtered: T[];
-    const matches = new Map<string, readonly FuseResultMatch[]>();
+    let matches = new Map<string, readonly FuseResultMatch[]>();
 
-    if (filterFn) {
+    if (searchFn) {
+      const searched = searchFn(items, deferredQuery);
+      filtered = searched.items;
+      matches = searched.matchesById;
+    } else if (filterFn) {
       filtered = filterFn(items, deferredQuery);
     } else if (!deferredQuery.trim()) {
       filtered = items;
-    } else if (fuse) {
-      const fuseResults = fuse.search(deferredQuery);
+    } else if (effectiveFuseOptions && searchEnabled) {
+      const fuseResults = searchFuseIndex(items, effectiveFuseOptions, deferredQuery);
       filtered = fuseResults.map((r) => r.item);
       if (includeMatches) {
         for (const r of fuseResults) {
@@ -153,7 +190,27 @@ export function useSearchablePalette<T>(
       totalResults: filtered.length,
       matchesById: matches,
     };
-  }, [deferredQuery, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
+  }, [
+    deferredQuery,
+    items,
+    effectiveFuseOptions,
+    searchEnabled,
+    searchFn,
+    filterFn,
+    maxResults,
+    includeMatches,
+    getItemId,
+  ]);
+
+  // Read by the callbacks below instead of closing over `results`, so the
+  // setter rows receive as their hover handler keeps one identity across
+  // keystrokes and a memoized row whose own props are unchanged can skip
+  // the render. Layout effects run before every passive effect and event that
+  // can call those callbacks, so the ref always holds the committed list.
+  const resultsRef = useRef(results);
+  useLayoutEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
 
   const findNavigable = useCallback(
     (startIndex: number, direction: 1 | -1): number => {
@@ -209,14 +266,14 @@ export function useSearchablePalette<T>(
       // agree with each other. Every write lands here, so the ref is as current
       // as the state it mirrors.
       const value = typeof next === "function" ? next(selectedIndexRef.current) : next;
-      const item = results[value];
+      const item = resultsRef.current[value];
       if (item != null) {
         selectedItemIdRef.current = getItemId(item);
       }
       selectedIndexRef.current = value;
       setSelectedIndex(value);
     },
-    [results, getItemId]
+    [getItemId]
   );
 
   useEffect(() => {
@@ -310,6 +367,22 @@ export function useSearchablePalette<T>(
     selectedIndexRef.current = 0;
     setSelectedIndex(0);
   }, [paletteId]);
+
+  // An opener outside the component that renders this palette can only reach
+  // the palette store, so a store open has to give the same fresh start as
+  // `open()` above. Done before paint: a query left from an opening that ended
+  // without `close()` (another palette took over) never shows. Seeded from the
+  // request already in place when the hook mounts, which needs no reset.
+  const handledOpenRequestRef = useRef(openRequestId);
+  useLayoutEffect(() => {
+    if (openRequestId === 0 || openRequestId === handledOpenRequestRef.current) return;
+    handledOpenRequestRef.current = openRequestId;
+    setQuery("");
+    selectedItemIdRef.current = null;
+    const firstNav = canNavigate && results.length > 0 ? findNavigable(0, 1) : 0;
+    selectedIndexRef.current = firstNav;
+    setSelectedIndex(firstNav);
+  }, [openRequestId, canNavigate, results.length, findNavigable]);
 
   const toggle = useCallback(() => {
     if (isOpen) {

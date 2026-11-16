@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -691,7 +699,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     [argField, query, submitArgValue]
   );
 
-  const executeAction = useCallback(
+  const runAction = useCallback(
     (item: ActionPaletteItem) => {
       // Enter on a disabled row is a silent no-op: palette stays open, no
       // dispatch, no toast. The inline disabled-reason text in the row already
@@ -716,6 +724,16 @@ export function useActionPalette(): UseActionPaletteReturn {
     [argSession, pickArgRow, dispatchAction, query, setQuery]
   );
 
+  // Every row takes this as its click handler, and `runAction` changes with
+  // the query, so handing rows that directly re-rendered the whole memoized
+  // list on each keystroke. The rows get one identity for the palette's
+  // lifetime that runs whatever `runAction` the last commit produced.
+  const runActionRef = useRef(runAction);
+  useLayoutEffect(() => {
+    runActionRef.current = runAction;
+  }, [runAction]);
+  const executeAction = useCallback((item: ActionPaletteItem) => runActionRef.current(item), []);
+
   const confirmSelection = useCallback(() => {
     if (argSession) {
       pickArgRow(argRows[argSelectedIndex]);
@@ -729,18 +747,9 @@ export function useActionPalette(): UseActionPaletteReturn {
     // `selectedIndex` is the clamped read above, so it already names a row that
     // exists whenever there is one.
     if (selectedIndex >= 0) {
-      executeAction(results[selectedIndex]!);
+      runAction(results[selectedIndex]!);
     }
-  }, [
-    argSession,
-    argRows,
-    argSelectedIndex,
-    pickArgRow,
-    isStale,
-    results,
-    selectedIndex,
-    executeAction,
-  ]);
+  }, [argSession, argRows, argSelectedIndex, pickArgRow, isStale, results, selectedIndex, runAction]);
 
   const pinAction = useCallback((item: ActionPaletteItem): boolean => {
     if (item.danger === "confirm") {

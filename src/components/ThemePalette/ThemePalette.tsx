@@ -11,7 +11,7 @@ import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
-import { useSearchablePalette } from "@/hooks/useSearchablePalette";
+import { useSearchablePalette, type PaletteSearchResult } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import {
   useAppThemeStore,
@@ -26,8 +26,15 @@ import type { AppColorScheme } from "@shared/types/appTheme";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { THEME_MODE_LABEL, searchThemes } from "./themeSearch";
 
-const filterThemes = (items: AppColorScheme[], query: string): AppColorScheme[] =>
-  searchThemes(items, query).items;
+const searchThemeRows = (
+  items: AppColorScheme[],
+  query: string
+): PaletteSearchResult<AppColorScheme> => {
+  const { items: rows, matches } = searchThemes(items, query);
+  return { items: rows, matchesById: matches };
+};
+
+const getSchemeId = (scheme: AppColorScheme): string => scheme.id;
 
 interface ThemePaletteProps {
   isOpen: boolean;
@@ -148,23 +155,25 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
     results,
     totalResults,
     selectedIndex,
+    matchesById,
     setQuery,
     setSelectedIndex,
     selectPrevious,
     selectNext,
   } = useSearchablePalette<AppColorScheme>({
     items: allSchemes,
-    filterFn: filterThemes,
+    // One search yields both the rows and their marks, so they always answer
+    // the same query.
+    searchFn: searchThemeRows,
     // Every theme stays reachable by browsing: the shell's default cap of 20
     // cut imported themes off the end, including a committed one.
     maxResults: allSchemes.length,
-    // Match marks are computed from the live query below, so the rows must be
-    // too — a deferred pass would pair one query's rows with another's marks.
+    // Enter commits the row under the cursor, so it must reflect the last
+    // keystroke rather than trail it by a deferred frame.
     deferFiltering: false,
     paletteId: "theme",
-    getItemId: (scheme) => scheme.id,
+    getItemId: getSchemeId,
   });
-  const matchesById = useMemo(() => searchThemes(allSchemes, query).matches, [allSchemes, query]);
 
   const originalSchemeIdRef = useRef<string | null>(null);
   const committedRef = useRef(false);
