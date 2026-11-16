@@ -1344,6 +1344,43 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill bursts
     expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
   });
 
+  it("a slow escalation does not leave the next member on an old table", () => {
+    const [a, b] = [P(1000), P(1100)];
+    const lineage = {
+      ...makeCensusLineage([
+        makeCensus([...rowsFor(a), ...rowsFor(b)]),
+        // A's escalation read fails, so A falls back to probing the ledger...
+        null,
+        // ...and by the time B escalates its child's PID has been reused.
+        makeCensus([
+          [b, 1, `shell-${b}`],
+          [b + 1, 1, "replacement"],
+        ]),
+      ]),
+      getVerifiedOrphanPids: (
+        _root: number,
+        _covered: readonly number[],
+        census?: KillCensus | null
+      ) => {
+        if (!census) vi.setSystemTime(Date.now() + 300);
+        return [];
+      },
+    };
+    const cache = makeTreeCache([], { [a]: [a + 1], [b]: [b + 1] });
+    const killerA = new ProcessTreeKiller(makePty(a), cache, lineage);
+    const killerB = new ProcessTreeKiller(makePty(b), cache, lineage);
+
+    killerA.execute(false);
+    killerB.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+    const killed = signalsOf(killSpy, "SIGKILL");
+    expect(killed).toContain(b);
+    expect(killed).not.toContain(b + 1);
+  });
+
   it("never shares across ledgers", () => {
     const lineageA = makeCensusLineage([makeCensus(rowsFor(P(1000)))]);
     const lineageB = makeCensusLineage([makeCensus(rowsFor(P(1100)))]);
@@ -1406,6 +1443,50 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill bursts
 
       killSpy.mockClear();
       vi.advanceTimersByTime(300);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+    });
+
+    it("an older escalation firing leaves the one that replaced it taking members", () => {
+      const lineage = makeCensusLineage([
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+      ]);
+      const [killerA, killerB, killerC] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(300);
+      killerB.execute(false);
+      vi.advanceTimersByTime(240);
+      killerC.execute(false);
+      killSpy.mockClear();
+      vi.advanceTimersByTime(499);
+
+      expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+
+      vi.advanceTimersByTime(1);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+        new Set([P(1100), P(1101), P(1200), P(1201)])
+      );
+    });
+
+    it("a member leaving an escalation that was replaced costs the newer one nothing", () => {
+      const lineage = makeCensusLineage([
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+      ]);
+      const [killerA, killerB] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(300);
+      killerB.execute(false);
+      killerA.abort();
+      killSpy.mockClear();
+      vi.advanceTimersByTime(500);
 
       expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
     });
