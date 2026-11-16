@@ -264,6 +264,116 @@ describe("WorkspaceService.pause/resume", () => {
   });
 });
 
+describe("WorkspaceService PR polling under the power policy (#17060)", () => {
+  const DEEP = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+  const BLURRED = { statusAllowed: true, backgroundWorkAllowed: false, attenuated: true };
+  const ACTIVE = { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false };
+
+  let service: WorkspaceService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.spyOn(os, "setPriority").mockImplementation(() => {});
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(vi.fn() as any);
+    service["projectRootPath"] = "/test/root";
+    service["projectId"] = "test-project-id";
+    service["git"] = mockSimpleGit as any;
+    // Stands in for a load that initialized PR detection.
+    service["prService"]["initializedForPath"] = "/test/root";
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stops PR polling when no window is on screen or the machine suspends", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+
+    expect(mockPullRequestService.stop).toHaveBeenCalled();
+  });
+
+  it("keeps PR polling while a window is on screen but unfocused", () => {
+    service.setWorkspacePowerPolicy(BLURRED);
+
+    expect(mockPullRequestService.stop).not.toHaveBeenCalled();
+  });
+
+  it("restarts PR polling without jitter when a window comes back on screen", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy(BLURRED);
+
+    expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("does not restart PR polling for a policy push that keeps the window off screen", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy({ ...DEEP, attenuated: false });
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("leaves a paused host's PR polling stopped when a window comes back on screen", () => {
+    service.pause();
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("does not start PR polling when foregrounded while nothing is on screen", () => {
+    service.pause();
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.resume();
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("resetPRState() in a paused host resets PR state without starting polling", () => {
+    service.pause();
+    vi.clearAllMocks();
+
+    service.resetPRState("req-reset");
+
+    expect(mockPullRequestService.reset).toHaveBeenCalled();
+    expect(mockPullRequestService.initialize).toHaveBeenCalledWith("/test/root", "test-project-id");
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+    service.resume();
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("resetPRState() while nothing is on screen does not start polling", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.resetPRState("req-reset");
+
+    expect(mockPullRequestService.reset).toHaveBeenCalled();
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("a credential sign-out while nothing is on screen does not start polling", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.updateForgeCredentials("daintree.github.github", null);
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+});
+
 describe("WorkspaceService.refreshOnWake", () => {
   let service: WorkspaceService;
   let mockSendEvent: ReturnType<typeof vi.fn>;

@@ -561,9 +561,10 @@ export class WorkspaceService {
   private backgrounded = false;
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
-  // Credential changes that reached this host while backgrounded, the latest
-  // per provider, replayed once PR work resumes — they would otherwise fetch
-  // every worktree and poll PRs in a host nothing is looking at. Per provider
+  // Credential changes that reached this host while backgrounded or with no
+  // window on screen, the latest per provider, replayed once PR work resumes —
+  // they would otherwise fetch every worktree and poll PRs in a host nothing is
+  // looking at. Per provider
   // because a set and a clear have different effects, and one provider's
   // must not swallow another's.
   private readonly deferredCredentialUpdates = new Map<
@@ -5378,8 +5379,20 @@ export class WorkspaceService {
    * what they may run. Replayed by main on host restart.
    */
   setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    const wasOnScreen = this.appPolicy.statusAllowed;
     this.appPolicy = { ...policy };
     this.reconcilePolling();
+    // PR polling follows status work: off with every window hidden, the screen
+    // locked, or the machine asleep.
+    if (policy.statusAllowed === wasOnScreen) return;
+    if (!policy.statusAllowed) {
+      this.prService.pause();
+      return;
+    }
+    // A paused host restarts it on its own resume(), and a resume still
+    // settling its remotes restarts it once they settle.
+    if (this.backgrounded || this.pendingResumeSettle) return;
+    this.resumePRWork();
   }
 
   /**
@@ -5498,6 +5511,9 @@ export class WorkspaceService {
 
   /** The PR side of `resume()`, run once the remotes have settled. */
   private resumePRWork(): void {
+    // Foregrounded with nothing on screen: the poller and any held-back
+    // credential change wait for a window to come back.
+    if (!this.appPolicy.statusAllowed) return;
     // A credential change held back while backgrounded refreshes PRs, so it
     // waits for the same settle the poller does.
     const deferred = [...this.deferredCredentialUpdates];
@@ -5549,7 +5565,7 @@ export class WorkspaceService {
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    if (this.backgrounded || this.pendingResumeSettle) {
+    if (this.backgrounded || this.pendingResumeSettle || !this.appPolicy.statusAllowed) {
       this.deferredCredentialUpdates.set(providerId, credentials);
       return;
     }
