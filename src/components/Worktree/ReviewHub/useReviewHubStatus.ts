@@ -286,14 +286,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
         }
       })();
     },
-    [
-      worktreeId,
-      worktreePath,
-      refresh,
-      backgroundRefresh,
-      beginForegroundRead,
-      sendForegroundRead,
-    ]
+    [worktreeId, worktreePath, refresh, backgroundRefresh, beginForegroundRead, sendForegroundRead]
   );
 
   /** A capture and the silent read after it: what events and a mark ask for. */

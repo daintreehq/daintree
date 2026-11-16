@@ -15,7 +15,8 @@ const { marks } = vi.hoisted(() => ({
 
 vi.mock("@/store/reviewMarksStore", () => ({
   reviewMarkCapturesAvailable: () => marks.available,
-  captureForReviewMark: (worktreeId: string) => (marks.available ? marks.capture(worktreeId) : null),
+  captureForReviewMark: (worktreeId: string) =>
+    marks.available ? marks.capture(worktreeId) : null,
   getReviewMarksRevision: () => 0,
 }));
 
