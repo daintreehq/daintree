@@ -18,10 +18,14 @@
   }
 
   /* F1 (light) — elevate the floating surface to the brightest plane and force
-   * it opaque (no transparency mix). */
+   * it opaque (no transparency mix). An opaque fill hides its backdrop
+   * entirely, so the dark rule's blur would only cost Chromium an offscreen
+   * pass behind every light menu for nothing anyone can see. */
   .light .surface-overlay {
     --scroll-shadow-color: var(--color-surface-panel-elevated);
     background-color: var(--color-surface-panel-elevated);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   /* Solid stand-in for the frosted overlay background, for marks that have to

@@ -60,7 +60,10 @@ vi.mock("@/hooks", () => ({
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: [], localSummary: null }),
 }));
-vi.mock("@/lib/appThemeViewTransition", () => ({ prefersReducedMotion: () => true }));
+vi.mock("@/lib/appThemeViewTransition", () => ({
+  prefersReducedMotion: () => true,
+  subscribeReducedMotion: () => () => {},
+}));
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("../RecentDictationMenuItems", () => ({ RecentDictationMenuItems: () => null }));
 

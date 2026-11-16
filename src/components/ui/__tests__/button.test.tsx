@@ -21,6 +21,32 @@ describe("buttonVariants", () => {
     expect(transitions[0]).not.toMatch(/scale|transform|translate|rotate|all/);
   });
 
+  // A backdrop blur behind an opaque fill shows nothing and still costs an
+  // offscreen pass for every pill on screen (#17074).
+  it("keeps the pill unblurred while its fills are opaque surfaces", () => {
+    // Tailwind's important marker, leading or trailing, changes nothing here.
+    const tokens = buttonVariants({ variant: "pill" })
+      .split(/\s+/)
+      .map((token) => token.replace(/(^|:)!/, "$1").replace(/!$/, ""));
+    const fills = tokens
+      .map((token) => /^(?:[^\s:]+:)*bg-surface-([a-z-]+)$/.exec(token)?.[1])
+      .filter((name): name is string => name !== undefined);
+    expect(fills.length).toBeGreaterThan(1);
+    // No fill may be anything but a surface token, and every surface it uses is
+    // opaque in every built-in theme, so nothing behind the pill ever shows.
+    expect(tokens.filter((token) => /(?:^|:)bg-/.test(token))).toHaveLength(fills.length);
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      for (const name of fills) {
+        const tokenName = `surface-${name}`;
+        const value = Object.entries(scheme.tokens).find(([key]) => key === tokenName)?.[1];
+        expect(value, `${scheme.id} ${tokenName}`).toMatch(/^#[0-9a-f]{6}$/i);
+      }
+    }
+    // A backdrop utility under any variant prefix; the shared transition list
+    // may still name the property.
+    expect(tokens.some((token) => /(?:^|:)backdrop-/.test(token))).toBe(false);
+  });
+
   // A `truncate` label clips at its own box, and at `leading-none` that box is
   // shorter than the glyphs, so the descenders are sliced off. The room comes
   // from padding on the clip box, handed back by an equal negative margin so

@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import { useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
-import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { prefersReducedMotion, subscribeReducedMotion } from "@/lib/appThemeViewTransition";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
 import { OwnVoiceSessionPanel } from "./OwnVoiceSessionPanel";
@@ -360,9 +361,11 @@ function VoiceWave({
     let lastTime = performance.now();
     let envelope = 0;
     const history: Array<{ t: number; v: number }> = [];
-    let rafId = 0;
+    let rafId: number | null = null;
+    let resumed = false;
 
     const tick = (now: number) => {
+      rafId = null;
       // A frame's timestamp can precede the snapshot the loop started from.
       const gap = Math.max(0, (now - lastTime) / 1000);
       lastTime = now;
@@ -374,9 +377,10 @@ function VoiceWave({
       // Lift the quiet end before smoothing, so the envelope's timing is the
       // timing the eye sees.
       const target = Math.sqrt(gated);
-      if (gap > MAX_FRAME_GAP) {
-        // Frames stopped (a hidden window): what was heard before the gap is
-        // stale, so start again from what is heard now.
+      if (resumed || gap > MAX_FRAME_GAP) {
+        // Frames stopped (the loop paused, or a hidden window): what was heard
+        // before the gap is stale, so start again from what is heard now.
+        resumed = false;
         history.length = 0;
         envelope = target;
       } else {
@@ -395,24 +399,48 @@ function VoiceWave({
         return 0;
       };
 
-      // Reduced motion holds one still shape. Read per frame so flipping the
-      // preference mid-dictation applies at once.
-      const still = prefersReducedMotion();
       WAVE_WEIGHTS.forEach((weight, i) => {
         const el = barRefs.current[i];
         if (!el) return;
         const level = at((WAVE_WEIGHTS.length - 1 - i) * HISTORY_STEP);
-        const scale = still
-          ? STILL_SHAPE[i]!
-          : BAR_REST + (1 - BAR_REST) * Math.min(1, level * weight);
+        const scale = BAR_REST + (1 - BAR_REST) * Math.min(1, level * weight);
         el.style.transform = `scaleY(${scale.toFixed(3)})`;
       });
 
       rafId = requestAnimationFrame(tick);
     };
 
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    const holdStill = () => {
+      STILL_SHAPE.forEach((scale, i) => {
+        const el = barRefs.current[i];
+        if (el) el.style.transform = `scaleY(${scale.toFixed(3)})`;
+      });
+    };
+
+    // Frames only while the bars can be seen moving. Reduced motion holds one
+    // still shape, which needs no frames at all. A cached project view still
+    // reports itself visible and keeps getting frames at display rate, so a
+    // dictation would otherwise drive this loop in every open project at once.
+    const sync = () => {
+      const still = prefersReducedMotion();
+      if (still) holdStill();
+      if (!still && isProjectViewObservable()) {
+        if (rafId === null) rafId = requestAnimationFrame(tick);
+      } else if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+        resumed = true;
+      }
+    };
+
+    const offObservability = subscribeProjectViewObservability(sync);
+    const offReducedMotion = subscribeReducedMotion(sync);
+    sync();
+    return () => {
+      offObservability();
+      offReducedMotion();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, [mode, elsewhereSessionId]);
 
   return (
