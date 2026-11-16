@@ -856,10 +856,15 @@ describe("installTerminalBoundListeners", () => {
         () => (deps.setCachedSelection as ReturnType<typeof vi.fn>).mock.lastCall?.[1]
       );
       let copiedOnSelect: string | undefined;
+      let extractedOnXtermReport: boolean | undefined;
       const xtermElement = mountLikeXterm(
         managed,
         () => {},
-        () => captured.onSelectionChange!(),
+        () => {
+          const before = getSelection.mock.calls.length;
+          captured.onSelectionChange!();
+          extractedOnXtermReport = getSelection.mock.calls.length > before;
+        },
         () => {
           copiedOnSelect = primaryDeps.getCachedSelection();
         }
@@ -870,6 +875,9 @@ describe("installTerminalBoundListeners", () => {
       getSelection.mockReturnValue("new selection");
       xtermElement.dispatchEvent(new MouseEvent("mouseup", { button: 0, bubbles: true }));
       expect(copiedOnSelect).toBe("new selection");
+      // The drag was still live when xterm reported it, so the report only
+      // marked the cache stale and the window's release listener caught up.
+      expect(extractedOnXtermReport).toBe(false);
       expect(deps.setCachedSelection).toHaveBeenLastCalledWith("t1", "new selection");
 
       // xterm's report came while the gesture was live, and the gesture is

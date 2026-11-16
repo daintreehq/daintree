@@ -44,12 +44,26 @@ function isExecutable(c: number): boolean {
   return c <= 0x17 || c === 0x19 || (c >= 0x1c && c <= 0x1f);
 }
 
-// Keep every U+FEFF, wherever a window starts: `step` decides what one does.
+// Keep every U+FEFF, wherever a window starts: `run` decides what one does.
 const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 // First window `feedBytes` decodes; each later one doubles. Most sequences end
 // within a few bytes, so a chunk of plain output after one costs one window.
 const FIRST_WINDOW_BYTES = 256;
+
+function isHighSurrogate(c: number): boolean {
+  return c >= 0xd800 && c <= 0xdbff;
+}
+
+// Whether xterm's string decoder ends `data` holding a high surrogate for the
+// next write, given whether it held one before. Each high surrogate takes the
+// unit after it as its partner, so only the parity of the trailing run counts.
+function leavesHighSurrogate(data: string, holding: boolean): boolean {
+  let run = 0;
+  while (run < data.length && isHighSurrogate(data.charCodeAt(data.length - 1 - run))) run++;
+  if (run === data.length && holding) run++;
+  return run % 2 === 1;
+}
 
 function isAnywhere(c: number): boolean {
   return c === 0x1b || c === 0x18 || c === 0x1a || (c >= 0x80 && c <= 0x9f);
@@ -100,6 +114,7 @@ export class PartialEscapeTracker {
   private state: S = S.Ground;
   private buffer = "";
   private overflowed = false;
+  private highSurrogateHeld = false;
 
   /**
    * The code units to replay after a snapshot: `""` when the parser is in
@@ -117,6 +132,7 @@ export class PartialEscapeTracker {
     this.state = S.Ground;
     this.buffer = "";
     this.overflowed = false;
+    this.highSurrogateHeld = false;
   }
 
   /** Put the tracker in the state `tail` leaves a fresh parser in. */
@@ -129,13 +145,15 @@ export class PartialEscapeTracker {
     // Every ESC, CAN, SUB and C1 control moves the parser to a state that does
     // not depend on the one it was in, so only the text from the last of them
     // matters. Searching backwards keeps a long run of plain output cheap.
+    const held = this.highSurrogateHeld;
+    this.highSurrogateHeld = leavesHighSurrogate(data, held);
     let from = data.length - 1;
     while (from >= 0 && !isAnywhere(data.charCodeAt(from))) from--;
     if (from < 0) {
-      if (this.state !== S.Ground) this.run(data, 0);
+      if (this.state !== S.Ground) this.run(data, 0, held);
       return;
     }
-    this.run(data, from);
+    this.run(data, from, false);
   }
 
   /** Feed whatever a terminal write accepts. */
@@ -173,7 +191,7 @@ export class PartialEscapeTracker {
       // wherever it is cut.
       while (end < data.length && end > from && (data[end]! & 0xc0) === 0x80) end--;
       if (end === from) end = Math.min(data.length, from + size);
-      if (this.run(decoder.decode(data.subarray(from, end)), 0)) return;
+      if (this.run(decoder.decode(data.subarray(from, end)), 0, false)) return;
       from = end;
       size *= 2;
     }
@@ -183,12 +201,25 @@ export class PartialEscapeTracker {
    * Steps `data` from `begin`, where the caller guarantees no ESC, CAN, SUB or
    * C1 control after `begin` itself. Only those leave ground, so the first
    * return to ground is final and the rest of `data` is never read. Returns
-   * whether it got there.
+   * whether it got there. `high` is whether the unit before `begin` left
+   * xterm's string decoder holding a high surrogate.
    */
-  private run(data: string, begin: number): boolean {
+  private run(data: string, begin: number, high: boolean): boolean {
     let start = -1;
     for (let i = begin; i < data.length; i++) {
       const c = data.charCodeAt(i);
+      // xterm's decoders discard U+FEFF before its parser, except as the unit
+      // a high surrogate takes for its partner, which the string decoder passes
+      // through whatever it is. A UTF-8 decode never leaves a lone surrogate.
+      const partner = high;
+      high = !partner && isHighSurrogate(c);
+      if (c === 0xfeff && !partner) {
+        if (start !== -1) {
+          this.append(data, start, i);
+          start = -1;
+        }
+        continue;
+      }
       const prev = this.state;
       const op = this.step(c);
       if (this.state === S.Ground) {
@@ -243,12 +274,6 @@ export class PartialEscapeTracker {
 
   private step(c: number): T {
     const state = this.state;
-
-    // xterm's decoders discard U+FEFF before its parser, except straight after
-    // an unpaired high surrogate, which has already grounded every header
-    // state. So it is a no-op outside a string, and string payload keeps it:
-    // the replayed tail goes through the same decoder.
-    if (c === 0xfeff && !isStringState(state)) return T.Drop;
 
     // "Anywhere" transitions. The string states' own terminators land here
     // too: ESC ends an OSC/DCS/APC string and leaves the parser in ESCAPE.

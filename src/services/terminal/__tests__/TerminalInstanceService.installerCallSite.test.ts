@@ -83,6 +83,7 @@ type CallSiteTestService = {
     onInput?: (data: string) => void
   ) => Record<string, unknown>;
   detachForProjectSwitch: (id: string) => void;
+  getCachedSelection: (id: string) => string;
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {

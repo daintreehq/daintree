@@ -98,10 +98,14 @@ const CASES: Record<string, { stream: string; split: number; titleOnSource?: boo
     stream: "hello \x1b]0;ti\ufefftle\x07world",
     split: "hello \x1b]0;ti\ufeff".length,
   },
-  // ...except straight after an unpaired high surrogate, where it keeps it.
+  // ...except as the unit a high surrogate takes for its partner.
   "BOM after a lone surrogate in an OSC title": {
     stream: "hello \x1b]0;a\ud800\ufeffb\x07world",
     split: "hello \x1b]0;a\ud800\ufeff".length,
+  },
+  "BOM after a surrogate that took a NUL": {
+    stream: "hello \x1b]0;a\ud800\0\ufeffb\x07world",
+    split: "hello \x1b]0;a\ud800\0\ufeff".length,
   },
 };
 
@@ -151,6 +155,54 @@ describe("PartialEscapeTracker", () => {
     tracker.feed("\x1b]0;title\x1b");
     expect(tracker.tail).toBe("\x1b");
   });
+
+  it("leaves a discarded U+FEFF out of the tail", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feed("\x1b]0;ti\ufefftle");
+    expect(tracker.tail).toBe("\x1b]0;title");
+  });
+
+  // The source decodes each write as it comes, holding a high surrogate that
+  // ends one for the next.
+  for (const writes of [
+    ["\x1b]0;a\ud800", "\ufeffb"],
+    ["\x1b]0;a\ud800", "\0\ufeffb"],
+    ["\x1b]0;a\ud800\0", "\ufeffb"],
+    ["\x1b]0;a\ud800", "", "\ufeffb"],
+    ["\x1b]0;a\ud800\ud800", "\ufeffb"],
+    ["\x1b]0;a", "\ud800", "\ud800", "\ufeffb"],
+  ]) {
+    it(`restores a title written as ${JSON.stringify(writes)} the same as uninterrupted playback`, async () => {
+      const source = makeTerminal();
+      const tracker = new PartialEscapeTracker();
+      for (const chunk of writes) {
+        await write(source.term, chunk);
+        tracker.feed(chunk);
+      }
+      const dest = makeTerminal();
+      const title = trackTitle(dest.term);
+      await write(dest.term, PARSER_GROUND + source.addon.serialize() + (tracker.tail ?? ""));
+      await write(dest.term, "\x07world");
+      expect(observe(dest.term, title())).toEqual(
+        await uninterrupted(writes.join("") + "\x07world")
+      );
+    });
+  }
+
+  for (const [name, stream] of [
+    ["OSC", "\x1b]0;" + "p".repeat(5000)],
+    ["DCS", "\x1bP1$q" + "m".repeat(5000)],
+    ["APC", "\x1b_G" + "x".repeat(5000)],
+  ] as const) {
+    it(`keeps a ${name} payload between the header and string caps whole`, () => {
+      const fromString = new PartialEscapeTracker();
+      fromString.feed(stream);
+      const fromBytes = new PartialEscapeTracker();
+      fromBytes.feedBytes(new TextEncoder().encode(stream));
+      expect(fromString.tail).toBe(stream);
+      expect(fromBytes.tail).toBe(stream);
+    });
+  }
 
   it("checks a header against its own cap however the input is split", () => {
     const stream = "\x1bP" + "1".repeat(9000) + "qpayload";
