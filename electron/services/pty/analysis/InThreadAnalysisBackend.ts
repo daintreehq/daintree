@@ -380,9 +380,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     const monitor = this.activityMonitor;
     const headlessTerminal = this.terminalInfo.headlessTerminal;
     if (monitor.consumesSynchronizedFrames && headlessTerminal) {
-      this.synchronizedFrameDetector = new SynchronizedFrameDetector(
-        headlessTerminal,
-        (snapshot) => monitor.onSynchronizedFrame(snapshot)
+      this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) =>
+        monitor.onSynchronizedFrame(snapshot)
       );
     }
     monitor.startPolling();

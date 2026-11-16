@@ -277,9 +277,7 @@ describe("ActivityMonitor", () => {
       const getVisibleLines = () => ["> "];
 
       expect(consumes({ getVisibleLines })).toBe(true);
-      expect(consumes({ getVisibleLines, agentId: "claude", simpleOutputState: false })).toBe(
-        true
-      );
+      expect(consumes({ getVisibleLines, agentId: "claude", simpleOutputState: false })).toBe(true);
       expect(consumes({})).toBe(false);
       expect(consumes({ getVisibleLines, agentId: "claude" })).toBe(false);
       expect(consumes({ getVisibleLines, simpleOutputState: true })).toBe(false);
