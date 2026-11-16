@@ -162,6 +162,26 @@ describe("useForgeReferenceMarks (#14849)", () => {
     expect(getReferencesByNumbers).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a restored draft's marks off without a cwd", async () => {
+    type("#7");
+    const hook = render();
+    await vi.advanceTimersByTimeAsync(REFERENCE_LOOKUP_SETTLE_MS);
+    const stashed = view.state;
+    expect(marked()).toEqual(["#7"]);
+
+    type("");
+    hook.rerender({ cwd: null, paused: false, value: "" });
+    view.setState(stashed);
+    expect(marked()).toEqual(["#7"]);
+    hook.rerender({ cwd: null, paused: false, value: "#7" });
+    expect(marked()).toEqual([]);
+
+    view.setState(stashed);
+    rescanForgeReferences(view);
+    expect(marked()).toEqual([]);
+    expect(getReferencesByNumbers).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps what's known but asks nothing new while paused", async () => {
     type("#7");
     const hook = render();

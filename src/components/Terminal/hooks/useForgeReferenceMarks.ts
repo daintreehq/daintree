@@ -61,8 +61,14 @@ export function useForgeReferenceMarks({
     const view = editorViewRef.current;
     if (!view) return;
     if (!cwd) {
-      applyForgeReferences(view, NO_REFERENCES);
-      return;
+      // A restored draft can bring marks back; without a repository, they go.
+      const clear = () => applyForgeReferences(view, NO_REFERENCES);
+      refreshRef.current = clear;
+      const stopRescan = onForgeReferenceRescan(view, clear);
+      return () => {
+        if (refreshRef.current === clear) refreshRef.current = null;
+        stopRescan();
+      };
     }
 
     let current = true;

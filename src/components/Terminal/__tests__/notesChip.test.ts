@@ -151,16 +151,28 @@ describe("notesChipField", () => {
   });
 
   it("never reads a draft whole for a composer that can't take notes", () => {
-    let state = EditorState.create({ doc: "Fix @notes", extensions: [notesChipField] });
     const toString = vi.spyOn(Text.prototype, "toString");
     onTestFinished(() => toString.mockRestore());
+    let state = EditorState.create({ doc: "Fix @notes", extensions: [notesChipField] });
+    const inactive = state.field(notesChipField);
     for (const ch of " now") {
       state = state.update({ changes: { from: state.doc.length, insert: ch } }).state;
     }
     state = state.update({ effects: setDiffNotesChipSource.of(null) }).state;
+    expect(state.field(notesChipField)).toBe(inactive);
     expect(toString).not.toHaveBeenCalled();
 
-    state = state.update({ effects: setDiffNotesChipSource.of(source([])) }).state;
-    expect(state.field(notesChipField).tokens.map((t) => t.label)).toEqual(["No notes"]);
+    state = state.update({
+      changes: { from: 0, insert: "Now " },
+      effects: setDiffNotesChipSource.of(source([])),
+    }).state;
+    expect(state.field(notesChipField).tokens.map((t) => [t.start, t.label])).toEqual([
+      [8, "No notes"],
+    ]);
+
+    toString.mockClear();
+    state = state.update({ effects: setDiffNotesChipSource.of(null) }).state;
+    expect(state.field(notesChipField).tokens).toEqual([]);
+    expect(toString).not.toHaveBeenCalled();
   });
 });

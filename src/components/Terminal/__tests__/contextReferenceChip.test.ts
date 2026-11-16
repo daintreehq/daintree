@@ -85,19 +85,34 @@ describe("context reference chips (#13795)", () => {
   });
 
   it("never reads a draft whole while no provider holds a prefix", () => {
-    let state = EditorState.create({ doc: "see @rec:1", extensions: [contextReferenceChipField] });
     const toString = vi.spyOn(Text.prototype, "toString");
     try {
+      let state = EditorState.create({
+        doc: "see @rec:1",
+        extensions: [contextReferenceChipField],
+      });
+      const inactive = state.field(contextReferenceChipField);
       for (const ch of " and") {
         state = state.update({ changes: { from: state.doc.length, insert: ch } }).state;
       }
       state = state.update({ effects: setContextReferenceProviders.of(new Map()) }).state;
+      expect(state.field(contextReferenceChipField)).toBe(inactive);
+      expect(toString).not.toHaveBeenCalled();
+
+      state = state.update({
+        changes: { from: 0, insert: "so " },
+        effects: setContextReferenceProviders.of(KANBAN),
+      }).state;
+      expect(state.field(contextReferenceChipField).tokens.map((t) => [t.start, t.id])).toEqual([
+        [7, "1"],
+      ]);
+
+      toString.mockClear();
+      state = state.update({ effects: setContextReferenceProviders.of(new Map()) }).state;
+      expect(state.field(contextReferenceChipField).tokens).toEqual([]);
       expect(toString).not.toHaveBeenCalled();
     } finally {
       toString.mockRestore();
     }
-
-    state = state.update({ effects: setContextReferenceProviders.of(KANBAN) }).state;
-    expect(state.field(contextReferenceChipField).tokens.map((t) => t.id)).toEqual(["1"]);
   });
 });

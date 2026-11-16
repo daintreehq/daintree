@@ -91,7 +91,7 @@ describe("composer draft reports (#16282)", () => {
     expect(draftsWithTextMayDiffer(removed, held)).toBe(true);
   });
 
-  it("never walks the drafts while one is typed into", () => {
+  it("never derives the whole set again while a draft holding text is typed into", () => {
     const store = useTerminalInputStore.getState();
     store.setDraftInput("t2", "another draft", "p1");
     store.setDraftInput("t1", "h", "p1");
