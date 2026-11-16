@@ -128,6 +128,7 @@ import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
+import { BulkWorktreeRunIndicator } from "./BulkWorktreeRunIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
@@ -1948,6 +1949,12 @@ export function Toolbar({
               aria-label="Tools and settings"
               className="flex items-center justify-end gap-1.5 z-20"
             >
+              {/* Fixed chrome outside the measured button row, like the memory
+                  pause below: it exists only while a bulk worktree run is worth
+                  showing (#17086), in every project view. First in the group so
+                  its width changing as the batch moves on never shifts the
+                  buttons, which stay pinned to the right. */}
+              <BulkWorktreeRunIndicator />
               <div
                 ref={rightGroupRef}
                 className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5 justify-end"

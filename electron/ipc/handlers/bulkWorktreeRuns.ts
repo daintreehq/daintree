@@ -41,6 +41,7 @@ const ItemSchema = z.object({
     "interrupted",
   ]),
   attempt: z.number().int().nonnegative(),
+  retried: z.number().int().nonnegative().optional(),
   error: text(4096).optional(),
   failedStep: z.enum(["worktree", "terminals", "verification", "assignment"]).optional(),
   worktreeId: text(4096).optional(),
@@ -57,6 +58,10 @@ const SnapshotSchema = z.object({
   // on unseen and unheld.
   items: z.array(ItemSchema).max(5000),
   startedAt: z.number(),
+  executions: z
+    .array(z.object({ startedAt: z.number(), endedAt: z.number().optional() }))
+    .max(1000)
+    .optional(),
   updatedAt: z.number(),
   controllable: z.boolean(),
 });

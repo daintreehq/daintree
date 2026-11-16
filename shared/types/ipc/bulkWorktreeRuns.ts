@@ -32,6 +32,8 @@ export interface BulkWorktreeRunItem {
   stage: BulkWorktreeRunItemStage;
   /** Attempts at the current step; above 1 means it is being retried. */
   attempt: number;
+  /** Times the user has retried this item after it failed. */
+  retried?: number;
   error?: string;
   failedStep?: BulkWorktreeRunFailedStep;
   /** Set once the item's worktree exists on disk, whatever happened after. */
@@ -48,6 +50,12 @@ export interface BulkWorktreeRunItem {
  */
 export type BulkWorktreeRunPhase = "running" | "cancelling" | "cancelled" | "done";
 
+/** One pass over a run. `endedAt` is set once that pass has settled. */
+export interface BulkWorktreeRunExecution {
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface BulkWorktreeRunSnapshot {
   runId: string;
   projectId: string;
@@ -56,6 +64,8 @@ export interface BulkWorktreeRunSnapshot {
   /** Every item the run was started with, in order. */
   items: BulkWorktreeRunItem[];
   startedAt: number;
+  /** Every pass over the run, oldest first: its start, then each Retry failed. */
+  executions?: BulkWorktreeRunExecution[];
   updatedAt: number;
   /**
    * False once the view that ran it has gone, so nothing can cancel or retry
@@ -125,4 +135,22 @@ export type BulkWorktreeRunCommandResult =
 /** Main's push whenever any run changes: every run it holds, oldest first. */
 export interface BulkWorktreeRunsChanged {
   runs: BulkWorktreeRunSnapshot[];
+}
+
+/**
+ * How long a run that ended without a failure stays on show before it retires
+ * to the notification center. Every view hides it once this has passed since
+ * it ended, so a view opened later never shows a stale finish.
+ */
+export const BULK_RUN_LINGER_MS = 6_000;
+
+/**
+ * Whether an ended run still wants the user: something failed, or the view
+ * running it went away before it finished. Such a run stays until it is
+ * retried or dismissed; any other ended run retires on its own.
+ */
+export function bulkWorktreeRunNeedsAttention(
+  run: Pick<BulkWorktreeRunSnapshot, "items">
+): boolean {
+  return run.items.some((item) => item.stage === "failed" || item.stage === "interrupted");
 }
