@@ -8,7 +8,7 @@ import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/termin
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridShell } from "./GridShell";
-import { ContentGridEmptyState } from "./ContentGridEmptyState";
+import { ContentGridEmptyStateGate } from "./ContentGridEmptyStateGate";
 import { pixelSnapTransform, type ContentGridContext } from "./useContentGridContext";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -101,7 +101,7 @@ export function ContentGridFleetScope({
         >
           {ctx.fleetPanels.length === 0 ? (
             <div className="col-span-full row-span-full">
-              <ContentGridEmptyState
+              <ContentGridEmptyStateGate
                 hasLaunchTarget={ctx.hasActiveWorktree}
                 hasProjectContext={ctx.projectName !== null}
                 hasWorktrees={ctx.hasWorktrees}

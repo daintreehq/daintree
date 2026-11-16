@@ -57,10 +57,8 @@ import {
 } from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import {
-  TerminalSearchBar,
-  type TerminalSearchTarget,
-} from "@/components/Terminal/TerminalSearchBar";
+import type { TerminalSearchTarget } from "@/components/Terminal/TerminalSearchBar";
+import { LazyTerminalSearchBar } from "@/components/Terminal/LazyTerminalSearchBar";
 import {
   ownCanopyTerminalApi,
   unlessHostDisconnected,
@@ -1085,7 +1083,7 @@ export function CanopyTerminal({
       {searchOpen && search && (
         // Typed into here, not the terminal: still none of the grid's shortcuts.
         <div data-keybindings-isolated="" className="contents">
-          <TerminalSearchBar search={search} onClose={closeSearch} />
+          <LazyTerminalSearchBar search={search} onClose={closeSearch} />
         </div>
       )}
     </div>

@@ -11,7 +11,7 @@ describe("ContentGrid emptyContent prop (issue #4254)", () => {
     const content = await readFile(DEFAULT_PATH, "utf-8");
     // The grid should use nullish coalescing to prefer emptyContent over EmptyState
     expect(content).toContain("emptyContent ?? (");
-    expect(content).toContain("<ContentGridEmptyState");
+    expect(content).toContain("<ContentGridEmptyStateGate");
   });
 });
 

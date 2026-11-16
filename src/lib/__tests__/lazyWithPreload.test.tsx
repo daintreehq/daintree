@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Suspense } from "react";
 import { act, render, renderHook } from "@testing-library/react";
-import { lazyWithPreload, usePreloadedComponent } from "../lazyWithPreload";
+import { lazyWhenLoaded, lazyWithPreload, usePreloadedComponent } from "../lazyWithPreload";
 
 function Greeting({ name }: { name: string }) {
   return <p>hello {name}</p>;
@@ -222,5 +222,53 @@ describe("usePreloadedComponent", () => {
     await act(async () => resolveFirst({ Greeting }));
     expect(result.current).toEqual({ status: "failed", error });
     expect(secondLoad).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("lazyWhenLoaded", () => {
+  it("loads nothing until mounted, then draws nothing until its chunk lands", async () => {
+    let resolve!: (m: { Greeting: typeof Greeting }) => void;
+    const load = vi.fn(() => new Promise<{ Greeting: typeof Greeting }>((r) => (resolve = r)));
+    const Deferred = lazyWhenLoaded(load, (m) => m.Greeting);
+    expect(load).not.toHaveBeenCalled();
+
+    // No Suspense boundary above: a suspension here would throw.
+    const { container } = render(<Deferred name="ribbon" />);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toBe("");
+
+    await act(async () => resolve({ Greeting }));
+    expect(container.textContent).toBe("hello ribbon");
+  });
+
+  it("renders in the first commit once loaded", async () => {
+    const Deferred = lazyWhenLoaded(
+      () => Promise.resolve({ Greeting }),
+      (m) => m.Greeting
+    );
+    await Deferred.preload();
+    expect(Deferred.isLoaded()).toBe(true);
+
+    const { container } = render(<Deferred name="search" />);
+
+    expect(container.textContent).toBe("hello search");
+  });
+
+  it("draws nothing for a chunk that fails, and loads again on the next mount", async () => {
+    const load = vi
+      .fn<() => Promise<{ Greeting: typeof Greeting }>>()
+      .mockRejectedValueOnce(new Error("chunk missing"))
+      .mockResolvedValueOnce({ Greeting });
+    const Deferred = lazyWhenLoaded(load, (m) => m.Greeting);
+
+    const first = render(<Deferred name="dialog" />);
+    await act(async () => {});
+    expect(first.container.textContent).toBe("");
+    first.unmount();
+
+    const second = render(<Deferred name="dialog" />);
+    await act(async () => {});
+    expect(second.container.textContent).toBe("hello dialog");
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });

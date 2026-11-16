@@ -49,7 +49,6 @@ vi.stubGlobal(
 );
 
 import { ImportConfigDialog } from "../ImportConfigDialog";
-import { IMPORT_CONFIG_EVENT } from "../importConfigEvent";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -128,9 +127,9 @@ afterEach(() => {
 
 async function open(preview: ConfigBundlePreview) {
   previewImport.mockResolvedValue(preview);
-  render(<ImportConfigDialog />);
+  // ImportConfigDialogGate turns each import event into a request (its own suite).
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
+    render(<ImportConfigDialog request={1} />);
   });
 }
 

@@ -133,7 +133,7 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(ts.isJsxElement(container)).toBe(true);
     expect(ts.isParenthesizedExpression(container.parent)).toBe(true);
     expect(ts.isReturnStatement(container.parent.parent)).toBe(true);
-    const siblings = selfClosing("ImportConfigDialog");
+    const siblings = selfClosing("ImportConfigDialogGate");
     expect(siblings).toHaveLength(1);
     expect(siblings[0]!.parent).toBe(container);
     expect(source.match(/<ProjectDialogHost\b/g)).toHaveLength(1);

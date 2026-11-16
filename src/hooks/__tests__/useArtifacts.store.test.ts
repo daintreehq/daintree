@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
   MAX_ARTIFACTS_PER_TERMINAL,
   removeArtifactsForTerminal,
   useArtifacts,
+  useHasArtifacts,
   __test_resetArtifactStore,
   __test_seedArtifactStore,
   __test_getArtifactStoreSize,
@@ -250,5 +251,77 @@ describe("useArtifacts module-level store teardown", () => {
     expect(observed[1]).toEqual([]);
 
     unsubscribe();
+  });
+});
+
+describe("useHasArtifacts", () => {
+  let detected: ((payload: { terminalId: string; artifacts: Artifact[] }) => void) | null;
+  const unsubscribe = vi.fn();
+
+  beforeEach(() => {
+    __test_resetArtifactStore();
+    detected = null;
+    unsubscribe.mockClear();
+    vi.stubGlobal("electron", {
+      artifact: {
+        onDetected: (callback: NonNullable<typeof detected>) => {
+          detected = callback;
+          return unsubscribe;
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    __test_resetArtifactStore();
+    vi.unstubAllGlobals();
+  });
+
+  it("collects a terminal's first batch with no overlay mounted to receive it", () => {
+    const { result } = renderHook(() => useHasArtifacts("t1"));
+    expect(result.current).toBe(false);
+
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
+
+    expect(result.current).toBe(true);
+    expect(__test_getArtifactsFor("t1")).toHaveLength(1);
+  });
+
+  it("answers from artifacts collected before it mounted, and only for its terminal", () => {
+    __test_seedArtifactStore("t1", [makeArtifact()]);
+
+    expect(renderHook(() => useHasArtifacts("t1")).result.current).toBe(true);
+    expect(renderHook(() => useHasArtifacts("t2")).result.current).toBe(false);
+  });
+
+  it("turns false when the terminal's artifacts are torn down", () => {
+    __test_seedArtifactStore("t1", [makeArtifact()]);
+    const { result } = renderHook(() => useHasArtifacts("t1"));
+
+    act(() => removeArtifactsForTerminal("t1"));
+
+    expect(result.current).toBe(false);
+  });
+
+  it("clears the teardown tombstone for a terminal id that mounts again", () => {
+    removeArtifactsForTerminal("t1");
+    expect(__test_isTombstoned("t1")).toBe(true);
+
+    renderHook(() => useHasArtifacts("t1"));
+
+    expect(__test_isTombstoned("t1")).toBe(false);
+  });
+
+  it("shares one detection subscription with the overlay and drops it with the last owner", () => {
+    const presence = renderHook(() => useHasArtifacts("t1"));
+    const overlay = renderHook(() => useArtifacts("t1"));
+
+    presence.unmount();
+    expect(unsubscribe).not.toHaveBeenCalled();
+    act(() => detected?.({ terminalId: "t1", artifacts: [makeArtifact()] }));
+    expect(overlay.result.current.artifacts).toHaveLength(1);
+
+    overlay.unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

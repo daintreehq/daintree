@@ -92,8 +92,8 @@ vi.mock("../GridTabGroup", () => ({
 vi.mock("../GridShell", () => ({
   GridShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-vi.mock("../ContentGridEmptyState", () => ({
-  ContentGridEmptyState: (props: {
+vi.mock("../ContentGridEmptyStateGate", () => ({
+  ContentGridEmptyStateGate: (props: {
     hasWorktrees: boolean;
     isWorktreeInitialized: boolean;
     activeWorktreeName: string | null;
