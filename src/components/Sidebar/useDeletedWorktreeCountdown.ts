@@ -49,53 +49,32 @@ export function useDeletedWorktreeCountdown(worktree: DeletedWorktree): DeletedW
     hasCountdown && worktree.holdReason !== null
       ? DELETED_WORKTREE_HOLD_COPY[worktree.holdReason]
       : undefined;
-  // A held readout is frozen from captured state below, so ticking it would only
-  // re-render for nothing (#17051).
+  // A held readout shows the sweep's own held remaining, so ticking it would
+  // only re-render for nothing (#17051). Resync before paint whenever the clock
+  // starts again (arming, or a hold lifting): it slept, and the first frame must
+  // not read the deadline the sweep re-pinned against a stale `now`.
   const isTicking = hasCountdown && hold === undefined;
   useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, isTicking);
+  useLayoutEffect(() => {
+    if (isTicking) setNowTick(Date.now());
+  }, [isTicking]);
   // Clamp to the TTL: the sweep arms the deadline off its own clock, so the
   // first tick after arming can otherwise read a whole second past full ("61s").
   const cleanupMs = cleanupSeconds * 1000;
+  const clampToTtl = (ms: number) => (cleanupMs > 0 ? Math.min(ms, cleanupMs) : ms);
   const rawRemainingMs = expiresAt !== null ? Math.max(0, expiresAt - nowTick) : 0;
-  const derivedRemainingMs = cleanupMs > 0 ? Math.min(rawRemainingMs, cleanupMs) : rawRemainingMs;
-  // While held, render the remaining captured when the hold began rather than
+  // While held, show the remaining the sweep is holding at rather than
   // re-deriving it from the deadline. The sweep re-pins `expiresAt` to
   // `now + remaining` on every pass, and its phase is independent of this
-  // tick, so each pins a value exactly one interval apart and the readout
-  // alternates between N and N+1 forever — a held row visibly flips
-  // 38s/37s/38s. Freezing is also the honest reading: a held countdown is not
-  // advancing. The capture follows the sweep's own (`deletedWorktreeCleanup.ts`):
-  // once per hold, kept through a change of reason alone (agent working, then a
-  // confirm opening), and replaced by a full window of the new TTL when the
-  // preference changes underneath it, which is what the sweep re-arms to.
-  // Captured in state, not a ref: this value IS render output, and refs may not
-  // be read or written during render (React Compiler enforces it). This is the
-  // documented "adjust state when a prop changes" pattern — React re-runs the
-  // component immediately, before paint, so no torn frame is observable.
-  const holdKey = hold === undefined ? null : `held:${cleanupMs}`;
-  // The clock stops while held or disarmed, so it is resynced before paint
-  // whenever the countdown arms, holds, re-keys or lifts; `clockKey` says which
-  // hold it was synced for (null for none). A hold's capture waits for that
-  // sync, so it never reads a deadline against the stale `now` left behind.
-  const [clockKey, setClockKey] = useState<string | null>(null);
-  useLayoutEffect(() => {
-    if (hasCountdown) setNowTick(Date.now());
-    setClockKey(hasCountdown ? holdKey : null);
-  }, [hasCountdown, holdKey]);
-  const [heldRemaining, setHeldRemaining] = useState<{
-    key: string;
-    remainingMs: number;
-  } | null>(null);
-  if (holdKey === null) {
-    if (heldRemaining !== null) setHeldRemaining(null);
-  } else if (heldRemaining !== null) {
-    if (heldRemaining.key !== holdKey) setHeldRemaining({ key: holdKey, remainingMs: cleanupMs });
-  } else if (clockKey === holdKey) {
-    setHeldRemaining({ key: holdKey, remainingMs: derivedRemainingMs });
-  }
-  // A new hold shows the derived value until its capture lands; the clock was
-  // running up to it, and the layout effect re-renders before paint anyway.
-  const remainingMs = heldRemaining !== null ? heldRemaining.remainingMs : derivedRemainingMs;
+  // clock, so a derived readout alternates between N and N+1 forever — a held
+  // row visibly flips 38s/37s/38s — and with the clock asleep it would read the
+  // whole hold as time left. The sweep's value also follows what it alone
+  // knows: a TTL change re-arms a full window, a change of reason keeps the
+  // remaining, and cleanup switched off and on re-arms from scratch.
+  const remainingMs =
+    hold !== undefined && worktree.heldRemainingMs !== undefined
+      ? clampToTtl(worktree.heldRemainingMs)
+      : clampToTtl(rawRemainingMs);
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   // Snap the top of the range to exactly full: the tick that arms the row lands
   // somewhere inside the sweep's first second, so a bar that should read "just

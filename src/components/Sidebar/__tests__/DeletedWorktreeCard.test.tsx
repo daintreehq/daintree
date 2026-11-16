@@ -292,6 +292,7 @@ describe("DeletedWorktreeCard", () => {
         ...worktree,
         expiresAt: at + pinnedRemainingMs,
         holdReason: "agent",
+        heldRemainingMs: pinnedRemainingMs,
       });
 
       const { container, rerender } = render(
@@ -451,13 +452,20 @@ describe("DeletedWorktreeCard", () => {
   // The sweep re-pins a held deadline to `now + remaining` on every pass while
   // the card's clock sleeps, so anything read against that sleeping clock
   // reads the whole hold as time left.
+  // The sweep re-pins a held deadline to `now + remaining` on every pass while
+  // the card's clock sleeps, so a readout derived from that deadline reads the
+  // whole hold as time left. A held row shows what the sweep says it holds.
   describe("against the sweep's re-pinned deadline", () => {
     const base = 1_700_000_000_000;
-    const remaining = 38_000;
-    const sweptAt = (now: number, holdReason: DeletedWorktree["holdReason"]): DeletedWorktree => ({
+    const sweptAt = (
+      now: number,
+      holdReason: DeletedWorktree["holdReason"],
+      remaining = 38_000
+    ): DeletedWorktree => ({
       ...worktree,
       expiresAt: now + remaining,
       holdReason,
+      ...(holdReason !== null && { heldRemainingMs: remaining }),
     });
     const rerenderWith = (rerender: (ui: ReactNode) => void, wt: DeletedWorktree) =>
       rerender(
@@ -477,7 +485,7 @@ describe("DeletedWorktreeCard", () => {
       vi.useRealTimers();
     });
 
-    it("keeps the frozen remaining when the hold changes reason", () => {
+    it("keeps the held remaining when the hold changes reason", () => {
       const { container, rerender } = renderCard(sweptAt(base, "agent"));
       expect(seconds(container)).toBe("38s");
 
@@ -503,41 +511,36 @@ describe("DeletedWorktreeCard", () => {
       expect(seconds(container)).toBe("36s");
     });
 
-    // The sweep answers a TTL change with a full window of the new TTL, held
-    // or not, so the frozen readout must too, and keep it through the sweeps
-    // that follow.
-    it("shows a full window of a TTL changed under the hold", () => {
+    it("shows the full window the sweep re-arms a hold to when the TTL changes", () => {
       const { container, rerender } = renderCard(sweptAt(base, "agent"));
       act(() => {
         vi.advanceTimersByTime(30_000);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 300 });
       });
-      rerenderWith(rerender, sweptAt(base + 30_000, "agent"));
+      rerenderWith(rerender, sweptAt(base + 30_000, "agent", 300_000));
+      expect(seconds(container)).toBe("300s");
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerenderWith(rerender, sweptAt(base + 31_000, "agent", 300_000));
+      expect(seconds(container)).toBe("300s");
+    });
+
+    // Changed and changed back between two passes, the sweep never sees a TTL
+    // change, so it keeps the remaining it had; so must the row.
+    it("keeps the held remaining through a TTL changed and changed back between sweeps", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
       act(() => {
         usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 300 });
       });
-      expect(seconds(container)).toBe("300s");
-
-      for (let pass = 1; pass <= 3; pass += 1) {
-        act(() => {
-          vi.advanceTimersByTime(1000);
-        });
-        rerenderWith(rerender, {
-          ...worktree,
-          expiresAt: base + 30_000 + pass * 1000 + 300_000,
-          holdReason: "agent",
-        });
-        expect(seconds(container)).toBe("300s");
-      }
-    });
-
-    it("captures a re-armed hold against the current time, not the clock it slept on", () => {
-      const { container, rerender } = renderCard(sweptAt(base, "agent"));
-      rerenderWith(rerender, { ...worktree, expiresAt: null, holdReason: null });
       act(() => {
-        vi.advanceTimersByTime(30_000);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 60 });
       });
-
-      rerenderWith(rerender, sweptAt(base + 30_000, "agent"));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerenderWith(rerender, sweptAt(base + 1000, "agent"));
 
       expect(seconds(container)).toBe("38s");
     });

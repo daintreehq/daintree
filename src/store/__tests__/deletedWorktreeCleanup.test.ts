@@ -123,6 +123,11 @@ function setPanels(
   });
 }
 
+/** What the sweep tells the row it is holding at (#17051). */
+function getHeldRemaining(): number | undefined {
+  return useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.heldRemainingMs;
+}
+
 function getExpiry(): number | null | undefined {
   return useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.expiresAt;
 }
@@ -428,6 +433,11 @@ describe("sweepDeletedWorktreeCleanup", () => {
 
     sweepDeletedWorktreeCleanup(makeDeps({ now: () => held, isDragActive: () => true }));
     const pinned = getRemainingAt(held);
+    // The row is told the remaining it is held at, not left to infer it from a
+    // deadline the sweep re-pins against its own clock.
+    expect(getHeldRemaining()).toBe(pinned);
+    sweepDeletedWorktreeCleanup(makeDeps({ now: () => held + 5_000, isDragActive: () => true }));
+    expect(getHeldRemaining()).toBe(pinned);
     const releasedAt = held + 10_000;
     sweepDeletedWorktreeCleanup(makeDeps({ now: () => releasedAt }));
 
@@ -435,6 +445,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     // row is not handed a fresh window either.
     expect(getRemainingAt(releasedAt)).toBe(pinned);
     expect(getHoldReason()).toBeNull();
+    expect(getHeldRemaining()).toBeUndefined();
   });
 
   it("gives up on a drag that never clears and fires once its cap is spent", () => {
@@ -594,6 +605,7 @@ describe("sweepDeletedWorktreeCleanup", () => {
     // overflow. The row re-arms to a full window of the new TTL instead.
     expect(getRemainingAt(at)).toBe(30_000);
     expect(getHoldReason()).toBe("drag");
+    expect(getHeldRemaining()).toBe(30_000);
   });
 
   it("spends a gap between sweeps at a fifth of real time", () => {

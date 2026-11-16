@@ -441,6 +441,7 @@ describe("DeletedWorktreeGroup", () => {
       const held = {
         ...makeDeleted("wt-1", "feature/alpha", now + 20_000),
         holdReason: "agent" as const,
+        heldRemainingMs: 20_000,
       };
       const running = makeDeleted("wt-2", "feature/beta", now + 40_000);
       const { container, rerender } = renderGroup([held, running]);
@@ -463,7 +464,7 @@ describe("DeletedWorktreeGroup", () => {
       rerender(
         <TooltipProvider>
           <DeletedWorktreeGroup
-            worktrees={[{ ...held, expiresAt: Date.now() + 20_500 }, running]}
+            worktrees={[{ ...held, expiresAt: Date.now() + 20_000 }, running]}
           />
         </TooltipProvider>
       );

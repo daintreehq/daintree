@@ -403,6 +403,7 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
       setDeletedWorktreeCleanupState(entry.id, {
         expiresAt: now + snapshot.remainingMs,
         holdReason,
+        heldRemainingMs: snapshot.remainingMs,
       });
       continue;
     }
