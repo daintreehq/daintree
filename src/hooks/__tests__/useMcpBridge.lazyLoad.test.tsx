@@ -63,6 +63,10 @@ import { useMcpBridge } from "../useMcpBridge";
 
 type DispatchPayload = { requestId: string; actionId: string; args?: unknown; confirmed?: boolean };
 
+// Imports evaluate before this line and before any `beforeEach`, so this is
+// what loading the bridge itself pulled in.
+const loadedByImport = [...loaded.modules];
+
 describe("the bridge's on-demand modules", () => {
   let dispatchHandler: ((payload: DispatchPayload) => void | Promise<void>) | undefined;
 
@@ -99,6 +103,10 @@ describe("the bridge's on-demand modules", () => {
     danger,
     enabled: true,
     requiresArgs: false,
+  });
+
+  it("loads none of them with the bridge's own imports", () => {
+    expect(loadedByImport).toEqual([]);
   });
 
   it("loads none of them on mount or for an ordinary dispatch", async () => {

@@ -12,8 +12,7 @@ import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import {
-  layoutApplyCancelMark,
-  layoutApplyCancelledSince,
+  watchLayoutApplyCancellation,
   requestLayoutApplyConfirmation,
 } from "@/store/layoutApplyConfirmStore";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
@@ -392,10 +391,10 @@ export async function applyPluginLayout(
   // digests above were taken from, so the lines and the approval still agree.
   // A withdrawal during the load had no request to decline, so it is honoured
   // here.
-  const mark = layoutApplyCancelMark();
+  const watch = watchLayoutApplyCancellation(layout.id);
   const { formatRecipePreviewLines } =
-    await import("@/components/TerminalRecipe/recipeConfirmPreview");
-  if (layoutApplyCancelledSince(layout.id, mark)) return { status: "cancelled" };
+    await import("@/components/TerminalRecipe/recipeConfirmPreview").finally(watch.release);
+  if (watch.cancelled) return { status: "cancelled" };
   const approval = requestLayoutApplyConfirmation({
     layoutId: layout.id,
     layoutName: layout.name,

@@ -38,23 +38,33 @@ export const useLayoutApplyConfirmStore = create<LayoutApplyConfirmState>((set, 
   },
 }));
 
-let cancelCount = 0;
-let cancelledAllAt = 0;
-const cancelledLayoutAt = new Map<string, number>();
-
-/** A point in the cancellation history, for {@link layoutApplyCancelledSince}. */
-export function layoutApplyCancelMark(): number {
-  return cancelCount;
+interface CancellationWatch {
+  readonly layoutId: string;
+  cancelled: boolean;
 }
 
+const watches = new Set<CancellationWatch>();
+
 /**
- * Whether a cancellation naming this layout (or every layout) landed after
- * `mark`. A caller that awaits between resolving a layout and raising its
- * request checks it across the wait: a cancellation that landed meanwhile had
- * no request to decline, so the caller declines instead.
+ * Watch for a cancellation of a layout across an await that sits between
+ * resolving it and raising its request. A cancellation landing in that wait had
+ * no request to decline, so the caller reads `cancelled` afterwards and declines
+ * itself. Release the watch when the wait ends; only live waits are tracked.
  */
-export function layoutApplyCancelledSince(layoutId: string, mark: number): boolean {
-  return cancelledAllAt > mark || (cancelledLayoutAt.get(layoutId) ?? 0) > mark;
+export function watchLayoutApplyCancellation(layoutId: string): {
+  readonly cancelled: boolean;
+  release: () => void;
+} {
+  const watch: CancellationWatch = { layoutId, cancelled: false };
+  watches.add(watch);
+  return {
+    get cancelled() {
+      return watch.cancelled;
+    },
+    release: () => {
+      watches.delete(watch);
+    },
+  };
 }
 
 /**
@@ -63,9 +73,9 @@ export function layoutApplyCancelledSince(layoutId: string, mark: number): boole
  * ids, every request is declined.
  */
 export function cancelLayoutApplyConfirmations(layoutIds?: ReadonlySet<string>): void {
-  cancelCount++;
-  if (layoutIds === undefined) cancelledAllAt = cancelCount;
-  else for (const id of layoutIds) cancelledLayoutAt.set(id, cancelCount);
+  for (const watch of watches) {
+    if (layoutIds === undefined || layoutIds.has(watch.layoutId)) watch.cancelled = true;
+  }
   const { current, queue } = useLayoutApplyConfirmStore.getState();
   const cancelled = (item: PendingLayoutApplyConfirm) =>
     layoutIds === undefined || layoutIds.has(item.layoutId);
