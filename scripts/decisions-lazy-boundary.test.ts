@@ -7,8 +7,8 @@ import {
   walkEagerGraph,
 } from "./import-budget-lib.mjs";
 
-/** What runs at startup: the bootstrap, then main, which it loads. */
-const STARTUP_ENTRIES = ["electron/bootstrap.ts", "electron/main.ts"];
+/** What runs at startup: the bootstrap, the boot it loads, then main. */
+const STARTUP_ENTRIES = ["electron/bootstrap.ts", "electron/boot/appBoot.ts", "electron/main.ts"];
 const STATUS_READ_HOST = "electron/ipc/handlers/deviceAnswer.ts";
 const LIBRARIES = [
   "decisions-protocol",
