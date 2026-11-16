@@ -35,7 +35,10 @@ vi.mock("@/hooks", () => ({
   useEffectiveCombo: () => undefined,
   useShortcutHintHover: () => ({}),
 }));
-vi.mock("@/lib/appThemeViewTransition", () => ({ prefersReducedMotion: () => true }));
+vi.mock("@/lib/appThemeViewTransition", () => ({
+  prefersReducedMotion: () => true,
+  subscribeReducedMotion: () => () => {},
+}));
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("@/components/ui/TimeAgo", () => ({ TimeAgo: () => null }));
 vi.mock("@/components/ui/tooltip", () => ({

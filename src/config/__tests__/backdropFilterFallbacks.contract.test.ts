@@ -14,10 +14,7 @@ const STYLES_ROOT = path.join(REPO_ROOT, "src/styles/components");
 // Contrast which fires prefers-contrast: more but NOT forced-colors:active).
 // The three gates are independent concerns and must be separate at-rules,
 // and they must appear after the base rule so source-order cascade wins.
-const SURFACES = [
-  { file: "toolbar.css", selector: ".surface-toolbar" },
-  { file: "panels.css", selector: ".surface-chrome" },
-] as const;
+const SURFACES = [{ file: "panels.css", selector: ".surface-chrome" }] as const;
 
 describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
   for (const { file, selector } of SURFACES) {
@@ -91,4 +88,39 @@ describe("backdrop-filter fallbacks contract (#8166, #8939)", () => {
       });
     });
   }
+});
+
+// The toolbar strip heads the window in normal flow over the page root's flat
+// fill, so it carries no backdrop-filter at all (#17074): a blur there drew an
+// offscreen pass beside the terminals' WebGL canvases and showed nothing. The
+// solid-chrome preferences still force the opaque token over a theme's
+// translucent `--toolbar-bg`.
+describe("toolbar strip — solid chrome without a backdrop blur (#17074)", () => {
+  const css = readCssWithImports(path.join(STYLES_ROOT, "toolbar.css")).replace(
+    /\/\*[\s\S]*?\*\//g,
+    ""
+  );
+
+  it("never gives the strip a backdrop-filter", () => {
+    const declarations = [...css.matchAll(/\.surface-toolbar[^{]*{([^}]*)}/g)].map(
+      (match) => match[1]
+    );
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const body of declarations) {
+      expect(body).not.toMatch(/backdrop-filter\s*:/);
+    }
+  });
+
+  it.each(["@media (prefers-reduced-transparency: reduce)", "@media (prefers-contrast: more)"])(
+    "restores the opaque toolbar surface under %s",
+    (atRule) => {
+      const start = css.indexOf(atRule);
+      expect(start).toBeGreaterThan(-1);
+      const block = css.slice(start, css.indexOf("\n}\n", start) + 3);
+      expect(block).toMatch(
+        /\.surface-toolbar\s*{\s*background-color:\s*var\(--theme-surface-toolbar\);\s*}/
+      );
+      expect(block).not.toMatch(/!important/);
+    }
+  );
 });

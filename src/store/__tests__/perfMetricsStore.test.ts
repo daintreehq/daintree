@@ -13,7 +13,14 @@ vi.mock("@/utils/logger", () => ({
 
 import { filesClient } from "@/clients/filesClient";
 import { ClientAppError } from "@/utils/clientAppError";
-import { usePerfMetricsStore, resetPerfMetricsForTests, type PerfMode } from "../perfMetricsStore";
+import {
+  usePerfMetricsStore,
+  resetPerfMetricsForTests,
+  startLivePerfCapture,
+  stopLivePerfCapture,
+  type PerfMode,
+} from "../perfMetricsStore";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 const mockRead = filesClient.read as ReturnType<typeof vi.fn>;
 
@@ -368,5 +375,148 @@ describe("perfMetricsStore wire-format compatibility", () => {
 
     await usePerfMetricsStore.getState().refreshSummaries("/repo");
     expect(usePerfMetricsStore.getState().summaryRows).toHaveLength(0);
+  });
+});
+
+describe("perfMetricsStore live capture", () => {
+  const originalElectron = window.electron;
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrameId: number;
+  let now: number;
+  let cache: (() => void) | null;
+  let warmActivate: (() => void) | null;
+
+  beforeEach(() => {
+    resetPerfMetricsForTests();
+    __resetProjectViewCacheStateForTests();
+    frames = new Map();
+    nextFrameId = 0;
+    now = 0;
+    cache = null;
+    warmActivate = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.set(++nextFrameId, cb);
+      return nextFrameId;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        app: {
+          isViewCached: () => false,
+          onViewCached: (callback: () => void) => {
+            cache = callback;
+            return () => {
+              cache = null;
+            };
+          },
+          onViewWarmActivated: (callback: () => void) => {
+            warmActivate = callback;
+            return () => {
+              warmActivate = null;
+            };
+          },
+          onViewRevealed: () => () => {},
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    resetPerfMetricsForTests();
+    __resetProjectViewCacheStateForTests();
+    Reflect.deleteProperty(document, "hidden");
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: originalElectron,
+    });
+    vi.restoreAllMocks();
+  });
+
+  function runFrames(count: number) {
+    for (let i = 0; i < count; i++) {
+      now += 16;
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((cb) => cb(now));
+    }
+  }
+
+  function setHidden(hidden: boolean) {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  const state = () => usePerfMetricsStore.getState();
+
+  it("reads the frame rate while the view can be seen", () => {
+    startLivePerfCapture();
+    runFrames(70);
+    expect(state().fps).toBeGreaterThan(55);
+    expect(state().isBackgrounded).toBe(false);
+  });
+
+  it("schedules no frames while the window is hidden, then reads afresh on return", () => {
+    startLivePerfCapture();
+    runFrames(10);
+
+    setHidden(true);
+    expect(frames.size).toBe(0);
+    expect(state().isBackgrounded).toBe(true);
+    expect(state().fps).toBeNull();
+
+    // Five seconds pass unseen. A bucket spanning them would read about 12fps.
+    now += 5000;
+    setHidden(false);
+    expect(frames.size).toBe(1);
+    expect(state().isBackgrounded).toBe(false);
+    runFrames(70);
+    expect(state().fps).toBeGreaterThan(55);
+  });
+
+  it("schedules no frames in a cached view, which still reports itself visible", () => {
+    startLivePerfCapture();
+    expect(frames.size).toBe(1);
+
+    cache?.();
+    expect(document.visibilityState).toBe("visible");
+    expect(frames.size).toBe(0);
+    expect(state().isBackgrounded).toBe(true);
+
+    warmActivate?.();
+    expect(frames.size).toBe(1);
+    expect(state().isBackgrounded).toBe(false);
+  });
+
+  it("starts paused when capture begins in a hidden window", () => {
+    setHidden(true);
+    startLivePerfCapture();
+    expect(frames.size).toBe(0);
+    expect(state().isBackgrounded).toBe(true);
+
+    setHidden(false);
+    expect(frames.size).toBe(1);
+  });
+
+  it("runs one loop for overlapping captures and lets go only at the last release", () => {
+    startLivePerfCapture();
+    startLivePerfCapture();
+    expect(frames.size).toBe(1);
+
+    stopLivePerfCapture();
+    runFrames(3);
+    expect(frames.size).toBe(1);
+
+    stopLivePerfCapture();
+    expect(frames.size).toBe(0);
+    // Released: a view that becomes visible again no longer restarts it.
+    setHidden(true);
+    setHidden(false);
+    expect(frames.size).toBe(0);
   });
 });

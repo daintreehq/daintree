@@ -21,6 +21,18 @@ describe("buttonVariants", () => {
     expect(transitions[0]).not.toMatch(/scale|transform|translate|rotate|all/);
   });
 
+  // A backdrop blur behind an opaque fill shows nothing and still costs an
+  // offscreen pass for every pill on screen (#17074).
+  it("keeps the pill unblurred while its fills are opaque surfaces", () => {
+    const tokens = buttonVariants({ variant: "pill" }).split(/\s+/);
+    const fills = tokens.filter((token) => /^(?:hover:)?bg-/.test(token));
+    expect(fills.length).toBeGreaterThan(0);
+    expect(fills.every((token) => /^(?:hover:)?bg-surface-[a-z-]+$/.test(token))).toBe(true);
+    // A backdrop utility at any variant prefix; the shared transition list may
+    // still name the property.
+    expect(tokens.some((token) => /^(?:[\w-]+:)*backdrop-/.test(token))).toBe(false);
+  });
+
   // A `truncate` label clips at its own box, and at `leading-none` that box is
   // shorter than the glyphs, so the descenders are sliced off. The room comes
   // from padding on the clip box, handed back by an equal negative margin so
