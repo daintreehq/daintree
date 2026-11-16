@@ -109,11 +109,15 @@ beforeEach(() => {
     get: vi.fn((runId: string) => history.find((recorded) => recorded.id === runId) ?? null),
     settle: vi.fn(),
     findIdByOccurrence: vi.fn(
-      (_scheduleId: string, key: string) =>
-        history.find((recorded) => recorded.origin.occurrenceKey === key)?.id ?? null
+      (scheduleId: string, key: string) =>
+        history.find(
+          (recorded) => recorded.scheduleId === scheduleId && recorded.origin.occurrenceKey === key
+        )?.id ?? null
     ),
-    listOpenBySchedule: vi.fn(() =>
-      history.filter((recorded) => recorded.settlement.state === "open")
+    listOpenBySchedule: vi.fn((scheduleId: string) =>
+      history.filter(
+        (recorded) => recorded.scheduleId === scheduleId && recorded.settlement.state === "open"
+      )
     ),
     beginReplacement: vi.fn(() => null),
     handleSessionCaptured: vi.fn(),

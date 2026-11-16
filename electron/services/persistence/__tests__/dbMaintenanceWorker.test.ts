@@ -430,6 +430,30 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(order).toEqual([backupId, backupId + 1, backupId + 2]);
   });
 
+  it("reports a copy of a damaged database as corrupt rather than promotable", async () => {
+    const damagedPath = path.join(tmpDir, "damaged.db");
+    const seed = new Database(damagedPath);
+    seed.exec("CREATE TABLE filler (id INTEGER PRIMARY KEY, body TEXT)");
+    const insert = seed.prepare("INSERT INTO filler (body) VALUES (?)");
+    seed.transaction(() => {
+      for (let i = 0; i < 400; i++) insert.run("y".repeat(200));
+    })();
+    const pageSize = Number(seed.pragma("page_size", { simple: true }));
+    seed.close();
+    // Scribble over an interior b-tree page: the file still opens, and the
+    // backup copies the damage verbatim without complaint.
+    const fd = fs.openSync(damagedPath, "r+");
+    fs.writeSync(fd, Buffer.alloc(pageSize, 0xa5), 0, pageSize, pageSize * 2);
+    fs.closeSync(fd);
+
+    const w = spawn(damagedPath);
+    const response = await request(w, {
+      op: "backup",
+      destPath: path.join(tmpDir, "backup.tmp"),
+    });
+    expect(response).toMatchObject({ ok: true, result: "corrupt" });
+  });
+
   it("fails a backup it can't write without stalling the requests behind it", async () => {
     const w = spawn();
     const failed = request(w, {

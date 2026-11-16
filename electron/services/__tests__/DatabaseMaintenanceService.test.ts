@@ -453,8 +453,10 @@ describe("DatabaseMaintenanceService", () => {
   });
 
   it("keeps the quick_check pending and retries when the DB worker is unavailable", async () => {
-    // Default mock: the worker is unavailable, so quickCheck's fallback returns
-    // null — the scan never actually ran.
+    // quickCheck's fallback returns null — the scan never actually ran.
+    mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
+      Promise.resolve(fallback())
+    );
     const service = new DatabaseMaintenanceService();
     service.initialize(true);
     service.startMaintenance();
@@ -468,13 +470,13 @@ describe("DatabaseMaintenanceService", () => {
     await drainMicrotasks();
     expect(quickCheckOps()).toHaveLength(2);
 
-    // The backup still runs — its own candidate probe is what guards the
-    // existing backup, and it catches on main what the worker could not.
-    expect(mockSqlite.backup).toHaveBeenCalled();
-    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
-      "/fake/daintree.db.backup.tmp",
-      "/fake/daintree.db.backup"
-    );
+    // The gate lets the backup through, and the backup, with no worker to
+    // copy on, skips itself rather than copying on main.
+    expect(
+      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "backup")
+    ).toHaveLength(2);
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
     await service.dispose();
   });
 
@@ -506,7 +508,7 @@ describe("DatabaseMaintenanceService", () => {
 
     try {
       const service = new DatabaseMaintenanceService();
-      // dispose() runs the final backup on main (probeOnMain), no worker needed.
+      // dispose() runs the final backup on main, no worker needed.
       await service.dispose();
 
       expect(tmpModeAtBackupStart).toBe(0o600);
@@ -719,6 +721,7 @@ describe("DatabaseMaintenanceService", () => {
     mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
       Promise.resolve(fallback())
     );
+    const openSync = vi.spyOn(fs, "openSync");
 
     const service = new DatabaseMaintenanceService();
     service.initialize();
@@ -731,8 +734,12 @@ describe("DatabaseMaintenanceService", () => {
 
     expect(mockSqlite.backup).not.toHaveBeenCalled();
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
-    // A timed-out worker may still be writing the candidate: never touch it.
+    // A timed-out worker may still be writing the candidate: never touch it,
+    // not even to truncate it for a copy that won't happen.
     expect(vi.mocked(fs.unlinkSync)).not.toHaveBeenCalled();
+    expect(
+      openSync.mock.calls.filter(([file]) => file === "/fake/daintree.db.backup.tmp")
+    ).toHaveLength(0);
     // Not a verification failure, however many ticks it happens on.
     const warnings = vi.mocked(console.warn).mock.calls.map(([message]) => String(message));
     expect(warnings.filter((message) => message.includes("Periodic backup skipped"))).toHaveLength(

@@ -194,7 +194,8 @@ describe("ScheduledRunStore", () => {
   });
 
   it("finds a schedule's run for an occurrence by its key alone", () => {
-    const store = new ScheduledRunStore(sqlite);
+    const logWarn = vi.fn();
+    const store = new ScheduledRunStore(sqlite, logWarn);
     const key = occurrenceKeyFor(T0);
     const origin = {
       trigger: "scheduled" as const,
@@ -205,14 +206,19 @@ describe("ScheduledRunStore", () => {
     store.insert(run("keyed", { origin }));
     store.insert(run("other-schedule", { scheduleId: "schedule-2", origin }));
     store.insert(run("unkeyed"));
+    // Its record no longer reads, but the occurrence is still taken: a second
+    // run for it would only fail on the unique index.
+    sqlite.prepare("UPDATE scheduled_runs SET record = 'not json' WHERE id = ?").run("keyed");
 
     expect(store.findIdByOccurrence("schedule-1", key)).toBe("keyed");
+    expect(logWarn).not.toHaveBeenCalled();
     expect(store.findIdByOccurrence("schedule-2", key)).toBe("other-schedule");
     expect(store.findIdByOccurrence("schedule-1", occurrenceKeyFor(T0 + 1))).toBeNull();
   });
 
   it("lists a schedule's open runs newest first, leaving settled and still-running ones out", () => {
-    const store = new ScheduledRunStore(sqlite);
+    const logWarn = vi.fn();
+    const store = new ScheduledRunStore(sqlite, logWarn);
     store.insert(run("open-older", { createdAt: T0 - 1, settlement: { state: "open" } }));
     store.insert(run("open-first", { createdAt: T0, settlement: { state: "open" } }));
     store.insert(run("open-second", { createdAt: T0, settlement: { state: "open" } }));
@@ -225,12 +231,16 @@ describe("ScheduledRunStore", () => {
       })
     );
     store.insert(run("elsewhere", { scheduleId: "schedule-2", settlement: { state: "open" } }));
+    // Settled history isn't read at all: a record of it that no longer parses
+    // goes unnoticed.
+    sqlite.prepare("UPDATE scheduled_runs SET record = 'not json' WHERE id = ?").run("settled");
 
     expect(store.listOpenBySchedule("schedule-1").map((r) => r.id)).toEqual([
       "open-second",
       "open-first",
       "open-older",
     ]);
+    expect(logWarn).not.toHaveBeenCalled();
 
     const [newest] = store.listOpenBySchedule("schedule-1");
     store.update({

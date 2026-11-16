@@ -22,10 +22,10 @@ import type {
   DbWorkerResponse,
 } from "./dbWorkerProtocol.js";
 
-const port = parentPort;
-if (!port) {
+if (!parentPort) {
   throw new Error("dbMaintenanceWorker must be spawned as a worker thread");
 }
+const port = parentPort;
 
 const { dbPath } = workerData as DbWorkerData;
 
@@ -101,6 +101,13 @@ const ALL_PAGES_PER_STEP = 0x7fffffff;
 
 async function backupTo(destPath: string): Promise<DbProbeResult> {
   try {
+    // Created owner-only before the copy, since it is a verbatim copy of the
+    // whole database; "w" truncates what an earlier run left. Created here,
+    // not on main, so main never opens a candidate this thread may still be
+    // writing after a timed-out request. POSIX-only, as main's chmod after.
+    if (process.platform !== "win32") {
+      fs.closeSync(fs.openSync(destPath, "w", 0o600));
+    }
     await sqlite.backup(destPath, { progress: () => ALL_PAGES_PER_STEP });
   } catch (error) {
     // A partial copy (disk full, I/O error) is a whole database's worth of

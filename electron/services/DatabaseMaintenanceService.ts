@@ -421,7 +421,8 @@ class DatabaseMaintenanceService {
       // the (potentially slow) page copy — the temp is a verbatim copy of the
       // whole database. "w" truncates any stale temp from a crashed run; better-
       // sqlite3 backs up correctly into a pre-existing empty file. POSIX-only.
-      if (process.platform !== "win32") {
+      // The worker creates its own candidate the same way.
+      if (final && process.platform !== "win32") {
         try {
           fs.closeSync(fs.openSync(tmpPath, "w", OWNER_RW_FILE_MODE));
         } catch {
