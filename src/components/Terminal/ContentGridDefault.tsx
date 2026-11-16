@@ -77,14 +77,18 @@ export function ContentGridDefault({
     [bindCombinedGrid, setGridScrollRoot]
   );
 
-  // Everything that can move a grid panel, folded into one key so the FLIP
-  // wrappers only re-measure when grid geometry actually changed (see
-  // SortableTerminal.layoutDependency).
+  // Every discrete change that moves a grid panel, folded into one key so the
+  // FLIP wrappers only re-measure when the grid's shape changed (see
+  // SortableTerminal.layoutDependency). Continuous geometry stays out: the
+  // container width, the split ratio and the scroll-mode row height move panels
+  // on every frame of a window, sidebar or divider drag, and keying on them
+  // re-measured every wrapper and restarted a 200ms FLIP per pixel. Panels track
+  // those directly; a width that crosses a column breakpoint still animates
+  // through `gridCols`.
   const gridLayoutDependency = [
-    isSplit ? `split:${splitTemplate ?? ""}` : ctx.gridCols,
-    isScrollMode ? ctx.scrollRowHeight : "fit",
+    isSplit ? "split" : ctx.gridCols,
+    isScrollMode ? "scroll" : "fit",
     ctx.maximizedId ?? "",
-    ctx.gridWidth ?? 0,
     ctx.showPlaceholder && ctx.placeholderInGrid ? ctx.placeholderIndex : "",
     ctx.tabGroups.map((g) => `${g.id}/${g.panelIds.length}`).join(","),
   ].join("|");
