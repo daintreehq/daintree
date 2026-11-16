@@ -204,3 +204,46 @@ describe("getStageLabel", () => {
     expect(getStageLabel(makeStatus({ stage: "succeeded" }))).toBeNull();
   });
 });
+
+describe("progressReducer cancellation", () => {
+  it("waits in cancelling, then cancels what didn't finish while keeping landed worktrees", () => {
+    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1, 2, 3, 4] });
+    state = progressReducer(state, { type: "ITEM_SUCCEEDED", issueNumber: 1 });
+    state = progressReducer(state, {
+      type: "ITEM_FAILED",
+      issueNumber: 2,
+      error: "boom",
+      attempts: 1,
+    });
+    state = progressReducer(state, { type: "CANCEL_REQUESTED" });
+    expect(state.phase).toBe("cancelling");
+
+    // A create already underway still lands while the cancel drains.
+    state = progressReducer(state, {
+      type: "ITEM_WORKTREE_CREATED",
+      issueNumber: 3,
+      worktreeId: "wt-3",
+      worktreePath: "/wt/3",
+      branch: "feature/3",
+    });
+    state = progressReducer(state, { type: "CANCELLED" });
+
+    expect(state.phase).toBe("cancelled");
+    expect([1, 2, 3, 4].map((n) => state.items.get(n)!.stage)).toEqual([
+      "succeeded",
+      "failed",
+      "cancelled",
+      "cancelled",
+    ]);
+    expect(state.items.get(3)!.worktreeId).toBe("wt-3");
+    expect(getStageLabel(state.items.get(3))).not.toBe(getStageLabel(state.items.get(4)));
+  });
+
+  it("ignores a cancel for a run that isn't executing", () => {
+    const done = progressReducer(
+      progressReducer(emptyState(), { type: "START", issueNumbers: [1] }),
+      { type: "DONE" }
+    );
+    expect(progressReducer(done, { type: "CANCEL_REQUESTED" })).toBe(done);
+  });
+});

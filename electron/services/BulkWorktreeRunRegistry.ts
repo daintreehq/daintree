@@ -235,8 +235,7 @@ export class BulkWorktreeRunRegistry {
   }
 }
 
-/** Test-only: forget every hold. */
+/** Test-only: forget every hold. A release from before the reset then drops nothing. */
 export function _resetBulkWorktreeRunHoldsForTests(): void {
   holds.clear();
-  releaseListeners.clear();
 }
