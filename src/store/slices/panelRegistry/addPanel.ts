@@ -57,6 +57,7 @@ import {
   parkedRestoreTarget,
   showsLostTerminal,
 } from "./panelCommit";
+import { readConversationStore } from "@shared/utils/conversationStore";
 import { addNonPtyPanel } from "./nonPtyPanel";
 import { startSpawnEnvFetch } from "./spawnEnv";
 import { enqueuePtyStartup, terminalStartupQueue } from "./ptyStartup";
@@ -219,6 +220,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // whose process is gone takes the exit too, and spawns nothing anyway.
     const restoredExitCode = isRecoveryHold ? undefined : options.restoredExitCode;
     const restoresExit = restoredExitCode !== undefined;
+    const conversationStore = readConversationStore(options.conversationStore);
     const isRestoredExit = restoresExit && !isReconnect;
 
     // Checked after the last await before the commit: the pane may have been
@@ -435,6 +437,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,
       ...(options.conversationCwd && { conversationCwd: options.conversationCwd }),
+      ...(conversationStore && { conversationStore }),
       // `hasPty: false` is what keeps fleet broadcast, interrupt and the other
       // live-process consumers off a pane that has nothing to write to.
       ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),

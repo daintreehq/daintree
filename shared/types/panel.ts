@@ -419,6 +419,7 @@ export type PresetSwitchPriorLaunch = Pick<
   | "env"
   | "agentAccountId"
   | "conversationCwd"
+  | "conversationStore"
 > & { cwd: string };
 
 /** The launch fields of `panel` a preset switch replaces, in the shape "Back" restores. */
@@ -436,8 +437,22 @@ export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaun
     env: panel.env,
     agentAccountId: panel.agentAccountId,
     conversationCwd: panel.conversationCwd,
+    conversationStore: panel.conversationStore,
     cwd: panel.cwd,
   };
+}
+
+/**
+ * The agent config folder that holds a conversation's transcript, kept once the
+ * pane launches on another one (#17087). An account switch moves the pane to
+ * another folder, but the CLI goes on writing the conversation where it began,
+ * so a relaunch reopens it from there by the transcript's path. Belongs to one
+ * conversation: it says nothing about any other session id.
+ */
+export interface ConversationStore {
+  sessionId: string;
+  /** The config folder (`CLAUDE_CONFIG_DIR`) the conversation was written under. */
+  configDir: string;
 }
 
 /**
@@ -928,6 +943,12 @@ export interface PtyPanelData extends BasePanelData {
    * conversation starts. Persisted.
    */
   conversationCwd?: string;
+  /**
+   * Where the conversation in `agentSessionId` is stored, when a switch that
+   * kept it moved the pane onto another account's folder (#17087). Read only
+   * for that same session id. Persisted.
+   */
+  conversationStore?: ConversationStore;
   /**
    * Restore held this pane instead of launching it (#12434): the pane exists,
    * with its title, placement and launch settings, but has no process until

@@ -53,7 +53,11 @@ describe("RestartOnAccountConfirmDialog — keeping the conversation (#16135)", 
     act(() => {
       fireEvent.click(keep);
     });
-    expect(screen.getByText(/reopens this conversation on that account/)).toBeTruthy();
+    // Claude Code reopens it from the folder it began in (#17087), so the
+    // account it moves to needn't hold it.
+    expect(screen.getByText(/continues this conversation on that account/)).toBeTruthy();
+    expect(screen.getByText(/stays in the folder it began in/)).toBeTruthy();
+    expect(screen.queryByText(/If the account can't find the conversation/)).toBeNull();
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Restart on account" }));
     });
@@ -63,6 +67,18 @@ describe("RestartOnAccountConfirmDialog — keeping the conversation (#16135)", 
       { terminalId: "t1", accountId: "company", confirmed: true, keepConversation: true },
       { source: "user" }
     );
+  });
+
+  it("says an agent that looks the conversation up by id may not find it there", () => {
+    seedPane("codex");
+    render(<RestartOnAccountConfirmDialog request={request} {...props} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Keep this conversation" }));
+    });
+
+    expect(screen.getByText(/reopens this conversation on that account/)).toBeTruthy();
+    expect(screen.getByText(/If the account can't find the conversation/)).toBeTruthy();
   });
 
   it("starts every opening unchecked, and an unchecked confirm asks for no conversation", () => {

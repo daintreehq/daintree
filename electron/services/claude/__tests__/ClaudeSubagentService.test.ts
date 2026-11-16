@@ -250,6 +250,26 @@ describe("the store a pane launched against (#16269)", () => {
     });
   });
 
+  it("lists a conversation's children from the folder its launch reopened it from (#17087)", async () => {
+    const { rememberClaudePaneStore, __resetClaudeSessionStoreForTests } =
+      await import("../ClaudeSessionStore.js");
+    // Launched on the default login, still writing a conversation that lives
+    // in the account's folder.
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    await seedChild("acc1", [TASK, REPLY], accountDir);
+    await seedChild("def1", [TASK, REPLY], root);
+    rememberClaudePaneStore("t1", path.join(root, "projects"), {
+      sessionId: SESSION,
+      configDir: accountDir,
+    });
+    try {
+      const result = await listClaudeSubagents("t1");
+      expect(result.status === "ok" && result.subagents.map((child) => child.id)).toEqual(["acc1"]);
+    } finally {
+      __resetClaudeSessionStoreForTests();
+    }
+  });
+
   it("follows the pane to a new store when the same terminal id relaunches under another account", async () => {
     await seedChild("acc1", [TASK, REPLY], accountDir);
     await seedChild("def1", [TASK, REPLY], root);

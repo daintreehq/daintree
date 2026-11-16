@@ -1,6 +1,7 @@
 import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
+  ConversationStore,
   PanelKind,
   PanelLocation,
   PanelTitleMode,
@@ -422,6 +423,11 @@ export interface PanelSnapshot {
    * runs somewhere else (#12434). Session lookup searches here.
    */
   conversationCwd?: string;
+  /**
+   * The config folder holding the conversation, once a switch that kept it
+   * moved the pane onto another account's (#17087). Untrusted on read.
+   */
+  conversationStore?: ConversationStore;
   /**
    * The pane was held for recovery rather than launched (#12434), so the next
    * restore holds it again instead of starting a fresh conversation.

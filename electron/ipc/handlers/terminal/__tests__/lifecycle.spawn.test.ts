@@ -119,6 +119,14 @@ vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
+  getClaudePaneConversationStore: vi.fn(() => undefined),
+}));
+
+const resumeFromStoreMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<string | undefined>>(async () => undefined)
+);
+vi.mock("../../../../services/claude/claudeConversationResume.js", () => ({
+  resumeClaudeFromConversationStore: resumeFromStoreMock,
 }));
 
 type SafeParseable = {
@@ -1301,7 +1309,8 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       );
       expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
         expect.any(String),
-        CLAUDE_STORE
+        CLAUDE_STORE,
+        undefined
       );
       expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
       expect(spawnArgs.command).not.toContain("--resume");
@@ -1368,6 +1377,83 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
       expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
       expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+    });
+
+    describe("a conversation stored in another account's folder (#17087)", () => {
+      const STORE = { sessionId: SESSION, configDir: "/accounts/a" };
+      const BY_PATH = `claude --resume '/accounts/a/projects/-work/${SESSION}.jsonl'`;
+
+      it("reopens it by the path of the transcript found there", async () => {
+        resumeFromStoreMock.mockResolvedValueOnce(BY_PATH);
+
+        const { spawnArgs, cwd } = await spawnClaude({
+          shell: "/usr/bin/nu",
+          agentSessionId: SESSION,
+          conversationStore: STORE,
+        });
+
+        expect(resumeFromStoreMock).toHaveBeenCalledWith(`claude --resume ${SESSION}`, STORE, cwd);
+        expect(spawnArgs.command).toContain(
+          `--resume '/accounts/a/projects/-work/${SESSION}.jsonl'`
+        );
+        expect(spawnArgs.agentSessionId).toBe(SESSION);
+        expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
+          expect.any(String),
+          CLAUDE_STORE,
+          STORE
+        );
+      });
+
+      it("never starts a fresh conversation under its id when the folder doesn't answer", async () => {
+        // This launch's own store doesn't hold it either, which proves nothing:
+        // the CLI's refusal is the answer, not an empty conversation.
+        findUntouchedClaudeSessionMock.mockResolvedValue(SESSION);
+        try {
+          const { spawnArgs } = await spawnClaude({
+            shell: "/usr/bin/nu",
+            agentSessionId: SESSION,
+            conversationStore: STORE,
+          });
+
+          expect(findUntouchedClaudeSessionMock).not.toHaveBeenCalled();
+          expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+          expect(spawnArgs.command).not.toContain("--session-id");
+          expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
+            expect.any(String),
+            CLAUDE_STORE,
+            undefined
+          );
+        } finally {
+          findUntouchedClaudeSessionMock.mockReset();
+          findUntouchedClaudeSessionMock.mockResolvedValue(undefined);
+        }
+      });
+
+      it("ignores a store that belongs to another conversation", async () => {
+        const other = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
+        findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+        const { spawnArgs } = await spawnClaude({
+          shell: "/usr/bin/nu",
+          agentSessionId: SESSION,
+          conversationStore: { sessionId: other, configDir: "/accounts/a" },
+        });
+
+        expect(resumeFromStoreMock).not.toHaveBeenCalled();
+        expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
+      });
+
+      it("looks nothing up for an agent other than Claude", async () => {
+        await spawnClaude({
+          launchAgentId: "codex",
+          command: `codex resume ${SESSION}`,
+          shell: "/usr/bin/nu",
+          agentSessionId: SESSION,
+          conversationStore: STORE,
+        });
+
+        expect(resumeFromStoreMock).not.toHaveBeenCalled();
+      });
     });
 
     it("resolves and remembers no Claude store for a launch that isn't Claude", async () => {

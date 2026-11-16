@@ -19,7 +19,12 @@ import type {
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalSpawnSource, AddPanelFocusPolicy, ScheduledRunRef } from "./panel.js";
+import type {
+  ConversationStore,
+  TerminalSpawnSource,
+  AddPanelFocusPolicy,
+  ScheduledRunRef,
+} from "./panel.js";
 import type { ActionContext } from "./actions.js";
 import type { TerminalGeometry } from "./terminal.js";
 
@@ -238,6 +243,11 @@ export interface AddPanelOptionsBase {
   sessionLostOnRestore?: SessionLostReason;
   /** PTY-only. Where the conversation began, when the pane runs elsewhere (#12434). */
   conversationCwd?: string;
+  /**
+   * PTY-only. The config folder holding the conversation `agentSessionId`
+   * resumes, when the launch env points at another (#17087).
+   */
+  conversationStore?: ConversationStore;
   /**
    * PTY-only. Commit the pane held for recovery (#12434): no startup slot, no
    * prewarm, no spawn. See `PtyPanelData.restoreRecovery`.

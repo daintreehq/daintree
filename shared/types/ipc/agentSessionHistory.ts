@@ -1,4 +1,4 @@
-import type { PanelTitleMode, ScheduledRunRef } from "../panel.js";
+import type { ConversationStore, PanelTitleMode, ScheduledRunRef } from "../panel.js";
 
 /**
  * User-adjustable retention window for the agent resume journal, in days.
@@ -84,6 +84,11 @@ export interface AgentSessionRecord {
    * so a resume can tell a scheduled run's conversation from any other.
    */
   scheduledRun?: ScheduledRunRef;
+  /**
+   * The config folder holding the conversation, when its pane had moved onto
+   * another account's (#17087), so a resume reopens it from there.
+   */
+  conversationStore?: ConversationStore;
 }
 
 /**

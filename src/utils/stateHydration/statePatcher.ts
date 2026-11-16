@@ -44,6 +44,7 @@ import {
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
+import { readConversationStore } from "@shared/utils/conversationStore";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import {
   appendCallerLaunchFlagsToCommand,
@@ -230,6 +231,8 @@ export interface SavedTerminalData {
   fallbackChainIndex?: number;
   /** Untrusted on-disk values (#12434) — sanitized in `restoreRecovery.ts`. */
   conversationCwd?: unknown;
+  /** Untrusted on-disk value (#17087) — read through `readConversationStore`. */
+  conversationStore?: unknown;
   restoreRecovery?: unknown;
   /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
   scratchpad?: unknown;
@@ -516,6 +519,8 @@ export function buildArgsForBackendTerminal(
     // A live pane that was already relaunched away from its conversation's
     // folder keeps pointing lookups at that folder (#12434).
     conversationCwd: sanitizeConversationCwd(saved.conversationCwd),
+    // And in the account folder it was written under (#17087).
+    conversationStore: readConversationStore(saved.conversationStore),
     // Carry the captured launch env forward so a reconnect (project switch /
     // renderer reload to a still-live PTY) re-serializes the snapshot WITH env,
     // instead of dropping it and reintroducing the provider swap on the next
@@ -614,6 +619,7 @@ export function buildArgsForReconnectedFallback(
       readPresetId(saved) ??
       reconnectedTerminal.agentPresetId,
     conversationCwd: sanitizeConversationCwd(saved.conversationCwd),
+    conversationStore: readConversationStore(saved.conversationStore),
     // Carry the captured launch env forward so a reconnect re-serializes the
     // snapshot WITH env rather than dropping it and reintroducing the provider
     // swap on the next full restart (#10922). Not used to spawn — PTY has it.
@@ -1173,6 +1179,9 @@ export function buildArgsForRespawn(
     conversationCwd: coldLaunch
       ? coldLaunch.conversationCwd
       : sanitizeConversationCwd(saved.conversationCwd),
+    // Spawned only for the conversation it holds, which is the one resumed
+    // here or the one a held pane offers (#17087).
+    conversationStore: readConversationStore(saved.conversationStore),
     restoreRecovery,
     restoreProvenance,
     ...(restoredExitCode !== undefined && { restoredExitCode }),

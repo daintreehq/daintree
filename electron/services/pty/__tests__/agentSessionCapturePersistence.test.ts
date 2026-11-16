@@ -37,6 +37,7 @@ vi.mock("../../../utils/performance.js", () => ({
 
 vi.mock("../../claude/ClaudeSessionStore.js", () => ({
   isClaudeSessionWithoutTranscript: vi.fn(async () => false),
+  getClaudePaneConversationStore: vi.fn(() => undefined),
 }));
 
 vi.mock("../../assistantTerminal.js", () => ({

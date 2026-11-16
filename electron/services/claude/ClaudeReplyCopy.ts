@@ -21,7 +21,7 @@ export async function findClaudeReplySpan(
 ): Promise<string | null> {
   const resolved = await resolveClaudeTerminal(terminalId);
   if ("status" in resolved) return null;
-  const projectsRoot = getClaudePaneProjectsRoot(terminalId);
+  const projectsRoot = getClaudePaneProjectsRoot(terminalId, resolved.parentSessionId);
   if (!projectsRoot) return null;
   const replies = await readClaudeRecentReplies(
     { projectsRoot, cwd: resolved.cwd, sessionId: resolved.parentSessionId },

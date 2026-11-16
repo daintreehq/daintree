@@ -11,6 +11,7 @@ import { buildLaunchIdentity } from "../../../shared/utils/agentLaunchPlan.js";
 import { unknownAgentIdMessage } from "../../../shared/utils/agentLaunchValidation.js";
 import { reconcileResumeLaunchFlagsWith } from "../../../shared/utils/agentResumeFlags.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
@@ -237,6 +238,8 @@ async function launchResumedPane(
   // Only a captured launch is kept for restart and restore to replay: flags
   // reconciled into an empty one are no whole configuration.
   const savedFlags = captured?.length ? flags : undefined;
+  // A conversation recorded in another account's folder reopens from there (#17087).
+  const conversationStore = conversationStoreFor(record?.conversationStore, sessionId);
   const command = buildResumeCommand(
     agentId,
     sessionId,
@@ -313,6 +316,7 @@ async function launchResumedPane(
           agentSessionId: sessionId,
           // A conversation the CLI never wrote is refused, never started afresh under its id.
           exactResume: true,
+          ...(conversationStore !== undefined ? { conversationStore } : {}),
           ...(actionContext !== undefined ? { actionContext } : {}),
         },
       ]);
@@ -337,6 +341,7 @@ async function launchResumedPane(
       command,
       agentSessionId: sessionId,
       agentLaunchFlags: savedFlags,
+      conversationStore,
     }),
   };
   let savedInLayout = true;

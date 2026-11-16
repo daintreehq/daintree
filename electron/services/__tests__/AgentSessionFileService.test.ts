@@ -178,6 +178,22 @@ describe("locateAgentSessionFile — Claude Code", () => {
     });
   });
 
+  it("asks for the store holding the recorded session, which a switch may have left behind (#17087)", async () => {
+    const getClaudeProjectsRoot = vi.fn(() => "/Users/x/.claude-a/projects");
+    const locateClaude = vi.fn().mockResolvedValue({ status: "found", file: transcript });
+
+    await locateAgentSessionFile(TERMINAL, PROJECT, {
+      ptyClient: queries(claudePane()),
+      getClaudeProjectsRoot,
+      locateClaude,
+    });
+
+    expect(getClaudeProjectsRoot).toHaveBeenCalledWith(TERMINAL, CLAUDE_SESSION);
+    expect(locateClaude).toHaveBeenCalledWith(
+      expect.objectContaining({ projectsRoot: "/Users/x/.claude-a/projects" })
+    );
+  });
+
   it("never falls back to another store when the pane's own was never certain", async () => {
     const locateClaude = vi.fn();
     const result = await locateAgentSessionFile(TERMINAL, PROJECT, {

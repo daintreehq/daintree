@@ -6,6 +6,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { reconcileResumeLaunchFlagsWith } from "@shared/utils/agentResumeFlags";
+import { conversationStoreFor } from "@shared/utils/conversationStore";
 import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 /**
@@ -70,6 +71,9 @@ export function buildResumePanelOptions(
     // restart from rebuilding the rest from settings.
     agentLaunchFlags: session.agentLaunchFlags?.length ? resumeFlags : undefined,
     agentSessionId: session.sessionId,
+    // A conversation recorded in another account's folder reopens from there
+    // (#17087); the launch's own folder is looked up by id.
+    conversationStore: conversationStoreFor(session.conversationStore, session.sessionId),
   };
 }
 
