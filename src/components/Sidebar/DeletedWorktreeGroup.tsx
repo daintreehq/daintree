@@ -49,6 +49,13 @@ import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
 import { Badge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
+const ID_SEPARATOR = "\u0000";
+const LIST_SEPARATOR = "\u0001";
+
+function splitIds(part: string): string[] {
+  return part === "" ? [] : part.split(ID_SEPARATOR);
+}
+
 interface GroupMember {
   worktree: DeletedWorktree;
   /**
@@ -96,27 +103,28 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
 
   // Membership is derived, never snapshotted: a terminal rescued out of the
   // group shrinks it the same way it shrinks a single card (#11232).
-  // Selected as one value key rather than through `panelsById`: a panel object
-  // is replaced on every activity write, and that subscription re-rendered the
-  // group for output in any terminal in the app (#17051). The key changes only
-  // when a member's membership, order or PTY subset does, which also tells a
-  // rescue between two members apart from no change at all.
-  const membershipKey = usePanelStore((s) =>
-    JSON.stringify(
+  // Selected as one string per member rather than through `panelsById`: a
+  // panel object is replaced on every activity write, and that subscription
+  // re-rendered the group for output in any terminal in the app (#17051). A
+  // member's string changes only when its membership, order or PTY subset does,
+  // which also tells a rescue between two members apart from no change at all.
+  const membership = usePanelStore(
+    useShallow((s) =>
       worktrees.map((worktree) => {
         const ids = selectDeletedWorktreeTerminalIds(s, worktree.id);
-        return [ids, selectPtyPanels(s, ids).map((t) => t.id)];
+        const ptyIds = selectPtyPanels(s, ids).map((t) => t.id);
+        return `${ids.join(ID_SEPARATOR)}${LIST_SEPARATOR}${ptyIds.join(ID_SEPARATOR)}`;
       })
     )
   );
-  const members = useMemo<GroupMember[]>(() => {
-    const membership = JSON.parse(membershipKey) as [string[], string[]][];
-    return worktrees.map((worktree, i) => ({
-      worktree,
-      panelIds: membership[i]?.[0] ?? [],
-      terminalIds: membership[i]?.[1] ?? [],
-    }));
-  }, [worktrees, membershipKey]);
+  const members = useMemo<GroupMember[]>(
+    () =>
+      worktrees.map((worktree, i) => {
+        const [panelPart = "", ptyPart = ""] = (membership[i] ?? "").split(LIST_SEPARATOR);
+        return { worktree, panelIds: splitIds(panelPart), terminalIds: splitIds(ptyPart) };
+      }),
+    [worktrees, membership]
+  );
 
   const terminalCount = members.reduce((n, m) => n + m.panelIds.length, 0);
 
