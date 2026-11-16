@@ -725,6 +725,21 @@ async function whileDelivering<T>(
   }
 }
 
+/**
+ * A read that answers not running when its delivery stopped while it ran,
+ * even if nothing threw: content opened as the delivery stopped may have
+ * failed for that alone.
+ */
+async function whileReading<T>(
+  read: (delivery: AnswerDelivery) => Promise<T>,
+  notRunning: T
+): Promise<T> {
+  const delivery = answerDelivery();
+  if (delivery === null) return notRunning;
+  const result = await whileDelivering(read, notRunning);
+  return answerDelivery() === delivery ? result : notRunning;
+}
+
 /** Every answer a person has to decide about, opened, oldest question first. */
 export function listDecisionsAttention(): Promise<DecisionsAttentionList> {
   return whileDelivering<DecisionsAttentionList>(
@@ -787,7 +802,7 @@ export function getDecisionQuestionContent(
   projectId: string | null,
   payload: GetDecisionQuestionPayload
 ): Promise<DecisionQuestionContentResult> {
-  return whileDelivering<DecisionQuestionContentResult>(
+  return whileReading<DecisionQuestionContentResult>(
     (delivery) =>
       delivery.questionContent({ projectId, terminalId: payload.terminalId }, payload.questionId),
     { result: "not-running" }
@@ -799,7 +814,7 @@ export function getDecisionQuestionSummaries(
   projectId: string | null,
   payload: GetDecisionQuestionSummariesPayload
 ): Promise<DecisionQuestionSummariesResult> {
-  return whileDelivering<DecisionQuestionSummariesResult>(
+  return whileReading<DecisionQuestionSummariesResult>(
     async (delivery) => ({
       result: "read",
       summaries: await delivery.questionSummaries(

@@ -17,6 +17,7 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
+import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
  * Where a read comes from: the pane and the project of the view asking, and
@@ -103,7 +104,8 @@ async function openedQuestion(
   let raw: unknown;
   try {
     raw = await openQuestionContent(ctx, row);
-  } catch {
+  } catch (error) {
+    rethrowRetired(error);
     return null;
   }
   if (raw === null) return null;
@@ -130,7 +132,8 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
     let opened;
     try {
       opened = await openAnswerContent(ctx, row.question_id, entry);
-    } catch {
+    } catch (error) {
+      rethrowRetired(error);
       opened = null;
     }
     placed.push({
@@ -158,7 +161,8 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
     let opened;
     try {
       opened = await openMessageContent(ctx, row.question_id, message);
-    } catch {
+    } catch (error) {
+      rethrowRetired(error);
       opened = null;
     }
     placed.push({
@@ -179,6 +183,14 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
   }
   // Stable, so entries sharing a seq (answers stored before threads) keep their stored order.
   return placed.sort((a, b) => a.seq - b.seq).map((item) => item.entry);
+}
+
+/**
+ * A delivery that stopped under a read refuses the key reload an open may
+ * need: that is the read stopping, not the content being unreadable.
+ */
+function rethrowRetired(error: unknown): void {
+  if (error instanceof RetiredAttemptError) throw error;
 }
 
 function threadImage(image: PhoneImageReference): DecisionThreadImage {

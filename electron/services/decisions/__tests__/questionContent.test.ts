@@ -16,6 +16,7 @@ import {
   encryptEnvelope,
   generateDeviceKeys,
   generateEpochKeyBytes,
+  importEpochKey,
   serializeDeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import {
@@ -24,6 +25,7 @@ import {
   type PhoneImageReference,
 } from "@daintreehq/decisions-protocol";
 import { inScope, readQuestionContent, readQuestionSummary } from "../questionContent.js";
+import { RetiredAttemptError } from "../relayTransport.js";
 import { row as baseRow } from "./questionRows.js";
 
 const QID = "0190f0aa11112222333344445555aa01";
@@ -70,6 +72,7 @@ async function question(content: unknown, over: Partial<QuestionRow> = {}): Prom
     }),
     question_id: QID,
     content_sealed: await sealQuestionContent(ctx(), QID, content),
+    legacy_content_json: null,
     ...over,
   };
 }
@@ -344,11 +347,13 @@ describe("readQuestionContent", () => {
     const good = await answer({ entry_id: "entry-1", event_seq: 2 }, { text: "Yes." });
     const broken = { ...(await answer({ entry_id: "entry-2", revision: 2, event_seq: 6 })) };
     broken.sealed = good.sealed;
+    const after = await answer({ entry_id: "entry-3", revision: 3, event_seq: 7 }, { text: "No." });
     const tampered = { ...(await message("msg_human_02", "human", "Later.", 9)) };
     tampered.side = "agent";
+    const last = await message("msg_human_03", "human", "Last word.", 11);
     const row = await question(CONTENT, {
-      answers_json: serializeAnswers([good, broken]),
-      messages_json: serializeMessages([tampered]),
+      answers_json: serializeAnswers([good, broken, after]),
+      messages_json: serializeMessages([tampered, last]),
     });
 
     const read = await readQuestionContent(ctx(), row);
@@ -357,7 +362,9 @@ describe("readQuestionContent", () => {
     expect(read.question.thread).toMatchObject([
       { entryId: "entry-1", text: "Yes.", unreadable: false },
       { entryId: "entry-2", choices: [], text: null, images: [], unreadable: true },
+      { entryId: "entry-3", text: "No.", unreadable: false },
       { messageId: "msg_human_02", text: null, unreadable: true },
+      { messageId: "msg_human_03", text: "Last word.", unreadable: false },
     ]);
   });
 
@@ -373,6 +380,50 @@ describe("readQuestionContent", () => {
     ]) {
       await expect(readQuestionContent(ctx(), row)).resolves.toEqual({ result: "unreadable" });
     }
+  });
+
+  it("lets a stopped delivery's refusal through, so the read ends as not running", async () => {
+    const row = await question(CONTENT);
+    const missingKey = { identity: { ...identity, epochs: new Map() } };
+    const retired = {
+      ...missingKey,
+      refreshIdentity: async () => {
+        throw new RetiredAttemptError();
+      },
+    };
+
+    await expect(readQuestionContent(missingKey, row)).resolves.toEqual({ result: "unreadable" });
+    await expect(readQuestionContent(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
+    await expect(readQuestionSummary(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
+  });
+
+  it("lets a stopped delivery's refusal through from a thread entry too", async () => {
+    const rotated = {
+      ...identity,
+      epochs: new Map([[2, await importEpochKey(generateEpochKeyBytes(), 2, false)]]),
+      currentEpoch: 2,
+    };
+    const later: AnswerEntry = {
+      ...(await answer({ entry_id: "entry-9", event_seq: 3 })),
+      sealed: await sealAnswerContent({ identity: rotated }, QID, "entry-9", 1, {
+        choices: [],
+        text: "Sealed after a rotation.",
+        reviewed_attachment_digests: [],
+      }),
+    };
+    const row = await question(CONTENT, { answers_json: serializeAnswers([later]) });
+    const retired = {
+      identity,
+      refreshIdentity: async () => {
+        throw new RetiredAttemptError();
+      },
+    };
+
+    await expect(readQuestionContent(ctx(), row)).resolves.toMatchObject({
+      result: "read",
+      question: { thread: [{ entryId: "entry-9", unreadable: true }] },
+    });
+    await expect(readQuestionContent(retired, row)).rejects.toBeInstanceOf(RetiredAttemptError);
   });
 });
 
