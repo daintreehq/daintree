@@ -23,19 +23,21 @@ const LinkSchema = z.object({
   addedByAssistant: z.boolean(),
 });
 
+// The writes answer with the link but don't advertise its schema: the listing
+// already does, and every advertised byte is paid on each Assistant turn.
 const LinkResultSchema = z.object({ link: LinkSchema });
 
-const linkId = z.string().min(1).max(200).describe("Link id from the project link listing.");
+const linkId = z.string().min(1).max(200).describe("Id from the project link listing.");
 const linkTitle = z
   .string()
   .min(1)
   .max(MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH)
-  .describe("Name shown in the launchpad, such as Staging.");
+  .describe("Name shown in the launchpad, e.g. Staging.");
 const linkUrl = z
   .string()
   .min(1)
   .max(MAX_PROJECT_PORTAL_LINK_URL_LENGTH)
-  .describe("An https:// address, or http:// for localhost or 127.0.0.1 only.");
+  .describe("https://, or http:// only for localhost or 127.0.0.1.");
 
 const KEYWORDS = ["portal", "link", "launchpad", "staging", "production", "dashboard", "url"];
 
@@ -129,7 +131,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       id: "portal.projectLinks.list",
       title: "List project Portal links",
       description:
-        "List the links saved with this project for its Portal launchpad, in order, with each id and whether the Assistant added it. Only a link the Assistant added can be changed or removed by it.",
+        "List this project's Portal launchpad links in order, with each id and whether you added it. You can change or remove only the links you added.",
       category: "portal",
       kind: "query",
       danger: "safe",
@@ -157,7 +159,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       id: "portal.projectLinks.add",
       title: "Add project Portal link",
       description:
-        "Add a named link, such as the staging site, production site or CI dashboard, to this project's Portal launchpad. Opens nothing. The user sees it marked as yours, with an Undo. Not an upsert: list first so a link isn't added twice.",
+        "Add a named link, such as a staging site or CI dashboard, to this project's Portal launchpad. Opens nothing; the user sees it marked as yours, with an Undo. List first: adding twice makes two.",
       category: "portal",
       kind: "command",
       danger: "safe",
@@ -167,7 +169,6 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       palette: { mode: "hidden" },
       argsSchema: z.object({ title: linkTitle, url: linkUrl }),
       resultSchema: LinkResultSchema,
-      mcpOutputSchema: true,
       mcpAnnotations: {
         readOnlyHint: false,
         idempotentHint: false,
@@ -194,7 +195,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       id: "portal.projectLinks.update",
       title: "Update project Portal link",
       description:
-        "Rename or readdress a link you added to this project's Portal launchpad, under the same address rule as adding. A link the user added, or edited since, is refused as theirs.",
+        "Rename or readdress a link you added to this project's Portal launchpad, under the same address rule as adding. A link the user added or has since edited is refused as theirs.",
       category: "portal",
       kind: "command",
       danger: "safe",
@@ -208,7 +209,6 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
           message: "Give a new title, url or both",
         }),
       resultSchema: LinkResultSchema,
-      mcpOutputSchema: true,
       mcpAnnotations: {
         readOnlyHint: false,
         idempotentHint: true,
@@ -238,7 +238,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       id: "portal.projectLinks.remove",
       title: "Remove project Portal link",
       description:
-        "Remove a link you added from this project's Portal launchpad. A link the user added, or edited since, is refused as theirs: ask them to remove it in project settings.",
+        "Remove a link you added from this project's Portal launchpad. A link the user added or has since edited is refused as theirs; ask them to remove it in project settings.",
       category: "portal",
       kind: "command",
       danger: "safe",
@@ -248,7 +248,6 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       palette: { mode: "hidden" },
       argsSchema: z.object({ id: linkId }),
       resultSchema: LinkResultSchema,
-      mcpOutputSchema: true,
       mcpAnnotations: {
         readOnlyHint: false,
         idempotentHint: false,
