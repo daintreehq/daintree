@@ -7,6 +7,7 @@ export type ReviewedImages = Readonly<Record<string, string>>;
 const MAX_QUESTIONS = 64;
 
 const NONE: ReviewedImages = Object.freeze({});
+const NO_QUESTIONS: Readonly<Record<string, ReviewedImages>> = Object.freeze({});
 
 export function reviewKey(terminalId: string, questionId: string): string {
   return `${terminalId}\u0000${questionId}`;
@@ -26,7 +27,7 @@ interface DecisionsImageReviewState {
  * never the images, never persisted. One per view, like the question view.
  */
 export const useDecisionsImageReviewStore = create<DecisionsImageReviewState>()((set) => ({
-  byQuestion: NONE,
+  byQuestion: NO_QUESTIONS,
   markShown: (terminalId, questionId, attachmentId, sha256) =>
     set((state) => {
       const key = reviewKey(terminalId, questionId);
@@ -41,7 +42,7 @@ export const useDecisionsImageReviewStore = create<DecisionsImageReviewState>()(
         ]) as Record<string, ReviewedImages>,
       };
     }),
-  clear: () => set({ byQuestion: NONE }),
+  clear: () => set({ byQuestion: NO_QUESTIONS }),
 }));
 
 /** A question's record; the same empty record for every question with none. */

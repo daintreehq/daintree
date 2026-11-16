@@ -46,8 +46,12 @@ async function readQuestionImage(
     });
     if (read.result !== "read") return read;
     const { part } = read;
+    // A Remote Host's link carries whatever its peer sent: nothing is taken on trust.
+    if (!(part.bytes instanceof Uint8Array) || !Number.isSafeInteger(part.size) || part.size < 1) {
+      throw new DecisionImagePartsError();
+    }
     const length = part.bytes.length;
-    const first = whole?.first ?? part;
+    const first: DecisionQuestionImagePart = whole?.first ?? part;
     if (
       part.attachmentId !== attachmentId ||
       part.offset !== offset ||

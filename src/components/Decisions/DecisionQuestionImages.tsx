@@ -37,7 +37,11 @@ export function DecisionQuestionImages({
   attachments,
   active,
 }: DecisionQuestionImagesProps) {
-  const { loads, retry, prioritize } = useQuestionImages(terminalId, questionId, attachments);
+  const { loads, retry, prioritize, undecodable } = useQuestionImages(
+    terminalId,
+    questionId,
+    attachments
+  );
   const reviewed = useReviewedImages(terminalId, questionId);
   const markShown = useDecisionsImageReviewStore((state) => state.markShown);
   const [viewing, setViewing] = useState<number | null>(null);
@@ -83,6 +87,7 @@ export function DecisionQuestionImages({
             viewed={reviewed[attachment.attachmentId] === attachment.sha256}
             onOpen={() => view(index)}
             onRetry={() => retry(attachment.attachmentId)}
+            onUndecodable={() => undecodable(attachment.attachmentId)}
           />
         ))}
       </ul>
@@ -94,6 +99,7 @@ export function DecisionQuestionImages({
         onIndex={view}
         onClose={() => setViewing(null)}
         onRetry={retry}
+        onUndecodable={undecodable}
         onShown={(attachment) =>
           markShown(terminalId, questionId, attachment.attachmentId, attachment.sha256)
         }
@@ -110,6 +116,7 @@ function ImageTile({
   viewed,
   onOpen,
   onRetry,
+  onUndecodable,
 }: {
   attachment: DecisionQuestionAttachment;
   index: number;
@@ -117,6 +124,7 @@ function ImageTile({
   viewed: boolean;
   onOpen: () => void;
   onRetry: () => void;
+  onUndecodable: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const name = imageName(attachment, index);
@@ -142,6 +150,7 @@ function ImageTile({
               src={load.url}
               alt=""
               draggable={false}
+              onError={onUndecodable}
               className="max-h-full max-w-full object-contain"
             />
           </button>

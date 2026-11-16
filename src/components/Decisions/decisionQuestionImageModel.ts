@@ -11,11 +11,16 @@ import type { ReviewedImages } from "@/store/decisionsImageReviewStore";
  * them a person has actually seen at full size.
  */
 
-/** Why an image isn't on screen: what its read answered, or `failed` when the read itself broke. */
+/**
+ * Why an image isn't on screen: what its read answered, `failed` when the
+ * read itself broke, or `undecodable` when it passed every check but this
+ * view couldn't draw it.
+ */
 export type QuestionImageFailure =
   | DecisionQuestionImageUnavailable
   | Exclude<DecisionQuestionImageResult["result"], "read" | "unavailable">
-  | "failed";
+  | "failed"
+  | "undecodable";
 
 export type QuestionImageLoad =
   | { status: "loading" }
@@ -54,6 +59,7 @@ const FAILURE_TEXT: Record<QuestionImageFailure, string> = {
   "not-found": "This image is no longer kept for this question.",
   unreadable: "This question couldn't be opened on this computer.",
   failed: "This image couldn't be read.",
+  undecodable: "This image matches its digest but couldn't be drawn.",
 };
 
 export function imageFailureText(failure: QuestionImageFailure): string {

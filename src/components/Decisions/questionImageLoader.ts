@@ -66,6 +66,15 @@ export class QuestionImageLoader {
     this.pump();
   };
 
+  /** An image that passed every check but couldn't be drawn: it fails, and its URL goes. */
+  undecodable = (attachmentId: string): void => {
+    const url = this.urls.get(attachmentId);
+    if (url === undefined || this.loads[attachmentId]?.status !== "ready") return;
+    URL.revokeObjectURL(url);
+    this.urls.delete(attachmentId);
+    this.update({ ...this.loads, [attachmentId]: { status: "failed", failure: "undecodable" } });
+  };
+
   /** Moves an image still waiting to the front: the one a person opened. */
   prioritize = (attachmentId: string): void => {
     if (!this.queue.includes(attachmentId)) return;
@@ -150,6 +159,7 @@ export function useQuestionImages(
   loads: QuestionImageLoads;
   retry: (attachmentId: string) => void;
   prioritize: (attachmentId: string) => void;
+  undecodable: (attachmentId: string) => void;
 } {
   const [loader] = useState(() => new QuestionImageLoader(terminalId, questionId, attachments));
   const loads = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
@@ -157,7 +167,12 @@ export function useQuestionImages(
     loader.start();
     return () => loader.stop();
   }, [loader]);
-  return { loads, retry: loader.retry, prioritize: loader.prioritize };
+  return {
+    loads,
+    retry: loader.retry,
+    prioritize: loader.prioritize,
+    undecodable: loader.undecodable,
+  };
 }
 
 /** A key that changes exactly when the images a question lists do. */

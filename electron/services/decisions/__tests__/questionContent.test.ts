@@ -1,4 +1,17 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+
+// Counts the image opens this module makes, so a read that has timed out can be shown to stop.
+const opens = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@daintreehq/decisions-crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@daintreehq/decisions-crypto")>();
+  return {
+    ...actual,
+    decryptAttachment: (...args: Parameters<typeof actual.decryptAttachment>) => {
+      opens.count += 1;
+      return actual.decryptAttachment(...args);
+    },
+  };
+});
 import {
   MemoryKeyStore,
   RelayError,
@@ -696,6 +709,61 @@ describe("readQuestionImage", () => {
       result: "unavailable",
       reason: "timed-out",
     });
+  });
+
+  it("opens nothing that arrives after its read timed out, and takes a late failure quietly", async () => {
+    const { row, ciphertext } = await imageQuestion();
+    const late: Array<{ resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void }> =
+      [];
+    const { context } = relay(
+      () => new Promise<Uint8Array>((resolve, reject) => late.push({ resolve, reject }))
+    );
+    opens.count = 0;
+
+    for (let i = 0; i < 2; i += 1) {
+      await expect(readQuestionImage(context, row, ATTACHMENT_ID, 0, 20)).resolves.toEqual({
+        result: "unavailable",
+        reason: "timed-out",
+      });
+    }
+    late[0]!.resolve(ciphertext);
+    late[1]!.reject(new Error("connection reset"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(opens.count).toBe(0);
+  });
+
+  it("fetches nothing once a key reload has outlasted its read", async () => {
+    const { row, ciphertext } = await imageQuestion({ key_epoch: 2 });
+    let reloaded: () => void = () => {};
+    const refreshIdentity = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          reloaded = () => {
+            // The reload finds the epoch after all, but too late.
+            identity.epochs.set(2, identity.epochs.get(1)!);
+            resolve();
+          };
+        })
+    );
+    const downloadAttachment = vi.fn(async () => ciphertext);
+    try {
+      await expect(
+        readQuestionImage(
+          { identity, refreshIdentity, client: { downloadAttachment } },
+          row,
+          ATTACHMENT_ID,
+          0,
+          20
+        )
+      ).resolves.toEqual({ result: "unavailable", reason: "timed-out" });
+      reloaded();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(downloadAttachment).not.toHaveBeenCalled();
+    } finally {
+      identity.epochs.delete(2);
+    }
   });
 
   it("passes a stopped delivery's refusal through rather than calling the image unavailable", async () => {

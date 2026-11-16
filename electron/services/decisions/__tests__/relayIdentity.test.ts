@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryKeyStore, claimRelay, type StoredIdentity } from "@daintreehq/decisions-client";
 import { encryptRecoveryBundle, generateEpochKeyBytes } from "@daintreehq/decisions-crypto";
 import {
+  LIMITS,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   bytesToBase64Url,
@@ -259,6 +260,33 @@ describe("relayRequests", () => {
     const response = await requests.fetch(`${ORIGIN}/api/v1/attachments/att_1/content`);
 
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(ciphertext);
+  });
+
+  it("takes an image's ciphertext up to the largest image, where any other answer stops at 1 MiB", async () => {
+    const twoMiB = new Uint8Array(2 * 1024 * 1024);
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: async () => new Response(twoMiB, { status: 200 }),
+    });
+
+    const download = await requests.fetch(`${ORIGIN}/api/v1/attachments/att_1/content`);
+    expect((await download.arrayBuffer()).byteLength).toBe(twoMiB.length);
+
+    await expect(requests.fetch(`${ORIGIN}/api/v1/devices`)).rejects.toThrow("network");
+    // An upload's answer to the same path is no download.
+    await expect(
+      requests.fetch(`${ORIGIN}/api/v1/attachments/att_1/content`, { method: "PUT" })
+    ).rejects.toThrow("network");
+  });
+
+  it("refuses an image's ciphertext larger than the protocol's largest image", async () => {
+    const tooLarge = new Uint8Array(LIMITS.attachmentBytes + 17);
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: async () => new Response(tooLarge, { status: 200 }),
+    });
+
+    await expect(requests.fetch(`${ORIGIN}/api/v1/attachments/att_1/content`)).rejects.toThrow(
+      "network"
+    );
   });
 });
 

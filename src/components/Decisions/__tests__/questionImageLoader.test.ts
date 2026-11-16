@@ -32,12 +32,18 @@ function image(n: number): DecisionQuestionAttachment {
 
 const IMAGES = [image(1), image(2), image(3), image(4)];
 
-/** Reads held open until the test settles each one. */
-const pending = new Map<string, (result: DecisionQuestionImageResult) => void>();
+/** Reads held open until the test settles each one; the latest read of an image first. */
+const pending = new Map<string, Array<(result: DecisionQuestionImageResult) => void>>();
 
-function settle(n: number, result?: DecisionQuestionImageResult) {
+function settle(
+  n: number,
+  result?: DecisionQuestionImageResult,
+  which: "latest" | "oldest" = "latest"
+) {
   const attachment = image(n);
-  pending.get(attachment.attachmentId)?.(
+  const reads = pending.get(attachment.attachmentId) ?? [];
+  const resolve = which === "latest" ? reads.at(-1) : reads[0];
+  resolve?.(
     result ?? {
       result: "read",
       image: {
@@ -60,7 +66,7 @@ beforeEach(() => {
   getQuestionImage.mockReset().mockImplementation(
     (_t, _q, attachmentId) =>
       new Promise((resolve) => {
-        pending.set(attachmentId, resolve);
+        pending.set(attachmentId, [...(pending.get(attachmentId) ?? []), resolve]);
       })
   );
   Reflect.set(
@@ -127,23 +133,51 @@ describe("QuestionImageLoader", () => {
     expect(getQuestionImage.mock.calls[1]![3]!.aborted).toBe(true);
   });
 
-  it("starts over after a stop, as a remount does", async () => {
+  it("starts over after a stop, as a remount does, and drops the read from before it", async () => {
     const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 1));
+    const seen = vi.fn();
+    loader.subscribe(seen);
     loader.start();
     loader.stop();
     loader.start();
+    seen.mockClear();
+
+    settle(1, undefined, "oldest");
+    await flush();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(seen).not.toHaveBeenCalled();
+    expect(loader.getSnapshot()["attach_0001"]).toEqual({ status: "loading" });
+
     settle(1);
     await flush();
-
     expect(readIds()).toEqual(["attach_0001", "attach_0001"]);
     expect(loader.getSnapshot()["attach_0001"]).toMatchObject({ status: "ready" });
+  });
+
+  it("fails an image that couldn't be drawn and lets its URL go, once it was ready", async () => {
+    const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
+    loader.start();
+    loader.undecodable("attach_0001");
+    expect(loader.getSnapshot()["attach_0001"]).toEqual({ status: "loading" });
+
+    settle(1);
+    await flush();
+    loader.undecodable("attach_0001");
+
+    expect(loader.getSnapshot()["attach_0001"]).toEqual({
+      status: "failed",
+      failure: "undecodable",
+    });
+    expect(URL.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:1");
+    loader.stop();
+    expect(URL.revokeObjectURL).toHaveBeenCalledOnce();
   });
 
   it("says why an image failed, never with the error, and reads it again on retry", async () => {
     const loader = new QuestionImageLoader("t1", "qa", IMAGES.slice(0, 2));
     loader.start();
     getQuestionImage.mockClear();
-    pending.get("attach_0001")?.({ result: "not-running" });
+    settle(1, { result: "not-running" });
     await flush();
     expect(loader.getSnapshot()["attach_0001"]).toEqual({
       status: "failed",

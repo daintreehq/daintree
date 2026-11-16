@@ -275,6 +275,22 @@ describe("decisionsClient.getQuestionImage", () => {
     ).rejects.toBeInstanceOf(DecisionImagePartsError);
   });
 
+  it.each([
+    ["bytes that aren't bytes", { bytes: { length: 1 } as unknown as Uint8Array }],
+    ["a size that isn't a whole number", { size: 0.5 }],
+    ["no size at all", { size: 0 }],
+  ])("refuses a part with %s, allocating nothing", async (_label, change) => {
+    const serve = servedInParts(IMAGE, 4);
+    getQuestionImage.mockImplementationOnce(async (payload) => {
+      const read = await serve(payload);
+      return read.result === "read" ? { ...read, part: { ...read.part, ...change } } : read;
+    });
+
+    await expect(
+      decisionsClient.getQuestionImage("pane-a", "q-1", "attach_0001")
+    ).rejects.toBeInstanceOf(DecisionImagePartsError);
+  });
+
   it("asks for no more parts once its signal aborts", async () => {
     const controller = new AbortController();
     const serve = servedInParts(IMAGE, 4);

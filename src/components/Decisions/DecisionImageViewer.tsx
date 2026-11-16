@@ -45,6 +45,8 @@ export interface DecisionImageViewerProps {
   onIndex: (index: number) => void;
   onClose: () => void;
   onRetry: (attachmentId: string) => void;
+  /** An image passed every check but couldn't be drawn. */
+  onUndecodable: (attachmentId: string) => void;
   /** An image was drawn at full size while the viewer was open. */
   onShown: (attachment: DecisionQuestionAttachment) => void;
   restoreFocusTo: () => HTMLElement | null;
@@ -64,6 +66,7 @@ export function DecisionImageViewer({
   onIndex,
   onClose,
   onRetry,
+  onUndecodable,
   onShown,
   restoreFocusTo,
 }: DecisionImageViewerProps) {
@@ -192,6 +195,7 @@ export function DecisionImageViewer({
               index={shown}
               load={loads[attachment.attachmentId] ?? LOADING}
               onLoaded={shownFrom(attachment)}
+              onUndecodable={() => onUndecodable(attachment.attachmentId)}
               onRetry={() => {
                 stageRef.current?.focus({ preventScroll: true });
                 onRetry(attachment.attachmentId);
@@ -230,6 +234,7 @@ export function DecisionImageViewer({
                 load={loads[side.attachmentId] ?? LOADING}
                 onChoose={(next) => setCompare({ ...compare, [role]: next })}
                 onLoaded={shownFrom(side)}
+                onUndecodable={() => onUndecodable(side.attachmentId)}
                 onRetry={() => onRetry(side.attachmentId)}
               />
             );
@@ -246,6 +251,7 @@ function ImageStage({
   index,
   load,
   onLoaded,
+  onUndecodable,
   onRetry,
 }: {
   ref?: Ref<HTMLDivElement>;
@@ -253,6 +259,7 @@ function ImageStage({
   index: number;
   load: QuestionImageLoad;
   onLoaded: () => void;
+  onUndecodable: () => void;
   onRetry: () => void;
 }) {
   const name = imageName(attachment, index);
@@ -271,6 +278,7 @@ function ImageStage({
           alt={attachment.alt ?? name}
           draggable={false}
           onLoad={onLoaded}
+          onError={onUndecodable}
           className="max-h-full max-w-full object-contain"
         />
       )}
@@ -328,6 +336,7 @@ function CompareSide({
   load,
   onChoose,
   onLoaded,
+  onUndecodable,
   onRetry,
 }: {
   role: "before" | "after";
@@ -336,8 +345,10 @@ function CompareSide({
   load: QuestionImageLoad;
   onChoose: (index: number) => void;
   onLoaded: () => void;
+  onUndecodable: () => void;
   onRetry: () => void;
 }) {
+  const stageRef = useRef<HTMLDivElement>(null);
   const label = role === "before" ? "Before" : "After";
   const choices = indexesWithRole(attachments, role);
   const attachment = attachments[chosen];
@@ -365,11 +376,17 @@ function CompareSide({
         )}
       </div>
       <ImageStage
+        ref={stageRef}
         attachment={attachment}
         index={chosen}
         load={load}
         onLoaded={onLoaded}
-        onRetry={onRetry}
+        onUndecodable={onUndecodable}
+        onRetry={() => {
+          // Retry goes as the image starts loading again; keep focus in the viewer.
+          stageRef.current?.focus({ preventScroll: true });
+          onRetry();
+        }}
       />
       {attachment.alt !== null && (
         <p className="max-h-16 shrink-0 overflow-y-auto text-xs text-text-secondary select-text [text-wrap:pretty]">

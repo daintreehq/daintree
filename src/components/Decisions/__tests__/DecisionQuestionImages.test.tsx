@@ -67,7 +67,7 @@ function question(attachments: DecisionQuestionAttachment[]): DecisionQuestionCo
     askedAt: "2026-11-02T10:00:00.000Z",
     expiresAt: null,
     status: "open",
-    deliveryStatus: "received",
+    deliveryStatus: "relay-queued",
     attachments,
     thread: [],
   };
@@ -95,8 +95,8 @@ function waitFor(check: () => void) {
   return vi.waitFor(check, { timeout: 4000 });
 }
 
-function openView() {
-  act(() => useDecisionsQuestionViewStore.getState().open("t1", ["qa"], "qa"));
+function openView(ids: string[] = ["qa"]) {
+  act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, "qa"));
 }
 
 function reviewed(): Record<string, string> {
@@ -250,6 +250,53 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     await waitFor(() =>
       expect(within(viewer()).getByRole("heading").textContent).toContain("2 of 3")
     );
+  });
+
+  it("steps only the images from the viewer, then returns to the last one's thumbnail", async () => {
+    openView(["qa", "qb"]);
+    await openImage("Before image 1");
+
+    fireEvent.keyDown(viewer(), { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(within(viewer()).getByRole("heading").textContent).toContain("2 of 3")
+    );
+    // The question view behind keeps its own arrows to itself.
+    expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(0);
+
+    fireEvent.keyDown(document.activeElement ?? viewer(), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("decision-image-viewer")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Open After image 2" })
+      )
+    );
+  });
+
+  it("counts nothing drawn while the viewer is on its way out", async () => {
+    openView();
+    await openImage("Before image 1");
+    const img = viewer().querySelector("img")!;
+
+    fireEvent.click(within(viewer()).getByRole("button", { name: /close/i }));
+    // Still on screen for its exit; a load now isn't a person looking at it.
+    fireEvent.load(img);
+
+    expect(reviewed()).toEqual({});
+  });
+
+  it("says an image that couldn't be drawn failed, and never counts it as seen", async () => {
+    openView();
+    await openImage("Before image 1");
+
+    fireEvent.error(viewer().querySelector("img")!);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("decision-image-stage").textContent).toContain("couldn't be drawn")
+    );
+    expect(viewer().querySelector("img")).toBeNull();
+    expect(reviewed()).toEqual({});
+    const failed = screen.getByTestId("decision-question-image-failed");
+    expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("closes back to the question on Escape, leaving the question open", async () => {

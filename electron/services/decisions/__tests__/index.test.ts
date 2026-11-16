@@ -504,6 +504,7 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
+import type { DecisionQuestionImagePartResult } from "../../../../shared/types/decisionsQuestion.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 
 const RELAY = {
@@ -1032,6 +1033,35 @@ describe("Decisions entry", () => {
       await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
         result: "not-running",
       });
+    });
+
+    it("is not running when the delivery stops while a part is read, though the read succeeds", async () => {
+      const current = await running(null);
+      let finish: (read: DecisionQuestionImagePartResult) => void = () => {};
+      current.delivery = {
+        questionImage: () =>
+          new Promise<DecisionQuestionImagePartResult>((resolve) => (finish = resolve)),
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+
+      const read = getDecisionQuestionImage("project-1", {
+        ...PAYLOAD,
+        attachmentId: "attach_0001",
+        offset: 0,
+      });
+      current.delivery = null;
+      finish({
+        result: "read",
+        part: {
+          attachmentId: "attach_0001",
+          mime: "image/png",
+          sha256: "a".repeat(64),
+          size: 1,
+          offset: 0,
+          bytes: new Uint8Array([1]),
+        },
+      });
+
+      await expect(read).resolves.toEqual({ result: "not-running" });
     });
 
     it("is not running with no delivery, and makes no service before Decisions runs", async () => {
