@@ -89,11 +89,19 @@ function hidePluginInProject(projectId: string, pluginId: string): void {
   hiddenPlugins.add(`${projectId}|${pluginId}`);
 }
 
-const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
+const { mockStableArgsSha256, mockBoundedStableArgsSha256 } = vi.hoisted(() => ({
+  mockStableArgsSha256: vi.fn(),
+  mockBoundedStableArgsSha256: vi.fn(),
+}));
 vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
   mockStableArgsSha256.mockImplementation(actual.stableArgsSha256);
-  return { ...actual, stableArgsSha256: mockStableArgsSha256 };
+  mockBoundedStableArgsSha256.mockImplementation(actual.boundedStableArgsSha256);
+  return {
+    ...actual,
+    stableArgsSha256: mockStableArgsSha256,
+    boundedStableArgsSha256: mockBoundedStableArgsSha256,
+  };
 });
 
 const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeMetadata } =
@@ -1373,6 +1381,7 @@ describe("registerPluginHandlers", () => {
       errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE audits a large accepted invoke without hashing its args on main (#17069)", async () => {
@@ -1394,6 +1403,7 @@ describe("registerPluginHandlers", () => {
     expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
     expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error", argsHash: "" });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE meters refused args against the load live at the refusal", async () => {
@@ -2794,6 +2804,30 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       );
     });
 
+    it("hands a GitLab project's forge through, which no GitHub-gated provider matches", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue({
+        entry: {
+          pluginId: "daintree.gitlab",
+          contribution: { id: "gitlab", name: "GitLab", matches: ["gitlab.com"] },
+        },
+        resolvedVia: "hostname",
+      });
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.gitlab.gitlab"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.gitlab.gitlab"
+      );
+    });
+
     it("waits for the plugin catalog before resolving, so a half-loaded registry can't decide", async () => {
       const { pluginService } = await import("../../../services/PluginService.js");
       let releaseCatalog!: () => void;
@@ -2807,6 +2841,7 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
 
       const pull = getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
       for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(pluginService.waitForCatalog).toHaveBeenCalled();
       expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
 
       releaseCatalog();

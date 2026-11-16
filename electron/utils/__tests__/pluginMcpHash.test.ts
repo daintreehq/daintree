@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sha256Hex, stableArgsSha256 } from "../pluginMcpHash.js";
+import { boundedStableArgsSha256, sha256Hex, stableArgsSha256 } from "../pluginMcpHash.js";
 import {
   safeSerializeToolResult,
   safeSerializeToolResultCompact,
@@ -53,5 +53,29 @@ describe("stableArgsSha256", () => {
 
     expect(stableArgsSha256(args)).toEqual(sha256Hex(safeSerializeToolResult(args)));
     expect(stableArgsSha256(args)).not.toEqual(sha256Hex(safeSerializeToolResultCompact(args)));
+  });
+});
+
+describe("boundedStableArgsSha256 (#17069)", () => {
+  it("hashes input within the budget exactly as stableArgsSha256 does", () => {
+    const shared = { k: "v" };
+    const cyclic: Record<string, unknown> = { name: "x" };
+    cyclic.self = cyclic;
+    for (const args of [
+      [{ b: 1, a: [1, "two", null] }],
+      [shared, shared],
+      cyclic,
+      [new Uint8Array([3, 1, 2])],
+    ]) {
+      expect(boundedStableArgsSha256(args, 10_000)).toBe(stableArgsSha256(args));
+    }
+  });
+
+  it("answers null once canonicalizing would exceed the budget", () => {
+    expect(boundedStableArgsSha256(["x".repeat(100)], 50)).toBeNull();
+    expect(boundedStableArgsSha256([new Uint8Array(100)], 50)).toBeNull();
+    const wide = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i]));
+    expect(boundedStableArgsSha256(wide, 50)).toBeNull();
+    expect(boundedStableArgsSha256(["x".repeat(10)], 50)).toBe(stableArgsSha256(["x".repeat(10)]));
   });
 });

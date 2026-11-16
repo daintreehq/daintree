@@ -1,4 +1,4 @@
-import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { boundedStableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { estimatePayloadBytes } from "./pluginPayloadLimits.js";
 
 /**
@@ -11,10 +11,12 @@ export const PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES = 64 * 1024;
 
 /**
  * SHA-256 of dispatch args for forensic grouping, best-effort. Args over
- * {@link PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES} are left unhashed, which the size
- * walk decides after about that many bytes however large they are. A
- * serialization throw must not mask the handler error being audited. Both
- * record `""`, the audit schema's "not hashed" value.
+ * {@link PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES} are left unhashed: first by their
+ * clone size, which the size walk decides after about that many bytes however
+ * large they are, then by what canonicalizing them would produce, which can
+ * be far larger (deep nesting, typed-array views sharing one buffer). A
+ * serialization throw must not mask the handler error being audited. All of
+ * these record `""`, the audit schema's "not hashed" value.
  */
 export function safeArgsHash(args: unknown): string {
   try {
@@ -24,7 +26,7 @@ export function safeArgsHash(args: unknown): string {
     ) {
       return "";
     }
-    return stableArgsSha256(args);
+    return boundedStableArgsSha256(args, PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES) ?? "";
   } catch {
     return "";
   }

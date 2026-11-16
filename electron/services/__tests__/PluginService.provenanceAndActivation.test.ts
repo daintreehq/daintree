@@ -825,7 +825,7 @@ describe("Deferred activation — activatePlugin", () => {
     );
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
-      "globalThis.__gatedDecoratorActivated = true; export function activate() {}"
+      "export function activate() { globalThis.__gatedDecoratorActivated = true; }"
     );
 
     try {

@@ -30,19 +30,65 @@ export function sha256Hex(input: string): string {
  * deliberately avoids (no raw args at rest).
  */
 export function stableArgsSha256(args: unknown): string {
-  const seen = new WeakSet<object>();
-  return sha256Hex(safeSerializeToolResult(normalizeKeys(args, seen)));
+  return sha256Hex(safeSerializeToolResult(normalizeKeys(args, new WeakSet<object>(), null, 0)));
 }
 
-function normalizeKeys(value: unknown, seen: WeakSet<object>): unknown {
+/**
+ * {@link stableArgsSha256}, or `null` when canonicalizing `args` would cost
+ * more than `budget`. The budget is metered in roughly the characters of the
+ * indented JSON that gets hashed (each value's indent, each key, each string),
+ * and charged before anything is sorted or serialized, so a payload that is
+ * small to clone but large to canonicalize — deep nesting, many typed-array
+ * views over one buffer — is refused after about `budget` units of work.
+ * Accepted input hashes exactly as {@link stableArgsSha256} would.
+ */
+export function boundedStableArgsSha256(args: unknown, budget: number): string | null {
+  const meter: Meter = { remaining: budget };
+  let normalized: unknown;
+  try {
+    normalized = normalizeKeys(args, new WeakSet<object>(), meter, 0);
+  } catch (error) {
+    if (error === OVER_BUDGET) return null;
+    throw error;
+  }
+  return sha256Hex(safeSerializeToolResult(normalized));
+}
+
+interface Meter {
+  remaining: number;
+}
+
+const OVER_BUDGET = new Error("canonical args over budget");
+
+function charge(meter: Meter | null, units: number): void {
+  if (meter === null) return;
+  meter.remaining -= units;
+  if (meter.remaining < 0) throw OVER_BUDGET;
+}
+
+function normalizeKeys(
+  value: unknown,
+  seen: WeakSet<object>,
+  meter: Meter | null,
+  depth: number
+): unknown {
+  charge(meter, 2 * depth + 1 + (typeof value === "string" ? value.length : 0));
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
-  if (Array.isArray(value)) return value.map((v) => normalizeKeys(v, seen));
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0
-  );
+  if (Array.isArray(value)) {
+    charge(meter, value.length);
+    return value.map((v) => normalizeKeys(v, seen, meter, depth + 1));
+  }
+  // A typed array's indices are its keys: charged before they are listed.
+  if (ArrayBuffer.isView(value) && "length" in value && typeof value.length === "number") {
+    charge(meter, value.length);
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  // Keys are charged before the sort, which would otherwise be the cost.
+  if (meter !== null) for (const [key] of entries) charge(meter, key.length + 1);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const out: Record<string, unknown> = {};
-  for (const [key, v] of entries) out[key] = normalizeKeys(v, seen);
+  for (const [key, v] of entries) out[key] = normalizeKeys(v, seen, meter, depth + 1);
   return out;
 }

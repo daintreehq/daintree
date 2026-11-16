@@ -625,6 +625,7 @@ describe("Plugin worktree host API", () => {
     await expect(
       (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(7)
     ).resolves.toBeNull();
+    expect(client.getActiveWorktreeIdForWindowAsync).toHaveBeenCalledWith(7);
   });
 
   // ── #12174: telling an unavailable read from an empty project ──
