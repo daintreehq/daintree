@@ -112,6 +112,7 @@ function cleanSyncResult(
 ): import("../AssistantContentMirror.js").AssistantContentSyncResult {
   return {
     copied: 0,
+    unchanged: 0,
     removed: 0,
     truncated: false,
     omittedSkills: [],
