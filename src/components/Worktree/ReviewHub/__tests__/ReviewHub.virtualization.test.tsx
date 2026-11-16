@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import type React from "react";
 import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { StagingStatus } from "@shared/types";
@@ -272,6 +273,23 @@ vi.mock("@/components/ui/EmptyState", () => ({
     </div>
   ),
 }));
+
+/** What each rendered file row's path tooltip was given, in order. */
+const rowRenders = vi.hoisted(() => ({ paths: [] as unknown[] }));
+
+// Counted inside the real row, through a child it rebuilds on every render of
+// its own, so the row's own `memo` is the only boundary being measured.
+vi.mock("@/components/ui/TruncatedTooltip", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui/TruncatedTooltip")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    TruncatedTooltip: (props: React.ComponentProps<typeof actual.TruncatedTooltip>) => {
+      rowRenders.paths.push(props.content);
+      return createElement(actual.TruncatedTooltip, props);
+    },
+  };
+});
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
@@ -746,6 +764,42 @@ describe("ReviewHub windowed file list (#12241)", () => {
     expect(screen.getByRole("button", { name: /file-000\.ts/ })).toBeTruthy();
     expect(screen.queryAllByRole("option", { name: /file-000\.ts/ })).toHaveLength(0);
   });
+
+  it.each([
+    ["static", "down", makeLargeStatus(3, 3), 2, "ArrowDown"],
+    ["static", "up", makeLargeStatus(3, 3), 3, "ArrowUp"],
+    ["static", "across the section split", makeLargeStatus(3, 3), 3, "ArrowDown"],
+    ["windowed", "down", makeLargeStatus(), 2, "ArrowDown"],
+    ["windowed", "across the section split", makeLargeStatus(), 60, "ArrowDown"],
+  ] as const)(
+    "re-renders only the rows the cursor leaves and lands on in the %s list, stepping %s",
+    async (_list, _step, status, presses, key) => {
+      const listbox = await renderLargeHub(status);
+      const rows = [...status.staged, ...status.unstaged].map((file) => file.path);
+      const press = (k: string) => act(() => void fireEvent.keyDown(document, { key: k }));
+      // The first press places the cursor on row 0.
+      for (let i = 0; i < presses; i++) press("ArrowDown");
+      // Lets every read the open started land before counting.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      const from = presses - 1;
+      const to = key === "ArrowDown" ? from + 1 : from - 1;
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(`review-hub-row-${from}`);
+      rowRenders.paths.length = 0;
+
+      press(key);
+
+      // Once each, not merely each of the two.
+      const rendered = rowRenders.paths.filter((p) => rows.includes(String(p)));
+      expect(rendered.sort()).toEqual([rows[from], rows[to]].sort());
+      // And the two that did render moved the focus between them.
+      const rowNode = (index: number) =>
+        document.getElementById(`review-hub-row-${index}`)?.getAttribute("data-focused");
+      expect(rowNode(from)).toBeNull();
+      expect(rowNode(to)).toBe("true");
+    }
+  );
 
   it("opens the menu directly when the focused row is mounted", async () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 59 };

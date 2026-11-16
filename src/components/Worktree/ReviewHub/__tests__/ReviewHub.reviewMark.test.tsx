@@ -81,6 +81,8 @@ import {
 
 const WT = "/home/user/project-wt";
 const SETTLE_MS = 50;
+/** Past the wait a foreground read gives a capture before it goes out without it. */
+const DEADLINE_WAIT_MS = 2_000;
 const COMMIT = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
 const PROJECT = "p".repeat(64);
 
@@ -309,15 +311,20 @@ describe("Review Hub review marks (#14585)", () => {
     renderHub();
     await markButtonReady();
 
-    // Refresh sends a status read at once, beside a new capture. The capture
-    // lands before the read answers: what it holds may have arrived after the
-    // read, so the read must still show the capture from before it went out.
+    // Refresh's read waits on a new capture, but only so long: a slow one lets
+    // the read go out first. The capture lands before the read answers: what
+    // it holds may have arrived after the read, so the read must still show
+    // the capture from before it went out.
     const read = deferred<StagingStatus>();
     const slowCapture = deferred<ReviewMarkCaptureOutcome>();
     getStagingStatus.mockReturnValueOnce(read.promise);
     bridge.capture.mockReturnValueOnce(slowCapture.promise);
+    const reads = getStagingStatus.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(bridge.capture).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getStagingStatus).toHaveBeenCalledTimes(reads + 1), {
+      timeout: DEADLINE_WAIT_MS,
+    });
     // The reads that follow the capture stay out, so only the first answers.
     getStagingStatus.mockReturnValue(new Promise(() => {}));
     await act(async () => slowCapture.resolve(captured("c3")));
@@ -584,7 +591,7 @@ describe("Review Hub review marks (#14585)", () => {
     }
   );
 
-  it("reads status twice on open: once straight away, once after the capture", async () => {
+  it("reads status once on open, after a capture that lands in time", async () => {
     renderHub();
     await markButtonReady();
     // Long enough for any read the lane would still send to have gone out.
@@ -592,8 +599,8 @@ describe("Review Hub review marks (#14585)", () => {
       await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
     });
 
-    // Staging status is rate limited on the host; the lane adds one read per capture.
-    expect(getStagingStatus).toHaveBeenCalledTimes(2);
+    // Staging status is rate limited on the host; the opening's read is the capture's.
+    expect(getStagingStatus).toHaveBeenCalledTimes(1);
     expect(bridge.capture).toHaveBeenCalledTimes(1);
   });
 
@@ -602,10 +609,18 @@ describe("Review Hub review marks (#14585)", () => {
       status: "saved",
       snapshot: snapshot({ [WT]: summary(1) }, 1),
     } satisfies ReviewMarkSaveOutcome);
+    // A slow capture lets the opening's read go out without it.
+    const slowCapture = deferred<ReviewMarkCaptureOutcome>();
+    bridge.capture.mockReturnValueOnce(slowCapture.promise);
     const firstRead = deferred<StagingStatus>();
     getStagingStatus.mockReturnValueOnce(firstRead.promise);
     renderHub();
+    await waitFor(() => expect(getStagingStatus).toHaveBeenCalledTimes(1), {
+      timeout: DEADLINE_WAIT_MS,
+    });
+    await act(async () => slowCapture.resolve(captured("c1")));
     const button = await markButtonReady();
+    expect(getStagingStatus).toHaveBeenCalledTimes(2);
 
     // The read sent before the capture landed answers after the one sent after it.
     await act(async () => firstRead.resolve(status));

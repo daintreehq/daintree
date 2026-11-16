@@ -145,7 +145,7 @@ interface SectionRowContext {
     status: GitStatus,
     e: React.MouseEvent
   ) => void;
-  onViewedChange: (viewedKey: string, viewed: boolean) => void;
+  onViewedChange: (filePath: string, viewed: boolean) => void;
   renderRowMenu: (
     file: StagingFileEntry,
     section: FileStageRowSection,
@@ -169,7 +169,6 @@ function computeSectionRowKey(_index: number, file: StagingFileEntry, ctx: Secti
  */
 function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRowContext) {
   const rowIndex = ctx.indexOffset + index;
-  const viewedKey = workingTreeViewedKey(file.path);
   return (
     <FileStageRow
       id={`review-hub-row-${rowIndex}`}
@@ -184,8 +183,8 @@ function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRow
       onRowClick={ctx.onRowClick}
       density={ctx.density}
       virtualized={ctx.virtualized}
-      viewed={ctx.viewedFiles.has(viewedKey)}
-      onViewedChange={(v) => ctx.onViewedChange(viewedKey, v)}
+      viewed={ctx.viewedFiles.has(workingTreeViewedKey(file.path))}
+      onViewedChange={ctx.onViewedChange}
       renderRowMenu={ctx.renderRowMenu}
     />
   );
@@ -300,6 +299,13 @@ export function FileSection({
   // list looked like a frame earlier.
   const windowed = virtualized && scrollParent !== null;
 
+  // One function for every row: a closure per row is a new prop each render,
+  // which re-renders every memoized row on each cursor step.
+  const handleRowViewedChange = useCallback(
+    (filePath: string, viewed: boolean) => onViewedChange(workingTreeViewedKey(filePath), viewed),
+    [onViewedChange]
+  );
+
   const rowContext: SectionRowContext = useMemo(
     () => ({
       section,
@@ -314,7 +320,7 @@ export function FileSection({
       viewedFiles,
       onToggle,
       onRowClick,
-      onViewedChange,
+      onViewedChange: handleRowViewedChange,
       renderRowMenu,
     }),
     [
@@ -330,7 +336,7 @@ export function FileSection({
       viewedFiles,
       onToggle,
       onRowClick,
-      onViewedChange,
+      handleRowViewedChange,
       renderRowMenu,
     ]
   );
@@ -582,7 +588,7 @@ export function FileSection({
                 onRowClick={onRowClick}
                 density={view.density}
                 viewed={viewedFiles.has(workingTreeViewedKey(file.path))}
-                onViewedChange={(v) => onViewedChange(workingTreeViewedKey(file.path), v)}
+                onViewedChange={handleRowViewedChange}
                 renderRowMenu={renderRowMenu}
               />
             ))}

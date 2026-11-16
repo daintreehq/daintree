@@ -95,7 +95,12 @@ interface FileStageRowProps {
    */
   virtualized?: boolean;
   viewed?: boolean;
-  onViewedChange?: (viewed: boolean) => void;
+  /**
+   * Takes the path, like `onToggle`, so the list can pass one function to every
+   * row: a closure per row is a new prop on every list render, which defeats
+   * the row's `memo` and re-renders the whole list on each cursor step.
+   */
+  onViewedChange?: (filePath: string, viewed: boolean) => void;
   /**
    * The shared file-row menu's items for this row (#11757). Built by the hub
    * once for the whole list — a hook per row would be a store subscription per
@@ -168,9 +173,9 @@ function FileStageRowComponent({
 
   const handleViewedChange = useCallback(
     (checked: boolean | "indeterminate") => {
-      onViewedChange?.(checked === true);
+      onViewedChange?.(file.path, checked === true);
     },
-    [onViewedChange]
+    [onViewedChange, file.path]
   );
 
   const handleViewedClick = useCallback((e: React.MouseEvent) => {
@@ -352,9 +357,35 @@ function FileStageRowComponent({
       <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
         {row}
       </ContextMenuTrigger>
-      <ContextMenuContent>{renderRowMenu(file, section, rowRef)}</ContextMenuContent>
+      <ContextMenuContent>
+        <FileStageRowMenuItems
+          renderRowMenu={renderRowMenu}
+          file={file}
+          section={section}
+          triggerRef={rowRef}
+        />
+      </ContextMenuContent>
     </ContextMenu>
   );
+}
+
+/**
+ * Radix mounts a context menu's content only while it is open, so building the
+ * items in a child of it, rather than as the content's children prop, keeps a
+ * closed row from assembling a whole menu on every render.
+ */
+function FileStageRowMenuItems({
+  renderRowMenu,
+  file,
+  section,
+  triggerRef,
+}: {
+  renderRowMenu: NonNullable<FileStageRowProps["renderRowMenu"]>;
+  file: StagingFileEntry;
+  section: FileStageRowSection;
+  triggerRef: RefObject<HTMLElement | null>;
+}) {
+  return renderRowMenu(file, section, triggerRef);
 }
 
 export const FileStageRow = memo(FileStageRowComponent);
