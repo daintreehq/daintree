@@ -5,6 +5,7 @@ import { useFileDocumentStore, type FileDocumentSaveOutcome } from "@/store/file
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import {
   CHANNELS,
   identityKey,
@@ -80,7 +81,11 @@ interface IdentityState {
    * panel started must not land over a newer one a sibling finished.
    */
   loadRequest: number;
-  /** The draft text recovery storage last acknowledged or handed back. */
+  /**
+   * The draft text recovery storage last acknowledged or handed back. Held
+   * only while a panel shows the document: it can be the whole file, and the
+   * identity entry outlives every panel.
+   */
   storedDraftText: string | null;
   /** Puts minted at or below this were overtaken by a delete, so their acknowledgement is void. */
   clearedAtGeneration: number;
@@ -104,7 +109,8 @@ function identityState(key: string): IdentityState {
 
 function acknowledgeStored(key: string, text: string, generation: number): void {
   const shared = identityState(key);
-  if (generation <= shared.clearedAtGeneration) return;
+  // The put a closing panel fires on its way out lands after the release.
+  if (generation <= shared.clearedAtGeneration || shared.controllers.size === 0) return;
   shared.storedDraftText = text;
   for (const controller of shared.controllers) controller.publishProjection();
 }
@@ -177,10 +183,6 @@ function invoke<T>(channel: string, args: unknown): Promise<T> {
 
 function announce(message: string): void {
   useAnnouncerStore.getState().announce(message);
-}
-
-function utf8Length(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
 }
 
 export class DocumentController {
@@ -487,7 +489,7 @@ export class DocumentController {
       void this.deleteStoredDraft();
       return;
     }
-    const tooLarge = utf8Length(text) > MAX_EDITABLE_BYTES;
+    const tooLarge = utf8ByteLength(text) > MAX_EDITABLE_BYTES;
     this.update((current) => ({
       ...current,
       draft: { text, baseRevision: current.draft?.baseRevision ?? base.revision },
@@ -521,7 +523,7 @@ export class DocumentController {
     if (record.saving) return { status: "refused", reason: "A save is already running" };
     const base = record.base;
     const snapshot = record.draft?.text ?? base.text;
-    if (utf8Length(snapshot) > MAX_EDITABLE_BYTES) {
+    if (utf8ByteLength(snapshot) > MAX_EDITABLE_BYTES) {
       this.update((current) => ({ ...current, error: TOO_LARGE_MESSAGE }));
       return { status: "refused", reason: TOO_LARGE_MESSAGE };
     }
@@ -552,7 +554,7 @@ export class DocumentController {
             text: snapshot,
             revision: result.revision,
             mixedEol: result.wrote ? false : base.mixedEol,
-            size: utf8Length(snapshot),
+            size: utf8ByteLength(snapshot),
           };
           // Whatever the buffer holds now — typing that landed during the
           // save, or an undo back to the old base — stays dirty against the
@@ -842,7 +844,9 @@ export class DocumentController {
       const result = await invoke<{ record: DraftRecord | null }>(CHANNELS.draftGet, {
         identity: this.identity,
       });
-      if (result.record) identityState(this.key).storedDraftText = result.record.draftText;
+      if (result.record && !this.disposed) {
+        identityState(this.key).storedDraftText = result.record.draftText;
+      }
       return result.record;
     } catch (error) {
       logError("[markdown-editor] drafts.get failed", error);
@@ -878,7 +882,6 @@ export class DocumentController {
       stateVersion: 1,
       identity: this.identity,
       baseRevision: record.draft.baseRevision,
-      baseText: record.base?.text ?? "",
       draftText: record.draft.text,
       hasBom: record.base?.hasBom ?? false,
       eol: record.base?.eol ?? "\n",
@@ -948,9 +951,10 @@ export class DocumentController {
     const shared = identities.get(this.key);
     if (shared) {
       shared.controllers.delete(this);
-      // The identity entry stays for its generation counter; only the record
-      // goes when the last panel leaves.
+      // The identity entry stays for its generation counter; the record and
+      // the stored draft's copy go when the last panel leaves.
       if (shared.controllers.size === 0) {
+        shared.storedDraftText = null;
         useDocumentStateStore.getState().remove(this.key);
       } else if (useDocumentStateStore.getState().records[this.key]?.status === "loading") {
         // This panel was the one loading the document; a sibling that only
@@ -972,6 +976,10 @@ export class DocumentController {
       logError("[markdown-editor] final draft persist failed", error);
     }
   }
+}
+
+export function __storedDraftTextForTests(key: string): string | null | undefined {
+  return identities.get(key)?.storedDraftText;
 }
 
 export function __resetDocumentControllersForTests(): void {

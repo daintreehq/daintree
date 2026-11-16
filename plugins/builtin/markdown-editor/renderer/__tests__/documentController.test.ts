@@ -24,7 +24,11 @@ vi.mock("@/store/panelStore", async () => {
   return { usePanelStore: store };
 });
 
-import { DocumentController, __resetDocumentControllersForTests } from "../documentController";
+import {
+  DocumentController,
+  __resetDocumentControllersForTests,
+  __storedDraftTextForTests,
+} from "../documentController";
 import { useDocumentStateStore } from "../documentStateStore";
 import { getFileDocumentProjection, useFileDocumentStore } from "@/store/fileDocumentStore";
 import { CHANNELS, PUSH_CHANNELS, identityKey } from "../../shared/protocol";
@@ -105,6 +109,8 @@ describe("DocumentController (#12323)", () => {
       generation: expect.any(Number),
       record: { draftText: "# Plan\n\nedit\n", baseRevision: sha("# Plan\n") },
     });
+    // Restore compares against the disk, so the base never rides along (#17071).
+    expect((put?.args as { record: object }).record).not.toHaveProperty("baseText");
   });
 
   it("typing back to the base text clears the draft and its record", async () => {
@@ -963,6 +969,28 @@ describe("DocumentController (#12323)", () => {
     controller.setText("# Plan\n\none\n");
     await flush(1000);
     expect(recoverable()).toBe(false);
+  });
+
+  it("lets go of the stored draft's text once the last panel on the document closes (#17071)", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.setText("# Plan\n\nkept\n");
+    await flush(1000);
+    expect(__storedDraftTextForTests(KEY)).toBe("# Plan\n\nkept\n");
+    // Typing just before the close leaves the final put to land after it.
+    first.setText("# Plan\n\nkept late\n");
+    first.release();
+    expect(__storedDraftTextForTests(KEY)).toBe("# Plan\n\nkept\n");
+    second.release();
+    expect(__storedDraftTextForTests(KEY)).toBeNull();
+    await flush();
+    expect(__storedDraftTextForTests(KEY)).toBeNull();
+    expect(
+      main.calls.filter((c) => c.channel === CHANNELS.draftPut).map((c) => c.args)
+    ).toContainEqual(
+      expect.objectContaining({ record: expect.objectContaining({ draftText: "# Plan\n\nkept late\n" }) })
+    );
   });
 
   it("republishes every panel on the document once recovery storage acknowledges the draft", async () => {
