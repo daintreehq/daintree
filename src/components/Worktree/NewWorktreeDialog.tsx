@@ -146,19 +146,16 @@ function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged
 const noopSubscribe = () => () => {};
 
 function useCloneStartsAgent(active: boolean, worktreeId: string | null): boolean {
-  return useSyncExternalStore(
-    active ? usePanelStore.subscribe : noopSubscribe,
-    () => {
-      if (!active || !worktreeId) return false;
-      try {
-        return recipeTerminalsStartAgent(
-          useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId)
-        );
-      } catch {
-        return false;
-      }
+  return useSyncExternalStore(active ? usePanelStore.subscribe : noopSubscribe, () => {
+    if (!active || !worktreeId) return false;
+    try {
+      return recipeTerminalsStartAgent(
+        useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId)
+      );
+    } catch {
+      return false;
     }
-  );
+  });
 }
 
 interface NewWorktreeDialogProps {
