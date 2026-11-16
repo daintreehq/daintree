@@ -39,7 +39,7 @@ export interface AgentSessionFileDeps {
   platform?: NodeJS.Platform;
   probeCodex?: (rootPid: number) => Promise<AgentSessionFileResult>;
   locateClaude?: typeof locateClaudeTranscript;
-  getClaudeProjectsRoot?: (terminalId: string) => string | null;
+  getClaudeProjectsRoot?: (terminalId: string, sessionId?: string) => string | null;
   deadlineMs?: number;
 }
 
@@ -95,7 +95,10 @@ async function locateClaude(
   if (!sessionId || record.agentIncarnation !== 0) {
     return unknownSessionFile("session-id-unknown");
   }
-  const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(terminalId);
+  const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(
+    terminalId,
+    sessionId
+  );
   if (!projectsRoot) return unknownSessionFile("store-unknown");
   if (!record.cwd || !path.isAbsolute(record.cwd)) {
     return unknownSessionFile("terminal-unavailable");

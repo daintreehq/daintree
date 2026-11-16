@@ -4787,6 +4787,7 @@ export interface GeneratedIpcInvokeMap {
         scheduledRun?: { scheduleId: string; runId: string } | undefined;
         agentSessionId?: string | undefined;
         exactResume?: boolean | undefined;
+        conversationStore?: { sessionId: string; configDir: string } | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;

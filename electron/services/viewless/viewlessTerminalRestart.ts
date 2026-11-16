@@ -17,6 +17,7 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
 import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
@@ -199,6 +200,11 @@ export async function restartTerminalWithoutView(
                 resumedSessionId !== undefined && supportsSessionIdAssignment(agentId)
                   ? resumedSessionId
                   : undefined,
+              // Still in the account folder it was written under (#17087).
+              conversationStore: conversationStoreFor(
+                snapshot.conversationStore,
+                resumedSessionId
+              ),
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,

@@ -1,4 +1,5 @@
 import type {
+  ConversationStore,
   PanelKind,
   PanelLocation,
   PanelRestoreRecovery,
@@ -81,6 +82,12 @@ export interface TerminalSpawnOptions {
    * caller needs that exact conversation or nothing (#16019).
    */
   exactResume?: boolean;
+  /**
+   * The config folder holding the conversation `agentSessionId` names, when the
+   * launch's own env points elsewhere (#17087). Main resumes it from there by
+   * the transcript's path, and never starts a fresh one under its id.
+   */
+  conversationStore?: ConversationStore;
   /** Worktree the terminal is spawned in; persisted in agent session history */
   worktreeId?: string;
   /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
@@ -207,6 +214,8 @@ export interface TerminalState {
   fallbackChainIndex?: number;
   /** Where the conversation began, when the pane runs elsewhere (#12434) */
   conversationCwd?: string;
+  /** Where the conversation is stored, when the pane launches on another folder (#17087) */
+  conversationStore?: ConversationStore;
   /** Held for recovery instead of launched (#12434). Untrusted until sanitized. */
   restoreRecovery?: PanelRestoreRecovery;
   /** How restore last rebuilt the pane (#14017). Untrusted until sanitized. */
@@ -418,6 +427,11 @@ export interface TerminalInfoPayload {
   hasPty?: boolean;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /**
+   * The Claude Code config folder the launch env names (#16269), `~/.claude`
+   * when it names none. Absent when it names one that can't be resolved.
+   */
+  claudeConfigDir?: string;
   /** Live detected identity — the agent currently running. Source of truth for chrome. */
   detectedAgentId?: AgentId;
   /**

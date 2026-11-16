@@ -25,6 +25,8 @@ import {
   resolvePaneClaudeProjectsRoot,
 } from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import type { ConversationStore } from "../../../../shared/types/panel.js";
+import { conversationStoreFor } from "../../../../shared/utils/conversationStore.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -800,19 +802,48 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       launchAgentId === "claude"
         ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
         : undefined;
-    const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
-      cwd,
-      agentSessionId: validatedOptions.agentSessionId,
-      projectsRoot: claudePaneStore ?? null,
-    }).catch(() => undefined);
+    // A conversation kept across an account switch stays in the folder it was
+    // written under (#17087), where a lookup by id from this launch's folder
+    // can't find it, so it reopens by its transcript's path. It was written,
+    // just not here: absence from this launch's store proves nothing, and it is
+    // never replaced by a fresh conversation under its id.
+    const conversationStore =
+      launchAgentId === "claude"
+        ? conversationStoreFor(validatedOptions.conversationStore, validatedOptions.agentSessionId)
+        : undefined;
+    let reopenedConversation: ConversationStore | undefined;
+    if (conversationStore && safeCommand) {
+      const { resumeClaudeFromConversationStore } = await import(
+        "../../../services/claude/claudeConversationResume.js"
+      );
+      const byPath = await resumeClaudeFromConversationStore(
+        safeCommand,
+        conversationStore,
+        cwd
+      ).catch(() => undefined);
+      if (byPath) {
+        safeCommand = byPath;
+        reopenedConversation = conversationStore;
+      }
+    }
+    const exactResume = validatedOptions.exactResume === true || conversationStore !== undefined;
+    const untouchedSessionId = conversationStore
+      ? undefined
+      : await findUntouchedClaudeSession(safeCommand, launchAgentId, {
+          cwd,
+          agentSessionId: validatedOptions.agentSessionId,
+          projectsRoot: claudePaneStore ?? null,
+        }).catch(() => undefined);
     // A caller resuming one exact conversation would otherwise get an empty
     // one wearing its id (#16019). Refused before anything is minted or armed.
-    if (untouchedSessionId && validatedOptions.exactResume === true) {
+    if (untouchedSessionId && exactResume) {
       throw new Error(
         `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
       );
     }
-    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
+    if (claudePaneStore !== undefined) {
+      rememberClaudePaneStore(id, claudePaneStore, reopenedConversation);
+    }
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
     // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
@@ -1386,7 +1417,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // to resume. A caller resuming one exact conversation keeps the refusal.
     const windowsClaudeResume: WindowsClaudeResumeChoice | undefined = (() => {
       if (!windowsAgentExecutable || launchAgentId !== "claude" || untouchedSessionId) return;
-      if (claudePaneStore !== null || validatedOptions.exactResume === true) return;
+      if (claudePaneStore !== null || exactResume) return;
       const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
       if (!relaunch) return;
       if (spawnAgentSessionId && spawnAgentSessionId !== relaunch.sessionId) return;

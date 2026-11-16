@@ -100,6 +100,11 @@ import {
   type AgentRuntimeSettingsResolution,
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  conversationStoreFor,
+  readConversationStore,
+  reopensFromConversationStore,
+} from "@shared/utils/conversationStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
 import type { SpawnError } from "@shared/types/pty-host";
@@ -1109,6 +1114,11 @@ export const createRestartActions = (
       const conversationHome = currentTerminal.conversationCwd || currentTerminal.cwd;
       const resumedConversationCwd =
         conversationHome && conversationHome !== launchCwd ? conversationHome : undefined;
+      // And stays in the account folder it was written under (#17087).
+      const resumedConversationStore = conversationStoreFor(
+        currentTerminal.conversationStore,
+        consumedSessionId
+      );
 
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
@@ -1152,6 +1162,7 @@ export const createRestartActions = (
           agentSessionId: nextSessionId,
           // A fresh conversation begins where this pane runs.
           conversationCwd: consumedSessionId ? resumedConversationCwd : undefined,
+          conversationStore: resumedConversationStore,
           firstPrompt: keepsFirstPrompt ? t.firstPrompt : undefined,
           isRestarting: true,
           restartError: undefined,
@@ -1261,6 +1272,7 @@ export const createRestartActions = (
         // pane is addressable immediately rather than only if a later teardown
         // manages to observe an id (#11782).
         agentSessionId: nextSessionId,
+        conversationStore: resumedConversationStore,
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
@@ -1870,6 +1882,7 @@ async function respawnAgentOnPreset(
     callerLaunchFlags: livePanel.callerLaunchFlags,
     agentModelId: livePanel.agentModelId,
     conversationCwd: terminal.conversationCwd,
+    conversationStore: terminal.conversationStore,
     env: terminal.env,
     agentAccountId: terminal.agentAccountId,
   };
@@ -1882,7 +1895,7 @@ async function respawnAgentOnPreset(
   let resumedSessionId: string | undefined;
 
   try {
-    const [agentSettings, tmpDir, titleModels] = await Promise.all([
+    const [agentSettings, tmpDir, titleModels, launchConfigDir] = await Promise.all([
       agentSettingsClient.get(),
       resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
       // Read before teardown: only a switch retitles the pane. A renamed one
@@ -1891,6 +1904,14 @@ async function respawnAgentOnPreset(
         ? loadModelTitleCatalog(effectiveAgentId, terminal.agentModelId, (agentId) =>
             agentCapabilitiesClient.getResolvedModelList(agentId)
           )
+        : undefined,
+      // The folder the running launch writes its conversation to, read while it
+      // still runs: a kept conversation reopens from there (#17087).
+      keepConversation && reopensFromConversationStore(effectiveAgentId)
+        ? terminalClient
+            .getInfo(id)
+            .then((info) => info.claudeConfigDir)
+            .catch(() => undefined)
         : undefined,
     ]);
     const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
@@ -2085,6 +2106,14 @@ async function respawnAgentOnPreset(
       spawnCommand = resumeCommand;
     }
     const keptSessionId = keepConversation ? resumedSessionId : undefined;
+    // Where the kept conversation is written, which the switch leaves behind:
+    // a folder an earlier switch already carried it from, or the one the run
+    // just stopped wrote it to. A newer conversation the run moved on to was
+    // written where it ran.
+    const keptStore = keptSessionId
+      ? (conversationStoreFor(terminal.conversationStore, keptSessionId) ??
+        readConversationStore({ sessionId: keptSessionId, configDir: launchConfigDir }))
+      : undefined;
     // What a refusal of the kept conversation is checked against: the account
     // an account switch moved to, its preset or none left as it was.
     const switchTarget: ConversationSwitchTarget | undefined =
@@ -2138,6 +2167,7 @@ async function respawnAgentOnPreset(
         // the conversation that prompt began, filed where it began (#16045).
         agentSessionId: keptSessionId,
         conversationCwd: keptConversationCwd,
+        conversationStore: keptStore,
         firstPrompt: keptSessionId ? t.firstPrompt : undefined,
         presetSwitchResume:
           keptSessionId && switchTarget
@@ -2277,6 +2307,10 @@ async function respawnAgentOnPreset(
       // On the record as the PTY starts, so the kept conversation is the
       // pane's from its first moment (#11782).
       agentSessionId: keptSessionId,
+      // The switch promised this conversation: one the launch can't find is
+      // refused, never started afresh under its id (#16019, #17087).
+      ...(keptSessionId && { exactResume: true }),
+      conversationStore: keptStore,
       ...(keptSessionId && terminal.firstPrompt && { hasFirstPrompt: true }),
       requiredPluginTools: terminal.requiredPluginTools,
       actionContext: buildAgentLaunchContext({

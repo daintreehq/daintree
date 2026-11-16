@@ -1698,6 +1698,71 @@ export function relaunchResumeAsAssignedSession(
   agentId: string | undefined
 ): AssignedSessionRelaunch | undefined {
   if (!command || !agentId || !supportsSessionIdAssignment(agentId)) return undefined;
+  const selector = findExactResumeSelector(command, agentId);
+  if (!selector) return undefined;
+  const { words, at, shapeLength, sessionId } = selector;
+  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assigning?.length) return undefined;
+  words.splice(
+    at,
+    shapeLength,
+    ...assigning.map((arg) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg)))
+  );
+  return { sessionId, command: words.join(" ") };
+}
+
+/**
+ * Rewrites an exact-id resume to name the conversation's transcript file in
+ * place of its id (#17087). Claude Code takes either after `--resume`, and a
+ * path is found wherever it lies, where an id is looked up only in the config
+ * folder the CLI runs on: a conversation kept across an account switch lives
+ * in the folder it began in.
+ *
+ * Only the one selector `command` resumes `sessionId` with is touched, matched
+ * on shell words as {@link relaunchResumeAsAssignedSession} matches it.
+ * Returns `undefined` when the command resumes no such id.
+ */
+export function resumeByTranscriptPath(
+  command: string,
+  agentId: string | undefined,
+  sessionId: string,
+  transcriptPath: string
+): string | undefined {
+  if (!command || !agentId || !transcriptPath) return undefined;
+  const selector = findExactResumeSelector(command, agentId);
+  if (!selector || selector.sessionId !== sessionId) return undefined;
+  const { words, at, slotOffset, prefix, suffix } = selector;
+  words[at + slotOffset] = quoteAgentArgOptional(`${prefix}${transcriptPath}${suffix}`);
+  return words.join(" ");
+}
+
+/** The session id `command` resumes exactly, or undefined when it resumes none unambiguously. */
+export function exactResumeSessionId(
+  command: string,
+  agentId: string | undefined
+): string | undefined {
+  if (!command || !agentId) return undefined;
+  return findExactResumeSelector(command, agentId)?.sessionId;
+}
+
+interface ExactResumeSelector {
+  /** The command's shell words, for the caller to rewrite. */
+  words: string[];
+  /** Where the agent's resume args start among them. */
+  at: number;
+  shapeLength: number;
+  /** Which of those args holds the id, and the text fused around it. */
+  slotOffset: number;
+  prefix: string;
+  suffix: string;
+  sessionId: string;
+}
+
+/** The one resume of an exact session id in `command`, or nothing when it isn't unambiguous. */
+function findExactResumeSelector(
+  command: string,
+  agentId: string
+): ExactResumeSelector | undefined {
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   if (resume?.kind !== "session-id") return undefined;
   const shape = resume.args(SESSION_ID_SLOT);
@@ -1731,14 +1796,7 @@ export function relaunchResumeAsAssignedSession(
     slotWord.slice(prefix.length, slotWord.length - suffix.length)
   );
   if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
-  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
-  if (!assigning?.length) return undefined;
-  words.splice(
-    at,
-    shape.length,
-    ...assigning.map((arg) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg)))
-  );
-  return { sessionId, command: words.join(" ") };
+  return { words, at, shapeLength: shape.length, slotOffset, prefix, suffix, sessionId };
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

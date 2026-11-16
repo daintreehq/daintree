@@ -1,5 +1,8 @@
 import { persistAgentSession, type AgentSessionRecord } from "./agentSessionHistory.js";
-import { isClaudeSessionWithoutTranscript } from "../claude/ClaudeSessionStore.js";
+import {
+  getClaudePaneConversationStore,
+  isClaudeSessionWithoutTranscript,
+} from "../claude/ClaudeSessionStore.js";
 import { getAgentSessionRetentionDays } from "./agentSessionRetention.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { hasCanopyTrashRemoval } from "./canopyTrashRemovals.js";
@@ -105,10 +108,15 @@ export async function journalAgentSessionRecord(
   // lands already out of the Trash, so no later read can bring the row back.
   // The note is not spent here: a write that fails and is retried lands the
   // same way.
+  // A conversation its pane reopened from another account's folder (#17087)
+  // is resumed from there again, and only the spawn knew where that was.
+  const conversationStore =
+    record.conversationStore ?? getClaudePaneConversationStore(ctx.terminalId, record.sessionId);
+  const stamped = conversationStore ? { ...record, conversationStore } : record;
   const landing =
-    record.trash && record.terminal && hasCanopyTrashRemoval(record.terminal)
-      ? { ...record, trash: { ...record.trash, removedAt: Date.now() } }
-      : record;
+    stamped.trash && stamped.terminal && hasCanopyTrashRemoval(stamped.terminal)
+      ? { ...stamped, trash: { ...stamped.trash, removedAt: Date.now() } }
+      : stamped;
 
   let persisted: AgentSessionRecord | null;
   try {

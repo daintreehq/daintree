@@ -20,6 +20,7 @@ import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { getClaudePaneConversationStore } from "./ClaudeSessionStore.js";
 import {
   findSubagentsDir,
   isSafeSubagentId,
@@ -80,10 +81,15 @@ export async function resolveClaudeTerminal(terminalId: string): Promise<
   // A pane launched before #11782, or one restored without its id, has no
   // addressable parent. Nothing to correlate against, so say so.
   if (!info.agentSessionId) return { status: "unavailable", reason: "no-session" };
+  // A conversation reopened from another account's folder (#17087) delegates
+  // there too; the launch's own folder holds none of it.
+  const configDir =
+    getClaudePaneConversationStore(terminalId, info.agentSessionId)?.configDir ??
+    info.claudeConfigDir;
   return {
     cwd: info.cwd,
     parentSessionId: info.agentSessionId,
-    ...(info.claudeConfigDir !== undefined && { configDir: info.claudeConfigDir }),
+    ...(configDir !== undefined && { configDir }),
   };
 }
 

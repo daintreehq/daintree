@@ -18,6 +18,7 @@ import type {
 } from "../../../shared/types/ipc/agentSessionHistory.js";
 import { rebaseAbsolutePath } from "../../../shared/utils/projectPathRelocation.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 
 export type { AgentSessionRecord };
 
@@ -105,6 +106,12 @@ function evictRecords(
       // The conversation a scheduled run started stays that run's when it is
       // resumed from a pane no schedule launched (#15977).
       if (!existing.scheduledRun && r.scheduledRun) existing.scheduledRun = r.scheduledRun;
+      // Where the conversation is stored doesn't change with a later record of
+      // it (#17087), and one journaled from a pane that no longer knew mustn't
+      // lose it.
+      if (!existing.conversationStore && r.conversationStore) {
+        existing.conversationStore = r.conversationStore;
+      }
     }
   }
 
@@ -226,6 +233,13 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
       const { scheduledRun, ...rest } = record;
       const ref = readScheduledRunRef(scheduledRun);
       record = ref ? { ...rest, scheduledRun: ref } : rest;
+    }
+    // Kept only for the session it names (#17087), so a resume never reopens
+    // another conversation's folder.
+    if ("conversationStore" in record) {
+      const { conversationStore, ...rest } = record;
+      const store = conversationStoreFor(conversationStore, rest.sessionId as string);
+      record = store ? { ...rest, conversationStore: store } : rest;
     }
     records.push(record as unknown as AgentSessionRecord);
   }

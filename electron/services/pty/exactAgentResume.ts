@@ -87,8 +87,12 @@ export interface ExactResumeObservation {
 }
 
 export interface TranscriptChecker {
-  /** The store this pane was launched against, or null unless that is certain. */
-  projectsRoot(terminalId: string): string | null;
+  /**
+   * The store holding `sessionId` for this pane, or null unless that is
+   * certain: the one it was launched against, or the one its launch reopened
+   * the conversation from (#17087).
+   */
+  projectsRoot(terminalId: string, sessionId?: string): string | null;
   observe(
     sessionId: string,
     cwd: string | undefined,
@@ -154,7 +158,7 @@ export async function observeExactAgentResume(
   const checkers = dependencies.checkers ?? TRANSCRIPT_CHECKERS;
   if (!Object.hasOwn(checkers, agentId)) return refuse("transcript-check-unsupported");
   const checker = checkers[agentId];
-  const projectsRoot = checker.projectsRoot(terminal.id);
+  const projectsRoot = checker.projectsRoot(terminal.id, sessionId);
   if (!projectsRoot) return refuse("store-unknown");
 
   let observation: ClaudeTranscriptObservation;

@@ -443,6 +443,11 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Listed or zod strips it, and a resume that must be exact would start a
   // fresh conversation under the id instead (#16019).
   exactResume: z.boolean().optional(),
+  // Listed or zod strips it, and a conversation kept across an account switch
+  // is looked up by id in a folder that doesn't hold it (#17087).
+  conversationStore: z
+    .object({ sessionId: z.string().min(1).max(128), configDir: z.string().min(1).max(4096) })
+    .optional(),
   worktreeId: z.string().optional(),
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),

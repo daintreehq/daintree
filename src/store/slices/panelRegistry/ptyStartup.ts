@@ -36,6 +36,7 @@ import {
 } from "@/store/driveLeaseWaitStore";
 import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
+import { conversationStoreFor } from "@shared/utils/conversationStore";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
@@ -690,6 +691,12 @@ export function enqueuePtyStartup(
             // the terminal record at spawn so a kill path that never runs a
             // capture (force quit, crash, SIGKILL) can't lose the conversation.
             agentSessionId: options.agentSessionId,
+            // Where that conversation is stored, when the pane launches on
+            // another account's folder (#17087).
+            conversationStore: conversationStoreFor(
+              options.conversationStore,
+              options.agentSessionId
+            ),
             // Live, for the same reason as `title` above: a move landing while
             // the spawn was queued reaches a pty-host with no record yet and is
             // dropped, so the spawn itself has to carry the current filing.

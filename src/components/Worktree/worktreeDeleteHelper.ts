@@ -49,6 +49,7 @@ export interface WorktreeTerminalRestoreSnapshot {
   originalPresetId?: string;
   agentSessionId?: string;
   conversationCwd?: string;
+  conversationStore?: PtyPanelData["conversationStore"];
   /** Held for recovery (#12434): comes back held, never launched by a rollback. */
   restoreRecovery?: PtyPanelData["restoreRecovery"];
   /** The pane's own notes (#12835): a rollback brings the terminal back whole. */
@@ -141,6 +142,7 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     originalPresetId: panel.originalPresetId,
     agentSessionId: panel.agentSessionId,
     conversationCwd: panel.conversationCwd,
+    conversationStore: panel.conversationStore,
     restoreRecovery: panel.restoreRecovery,
     ...(panel.scratchpad && { scratchpad: panel.scratchpad }),
     ...(panel.firstPrompt && { firstPrompt: panel.firstPrompt }),
@@ -277,6 +279,7 @@ export async function restoreClosedTerminals(
         originalPresetId: snap.originalPresetId,
         agentSessionId: snap.agentSessionId,
         conversationCwd: snap.conversationCwd,
+        conversationStore: snap.conversationStore,
         restoreRecovery: snap.restoreRecovery,
         ...(snap.scratchpad && { scratchpad: snap.scratchpad }),
         ...(snap.firstPrompt && { firstPrompt: snap.firstPrompt }),

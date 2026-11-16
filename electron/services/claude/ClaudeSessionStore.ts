@@ -24,6 +24,8 @@ import os from "os";
 import path from "path";
 import { relaunchResumeAsAssignedSession } from "../../../shared/types/agentSettings.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
+import type { ConversationStore } from "../../../shared/types/panel.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 import {
   getShellEnvironmentObservation,
   type ShellEnvironmentObservation,
@@ -334,16 +336,31 @@ export async function findUntouchedClaudeSession(
   return observation === "missing" ? relaunch.sessionId : undefined;
 }
 
-const paneStores = new Map<string, string | null>();
+interface PaneStore {
+  /** The store the launch itself reads, or null unless that is certain. */
+  projectsRoot: string | null;
+  /** The conversation the launch reopened from another store, found there (#17087). */
+  conversation?: ConversationStore;
+}
+
+const paneStores = new Map<string, PaneStore>();
 
 /**
  * Remember which store a Claude terminal was launched against, so its close is
  * judged by the pane's own store. A history record says nothing about the
  * environment its pane had; the spawn is the one place that knew.
+ *
+ * `conversation` is the store a launch reopened its conversation from when it
+ * runs on another (#17087): that conversation's transcript stays there, so a
+ * reader of it looks there too.
  */
-export function rememberClaudePaneStore(terminalId: string, projectsRoot: string | null): void {
+export function rememberClaudePaneStore(
+  terminalId: string,
+  projectsRoot: string | null,
+  conversation?: ConversationStore
+): void {
   paneStores.delete(terminalId);
-  paneStores.set(terminalId, projectsRoot);
+  paneStores.set(terminalId, conversation ? { projectsRoot, conversation } : { projectsRoot });
   if (paneStores.size > PANE_STORE_MEMORY) {
     const oldest = paneStores.keys().next().value;
     if (oldest !== undefined) paneStores.delete(oldest);
@@ -351,13 +368,28 @@ export function rememberClaudePaneStore(terminalId: string, projectsRoot: string
 }
 
 /**
- * The store a Claude terminal was launched against, or null when it was never
+ * The store holding a Claude terminal's transcript, or null when it was never
  * remembered or was not certain — the only answer a reader of that pane's own
  * transcript may use (#12479). Daintree's own store is never a fallback: it is
  * only right for a pane whose spawn already said so, and that pane is here.
+ *
+ * `sessionId` is the conversation about to be read. The one a launch reopened
+ * from another account's folder is read there (#17087); any other, such as
+ * one the CLI moved on to with `/clear`, is written where the launch runs.
  */
-export function getClaudePaneProjectsRoot(terminalId: string): string | null {
-  return paneStores.get(terminalId) ?? null;
+export function getClaudePaneProjectsRoot(terminalId: string, sessionId?: string): string | null {
+  const pane = paneStores.get(terminalId);
+  if (!pane) return null;
+  const conversation = conversationStoreFor(pane.conversation, sessionId);
+  return conversation ? path.join(conversation.configDir, "projects") : pane.projectsRoot;
+}
+
+/** The store a Claude terminal's launch reopened `sessionId` from, when it runs on another (#17087). */
+export function getClaudePaneConversationStore(
+  terminalId: string,
+  sessionId: string | undefined
+): ConversationStore | undefined {
+  return conversationStoreFor(paneStores.get(terminalId)?.conversation, sessionId);
 }
 
 /**
@@ -372,7 +404,7 @@ export async function isClaudeSessionWithoutTranscript(
   options: Pick<ClaudeStoreOptions, "fs" | "timeoutMs"> = {}
 ): Promise<boolean> {
   if (record.agentId !== CLAUDE_AGENT_ID || record.bookmark !== undefined) return false;
-  const projectsRoot = paneStores.get(terminalId);
+  const projectsRoot = getClaudePaneProjectsRoot(terminalId, record.sessionId);
   if (!projectsRoot) return false;
   const observation = await observeClaudeTranscript(
     record.sessionId,

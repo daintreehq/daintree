@@ -1,5 +1,6 @@
 import { sanitizeAgentEnv } from "./agentPresets.js";
 import { readSpawnProvenance } from "./scheduledRunProvenance.js";
+import { conversationStoreFor } from "./conversationStore.js";
 import { stripAssignedSessionIdArgs } from "../types/agentSettings.js";
 import type { PtyPanelData } from "../types/panel.js";
 import type { PanelSnapshot } from "../types/project.js";
@@ -38,6 +39,7 @@ export type PtySnapshotSource = Pick<
   | "isUsingFallback"
   | "fallbackChainIndex"
   | "conversationCwd"
+  | "conversationStore"
   | "restoreRecovery"
   | "restoreProvenance"
   | "lastAgentObservation"
@@ -69,6 +71,12 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
   const held = t.restoreRecovery !== undefined;
   // Only an exit the pane still shows (#15941). A session-preserving teardown
   // is restored with a new process, and an exit with no code was never seen.
+  // Only beside the conversation it holds: the pane's own, or the one a held
+  // pane offers to reopen (#17087).
+  const conversationStore = conversationStoreFor(
+    t.conversationStore,
+    held ? t.restoreRecovery?.sessionId : t.agentSessionId
+  );
   const shownExit =
     t.runtimeStatus === "exited" &&
     t.sessionPreservingExit !== true &&
@@ -96,6 +104,7 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
+    ...(conversationStore && { conversationStore }),
     ...(held && { restoreRecovery: t.restoreRecovery }),
     // Both written for a held pane too: they describe the pane, and the last
     // state observed for it, never a process the hold would start.

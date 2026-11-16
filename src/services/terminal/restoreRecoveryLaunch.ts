@@ -1,6 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { buildResumeCommand } from "@shared/types";
 import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
+import { conversationStoreFor } from "@shared/utils/conversationStore";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { getAgentConfig } from "@/config/agents";
@@ -96,6 +97,10 @@ export function buildRestoreRecoveryLaunchOptions(
     agentSessionId: resuming ? choice.sessionId : undefined,
     conversationCwd:
       resuming && supportsCrossDirectoryResume(agentId) ? panel.conversationCwd : undefined,
+    // Reopened from the account folder it was written under (#17087).
+    conversationStore: resuming
+      ? conversationStoreFor(panel.conversationStore, choice.sessionId)
+      : undefined,
     isInputLocked: panel.isInputLocked,
     agentLaunchFlags: panel.agentLaunchFlags,
     callerLaunchFlags: panel.callerLaunchFlags,
