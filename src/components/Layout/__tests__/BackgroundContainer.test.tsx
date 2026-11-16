@@ -25,6 +25,7 @@ const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
 let mockTerminals: PanelInstance[] = [];
+const liveArgs: boolean[] = [];
 let mockBackgroundedTerminals = new Map<
   string,
   { groupRestoreId?: string; groupMetadata?: TrashedTerminalGroupMetadata }
@@ -33,7 +34,10 @@ let mockWatchedPanels = new Set<string>();
 let lastConfirmTitle: React.ReactNode = null;
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useBackgroundedTerminals: () => mockTerminals,
+  useBackgroundedTerminals: (live: boolean) => {
+    liveArgs.push(live);
+    return mockTerminals;
+  },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -302,6 +306,13 @@ function focusInsideBackstopDialog() {
 }
 
 describe("BackgroundContainer", () => {
+  it("reads its members as a count while its popover is closed (#17053)", () => {
+    liveArgs.length = 0;
+    render(<BackgroundContainer />);
+    expect(liveArgs.length).toBeGreaterThan(0);
+    expect(liveArgs.every((live) => live === false)).toBe(true);
+  });
+
   it("stays mounted but hidden when there are no backgrounded terminals", () => {
     // The pill keeps its DOM node so the .dock-status-pill CSS can run the
     // display/opacity exit transition; visibility is gated by data-visible.

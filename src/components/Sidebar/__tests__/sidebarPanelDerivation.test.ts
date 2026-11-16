@@ -6,6 +6,7 @@ import {
   selectSidebarAgentPanelIds,
   selectSidebarFleetEligibleWorktreeById,
   computePanelStateByWorktree,
+  selectSidebarPanelMaps,
   type SidebarPanelDerivationState,
 } from "../sidebarPanelDerivation";
 
@@ -318,5 +319,28 @@ describe("selectSidebarAgentPanelIds", () => {
     });
 
     expect(selectSidebarAgentPanelIds(after)).toEqual(selectSidebarAgentPanelIds(before));
+  });
+});
+
+describe("selectSidebarPanelMaps (#17053)", () => {
+  const stateOf = (panels: PanelInstance[]): SidebarPanelDerivationState => ({
+    panelIds: panels.map((p) => p.id),
+    panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+    isInTrash: () => false,
+  });
+
+  it("builds the same four maps as the single-purpose selectors", () => {
+    const state = stateOf([
+      agentPanel({ id: "a", agentState: "working" }),
+      agentPanel({ id: "b", agentState: undefined }),
+      agentPanel({ id: "c", launchAgentId: undefined, hasPty: true, agentState: undefined }),
+    ]);
+
+    const maps = selectSidebarPanelMaps(state);
+
+    expect(maps.visiblePanelIds).toEqual(selectSidebarVisiblePanelIds(state));
+    expect(maps.agentStateByPanelId).toEqual(selectSidebarAgentStateByPanelId(state));
+    expect(maps.agentPanelIds).toEqual(selectSidebarAgentPanelIds(state));
+    expect(maps.fleetEligibleWorktreeById).toEqual(selectSidebarFleetEligibleWorktreeById(state));
   });
 });

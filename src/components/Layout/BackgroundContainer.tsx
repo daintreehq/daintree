@@ -113,7 +113,9 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // drawing it through its exit animation, after the target is gone.
   const [removalCopy, setRemovalCopy] = useState(() => getRemovalCopy(undefined));
   const [isUnsavedWorkPromptOpen, setIsUnsavedWorkPromptOpen] = useState(false);
-  const terminals = useBackgroundedTerminals();
+  const terminals = useBackgroundedTerminals(
+    isOpen || killConfirmId !== null || isUnsavedWorkPromptOpen
+  );
   const backgroundedTerminals = usePanelStore((state) => state.backgroundedTerminals);
   const watchedPanels = usePanelStore((state) => state.watchedPanels);
   const {
