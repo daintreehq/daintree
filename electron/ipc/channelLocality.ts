@@ -874,6 +874,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:report-panel-inventory": "host",
   "plugin:report-panel-lifecycle": "host",
   "plugin:report-unsaved-panels": "host",
+  "plugin:report-view-consumers": "host",
   "plugin:restart-worker": "host",
   "plugin:runtime-statuses-get": "host",
   "plugin:set-audit-enabled": "host",

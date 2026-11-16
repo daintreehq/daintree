@@ -1485,6 +1485,9 @@ export interface GeneratedElectronAPI {
     reportUnsavedPanels(
       ...args: IpcInvokeMap["plugin:report-unsaved-panels"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-unsaved-panels"]["result"]>;
+    reportViewConsumers(
+      ...args: IpcInvokeMap["plugin:report-view-consumers"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-view-consumers"]["result"]>;
     resolveContextReferences(
       ...args: IpcInvokeMap["plugin:context-references-resolve"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-references-resolve"]["result"]>;

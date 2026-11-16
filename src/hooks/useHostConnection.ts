@@ -26,6 +26,8 @@ import {
   type DriverNavigationReporter,
 } from "@/store/hostDriverNavigation";
 import { notifyHostResync, type HydratedSettings } from "@/store/hostResyncSignal";
+import { replayPluginPanelLifecycle } from "@/services/plugin/pluginPanelLifecycle";
+import { replayPluginViewConsumers } from "@/services/plugin/pluginViewConsumers";
 import {
   dropDeferredHostOwnedWrites,
   holdHostOwnedWrites,
@@ -157,7 +159,13 @@ export interface ResyncFromHostOptions {
  */
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
-  if (options.freshSession) resyncProjectStateOwed = true;
+  if (options.freshSession) {
+    resyncProjectStateOwed = true;
+    // The host forgot which plugin views this one shows; without them it would
+    // retire their workers under views still on screen (#17068).
+    replayPluginPanelLifecycle();
+    replayPluginViewConsumers();
+  }
   if (options.hostRestarted) armRestartRecovery(options.previousEnd);
   resyncFullOwed = true;
   return runResyncs();

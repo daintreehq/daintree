@@ -458,3 +458,67 @@ describe("ownership (#13820)", () => {
     expect(broker.ownership("p1", "acme")).toEqual({ kind: "unavailable" });
   });
 });
+
+describe("live panel count (#17068)", () => {
+  it.each(["mounted", "hidden", "backgrounded", "trashed", "render-failed"] as const)(
+    "counts a panel first reported %s until it is removed",
+    (phase) => {
+      const broker = makeBroker();
+      broker.ingest(1, [event({ phase })]);
+      expect(broker.livePanelCount("acme")).toBe(1);
+
+      broker.ingest(1, [event({ phase: "removed" })]);
+      expect(broker.livePanelCount("acme")).toBe(0);
+    }
+  );
+
+  it("counts a plugin's panels across renderers and never another plugin's", () => {
+    const broker = makeBroker();
+    broker.ingest(1, [event(), event({ panelId: "p2", panelKindId: "acme.logs" })]);
+    broker.ingest(2, [event({ panelId: "p3" })]);
+    broker.ingest(2, [event({ panelId: "p4", panelKindId: "other.panel", pluginId: "acme" })]);
+
+    expect(broker.livePanelCount("acme")).toBe(3);
+    expect(broker.livePanelCount("other")).toBe(1);
+  });
+
+  it("names the plugins a batch touched, by resolved owner", () => {
+    const broker = makeBroker();
+    const touched = broker.ingest(1, [
+      event({ pluginId: "spoofed" }),
+      event({ panelId: "p2", panelKindId: "other.panel", phase: "removed" }),
+      event({ panelId: "p3", panelKindId: "unknown.kind" }),
+    ]);
+    expect([...touched].sort()).toEqual(["acme", "other"]);
+  });
+
+  it("records a replay without delivering it, and hands it to a later subscriber", () => {
+    const broker = makeBroker();
+    const live = vi.fn();
+    broker.subscribe("acme", live);
+
+    const touched = broker.ingest(2, [event({ phase: "hidden" })], { replay: true });
+    expect(live).not.toHaveBeenCalled();
+    expect([...touched]).toEqual(["acme"]);
+    expect(broker.livePanelCount("acme")).toBe(1);
+
+    const late = vi.fn();
+    broker.subscribe("acme", late);
+    expect(late).toHaveBeenCalledWith(expect.objectContaining({ panelId: "p1", phase: "hidden" }));
+
+    // A real transition after the replay is delivered as ever.
+    broker.ingest(2, [event({ phase: "mounted" })]);
+    expect(live).toHaveBeenCalledWith(expect.objectContaining({ phase: "mounted" }));
+  });
+
+  it("forgets a cleared renderer's panels and names whose they were", () => {
+    const broker = makeBroker();
+    broker.ingest(1, [event(), event({ panelId: "p2", panelKindId: "other.panel" })]);
+    broker.ingest(2, [event({ panelId: "p3" })]);
+
+    expect([...broker.clearSource(1)].sort()).toEqual(["acme", "other"]);
+    expect(broker.livePanelCount("acme")).toBe(1);
+    expect(broker.livePanelCount("other")).toBe(0);
+    expect(broker.clearSource(1).size).toBe(0);
+  });
+});

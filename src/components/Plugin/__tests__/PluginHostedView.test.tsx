@@ -29,6 +29,17 @@ const h = vi.hoisted(() => ({
   mounts: [] as ContentMountProps[],
   mountCount: 0,
   configs: [] as Array<Record<string, unknown>>,
+  /** View ids retained as live consumers and not yet released. */
+  consumers: [] as string[],
+}));
+
+vi.mock("@/services/plugin/pluginViewConsumers", () => ({
+  retainPluginViewConsumer: (viewId: string) => {
+    h.consumers.push(viewId);
+    return () => {
+      h.consumers.splice(h.consumers.indexOf(viewId), 1);
+    };
+  },
 }));
 
 vi.mock("@/components/Plugin/PluginViewContent", () => ({
@@ -102,6 +113,7 @@ function serve(views: PluginHostedViewDescriptor[]) {
 beforeEach(() => {
   h.mounts = [];
   h.configs = [];
+  h.consumers = [];
   _resetPluginHostedViewRuntimesForTest();
   _resetPluginHostedViewsStoreForTest();
   serve([hostedView()]);
@@ -175,6 +187,34 @@ describe("PluginHostedView", () => {
     });
     expect(h.configs[1]).toMatchObject({ id: KIND_ID, extensionId: "project__p1__acme.dash" });
     expect(h.configs[1]?.standalone).toBeUndefined();
+  });
+
+  it("tells main a view is on screen for as long as its host is mounted (#17068)", () => {
+    const settings = render(<PluginHostedView source={hosted()} host="settings" mountId="a" />);
+    registerPanelKind(panelKind());
+    const surface = render(
+      <PluginHostedView
+        source={{ from: "panel-kind", config: panelKind() }}
+        host="surface"
+        mountId="b"
+      />
+    );
+    // A hosted view by its hosted id; a surface by the panel kind it draws.
+    expect([...h.consumers].sort()).toEqual([HOSTED_ID, KIND_ID].sort());
+
+    settings.rerender(<PluginHostedView source={hosted()} host="settings" mountId="a" />);
+    expect(h.consumers).toHaveLength(2);
+
+    // A home reused for another view stops holding the first one's plugin.
+    const other = { ...hostedView(), id: "plugin-view:acme.other/prefs", pluginId: "acme.other" };
+    serve([hostedView(), other]);
+    settings.rerender(<PluginHostedView source={hosted(other)} host="settings" mountId="a" />);
+    expect([...h.consumers].sort()).toEqual([KIND_ID, other.id].sort());
+
+    settings.unmount();
+    expect(h.consumers).toEqual([KIND_ID]);
+    surface.unmount();
+    expect(h.consumers).toEqual([]);
   });
 
   it("reuses one factory and one removal signal across re-renders and remounts", () => {

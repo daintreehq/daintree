@@ -195,6 +195,11 @@ import {
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
 import {
+  PluginHostedViewConsumers,
+  type ViewConsumerDocumentWatcher,
+} from "./plugin/PluginHostedViewConsumers.js";
+import { getPluginHostedViewOwner } from "./plugin/PluginHostedViewRegistry.js";
+import {
   PLUGIN_ACTION_CATEGORY_MAX_LENGTH,
   isReservedActionCategory,
   normalizePluginActionCategory,
@@ -429,6 +434,13 @@ const WORKTREE_CARD_READ_COALESCE_GRACE_MS = 250;
  * queued or in flight from before it, which the host-call deadline bounds.
  */
 const WORKTREE_CARD_TARGET_RETIRE_MS = 5 * 60_000;
+
+/**
+ * How often idle third-party workers are checked for retirement (#17068). A
+ * worker goes on the first sweep after its idle window, so this is how late
+ * past that window it can be.
+ */
+const PLUGIN_IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
@@ -1279,6 +1291,12 @@ export class PluginService {
   readonly metrics: PluginMetricsService;
   /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
   private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
+  /** Plugin views each renderer has mounted outside the panel grid (#17068). */
+  private readonly hostedViewConsumers = new PluginHostedViewConsumers((viewIds) =>
+    this.noteViewConsumersMoved(viewIds.map((viewId) => this.viewConsumerOwner(viewId)))
+  );
+  /** The idle-dispose sweep; armed only while a third-party worker is alive. */
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -1632,11 +1650,54 @@ export class PluginService {
   ingestPanelLifecycleEvents(
     sourceId: number,
     events: readonly unknown[],
-    sender?: PanelLifecycleSourceHandle
+    sender?: PanelLifecycleSourceHandle,
+    opts: { replay?: boolean } = {}
   ): void {
     if (this.disposed) return;
     if (sender) this.watchPanelLifecycleSource(sourceId, sender);
-    this.panelLifecycleBroker.ingest(sourceId, events);
+    this.noteViewConsumersMoved(this.panelLifecycleBroker.ingest(sourceId, events, opts));
+  }
+
+  /**
+   * Accept a renderer's plugin views mounted outside the panel grid (#17068),
+   * which have no panel record for the lifecycle batch to carry. Replaces that
+   * renderer's last report and is forgotten with its document.
+   */
+  ingestHostedViewConsumers(
+    sourceId: number,
+    watchDocument: ViewConsumerDocumentWatcher,
+    viewIds: readonly unknown[]
+  ): void {
+    if (this.disposed) return;
+    this.hostedViewConsumers.record(sourceId, watchDocument, viewIds);
+  }
+
+  /** Who owns a mounted view: a hosted view id, or the panel kind a surface draws. */
+  private viewConsumerOwner(viewId: string): string | undefined {
+    return getPluginHostedViewOwner(viewId) ?? getPanelKindConfig(viewId)?.extensionId;
+  }
+
+  /** `pluginId`'s views open in any renderer: grid panels in a live phase, and hosted mounts. */
+  private liveViewConsumerCount(pluginId: string): number {
+    return (
+      this.panelLifecycleBroker.livePanelCount(pluginId) +
+      this.hostedViewConsumers.count(pluginId, (viewId) => this.viewConsumerOwner(viewId))
+    );
+  }
+
+  /**
+   * A plugin's views opening, moving or closing is use of it, so a worker's
+   * idle window runs from its last view closing rather than from whenever the
+   * plugin was activated. Entries die with the plugin, so an unloaded one is
+   * never stamped.
+   */
+  private noteViewConsumersMoved(pluginIds: Iterable<string | undefined>): void {
+    const now = Date.now();
+    for (const pluginId of pluginIds) {
+      if (pluginId !== undefined && this.plugins.has(pluginId)) {
+        this.pluginWorkerActivity.set(pluginId, now);
+      }
+    }
   }
 
   /**
@@ -1671,7 +1732,7 @@ export class PluginService {
       // evicted says nothing about whether the user closed the panel, and a
       // false terminal event is the exact destructive misread this API exists
       // to prevent.
-      this.panelLifecycleBroker.clearSource(sourceId);
+      this.noteViewConsumersMoved(this.panelLifecycleBroker.clearSource(sourceId));
     };
     let unwatch: () => void;
     try {
@@ -1746,6 +1807,8 @@ export class PluginService {
     for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
     this.panelLifecycleSourceCleanups.clear();
     this.panelLifecycleBroker.dispose();
+    this.hostedViewConsumers.dispose();
+    this.syncIdleSweepTimer();
     // Drops the PtyClient subscriptions and force-kills any plugin PTY the
     // unload cascade above left running.
     this.pluginPtyTransport?.dispose();
@@ -3185,6 +3248,7 @@ export class PluginService {
 
     const entry = { workerHost, bridge, revoke, cleanup: () => cleanup(), activation };
     this.pluginWorkers.set(pluginId, entry);
+    this.syncIdleSweepTimer();
     // Subscribed to the host's own lifecycle events rather than threaded through
     // the bridge: the supervisor respawns a crashed worker without telling this
     // service, so the process edges are only observable here (#12278).
@@ -3205,6 +3269,7 @@ export class PluginService {
       revoke();
       if (this.pluginWorkers.get(pluginId) === entry) {
         this.pluginWorkers.delete(pluginId);
+        this.syncIdleSweepTimer();
       }
     };
     this.cleanupMap.set(pluginId, cleanup);
@@ -8010,6 +8075,7 @@ export class PluginService {
           devMode: plugin.devMode ?? false,
           activated: this.activatedPlugins.has(pluginId),
           panels: plugin.manifest.contributes.panels.length,
+          openViews: this.liveViewConsumerCount(pluginId),
           bootError: loadError ? loadError.message : null,
         },
       });
@@ -8052,10 +8118,11 @@ export class PluginService {
   /**
    * Governance sweep: dispose the workers of idle plugins that expose no live
    * surface a dead worker could break (see {@link canDisposeIdlePluginWorker}
-   * for the full disqualifier list). Deliberately conservative — most real
-   * plugins keep a panel, subscription, or process alive and are never
-   * eligible; the target is pure action/formatter plugins that were used once
-   * and have sat cold since.
+   * for the full disqualifier list). Runs every minute while a third-party
+   * worker is alive, and on entering the efficiency profile. Deliberately
+   * conservative: a plugin with a view open, a subscription, or a process
+   * running is never eligible; the target is a plugin whose views were all
+   * closed, or that was only ever dispatched, and that has sat cold since.
    */
   disposeIdlePluginWorkers(opts?: { now?: number; idleDisposeMs?: number }): {
     disposed: string[];
@@ -8109,7 +8176,7 @@ export class PluginService {
     return canDisposeIdlePluginWorker({
       isBuiltin: plugin.isBuiltin ?? false,
       devMode: plugin.devMode ?? false,
-      panelContributionCount: plugin.manifest.contributes.panels.length,
+      liveViewConsumerCount: this.liveViewConsumerCount(pluginId),
       mcpServerContributionCount: plugin.manifest.contributes.mcpServers.length,
       startupActivation: this.shouldActivateOnStartup(plugin.manifest),
       eventSubscriptionCount: this.pluginEventCleanups.get(pluginId)?.length ?? 0,
@@ -8123,6 +8190,39 @@ export class PluginService {
       now: opts?.now ?? Date.now(),
       idleDisposeMs: opts?.idleDisposeMs,
     });
+  }
+
+  /**
+   * Arm the idle sweep while any third-party worker is alive, and disarm it
+   * with the last one, so vanilla Daintree, built-ins and dev sessions never
+   * run it (#17068).
+   */
+  private syncIdleSweepTimer(): void {
+    let wanted = false;
+    if (!this.disposed) {
+      for (const pluginId of this.pluginWorkers.keys()) {
+        const plugin = this.plugins.get(pluginId);
+        if (plugin && !plugin.isBuiltin && !plugin.devMode) {
+          wanted = true;
+          break;
+        }
+      }
+    }
+    if (wanted && this.idleSweepTimer === null) {
+      this.idleSweepTimer = setInterval(() => this.runIdleSweep(), PLUGIN_IDLE_SWEEP_INTERVAL_MS);
+      this.idleSweepTimer.unref?.();
+    } else if (!wanted && this.idleSweepTimer !== null) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = null;
+    }
+  }
+
+  private runIdleSweep(): void {
+    try {
+      this.disposeIdlePluginWorkers();
+    } catch (err) {
+      console.error("[PluginService] Idle plugin worker sweep threw:", err);
+    }
   }
 
   /**

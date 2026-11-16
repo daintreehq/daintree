@@ -45,3 +45,11 @@ export function clearPluginHostedViewRegistry(): void {
 export function getPluginHostedViews(): PluginHostedViewDescriptor[] {
   return [...viewsByPlugin.values()].flat().map((view) => ({ ...view }));
 }
+
+/** The plugin that registered hosted view `viewId`, or `undefined` if none did. */
+export function getPluginHostedViewOwner(viewId: string): string | undefined {
+  for (const [pluginId, views] of viewsByPlugin) {
+    if (views.some((view) => view.id === viewId)) return pluginId;
+  }
+  return undefined;
+}

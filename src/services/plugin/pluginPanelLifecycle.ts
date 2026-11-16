@@ -471,6 +471,35 @@ export function syncPluginPanels(
   }
 }
 
+/**
+ * Tell main every live panel's current phase again, for a main that has lost
+ * what this renderer reported (#17068): a remote host that started a fresh
+ * session for this view keeps no record of the old one's panels. Sent as a
+ * replay, which main records without delivering: these are resting phases the
+ * plugin already heard, not transitions.
+ */
+export function replayPluginPanelLifecycle(): void {
+  const batch: PluginPanelLifecycleEvent[] = [];
+  for (const [panelId, entry] of tracked) {
+    if (entry.removed || entry.lastPhase === null || !entry.kindId || !entry.pluginId) continue;
+    batch.push(
+      Object.freeze({
+        panelId,
+        panelKindId: entry.kindId,
+        pluginId: entry.pluginId,
+        phase: effectivePhase(entry),
+      })
+    );
+  }
+  if (batch.length === 0) return;
+  const report =
+    typeof window !== "undefined" ? window.electron?.plugin?.reportPanelLifecycle : undefined;
+  if (!report) return;
+  void report(batch, { replay: true }).catch((error: unknown) => {
+    logWarn("[PluginPanelLifecycle] Failed to replay panel lifecycle phases", { error });
+  });
+}
+
 /** Test seam — drops all tracked state without aborting or emitting. */
 export function resetPluginPanelLifecycleForTests(): void {
   tracked.clear();

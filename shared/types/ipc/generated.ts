@@ -3384,11 +3384,18 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:report-panel-lifecycle": {
-    args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
+    args: [
+      events: import("../plugin.js").PluginPanelLifecycleEvent[],
+      options?: { replay?: boolean | undefined } | undefined,
+    ];
     result: void;
   };
   "plugin:report-unsaved-panels": {
     args: [panels: import("../pluginUnsavedPanels.js").PluginUnsavedPanelReport[]];
+    result: void;
+  };
+  "plugin:report-view-consumers": {
+    args: [viewIds: string[]];
     result: void;
   };
   "plugin:restart-worker": {

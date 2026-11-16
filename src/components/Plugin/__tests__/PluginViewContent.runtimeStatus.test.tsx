@@ -225,6 +225,56 @@ describe("mounted panel learns its backend died (#12278)", () => {
     expect(screen.getByRole("button", { name: /Restart plugin/ })).toBeTruthy();
   });
 
+  it("opens onto a worker idle governance retired without a stopped banner (#17068)", async () => {
+    let finishActivation: () => void = () => {};
+    activateForViewMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishActivation = () => resolve(undefined);
+      })
+    );
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function StubView() {
+        return <div data-testid="plugin-view" />;
+      },
+    }));
+    const { makePluginViewContent } = await import("../PluginViewContent");
+    const Content = makePluginViewContent(makeContentConfig());
+    render(<Content panelId="panel-1" />);
+    await waitFor(() => expect(activateForViewMock).toHaveBeenCalled());
+
+    // The retired worker is what this view opens onto, and its own activation,
+    // still in flight, is what brings a fresh one back.
+    await pushStatus(worker({ state: "stopped", reason: "deactivated" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await act(async () => {
+      finishActivation();
+    });
+    await pushStatus(worker({ generation: 2, state: "ready" }));
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("stops a view whose load settled, even one that never saw its backend ready", async () => {
+    await mountContent();
+    // Nothing is loading any more, so nothing will revive the backend.
+    await pushStatus(worker({ state: "stopped", reason: "deactivated" }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Plugin backend stopped");
+    expect(screen.getByTestId("plugin-content").hasAttribute("inert")).toBe(true);
+  });
+
+  it("stops a view whose working backend was retired under it", async () => {
+    await mountContent();
+    await pushStatus(worker({ state: "ready" }));
+    await pushStatus(worker({ state: "stopped", reason: "deactivated" }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Plugin backend stopped");
+    expect(screen.getByTestId("plugin-content").hasAttribute("inert")).toBe(true);
+  });
+
   it("keeps stale content visible but stops it being interactive", async () => {
     await mountContent();
     await pushStatus(worker({ state: "failed", reason: "activation-failed" }));
