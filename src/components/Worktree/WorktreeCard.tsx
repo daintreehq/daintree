@@ -818,9 +818,7 @@ export function WorktreeCard({
   const visibleAgentTerminalIds = usePanelStore(
     useShallow((state) =>
       selectPtyPanels(state, worktreeTerminalIds)
-        .filter(
-          (t) => isAgentTerminal(t) && isTerminalVisible(t, state.isInTrash, NO_WORKTREE_IDS)
-        )
+        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, state.isInTrash, NO_WORKTREE_IDS))
         .map((t) => t.id)
     )
   );

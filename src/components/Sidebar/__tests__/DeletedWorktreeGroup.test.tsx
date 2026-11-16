@@ -69,13 +69,10 @@ vi.mock("@/store/terminalPendingDestructiveActionStore", async (importOriginal) 
   const actual =
     await importOriginal<typeof import("@/store/terminalPendingDestructiveActionStore")>();
   const store = actual.useTerminalPendingDestructiveActionStore;
-  const counted = Object.assign(
-    (selector: Parameters<typeof store>[0]) => {
-      rootRenders.count += 1;
-      return store(selector);
-    },
-    store
-  );
+  const counted = Object.assign((selector: Parameters<typeof store>[0]) => {
+    rootRenders.count += 1;
+    return store(selector);
+  }, store);
   return { ...actual, useTerminalPendingDestructiveActionStore: counted };
 });
 
@@ -148,7 +145,6 @@ beforeEach(() => {
   usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 60 });
   setPanels([]);
 });
-
 
 // Patches a panel the way the status buffer does: a fresh object in a fresh
 // `panelsById`, with every bucket array left as it was.
