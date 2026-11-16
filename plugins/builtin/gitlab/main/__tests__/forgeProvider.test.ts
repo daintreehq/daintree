@@ -1054,6 +1054,52 @@ describe("batchLookups", () => {
     ]);
   });
 
+  it("keeps a newer view cached when an older read answers after it went stale", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = deferredFetch();
+      fetchMock().mockReturnValueOnce(pending.promise);
+      const older = batch.findPRsByNumbers!(REPO, [3]);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      fetchMock().mockImplementation(async () => graphqlMRs([{ ...mrNode(3), state: "merged" }]));
+      await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+
+      // The newer view is past its freshness when the older read lands.
+      await vi.advanceTimersByTimeAsync(6_000);
+      pending.resolve(graphqlMRs([mrNode(3)]));
+      await older;
+
+      const calls = fetchMock().mock.calls.length;
+      expect((await batch.findPRsByNumbers!(REPO, [3])).get(3)?.state).toBe("merged");
+      expect(fetchMock().mock.calls.length).toBe(calls + 1);
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't let a REST-answered batch join an older single read", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({
+        errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+      })
+    );
+    await batch.findPRsByNumbers!(REPO, [9]);
+
+    const pending = deferredFetch();
+    fetchMock().mockReset();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "merged" }));
+
+    const batched = await batch.findPRsByNumbers!(REPO, [3]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    expect(batched.get(3)?.state).toBe("merged");
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await older;
+  });
+
   it("doesn't let a fresh batch join one already in flight", async () => {
     const pending = deferredFetch();
     fetchMock().mockReturnValueOnce(pending.promise);

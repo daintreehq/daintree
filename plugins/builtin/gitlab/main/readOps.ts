@@ -30,7 +30,7 @@ import {
   resetReadFlights,
 } from "./GitLabClient.js";
 import { BoundedCache } from "./boundedCache.js";
-import { getInstanceHost } from "./GitLabAuth.js";
+import { GITLAB_API_TIMEOUT_MS, getInstanceHost } from "./GitLabAuth.js";
 import { encodeProjectId, repoFullPath } from "./gitlabRemote.js";
 import {
   absolutizeAvatarUrl,
@@ -118,7 +118,9 @@ interface CachedMergeRequest {
 }
 const mergeRequestCache = new BoundedCache<CachedMergeRequest>({
   maxEntries: 500,
-  retainMs: MERGE_REQUEST_CACHE_TTL_MS,
+  // Resident past its freshness so its `seq` still turns away an older read
+  // that answers late: every read settles within its own timeout of being sent.
+  retainMs: 2 * GITLAB_API_TIMEOUT_MS,
 });
 let mergeRequestReadSeq = 0;
 interface MergeRequestChunkAnswer {
@@ -558,17 +560,18 @@ function isUnservableBatchQuery(err: unknown): boolean {
  */
 async function fetchMergeRequestsOverRest(
   repo: RepoRef,
-  chunk: number[],
-  fresh: boolean
+  chunk: number[]
 ): Promise<Map<number, MergeRequestLookup | null>> {
   const result = new Map<number, MergeRequestLookup | null>();
   await Promise.all(
     chunk.map(async (iid) => {
       try {
+        // Fresh: joining a read already in flight would cache its older view
+        // under this chunk's newer `seq`.
         const { data } = await gitlabRest<GitLabMergeRequest>({
           host: repo.host,
           path: `/projects/${encodeProjectId(repo)}/merge_requests/${iid}`,
-          ...(fresh ? { fresh: true } : {}),
+          fresh: true,
         });
         result.set(iid, {
           pr: mergeRequestToForgePR(data, repo.host),
@@ -584,11 +587,10 @@ async function fetchMergeRequestsOverRest(
 
 async function fetchMergeRequestChunk(
   repo: RepoRef,
-  chunk: number[],
-  fresh: boolean
+  chunk: number[]
 ): Promise<Map<number, MergeRequestLookup | null>> {
   const host = repo.host.toLowerCase();
-  if (restOnlyBatchHosts.has(host)) return fetchMergeRequestsOverRest(repo, chunk, fresh);
+  if (restOnlyBatchHosts.has(host)) return fetchMergeRequestsOverRest(repo, chunk);
   const result = new Map<number, MergeRequestLookup | null>();
   const epoch = cacheEpoch();
   let response: MergeRequestsResponse;
@@ -601,7 +603,7 @@ async function fetchMergeRequestChunk(
   } catch (err) {
     if (!isUnservableBatchQuery(err)) return result;
     if (epoch === cacheGeneration) restOnlyBatchHosts.add(host);
-    return fetchMergeRequestsOverRest(repo, chunk, fresh);
+    return fetchMergeRequestsOverRest(repo, chunk);
   }
   const connection = response.project?.mergeRequests;
   const nodes = connection?.nodes;
@@ -655,7 +657,7 @@ async function lookupMergeRequests(
       continue;
     }
     const seq = ++mergeRequestReadSeq;
-    const started: Promise<MergeRequestChunkAnswer> = fetchMergeRequestChunk(repo, chunk, fresh)
+    const started: Promise<MergeRequestChunkAnswer> = fetchMergeRequestChunk(repo, chunk)
       .then((answers) => ({ seq, answers }))
       .finally(() => {
         if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
