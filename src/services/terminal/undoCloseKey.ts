@@ -6,6 +6,20 @@ import { peekUndoCloseStep } from "./panelCloseHistory";
 
 export const UNDO_CLOSE_ACTION_ID = "panel.undoClose";
 
+let pressedAsTextUndo = false;
+
+/** Notes that the key handler took the undo-close key, and whether it was also text undo. */
+export function noteUndoCloseKeyPress(textUndo: boolean): void {
+  pressedAsTextUndo = textUndo;
+}
+
+/** Whether the undo-close now running came from the text-undo key; reading it consumes it. */
+export function takeUndoCloseKeyPress(): boolean {
+  const was = pressedAsTextUndo;
+  pressedAsTextUndo = false;
+  return was;
+}
+
 /** Cmd+Z on the Mac, Ctrl+Z elsewhere: the key a text field undoes with. */
 export function isTextUndoKey(event: KeyboardEvent): boolean {
   const primary = isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;

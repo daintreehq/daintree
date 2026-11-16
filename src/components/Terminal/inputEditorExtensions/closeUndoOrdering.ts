@@ -5,9 +5,9 @@ import {
   Transaction,
   type Extension,
 } from "@codemirror/state";
-import { ViewPlugin } from "@codemirror/view";
-import { invertedEffects, isolateHistory, undoDepth } from "@codemirror/commands";
-import { latestCloseSeq, registerEditorUndoCheck } from "@/services/terminal/closeUndoOrder";
+import { ViewPlugin, type Command } from "@codemirror/view";
+import { invertedEffects, isolateHistory, undo, undoDepth } from "@codemirror/commands";
+import { latestCloseSeq, registerEditorUndo } from "@/services/terminal/closeUndoOrder";
 
 // An edit of the person's own. Undo and redo walk the history rather than add
 // to it, and a write kept out of history (a draft loading) can't be undone.
@@ -60,18 +60,21 @@ export function editorHasEditsSinceClose(state: EditorState, seq: number): boole
   return edit !== undefined && edit >= seq && undoDepth(state) > 0;
 }
 
-const registration = ViewPlugin.define((view) => {
-  const unregister = registerEditorUndoCheck(view.dom, (seq) =>
-    editorHasEditsSinceClose(view.state, seq)
-  );
-  return { destroy: unregister };
-});
-
 /**
  * Lets Cmd+Z tell this editor's newer edits from a panel closed before them,
  * so it undoes the typing first and reopens the panel after (#17107). Needs
  * the editor's `history()`: without it there is nothing to undo here.
+ * `undoCommand` is the editor's own undo, locks and all.
  */
-export function closeUndoOrdering(): Extension {
+export function closeUndoOrdering(undoCommand: Command = undo): Extension {
+  const registration = ViewPlugin.define((view) => {
+    const unregister = registerEditorUndo(view.dom, {
+      hasEditsSince: (seq) => editorHasEditsSinceClose(view.state, seq),
+      undo: () => {
+        undoCommand(view);
+      },
+    });
+    return { destroy: unregister };
+  });
   return [editCloseSeq, carryWithHistory, isolateFirstEditAfterClose, registration];
 }

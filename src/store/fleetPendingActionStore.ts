@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import type { ActionSource } from "@shared/types/actions";
 
 /**
  * Ephemeral UI state for fleet quick-action confirmations. Fleet actions
@@ -19,8 +18,6 @@ export interface FleetPendingActionSnapshot {
   kind: FleetPendingActionKind;
   targetCount: number;
   sessionLossCount: number;
-  /** Who asked first: the confirmation re-dispatches as the person. */
-  dispatchSource?: ActionSource;
 }
 
 interface FleetPendingActionState {

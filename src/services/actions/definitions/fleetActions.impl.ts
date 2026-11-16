@@ -4,6 +4,7 @@
 import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
 import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
+import { isForegroundDispatch } from "./dispatchSource";
 import {
   useFleetArmingStore,
   isFleetArmEligible,
@@ -92,18 +93,20 @@ function countSessionLoss(targets: PtyPanelData[]): number {
   ).length;
 }
 
-function requestConfirmation(
-  kind: FleetPendingActionKind,
-  targets: PtyPanelData[],
-  dispatchSource?: ActionSource
-): void {
+function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData[]): void {
   useFleetPendingActionStore.getState().request({
     kind,
     targetCount: targets.length,
     sessionLossCount: countSessionLoss(targets),
-    ...(dispatchSource !== undefined && { dispatchSource }),
   });
 }
+
+/**
+ * Who asked for the trash the fleet bar is confirming. The confirmation clears
+ * itself and re-dispatches as the person who confirmed, but a close an agent
+ * asked for stays the agent's: it isn't the person's to undo (#17107).
+ */
+let stagedTrashSource: ActionSource | undefined;
 
 /**
  * Module-level re-entrancy flag for `fleet.retryFailures`. A fast double-
@@ -212,15 +215,16 @@ export const fleetActionRuns = {
     if (targets.length === 0) return;
     const confirmed = parseConfirmed(args);
     if (!confirmed && targets.length >= 5) {
-      requestConfirmation("trash", targets, ctx.dispatchSource);
+      stagedTrashSource = ctx.dispatchSource;
+      requestConfirmation("trash", targets);
       return;
     }
-    // A confirmed close is still whoever asked for it first.
-    const pending = useFleetPendingActionStore.getState().pending;
+    // Only the person's own confirmation stands in for the staged request.
     const source =
-      confirmed && pending?.kind === "trash"
-        ? (pending.dispatchSource ?? ctx.dispatchSource)
+      confirmed && isForegroundDispatch(ctx.dispatchSource) && stagedTrashSource !== undefined
+        ? stagedTrashSource
         : ctx.dispatchSource;
+    stagedTrashSource = undefined;
     clearPendingIf("trash");
     const ids = new Set(targets.map((t) => t.id));
     userCloseCommit(source, [...ids], () => usePanelStore.getState().bulkTrashSet(ids))();

@@ -48,7 +48,8 @@ const { setCurrentProjectIdAccessor, setWorktreeIdSetAccessor } =
 const { useResumedSessionPanelStore } = await import("@/store/resumedSessionPanelStore");
 const history = await import("../panelCloseHistory");
 const { undoLastClose, CAPTURE_WAIT_MS } = await import("../panelCloseUndo");
-const { undoCloseTakesKey, isTextUndoKey } = await import("../undoCloseKey");
+const { undoCloseTakesKey, isTextUndoKey, noteUndoCloseKeyPress, takeUndoCloseKeyPress } =
+  await import("../undoCloseKey");
 const { trackNativeFieldEdits } = await import("../closeUndoOrder");
 const { takeSettledRestoreFocus } = await import("../settledRestores");
 const { PLUGIN_STYLE_OWNER_ATTRIBUTE } = await import("@/services/plugin/pluginStyleOwner");
@@ -356,6 +357,20 @@ describe("panel close history", () => {
     expect(group?.panelIds).toEqual(["a", "b"]);
   });
 
+  it("puts tabs closed one by one back into one group, however many undos it takes", async () => {
+    for (const id of ["a", "b", "c"]) seed(id);
+    usePanelStore.getState().createTabGroup("grid", "wt-1", ["a", "b", "c"], "a");
+    userClose(["a"]);
+    userClose(["b"]);
+    expect(usePanelStore.getState().getPanelGroup("c")).toBeUndefined();
+
+    await undoLastClose();
+    expect(usePanelStore.getState().getPanelGroup("b")?.panelIds).toEqual(["b", "c"]);
+    await undoLastClose();
+
+    expect(usePanelStore.getState().getPanelGroup("a")?.panelIds).toEqual(["a", "b", "c"]);
+  });
+
   it("never pulls a reopened tab into a group its old sibling joined since", async () => {
     for (const id of ["a", "b", "x"]) seed(id);
     usePanelStore.getState().createTabGroup("grid", "wt-1", ["a", "b"], "a");
@@ -391,8 +406,13 @@ describe("panel close history", () => {
     vi.setSystemTime(Date.now() + CAPTURE_WAIT_MS + 1);
     const olderSeq = history.peekUndoCloseStep()!.seq - 1;
 
-    await expect(undoLastClose({ yieldsTo: (step) => step.seq === olderSeq })).resolves.toBe(false);
+    const onYield = vi.fn();
+    await expect(
+      undoLastClose({ yieldsTo: (step) => step.seq === olderSeq, onYield })
+    ).resolves.toBe(false);
 
+    // The press goes to the field's own undo instead.
+    expect(onYield).toHaveBeenCalledTimes(1);
     expect(locationOf("older")).toBe("trash");
     expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("older");
   });
@@ -559,6 +579,42 @@ describe("after the trash lets an agent go", () => {
     expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("agent");
   });
 
+  it("keeps the members still waiting when the view leaves mid-batch", async () => {
+    let recorded: (() => void) | undefined;
+    Reflect.set(window, "electron", {
+      agentSessionHistory: { list: listSessions },
+      events: {
+        on: vi.fn((_channel: string, callback: () => void) => {
+          recorded = callback;
+          return () => undefined;
+        }),
+      },
+    });
+    seed("first", { agent: true });
+    seed("second", { agent: true });
+    userClose(["first", "second"]);
+    usePanelStore.getState().removePanel("first");
+    usePanelStore.getState().removePanel("second");
+    // Only the first one's conversation has been captured so far.
+    listSessions.mockResolvedValue([
+      record({ sessionId: "one", terminal: { id: "first", spawnedAt: 1 } }),
+    ]);
+    resumeSessionForPerson.mockImplementation(async () => {
+      seed("resumed-1");
+      return { terminalId: "resumed-1", outcome: "created", worktreeId: "wt-1" };
+    });
+
+    const pending = undoLastClose();
+    await vi.waitFor(() => expect(recorded).toBeDefined());
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    recorded!();
+
+    await expect(pending).resolves.toBe(true);
+    hidden.mockRestore();
+    expect(resumeSessionForPerson).toHaveBeenCalledTimes(1);
+    expect(history.peekUndoCloseStep()?.panels.map((panel) => panel.id)).toEqual(["second"]);
+  });
+
   it("waits for a capture still on its way", async () => {
     let recorded: (() => void) | undefined;
     Reflect.set(window, "electron", {
@@ -622,6 +678,12 @@ describe("undoCloseTakesKey", () => {
     expect(undoCloseTakesKey(field, false, true)).toBe(false);
     expect(undoCloseTakesKey(field, false, false)).toBe(true);
     field.remove();
+  });
+
+  it("hands the action the press's text-undo status once", () => {
+    noteUndoCloseKeyPress(true);
+    expect(takeUndoCloseKeyPress()).toBe(true);
+    expect(takeUndoCloseKeyPress()).toBe(false);
   });
 
   it("tells the text-undo key from other bindings", () => {

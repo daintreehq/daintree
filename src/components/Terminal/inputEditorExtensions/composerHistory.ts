@@ -71,7 +71,7 @@ export function createComposerHistory(): Extension {
     historyCompartment.of(history()),
     composerHistoryKeymap,
     lockedNativeHistory,
-    closeUndoOrdering(),
+    closeUndoOrdering(composerUndo),
   ];
 }
 

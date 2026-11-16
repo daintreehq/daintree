@@ -26,18 +26,20 @@ export function latestCloseSeq(): number {
 /** The checkpoints a field keeps: as many as there are closes to undo. */
 export const MAX_CLOSE_CHECKPOINTS = 10;
 
-type EditorUndoCheck = (closeSeq: number) => boolean;
+export interface EditorUndo {
+  /** Whether the editor's next undo would take back an edit made after close N. */
+  hasEditsSince: (closeSeq: number) => boolean;
+  /** Runs the editor's own undo, as its key would. */
+  undo: () => void;
+}
 
-const editorChecks = new WeakMap<Element, EditorUndoCheck>();
+const editors = new WeakMap<Element, EditorUndo>();
 
-/**
- * Registers an editor's answer to "would your next undo take back an edit
- * made after close N?", keyed by its `.cm-editor` root.
- */
-export function registerEditorUndoCheck(root: Element, check: EditorUndoCheck): () => void {
-  editorChecks.set(root, check);
+/** Registers an editor by its `.cm-editor` root. */
+export function registerEditorUndo(root: Element, editor: EditorUndo): () => void {
+  editors.set(root, editor);
   return () => {
-    if (editorChecks.get(root) === check) editorChecks.delete(root);
+    if (editors.get(root) === editor) editors.delete(root);
   };
 }
 
@@ -121,8 +123,17 @@ function fieldHasEditsSince(field: TextField, seq: number): boolean {
  */
 export function hasEditsSinceClose(target: Element, seq: number): boolean {
   const editor = target.closest(".cm-editor");
-  if (editor !== null) return editorChecks.get(editor)?.(seq) ?? false;
+  if (editor !== null) return editors.get(editor)?.hasEditsSince(seq) ?? false;
   return isTextField(target) && fieldHasEditsSince(target, seq);
+}
+
+/**
+ * Hands a press the undo-close key already took back to the editor holding
+ * `target`, for its own undo. A native field's undo can't be run from here.
+ */
+export function undoEditorText(target: Element | null): void {
+  const editor = target?.closest(".cm-editor");
+  if (editor) editors.get(editor)?.undo();
 }
 
 /** Test seam: forget every close and checkpoint. */

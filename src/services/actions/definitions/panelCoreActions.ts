@@ -9,6 +9,8 @@ import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestSt
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
+import { fieldOutranksClose, takeUndoCloseKeyPress } from "@/services/terminal/undoCloseKey";
+import { undoEditorText } from "@/services/terminal/closeUndoOrder";
 import { isForegroundDispatch } from "./dispatchSource";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
@@ -398,19 +400,24 @@ export function registerPanelCoreActions(
     // Undo takes back a person's own close; a plugin closed nothing of theirs.
     denyPluginDispatch: true,
     run: async (_args: unknown, ctx) => {
+      // Read before any await: it belongs to this press.
+      const viaTextUndo = takeUndoCloseKeyPress();
       // Undo takes back what the person did, so only the person can ask.
       if (!isForegroundDispatch(ctx.dispatchSource)) return;
       // A close still waiting to commit isn't in the history yet.
       flushOptimisticCloses();
-      const [{ undoLastClose }, { fieldOutranksClose }] = await Promise.all([
-        import("@/services/terminal/panelCloseUndo"),
-        import("@/services/terminal/undoCloseKey"),
-      ]);
-      // A close with nothing left falls through to an older one only while
-      // nothing newer than that one waits in the focused field.
-      await undoLastClose({
-        yieldsTo: (step) => fieldOutranksClose(document.activeElement, step.seq),
-      });
+      const { undoLastClose } = await import("@/services/terminal/panelCloseUndo");
+      // Pressed as text undo, a close with nothing left falls through to an
+      // older one only while nothing newer than that one waits in the focused
+      // field; otherwise the press goes to that field's own undo.
+      await undoLastClose(
+        viaTextUndo
+          ? {
+              yieldsTo: (step) => fieldOutranksClose(document.activeElement, step.seq),
+              onYield: () => undoEditorText(document.activeElement),
+            }
+          : {}
+      );
     },
   }));
 

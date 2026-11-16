@@ -28,6 +28,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   UNDO_CLOSE_ACTION_ID,
   isTextUndoKey,
+  noteUndoCloseKeyPress,
   undoCloseTakesKey,
 } from "@/services/terminal/undoCloseKey";
 
@@ -437,7 +438,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       if (result.shouldConsume) {
         e.preventDefault();
         e.stopPropagation();
-        if (result.match?.actionId === UNDO_CLOSE_ACTION_ID) heldUndoCloseCode = e.code;
+        if (result.match?.actionId === UNDO_CLOSE_ACTION_ID) {
+          heldUndoCloseCode = e.code;
+          noteUndoCloseKeyPress(isTextUndoKey(e));
+        }
 
         if (result.match) {
           // Cmd+W resolves to terminal.close, but where it actually lands

@@ -34,6 +34,8 @@ export interface UndoCloseOptions {
    * the focused field) should have the key instead.
    */
   yieldsTo?: (step: CloseStep) => boolean;
+  /** Runs instead when it yields, so the press still undoes something. */
+  onYield?: () => void;
 }
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -54,10 +56,14 @@ export function undoLastClose(options: UndoCloseOptions = {}): Promise<boolean> 
   return run;
 }
 
-async function restoreNewestClose({ yieldsTo }: UndoCloseOptions): Promise<boolean> {
+async function restoreNewestClose({ yieldsTo, onYield }: UndoCloseOptions): Promise<boolean> {
   for (let first = true; ; first = false) {
     const next = peekUndoCloseStep();
-    if (next === null || (!first && yieldsTo?.(next) === true)) return false;
+    if (next === null) return false;
+    if (!first && yieldsTo?.(next) === true) {
+      onYield?.();
+      return false;
+    }
     const step = takeUndoCloseStep();
     if (step === null) return false;
     try {
@@ -78,14 +84,15 @@ async function restoreStep(step: CloseStep): Promise<"restored" | "nothing" | "d
   // still held, a new one for a resumed conversation.
   const restored = new Map<string, string>();
   restoreFromTrash(step, restored);
-  for (const closed of step.panels) {
-    if (closed.status !== "expired") continue;
+  const expired = step.panels.filter((closed) => closed.status === "expired");
+  for (const [index, closed] of expired.entries()) {
     const id = await resumeExpired(step, closed);
     // Waiting on a capture can outlast the view being on screen. Spawning
     // into a project the person has left would change what they can't see,
-    // so a close with nothing back yet waits in the history for their return.
+    // so whatever hasn't come back yet waits in the history for their return.
     if (id === "hidden") {
       if (restored.size === 0) return "deferred";
+      returnUndoCloseStep({ ...step, panels: expired.slice(index) });
       break;
     }
     if (id !== null) restored.set(closed.id, id);
@@ -183,7 +190,7 @@ async function resumeExpired(
 ): Promise<string | "hidden" | null> {
   if (closed.agentId === null) return null;
   const record = await findCapturedSession(step, closed);
-  if (typeof document !== "undefined" && document.hidden) return "hidden";
+  if (record === "hidden" || isViewHidden()) return "hidden";
   if (record === null || buildResumeCommand(record.agentId, record.sessionId) === undefined) {
     return null;
   }
@@ -259,15 +266,21 @@ function waitForRecordedSession(ms: number): Promise<void> {
   });
 }
 
+function isViewHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
 async function findCapturedSession(
   step: CloseStep,
   closed: ClosedPanel
-): Promise<AgentSessionRecord | null> {
+): Promise<AgentSessionRecord | "hidden" | null> {
   const deadline = (closed.expiredAt ?? step.closedAt) + CAPTURE_WAIT_MS;
   for (;;) {
     const found = pickCapture(await listSessions(step.projectId), step, closed);
     if (found !== null || Date.now() >= deadline) return found;
     await waitForRecordedSession(deadline - Date.now());
+    // Out of sight, the wait stops: the close waits for the person instead.
+    if (isViewHidden()) return "hidden";
   }
 }
 
@@ -304,8 +317,7 @@ function isOpenAt(
  * its group at its old place, and a group the close dissolved is rebuilt from
  * whichever of its members are open where the restored ones landed (an orphan
  * re-homed to the active worktree takes its group along). A member that has
- * joined another group since stays there, and a group the trash's own group
- * restore rebuilt is left as it is.
+ * joined a group of the person's own since stays there.
  */
 function rejoinGroup(group: ClosedGroup, restored: ReadonlyMap<string, string>): void {
   const state = usePanelStore.getState();
@@ -314,14 +326,29 @@ function rejoinGroup(group: ClosedGroup, restored: ReadonlyMap<string, string>):
   const anchor = mapped.find((id) => restoredIds.has(id));
   if (anchor === undefined) return;
   const worktreeId = state.panelsById[anchor]?.worktreeId ?? undefined;
+  // The group as it stands now: its own id, or one rebuilt from nothing but
+  // its own members (by the trash's group restore, or an earlier undo). A
+  // group holding anything else is one the person made since.
+  const memberSet = new Set(mapped);
+  let target = state.tabGroups.get(group.id);
+  if (target === undefined) {
+    for (const id of mapped) {
+      const current = state.getPanelGroup(id);
+      if (current !== undefined && current.panelIds.every((member) => memberSet.has(member))) {
+        target = current;
+        break;
+      }
+    }
+  }
+  const targetId = target?.id;
   const members = mapped.filter((id) => {
     if (!isOpenAt(state, id, group.location, worktreeId)) return false;
     const current = state.getPanelGroup(id);
-    return current === undefined || current.id === group.id;
+    return current === undefined || current.id === targetId;
   });
   if (members.length < 2) return;
 
-  if (!state.tabGroups.has(group.id)) {
+  if (targetId === undefined) {
     const active =
       group.activeTabId === null
         ? undefined
@@ -337,15 +364,15 @@ function rejoinGroup(group: ClosedGroup, restored: ReadonlyMap<string, string>):
 
   for (const id of members) {
     const latest = usePanelStore.getState();
-    if (latest.getPanelGroup(id)?.id === group.id) continue;
+    if (latest.getPanelGroup(id)?.id === targetId) continue;
     const rank = members.indexOf(id);
-    const current = latest.tabGroups.get(group.id)?.panelIds ?? [];
+    const current = latest.tabGroups.get(targetId)?.panelIds ?? [];
     let index = 0;
     current.forEach((member, position) => {
       const memberRank = members.indexOf(member);
       if (memberRank !== -1 && memberRank < rank) index = position + 1;
     });
-    latest.addPanelToGroup(group.id, id, index);
+    latest.addPanelToGroup(targetId, id, index);
   }
 }
 
