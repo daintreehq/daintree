@@ -425,6 +425,21 @@ describe("projectSettingsStore", () => {
       });
     });
 
+    it("keeps links queued during the first load over a stale copy saved meanwhile", async () => {
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      // A save built from a copy read before the link was added.
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
+    });
+
     it("lets a revalidation keep what it read while taking links patched meanwhile", async () => {
       useProjectSettingsStore.setState({
         projectId: "project-a",

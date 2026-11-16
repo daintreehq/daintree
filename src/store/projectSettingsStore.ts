@@ -75,6 +75,10 @@ let settingsRevision = 0;
 // Bumped only when the cached Portal links change, so a links read can tell
 // a links change apart from any other settings write landing meanwhile.
 let portalLinksRevision = 0;
+// The links revision the cached settings hold. Set only when a patch lands on
+// cached settings: one queued during a first load reaches it through the queue,
+// and a whole-settings copy installed meanwhile holds no newer links.
+let cachedLinksRevision = 0;
 
 // Patches made while a project's settings were still loading. The load in
 // flight may have read the settings before the write a patch records, so it
@@ -151,7 +155,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
         revisionAtStart
       );
       // Links main returned while this read was out are at least as new as it.
-      if (portalLinksRevision !== linksRevisionAtStart && current) {
+      if (cachedLinksRevision > linksRevisionAtStart && current) {
         settings = withPortalLinks(settings, current.portalLinks);
       }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
@@ -329,6 +333,7 @@ export function patchCachedProjectPortalLinks(
   }
   // Not a whole-settings write: a revalidation in flight keeps the rest of
   // what it read, and takes these links in place of its own.
+  cachedLinksRevision = portalLinksRevision;
   useProjectSettingsStore.setState({
     settings: withPortalLinks(state.settings, portalLinks),
   });
