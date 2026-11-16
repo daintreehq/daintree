@@ -1455,10 +1455,10 @@ const CACHE_SEED_BLOCKING_OPTIONS = [
  * escapes declines seeding rather than re-implementing conf's key parser.
  */
 function confSnapshotFromPreflight(
-  options: object,
+  storeOpts: object,
   parsed: Record<string, unknown>
 ): Record<string, unknown> | null {
-  const confOptions = options as Record<string, unknown>;
+  const confOptions = storeOpts as Record<string, unknown>;
   if (CACHE_SEED_BLOCKING_OPTIONS.some((option) => confOptions[option] !== undefined)) {
     return null;
   }
