@@ -63,9 +63,9 @@ describe("checkRadixOverlayBundles", () => {
     const problems = checkRadixOverlayBundles(
       build({ appImports: ["_vendor-radix-utils.js", "_vendor-radix-overlay.js"] })
     );
-    expect(problems.some((p) => p.startsWith("the first-render graph") && p.includes(POPOVER))).toBe(
-      true
-    );
+    expect(
+      problems.some((p) => p.startsWith("the first-render graph") && p.includes(POPOVER))
+    ).toBe(true);
     expect(problems.some((p) => p.startsWith("the renderer's eager graph"))).toBe(false);
   });
 
@@ -123,9 +123,9 @@ describe("checkRadixOverlayBundles", () => {
 describe("deferredOverlayFamily", () => {
   it("names the deferred overlay family and leaves the eager Radix packages alone", () => {
     expect(deferredOverlayFamily(POPOVER)).toBe("a deferred Radix overlay");
-    expect(deferredOverlayFamily("../daintree/node_modules/@radix-ui/react-menu/dist/index.mjs")).toBe(
-      "a deferred Radix overlay"
-    );
+    expect(
+      deferredOverlayFamily("../daintree/node_modules/@radix-ui/react-menu/dist/index.mjs")
+    ).toBe("a deferred Radix overlay");
     expect(deferredOverlayFamily(FLOATING)).toBe("Floating UI");
     expect(deferredOverlayFamily("src/components/ui/radix-deferred.ts")).toBe(
       "the deferred Radix barrel"
