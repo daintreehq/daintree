@@ -27,10 +27,16 @@ function exitOf(child: ChildProcess): Promise<NodeJS.Signals | null> {
 // A zombie counts as gone: PID 1 in a container may never reap an orphan.
 function isGone(pid: number): boolean {
   try {
-    const stat = execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    const stat = execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
     return stat.trim().startsWith("Z");
-  } catch {
-    return true;
+  } catch (err) {
+    // ps exits 1 with nothing printed when no process holds the PID.
+    const { status, stdout } = err as { status?: number; stdout?: string };
+    if (status === 1 && !stdout?.trim()) return true;
+    throw err;
   }
 }
 
@@ -40,6 +46,7 @@ async function orphanedGroup(): Promise<{ group: number; orphan: number }> {
     detached: true,
     stdio: ["ignore", "pipe", "ignore"],
   });
+  children.push(leader);
   let out = "";
   leader.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
   await new Promise((resolve) => leader.once("close", resolve));
@@ -151,7 +158,7 @@ describe("unit-test process.kill guard (#14418)", () => {
       try {
         expect(process.kill(-group, "SIGKILL")).toBe(true);
         expect(takeProcessKillViolations()).toEqual([]);
-        await vi.waitFor(() => expect(isGone(orphan)).toBe(true));
+        await vi.waitFor(() => expect(isGone(orphan)).toBe(true), { timeout: 5_000 });
       } finally {
         killOrphan(orphan);
       }
@@ -198,12 +205,18 @@ describe("unit-test process.kill guard (#14418)", () => {
       parent.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
       await new Promise((resolve) => parent.once("close", resolve));
       const [group, orphan] = out.trim().split(" ").map(Number);
+      expect([group, orphan].every((pid) => Number.isInteger(pid) && pid > 1)).toBe(true);
+      // An orphaned group of its own is recorded alongside, so the refusal is
+      // about which group, not about the worker having none.
+      const own = await orphanedGroup();
 
       try {
-        expect(refusalOf(() => process.kill(-group, "SIGKILL"))?.code).toBe("EPERM");
+        expect(refusalOf(() => process.kill(-group, "SIGCONT"))?.code).toBe("EPERM");
+        expect(process.kill(-own.group, "SIGCONT")).toBe(true);
         expect(takeProcessKillViolations()).toEqual([expect.objectContaining({ pid: -group })]);
       } finally {
         killOrphan(orphan);
+        killOrphan(own.orphan);
       }
     }
   );
