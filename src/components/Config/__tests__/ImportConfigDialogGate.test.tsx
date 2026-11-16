@@ -69,10 +69,12 @@ describe("ImportConfigDialogGate", () => {
     expect(h.dialogLoads).toBe(1);
   });
 
-  it("hands the dialog the latest of several quick requests", async () => {
+  it("hands the dialog the latest of requests made together", async () => {
     render(<ImportConfigDialogGate />);
-    await requestImport();
-    await requestImport();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
+      window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
+    });
 
     expect((await screen.findByTestId("import-dialog")).dataset.request).toBe("2");
   });

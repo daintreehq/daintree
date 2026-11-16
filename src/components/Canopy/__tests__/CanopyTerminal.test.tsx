@@ -1736,14 +1736,14 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     textarea.addEventListener("keydown", reachedTerminal);
     fireEvent.keyDown(textarea, { key: "f", code: "KeyF", ctrlKey: true, metaKey: true });
     expect(reachedTerminal).not.toHaveBeenCalled();
-    // The bar's chunk loads the first time a search opens.
+    // The bar's chunk loads the first time a search opens, and whenever it
+    // lands the keyboard goes to the bar.
     const input = await vi.waitFor(() => {
       const found = container.querySelector<HTMLInputElement>("[data-terminal-search-input]");
       expect(found).not.toBeNull();
+      expect(document.activeElement).toBe(found);
       return found;
     });
-    // Whenever the chunk lands, the keyboard goes to the bar.
-    expect(document.activeElement).toBe(input);
     fireEvent.change(input!, { target: { value: "needle" } });
     await vi.waitFor(() =>
       expect(search.findNext).toHaveBeenCalledWith("needle", expect.anything())
