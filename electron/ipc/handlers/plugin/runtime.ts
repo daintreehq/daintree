@@ -354,6 +354,8 @@ export async function handleReportPanelInventory(
  */
 export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string[]): Promise<void> {
   const sender = ctx.event?.sender;
+  // Its `destroyed` has already fired, so a watch would never forget this report.
+  if (sender?.isDestroyed()) return;
   const source = sender ? undefined : panelLifecycleSourceFor(ctx);
   const watch = sender
     ? watchWebContentsDocument(sender)

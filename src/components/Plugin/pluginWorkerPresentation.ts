@@ -40,7 +40,12 @@ export function presentWorkerStatus(
    * Whether this panel has ever seen its backend reach `ready`. A transient
    * state before that is a FIRST activation, not a recovery.
    */
-  everReady: boolean
+  everReady: boolean,
+  /**
+   * Whether the view's own load — activation, then import — is still in
+   * flight. That activation is what brings a stopped backend back.
+   */
+  opening = false
 ): PluginWorkerPresentation {
   if (!worker) return { kind: "content" };
   switch (worker.state) {
@@ -57,11 +62,11 @@ export function presentWorkerStatus(
       if (!everReady) return { kind: "content" };
       return stalled ? { kind: "stalled" } : { kind: "reloading" };
     case "stopped":
-      // Idle governance retired the worker while nothing showed this plugin
-      // (#17068). A view that never had a backend is opening, and its own
-      // activation brings one back, so this is a first load the Suspense
-      // skeleton owns. Only a view that lost a working backend is stranded.
-      if (!everReady) return { kind: "content" };
+      // Idle governance retires a worker once nothing shows its plugin
+      // (#17068), so a view opening onto it is the usual case, and the load's
+      // own activation forks a fresh one: the skeleton owns that wait. A view
+      // whose load already settled has nothing coming to revive it.
+      if (opening) return { kind: "content" };
       return {
         kind: "unavailable",
         title: "Plugin backend stopped",

@@ -9,6 +9,7 @@ import {
   hasViewUnsavedChanges,
   isViewReloadBlocked,
   registerUserViewReload,
+  replayPluginPanelLifecycle,
   reportViewMounted,
   reportViewRenderFailed,
   resetPluginPanelLifecycleForTests,
@@ -234,6 +235,19 @@ describe("reporting", () => {
     vi.stubGlobal("window", {});
     expect(() => syncPluginPanels([panel()])).not.toThrow();
     await Promise.resolve();
+  });
+
+  it("replays every live panel's current phase for a host that lost them (#17068)", async () => {
+    syncPluginPanels([panel({ panelId: "a" }), panel({ panelId: "b", location: "trash" })]);
+    reportViewMounted("a", IDENTITY);
+    syncPluginPanels([panel({ panelId: "a" })]);
+    await drainPhases();
+    report.mockClear();
+
+    replayPluginPanelLifecycle();
+    await Promise.resolve();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]?.[0].map((e) => [e.panelId, e.phase])).toEqual([["a", "mounted"]]);
   });
 });
 

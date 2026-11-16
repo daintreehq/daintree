@@ -779,90 +779,136 @@ describe("Worker governance (idle dispose + snapshots)", () => {
     return { service, hostIndex: base.hosts };
   }
 
-  const panelEvent = (phase: string) => ({
-    panelId: "p1",
+  const panelEvent = (phase: string, panelId = "p1") => ({
+    panelId,
     panelKindId: "acme.panelly.viewer",
     pluginId: "acme.panelly",
     phase,
   });
+  /** Long past the idle window, on the service's own clock. */
+  const HOURS = 2 * 60 * 60_000;
+  const IDLE = 30 * 60_000;
 
-  it("retires a panel plugin none of whose panels is open (#17068)", async () => {
+  it("retires a panel plugin none of whose panels is open, and reopens it (#17068)", async () => {
     const { service, hostIndex } = await startPanelPlugin();
+    // Not vacuous: the plugin really contributes the panel kind.
+    expect(vi.mocked(registerPanelKind)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.panelly.viewer" })
+    );
 
     const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
     expect(result.disposed).toEqual(["acme.panelly"]);
     expect(devWorkerMock.instances[hostIndex].dispose).toHaveBeenCalledTimes(1);
 
-    // Opening a panel is a lazy trigger like any other: a fresh worker forks.
-    await service.activatePlugin("acme.panelly");
+    // Opening a panel activates through the view path, which forks a fresh worker.
+    await expect(service.activatePluginForView("acme.panelly.viewer")).resolves.toEqual({
+      ok: true,
+    });
     expect(devWorkerMock.instances).toHaveLength(hostIndex + 2);
   });
 
-  it("keeps the worker while a panel is open in any phase, and counts idle from its close", async () => {
+  it("keeps the worker while any of its panels is open, in any live phase", async () => {
     const { service, hostIndex } = await startPanelPlugin();
 
-    for (const phase of ["mounted", "hidden", "backgrounded", "trashed"]) {
-      service.ingestPanelLifecycleEvents(1, [panelEvent(phase)]);
+    for (const phase of ["mounted", "hidden", "backgrounded", "trashed", "render-failed"]) {
+      const panelId = `p-${phase}`;
+      service.ingestPanelLifecycleEvents(1, [panelEvent(phase, panelId)]);
       expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed, phase).toEqual([]);
+      service.ingestPanelLifecycleEvents(1, [panelEvent("removed", panelId)]);
     }
+
+    service.ingestPanelLifecycleEvents(1, [panelEvent("mounted", "a"), panelEvent("hidden", "b")]);
     const open = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.panelly");
     expect(open?.eligibility.dispose).toBe(false);
-    expect(open?.detail?.openViews).toBe(1);
+    expect(open?.detail?.openViews).toBe(2);
+    service.ingestPanelLifecycleEvents(1, [panelEvent("removed", "a")]);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
 
-    service.ingestPanelLifecycleEvents(1, [panelEvent("removed")]);
-    // The panel was open for longer than the idle window; the window starts now.
-    expect(service.disposeIdlePluginWorkers({ now: Date.now() + 60_000 }).disposed).toEqual([]);
+    service.ingestPanelLifecycleEvents(1, [panelEvent("removed", "b")]);
     expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual(["acme.panelly"]);
     expect(devWorkerMock.instances[hostIndex].dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("releases a destroyed renderer's panels and counts idle from then", async () => {
-    const { service } = await startPanelPlugin();
-    let destroyed: (() => void) | undefined;
-    const sender = {
-      id: 41,
-      once: (_event: "destroyed", listener: () => void) => {
-        destroyed = listener;
-      },
-      removeListener: () => {},
-    };
-    service.ingestPanelLifecycleEvents(41, [panelEvent("hidden")], sender);
-    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+  it("runs the idle window from the last panel closing, not from activation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { service } = await startPanelPlugin();
+      service.ingestPanelLifecycleEvents(1, [panelEvent("mounted")]);
+      vi.setSystemTime(Date.now() + HOURS);
+      service.ingestPanelLifecycleEvents(1, [panelEvent("removed")]);
 
-    destroyed?.();
-    expect(service.disposeIdlePluginWorkers({ now: Date.now() + 60_000 }).disposed).toEqual([]);
-    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual(["acme.panelly"]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.panelly",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a destroyed renderer's panels, running the idle window from then", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { service } = await startPanelPlugin();
+      let destroyed: (() => void) | undefined;
+      const sender = {
+        id: 41,
+        once: (_event: "destroyed", listener: () => void) => {
+          destroyed = listener;
+        },
+        removeListener: () => {},
+      };
+      service.ingestPanelLifecycleEvents(41, [panelEvent("hidden")], sender);
+      vi.setSystemTime(Date.now() + HOURS);
+      expect(service.disposeIdlePluginWorkers().disposed).toEqual([]);
+
+      destroyed?.();
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.panelly",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the worker while one of its views is mounted outside the grid", async () => {
-    const base = baseline();
-    await writeWorkerPlugin("sided", "acme.sided", {
-      contributes: {
-        views: [
-          { id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" },
-        ],
-      },
-    });
-    const service = startService();
-    await service.initialize();
-    await service.activatePlugin("acme.sided");
-    let documentGone: (() => void) | undefined;
-    const watch = (forget: () => void) => {
-      documentGone = forget;
-      return () => {};
-    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const base = baseline();
+      await writeWorkerPlugin("sided", "acme.sided", {
+        contributes: {
+          views: [
+            { id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" },
+          ],
+        },
+      });
+      const service = startService();
+      await service.initialize();
+      await service.activatePlugin("acme.sided");
+      let documentGone: (() => void) | undefined;
+      const watch = (forget: () => void) => {
+        documentGone = forget;
+        return () => {};
+      };
 
-    // A renderer's claim names a view; main decides whose it is.
-    service.ingestHostedViewConsumers(7, watch, ["plugin-view:acme.sided/board"]);
-    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+      // A renderer's claim names a view; main decides whose it is.
+      service.ingestHostedViewConsumers(7, watch, ["plugin-view:acme.sided/board"]);
+      vi.setSystemTime(Date.now() + HOURS);
+      expect(service.disposeIdlePluginWorkers().disposed).toEqual([]);
 
-    documentGone?.();
-    expect(service.disposeIdlePluginWorkers({ now: Date.now() + 60_000 }).disposed).toEqual([]);
-    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual(["acme.sided"]);
-    expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+      documentGone?.();
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.sided",
+      ]);
+      expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("keeps the worker while a surface draws one of its panel kinds outside the grid", async () => {
+  it("counts a panel kind drawn outside the grid, as a project surface does, as its plugin's view", async () => {
     const { service } = await startPanelPlugin();
     const watch = () => () => {};
 
@@ -1016,11 +1062,16 @@ describe("Worker governance (idle dispose + snapshots)", () => {
 
       await service.activatePlugin("acme.swept");
       expect(vi.getTimerCount()).toBe(idleTimers + 1);
+      const host = devWorkerMock.instances[base.hosts];
+
+      // A young worker survives its first ticks, and the sweep stays armed for it.
+      vi.advanceTimersByTime(60_000);
+      expect(host.dispose).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(idleTimers + 1);
 
       // Neither a fork nor a profile change: time passing is enough.
-      vi.setSystemTime(Date.now() + 30 * 60_000);
-      vi.advanceTimersByTime(60_000);
-      expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(30 * 60_000);
+      expect(host.dispose).toHaveBeenCalledTimes(1);
       // The last worker took the sweep with it.
       expect(vi.getTimerCount()).toBe(idleTimers);
 

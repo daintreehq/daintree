@@ -205,6 +205,12 @@ describe("PluginHostedView", () => {
     settings.rerender(<PluginHostedView source={hosted()} host="settings" mountId="a" />);
     expect(h.consumers).toHaveLength(2);
 
+    // A home reused for another view stops holding the first one's plugin.
+    const other = { ...hostedView(), id: "plugin-view:acme.other/prefs", pluginId: "acme.other" };
+    serve([hostedView(), other]);
+    settings.rerender(<PluginHostedView source={hosted(other)} host="settings" mountId="a" />);
+    expect([...h.consumers].sort()).toEqual([KIND_ID, other.id].sort());
+
     settings.unmount();
     expect(h.consumers).toEqual([KIND_ID]);
     surface.unmount();

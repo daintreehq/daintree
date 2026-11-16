@@ -471,6 +471,20 @@ export function syncPluginPanels(
   }
 }
 
+/**
+ * Report every live panel's current phase again, for a main that has lost what
+ * this renderer told it (#17068): a remote host that started a fresh session
+ * for this view keeps no record of the old one's panels.
+ */
+export function replayPluginPanelLifecycle(): void {
+  for (const [panelId, entry] of tracked) {
+    if (entry.removed || entry.lastPhase === null || !entry.kindId || !entry.pluginId) continue;
+    const phase = effectivePhase(entry);
+    entry.lastPhase = phase;
+    enqueue(panelId, entry, phase);
+  }
+}
+
 /** Test seam — drops all tracked state without aborting or emitting. */
 export function resetPluginPanelLifecycleForTests(): void {
   tracked.clear();

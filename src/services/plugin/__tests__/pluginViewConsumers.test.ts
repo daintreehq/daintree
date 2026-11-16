@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  replayPluginViewConsumers,
   resetPluginViewConsumersForTests,
   retainPluginViewConsumer,
 } from "@/services/plugin/pluginViewConsumers";
@@ -8,8 +9,7 @@ let report: ReturnType<typeof vi.fn<(viewIds: string[]) => Promise<void>>>;
 
 /** Drain the microtask-coalesced flush and return every snapshot sent so far. */
 async function drainReports(): Promise<string[][]> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
   return report.mock.calls.map(([viewIds]) => viewIds);
 }
 
@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   resetPluginViewConsumersForTests();
 });
@@ -65,14 +66,45 @@ describe("pluginViewConsumers (#17068)", () => {
     expect(await drainReports()).toEqual([]);
   });
 
-  it("resends after a failed report, so main isn't left with a stale snapshot", async () => {
-    report.mockRejectedValueOnce(new Error("ipc down"));
+  it("retries a failed report while the view sits open, backing off", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    report
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockRejectedValueOnce(new Error("ipc down"));
     retainPluginViewConsumer("acme.dash");
     await drainReports();
+
+    vi.advanceTimersByTime(1_000);
+    expect(await drainReports()).toEqual([["acme.dash"], ["acme.dash"]]);
+    // Doubled after the second failure: nothing at the first interval again.
+    vi.advanceTimersByTime(1_000);
+    expect(await drainReports()).toHaveLength(2);
+    vi.advanceTimersByTime(1_000);
+    expect(await drainReports()).toEqual([["acme.dash"], ["acme.dash"], ["acme.dash"]]);
+
+    vi.advanceTimersByTime(60_000);
+    expect(await drainReports()).toHaveLength(3);
+  });
+
+  it("retries a failed empty report, so main doesn't hold a closed view open", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const release = retainPluginViewConsumer("acme.dash");
+    await drainReports();
+    report.mockRejectedValueOnce(new Error("ipc down"));
+    release();
     await drainReports();
 
-    // A tick that nets out to the same mounts sends again, since main never got it.
-    retainPluginViewConsumer("plugin-view:acme/side")();
+    vi.advanceTimersByTime(1_000);
+    expect(await drainReports()).toEqual([["acme.dash"], [], []]);
+  });
+
+  it("replays its mounts for a host that lost them, and nothing when it never had one", async () => {
+    replayPluginViewConsumers();
+    expect(await drainReports()).toEqual([]);
+
+    retainPluginViewConsumer("acme.dash");
+    await drainReports();
+    replayPluginViewConsumers();
     expect(await drainReports()).toEqual([["acme.dash"], ["acme.dash"]]);
   });
 });

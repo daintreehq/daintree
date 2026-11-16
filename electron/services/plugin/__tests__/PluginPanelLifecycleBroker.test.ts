@@ -460,19 +460,17 @@ describe("ownership (#13820)", () => {
 });
 
 describe("live panel count (#17068)", () => {
-  it("counts every live phase until the panel is removed", () => {
-    const broker = makeBroker();
-    broker.ingest(1, [event({ phase: "mounted" })]);
-    expect(broker.livePanelCount("acme")).toBe(1);
-
-    for (const phase of ["hidden", "backgrounded", "trashed", "render-failed"] as const) {
+  it.each(["mounted", "hidden", "backgrounded", "trashed", "render-failed"] as const)(
+    "counts a panel first reported %s until it is removed",
+    (phase) => {
+      const broker = makeBroker();
       broker.ingest(1, [event({ phase })]);
-      expect(broker.livePanelCount("acme"), phase).toBe(1);
-    }
+      expect(broker.livePanelCount("acme")).toBe(1);
 
-    broker.ingest(1, [event({ phase: "removed" })]);
-    expect(broker.livePanelCount("acme")).toBe(0);
-  });
+      broker.ingest(1, [event({ phase: "removed" })]);
+      expect(broker.livePanelCount("acme")).toBe(0);
+    }
+  );
 
   it("counts a plugin's panels across renderers and never another plugin's", () => {
     const broker = makeBroker();

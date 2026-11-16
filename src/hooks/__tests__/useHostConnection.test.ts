@@ -109,6 +109,14 @@ vi.mock("@/store/hostDriverNavigation", () => ({
 vi.mock("@/store/slices/panelRegistry/helpers", () => ({
   deriveRuntimeStatus: () => "running",
 }));
+const replayPanelLifecycle = vi.hoisted(() => vi.fn());
+const replayViewConsumers = vi.hoisted(() => vi.fn());
+vi.mock("@/services/plugin/pluginPanelLifecycle", () => ({
+  replayPluginPanelLifecycle: replayPanelLifecycle,
+}));
+vi.mock("@/services/plugin/pluginViewConsumers", () => ({
+  replayPluginViewConsumers: replayViewConsumers,
+}));
 
 import {
   _reloadHostConnectionSyncForTesting,
@@ -428,6 +436,22 @@ describe("host connection sync", () => {
     await expect(heard[0]!.hydrated).resolves.toBe(settings);
     expect(heard[1]!.hydrated).toBeUndefined();
     offResync();
+  });
+
+  it("tells a fresh session's host which plugin views this one shows (#17068)", async () => {
+    installElectron();
+    bindView("studio-01");
+    replayPanelLifecycle.mockClear();
+    replayViewConsumers.mockClear();
+
+    // A resumed session kept every report this view made.
+    await resyncFromHost();
+    expect(replayPanelLifecycle).not.toHaveBeenCalled();
+    expect(replayViewConsumers).not.toHaveBeenCalled();
+
+    await resyncFromHost({ freshSession: true });
+    expect(replayPanelLifecycle).toHaveBeenCalledTimes(1);
+    expect(replayViewConsumers).toHaveBeenCalledTimes(1);
   });
 
   it("tells the listeners a fresh session's pass hydrated nothing when the view watches", async () => {

@@ -746,7 +746,12 @@ export function makePluginViewContent(
     // the banner would unmount mid-restart, taking the button's own pending
     // state with it, and `contentInert` would lift and re-arm the dead
     // backend's stale controls for the whole round trip.
-    const presentation = presentWorkerStatus(worker, stalled, everReady || restarting);
+    const presentation = presentWorkerStatus(
+      worker,
+      stalled,
+      everReady || restarting,
+      settled === null || settled.attempt !== attempt
+    );
 
     const boundWorkerGeneration = usePluginViewRebind({
       builtinComponent,

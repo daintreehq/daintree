@@ -30,6 +30,15 @@ describe("PluginHostedViewConsumers", () => {
     expect(consumers.count("unknown", ownerOf)).toBe(0);
   });
 
+  it("counts the same view mounted twice in one renderer twice", () => {
+    const consumers = new PluginHostedViewConsumers(() => {});
+    const w = watcher();
+    consumers.record(1, w.watch, ["plugin-view:acme/prefs", "plugin-view:acme/prefs"]);
+    expect(consumers.count("acme", ownerOf)).toBe(2);
+    consumers.record(1, w.watch, ["plugin-view:acme/prefs"]);
+    expect(consumers.count("acme", ownerOf)).toBe(1);
+  });
+
   it("replaces a renderer's report wholesale and forgets it on an empty one", () => {
     const consumers = new PluginHostedViewConsumers(() => {});
     const w = watcher();
@@ -83,9 +92,20 @@ describe("PluginHostedViewConsumers", () => {
       "x".repeat(513),
       null,
     ] as unknown);
-    expect(consumers.count("acme", ownerOf)).toBe(1);
-    consumers.record(2, watcher().watch, "not-an-array" as unknown);
-    expect(consumers.count("acme", ownerOf)).toBe(1);
+    const resolver = vi.fn(ownerOf);
+    expect(consumers.count("acme", resolver)).toBe(1);
+    // Only the valid id is held; nothing else ever reaches ownership.
+    expect(resolver.mock.calls).toEqual([["plugin-view:acme/prefs"]]);
+
+    const w = watcher();
+    consumers.record(2, w.watch, "not-an-array" as unknown);
+    expect(w.watch).not.toHaveBeenCalled();
+  });
+
+  it("holds at most a thousand mounts from one renderer", () => {
+    const consumers = new PluginHostedViewConsumers(() => {});
+    consumers.record(1, watcher().watch, Array(1_500).fill("plugin-view:acme/prefs"));
+    expect(consumers.count("acme", ownerOf)).toBe(1_000);
   });
 
   it("releases every watch on dispose", () => {
