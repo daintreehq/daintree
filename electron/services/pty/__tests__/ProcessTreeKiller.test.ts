@@ -756,6 +756,8 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
     const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
 
     killer.captureTree();
+    // Past the burst, so only the capture itself can supply this census.
+    vi.advanceTimersByTime(1);
     killer.execute(false);
 
     expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2003), P(2002), P(2001)]);
@@ -874,6 +876,8 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
     const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]), lineage);
 
     killer.captureTree();
+    // Past the burst, so only the capture itself can supply this census.
+    vi.advanceTimersByTime(1);
     killer.execute(false);
 
     expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
@@ -1048,6 +1052,444 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
 
     expect(killSpy).not.toHaveBeenCalled();
     expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #17045: closing a project kills every terminal in one synchronous burst, and
+// each kill used to take its own `ps -A` twice.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill bursts", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  // Three terminals: shell P(1000 + 100k) with one child P(1001 + 100k).
+  const shells = [P(1000), P(1100), P(1200)];
+  const rowsFor = (shell: number): CensusRow[] => [
+    [shell, 1, `shell-${shell}`],
+    [shell + 1, shell, `child-${shell}`],
+  ];
+  const everyTree = shells.flatMap(rowsFor);
+
+  function killersFor(lineage: LineageKillSource): ProcessTreeKiller[] {
+    return shells.map((shell) => new ProcessTreeKiller(makePty(shell), makeTreeCache([]), lineage));
+  }
+
+  it("reads one census for the burst's captures and one for its escalations", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(everyTree),
+      makeCensus([
+        // First shell died on SIGHUP; its child reparented and forked meanwhile.
+        [P(1001), 1, `child-${P(1000)}`],
+        [P(1002), P(1001), "forked-in-grace"],
+        // Second shell lives on, but its child exited and the PID was reused.
+        [P(1100), 1, `shell-${P(1100)}`],
+        [P(1101), 1, "replacement"],
+        ...rowsFor(P(1200)),
+      ]),
+    ]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) {
+      killer.captureTree();
+      killer.execute(false);
+    }
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual(shells.map((shell) => shell + 1));
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    const killed = signalsOf(killSpy, "SIGKILL");
+    expect(new Set(killed)).toEqual(new Set([P(1001), P(1002), P(1100), P(1200), P(1201)]));
+    expect(killed.indexOf(P(1002))).toBeLessThan(killed.indexOf(P(1001)));
+  });
+
+  it("never escalates off a census read before the kill's own SIGTERM pass", () => {
+    const [a, b] = [P(1000), P(1100)];
+    const lineage = makeCensusLineage([
+      makeCensus([...rowsFor(a), ...rowsFor(b)]),
+      // A's immediate escalation, read after A's SIGTERMs but before B's.
+      makeCensus([...rowsFor(a), ...rowsFor(b)]),
+      // B's, read after B's SIGTERMs: its child exited and the PID was reused.
+      makeCensus([...rowsFor(a), [b, 1, `shell-${b}`], [b + 1, 1, "replacement"]]),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    killerB.captureTree();
+    killerA.execute(true);
+    const aKills = signalsOf(killSpy, "SIGKILL");
+    killSpy.mockClear();
+    killerB.execute(true);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+    expect(new Set(aKills)).toEqual(new Set([a, a + 1]));
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([b + 1]);
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([b]);
+  });
+
+  it("shares a failed census instead of retrying it for every kill", () => {
+    const lineage = makeCensusLineage([null]);
+    const killers = shells.map(
+      (shell) => new ProcessTreeKiller(makePty(shell), makeTreeCache([shell + 1]), lineage)
+    );
+
+    for (const killer of killers) {
+      killer.captureTree();
+      killer.execute(false);
+    }
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual(shells.map((shell) => shell + 1));
+  });
+
+  it("reads again once the burst is over", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(everyTree),
+      makeCensus([...everyTree, [P(1102), P(1100), "forked-since"]]),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    killerA.execute(false);
+    vi.advanceTimersByTime(1);
+    killerB.captureTree();
+    killerB.execute(false);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(1001), P(1101), P(1102)]);
+  });
+
+  it("reads again when a burst outlasts the census's shelf life", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    vi.setSystemTime(Date.now() + 60_000);
+    killerB.captureTree();
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+  });
+
+  it("escalates only the members still waiting when the shared timer fires", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) killer.execute(false);
+    killers[0].abort();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+      new Set([P(1100), P(1101), P(1200), P(1201)])
+    );
+  });
+
+  it("reads no escalation census once every member has left", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) killer.execute(false);
+    for (const killer of killers) killer.abort();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps escalations with different grace windows apart", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(everyTree),
+      makeCensus(everyTree),
+      makeCensus(everyTree),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.execute(false, 500);
+    killerB.execute(false, 2000);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(499);
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1000), P(1001)]));
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(1499);
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+  });
+
+  it("never reuses a census read before the killer existed", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(rowsFor(P(1000))),
+      makeCensus([...rowsFor(P(1000)), ...rowsFor(P(1100))]),
+    ]);
+    new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage).captureTree();
+    // Spawned and killed in the same burst: the burst's census predates its shell.
+    const pty = makePty(P(1100));
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    killer.execute(false);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(1101)]);
+    expect(pty.kill).toHaveBeenCalled();
+  });
+
+  it("shares a census read that timed out", () => {
+    const lineage = {
+      ...makeCensusLineage([]),
+      takeKillCensus: vi.fn(() => {
+        vi.setSystemTime(Date.now() + 500);
+        return null;
+      }),
+    };
+    const killers = shells.map(
+      (shell) => new ProcessTreeKiller(makePty(shell), makeTreeCache([shell + 1]), lineage)
+    );
+
+    for (const killer of killers) {
+      killer.captureTree();
+      killer.execute(false);
+    }
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["succeeded", makeCensus([[P(1000), 1, "shell"]])],
+    ["failed", null],
+  ])("a re-kill in the same burst reads past an escalation that %s", (_label, escalation) => {
+    const stranger = makeCensus([
+      [P(1000), 1, "stranger"],
+      [P(2020), P(1000), "strangers-child"],
+    ]);
+    const lineage = makeCensusLineage([
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2001), P(1000), "agent"],
+      ]),
+      escalation,
+      stranger,
+    ]);
+    const pty = makePty(P(1000));
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]), lineage);
+
+    killer.execute(true);
+    killSpy.mockClear();
+    vi.mocked(pty.kill).mockClear();
+    killer.execute(false);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("a root exit refuses a census read while its shell was alive", () => {
+    const takeKillCensus = vi
+      .fn<() => KillCensus | null>()
+      .mockReturnValueOnce(makeCensus([[P(2002), 1, "npm"]]))
+      .mockReturnValueOnce(makeCensus([[P(2002), 1, "replacement"]]));
+    const lineage: LineageKillSource = {
+      registerRoot: () => {},
+      markRootClosing: () => {},
+      // The ledger's own probe still vouches for the orphan; the census decides.
+      getVerifiedOrphanPids: (_root, _covered, census) =>
+        !census || census.startTimeOf(P(2002)) === "npm" ? [P(2002)] : [],
+      takeKillCensus,
+    };
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    killer.reapAfterRootExit();
+
+    expect(takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("an escalation that throws does not cost the rest of the burst theirs", () => {
+    const failing: KillCensus = {
+      ...makeCensus(everyTree),
+      childrenOf: (pid) => {
+        if (pid === P(1001)) throw new Error("malformed table");
+        return everyTree.filter(([, ppid]) => ppid === pid).map(([child]) => child);
+      },
+    };
+    const lineage = makeCensusLineage([makeCensus(everyTree), failing]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.execute(false);
+    killerB.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("malformed table"));
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+  });
+
+  it("a slow escalation does not leave the next member on an old table", () => {
+    const [a, b] = [P(1000), P(1100)];
+    const lineage = {
+      ...makeCensusLineage([
+        makeCensus([...rowsFor(a), ...rowsFor(b)]),
+        // A's escalation read fails, so A falls back to probing the ledger...
+        null,
+        // ...and by the time B escalates its child's PID has been reused.
+        makeCensus([
+          [b, 1, `shell-${b}`],
+          [b + 1, 1, "replacement"],
+        ]),
+      ]),
+      getVerifiedOrphanPids: (
+        _root: number,
+        _covered: readonly number[],
+        census?: KillCensus | null
+      ) => {
+        if (!census) vi.setSystemTime(Date.now() + 300);
+        return [];
+      },
+    };
+    const cache = makeTreeCache([], { [a]: [a + 1], [b]: [b + 1] });
+    const killerA = new ProcessTreeKiller(makePty(a), cache, lineage);
+    const killerB = new ProcessTreeKiller(makePty(b), cache, lineage);
+
+    killerA.execute(false);
+    killerB.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+    const killed = signalsOf(killSpy, "SIGKILL");
+    expect(killed).toContain(b);
+    expect(killed).not.toContain(b + 1);
+  });
+
+  it("never shares across ledgers", () => {
+    const lineageA = makeCensusLineage([makeCensus(rowsFor(P(1000)))]);
+    const lineageB = makeCensusLineage([makeCensus(rowsFor(P(1100)))]);
+    const killerA = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineageA);
+    const killerB = new ProcessTreeKiller(makePty(P(1100)), makeTreeCache([]), lineageB);
+
+    killerA.captureTree();
+    killerB.captureTree();
+    killerA.execute(false);
+    killerB.execute(false);
+
+    expect(lineageA.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(lineageB.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(1001), P(1101)]);
+  });
+
+  describe("while a burst stays open", () => {
+    // Real setImmediate, so advancing the clock does not end the burst.
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    });
+
+    it("gives the last member to join its whole grace window", () => {
+      const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+      const [killerA, killerB] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(100);
+      killerB.execute(false);
+      killSpy.mockClear();
+      vi.advanceTimersByTime(499);
+
+      expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+
+      vi.advanceTimersByTime(1);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+        new Set([P(1000), P(1001), P(1100), P(1101)])
+      );
+      expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops delaying earlier members once a shared escalation has been open too long", () => {
+      const lineage = makeCensusLineage([
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+      ]);
+      const [killerA, killerB] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(300);
+      killerB.execute(false);
+      killSpy.mockClear();
+      vi.advanceTimersByTime(200);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1000), P(1001)]));
+
+      killSpy.mockClear();
+      vi.advanceTimersByTime(300);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+    });
+
+    it("an older escalation firing leaves the one that replaced it taking members", () => {
+      const lineage = makeCensusLineage([
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+      ]);
+      const [killerA, killerB, killerC] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(300);
+      killerB.execute(false);
+      vi.advanceTimersByTime(240);
+      killerC.execute(false);
+      killSpy.mockClear();
+      vi.advanceTimersByTime(499);
+
+      expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+
+      vi.advanceTimersByTime(1);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+        new Set([P(1100), P(1101), P(1200), P(1201)])
+      );
+    });
+
+    it("a member leaving an escalation that was replaced costs the newer one nothing", () => {
+      const lineage = makeCensusLineage([
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+        makeCensus(everyTree),
+      ]);
+      const [killerA, killerB] = killersFor(lineage);
+
+      killerA.execute(false);
+      vi.advanceTimersByTime(300);
+      killerB.execute(false);
+      killerA.abort();
+      killSpy.mockClear();
+      vi.advanceTimersByTime(500);
+
+      expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+    });
   });
 });
 

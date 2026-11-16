@@ -382,6 +382,41 @@ describe.skipIf(process.platform === "win32")(
       expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
     });
 
+    it("a project's kills share one census before any PTY is released (#17045)", () => {
+      const order: string[] = [];
+      const shells = [601, 602, 603, 604];
+      const lineageLedger = {
+        ...ledgerFor([]),
+        takeKillCensus: vi.fn(() => {
+          order.push("census");
+          return {
+            startTimeOf: (pid: number) => `t${pid}`,
+            childrenOf: (pid: number) => (shells.includes(pid) ? [pid + 1000] : []),
+          };
+        }),
+      };
+      const terminals = shells.map((shell) => {
+        const pty = createControllablePty();
+        (pty as { pid: number }).pid = shell;
+        pty.destroy.mockImplementation(() => order.push(`destroy ${shell}`));
+        return createTerminal(pty, undefined, { lineageLedger });
+      });
+
+      for (const terminal of terminals) terminal.kill("project-closed");
+
+      expect(order).toEqual(["census", ...shells.map((shell) => `destroy ${shell}`)]);
+      for (const shell of shells) expect(killSpy).toHaveBeenCalledWith(shell + 1000, "SIGTERM");
+
+      killSpy.mockClear();
+      vi.advanceTimersByTime(500);
+
+      expect(lineageLedger.takeKillCensus).toHaveBeenCalledTimes(2);
+      for (const shell of shells) {
+        expect(killSpy).toHaveBeenCalledWith(shell + 1000, "SIGKILL");
+        expect(killSpy).toHaveBeenCalledWith(shell, "SIGKILL");
+      }
+    });
+
     it("takes no census on a natural exit", () => {
       const pty = createControllablePty();
       const lineageLedger = { ...ledgerFor([]), takeKillCensus: vi.fn(() => null) };
