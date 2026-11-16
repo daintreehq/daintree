@@ -346,6 +346,25 @@ export async function handleReportPanelInventory(
 }
 
 /**
+ * Record the plugin views the sender has mounted outside the panel grid
+ * (#17068): settings, sidebar, toolbar and Canopy views, surfaces and file
+ * editors. Each entry is a view id, once per mount; main resolves who owns it.
+ * Watched like the unsaved-panel report, so a reload, crash or closed view
+ * never leaves a worker held open for views no longer on screen.
+ */
+export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string[]): Promise<void> {
+  const sender = ctx.event?.sender;
+  const source = sender ? undefined : panelLifecycleSourceFor(ctx);
+  const watch = sender
+    ? watchWebContentsDocument(sender)
+    : source
+      ? watchSourceHandle(source)
+      : undefined;
+  if (!watch) return;
+  (await getPluginService()).ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
+}
+
+/**
  * Record which of the sender's plugin panels say they hold unsaved work
  * (#15031). Keyed by sender and forgotten with its document, so a reload or a
  * closed view never leaves a stale prompt behind.

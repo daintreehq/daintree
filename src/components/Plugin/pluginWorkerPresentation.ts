@@ -57,6 +57,11 @@ export function presentWorkerStatus(
       if (!everReady) return { kind: "content" };
       return stalled ? { kind: "stalled" } : { kind: "reloading" };
     case "stopped":
+      // Idle governance retired the worker while nothing showed this plugin
+      // (#17068). A view that never had a backend is opening, and its own
+      // activation brings one back, so this is a first load the Suspense
+      // skeleton owns. Only a view that lost a working backend is stranded.
+      if (!everReady) return { kind: "content" };
       return {
         kind: "unavailable",
         title: "Plugin backend stopped",

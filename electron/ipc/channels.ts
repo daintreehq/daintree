@@ -1269,6 +1269,8 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
+  /** Renderer reports the plugin views it has mounted outside the panel grid, for idle worker governance (#17068). */
+  PLUGIN_REPORT_VIEW_CONSUMERS: "plugin:report-view-consumers",
   /** Renderer reports which of its plugin panels say they hold unsaved work (#15031). */
   PLUGIN_REPORT_UNSAVED_PANELS: "plugin:report-unsaved-panels",
   /** A plugin's panels, in any view, that say they hold unsaved work (#15031). */

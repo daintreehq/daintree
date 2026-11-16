@@ -558,6 +558,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:report-panel-inventory": "free",
   "plugin:report-panel-lifecycle": "free",
   "plugin:report-unsaved-panels": "free",
+  "plugin:report-view-consumers": "free",
   "plugin:restart-worker": "free",
   "plugin:runtime-statuses-get": "free",
   "plugin:set-audit-enabled": "free",

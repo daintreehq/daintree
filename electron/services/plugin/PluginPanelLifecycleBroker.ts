@@ -131,13 +131,16 @@ export class PluginPanelLifecycleBroker {
   /**
    * Accept a renderer batch. Malformed entries and unknown panel kinds are
    * dropped individually — a plugin that unloaded mid-batch must not cost the
-   * rest of the batch its delivery.
+   * rest of the batch its delivery. Returns the plugins whose panels the batch
+   * moved.
    */
-  ingest(sourceId: number, events: readonly unknown[]): void {
-    if (!Array.isArray(events)) return;
+  ingest(sourceId: number, events: readonly unknown[]): Set<string> {
+    const touched = new Set<string>();
+    if (!Array.isArray(events)) return touched;
     for (const raw of events) {
       const event = this.normalize(raw);
       if (!event) continue;
+      touched.add(event.pluginId);
 
       let panels = this.bySource.get(sourceId);
       if (!panels) {
@@ -154,6 +157,7 @@ export class PluginPanelLifecycleBroker {
 
       this.emit(event);
     }
+    return touched;
   }
 
   /**
@@ -192,11 +196,29 @@ export class PluginPanelLifecycleBroker {
    * evicted or destroyed — deliberately WITHOUT synthesizing `removed`, because
    * a cached or crashed view says nothing about whether the user closed the
    * panel, and a false terminal event is exactly the destructive misreading
-   * this issue exists to prevent.
+   * this issue exists to prevent. Returns the plugins whose panels it held.
    */
-  clearSource(sourceId: number): void {
+  clearSource(sourceId: number): Set<string> {
+    const held = new Set<string>();
+    for (const event of this.bySource.get(sourceId)?.values() ?? []) held.add(event.pluginId);
     this.bySource.delete(sourceId);
     this.nonPluginBySource.delete(sourceId);
+    return held;
+  }
+
+  /**
+   * How many of `pluginId`'s panels renderers hold, in any live phase (#17068).
+   * A hidden, backgrounded or trashed panel counts: it comes back without the
+   * user reopening it, and its worker may hold state for it.
+   */
+  livePanelCount(pluginId: string): number {
+    let count = 0;
+    for (const panels of this.bySource.values()) {
+      for (const event of panels.values()) {
+        if (event.pluginId === pluginId) count++;
+      }
+    }
+    return count;
   }
 
   /** Replace a renderer's set of live non-plugin panel ids (#12610). */

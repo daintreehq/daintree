@@ -99,6 +99,7 @@ import {
   handleActivateForView,
   handleReportPanelLifecycle,
   handleReportPanelInventory,
+  handleReportViewConsumers,
   handleReportUnsavedPanels,
   handleGetUnsavedPanels,
   handleRuntimeStatusesGet,
@@ -371,6 +372,11 @@ export const pluginNamespace = defineIpcNamespace({
     reportPanelInventory: op(
       PLUGIN_METHOD_CHANNELS.reportPanelInventory,
       handleReportPanelInventory,
+      { withContext: true }
+    ),
+    reportViewConsumers: op(
+      PLUGIN_METHOD_CHANNELS.reportViewConsumers,
+      handleReportViewConsumers,
       { withContext: true }
     ),
     reportUnsavedPanels: op(PLUGIN_METHOD_CHANNELS.reportUnsavedPanels, handleReportUnsavedPanels, {

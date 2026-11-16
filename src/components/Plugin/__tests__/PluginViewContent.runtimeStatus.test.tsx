@@ -225,6 +225,27 @@ describe("mounted panel learns its backend died (#12278)", () => {
     expect(screen.getByRole("button", { name: /Restart plugin/ })).toBeTruthy();
   });
 
+  it("opens on a worker idle governance retired without a stopped banner (#17068)", async () => {
+    await mountContent();
+    // Never had a working backend: this view is opening, and its own
+    // activation brings one back. A banner telling the user to restart would
+    // be wrong for the length of that activation.
+    await pushStatus(worker({ state: "stopped", reason: "deactivated" }));
+
+    expect(screen.getByTestId("plugin-content").hasAttribute("inert")).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("stops a view whose working backend was retired under it", async () => {
+    await mountContent();
+    await pushStatus(worker({ state: "ready" }));
+    await pushStatus(worker({ state: "stopped", reason: "deactivated" }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Plugin backend stopped");
+    expect(screen.getByTestId("plugin-content").hasAttribute("inert")).toBe(true);
+  });
+
   it("keeps stale content visible but stops it being interactive", async () => {
     await mountContent();
     await pushStatus(worker({ state: "failed", reason: "activation-failed" }));

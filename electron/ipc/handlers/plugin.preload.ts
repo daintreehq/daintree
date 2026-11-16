@@ -64,6 +64,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   activateForView: "plugin:activate-for-view",
   reportPanelLifecycle: "plugin:report-panel-lifecycle",
   reportPanelInventory: "plugin:report-panel-inventory",
+  reportViewConsumers: "plugin:report-view-consumers",
   reportUnsavedPanels: "plugin:report-unsaved-panels",
   getUnsavedPanels: "plugin:unsaved-panels-get",
   getRuntimeStatuses: "plugin:runtime-statuses-get",

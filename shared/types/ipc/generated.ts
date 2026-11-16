@@ -3391,6 +3391,10 @@ export interface GeneratedIpcInvokeMap {
     args: [panels: import("../pluginUnsavedPanels.js").PluginUnsavedPanelReport[]];
     result: void;
   };
+  "plugin:report-view-consumers": {
+    args: [viewIds: string[]];
+    result: void;
+  };
   "plugin:restart-worker": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginRuntimeStatus | null;
