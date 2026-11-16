@@ -85,10 +85,10 @@ export async function readPluginTerminalScreen(
   if (after.isExited === true) return { status: "exited" };
   if (!snapshot) return { status: "unavailable" };
   const screen = activeScreenData(snapshot.data);
-  const rule = inputSuggestionRuleFor(after.detectedAgentId ?? after.launchAgentId);
-  const inputLine = options.withInputLine ? observeInputLine(screen, rule).inputLine : undefined;
+  const rule = () => inputSuggestionRuleFor(after.detectedAgentId ?? after.launchAgentId);
+  const inputLine = options.withInputLine ? observeInputLine(screen, rule()).inputLine : undefined;
   const tail = tailCapturedOutput(
-    options.dropGhostInput ? dropInputSuggestion(screen, rule) : screen,
+    options.dropGhostInput ? dropInputSuggestion(screen, rule()) : screen,
     lines,
     true
   );
