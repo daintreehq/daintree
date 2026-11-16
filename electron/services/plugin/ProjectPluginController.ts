@@ -295,6 +295,30 @@ export class ProjectPluginController {
     );
   }
 
+  /** Whether this project has an entry: opened, and not closed (or swept) since. */
+  isTracking(projectId: string): boolean {
+    return this.entries.has(projectId);
+  }
+
+  /**
+   * Safety net for closes this controller has not been told about yet — the
+   * notification is fire-and-forget, and the project store's own status
+   * reconciliation flips a row to "closed" without routing through one at all.
+   * Sweeping on every project switch, warm ones included, bounds how long a
+   * closed project's plugins can outlive it to one user action.
+   */
+  async sweepClosedProjects(exceptProjectId: string): Promise<void> {
+    for (const trackedId of this.closedTrackedProjects(exceptProjectId)) {
+      await this.onProjectClosed(trackedId);
+    }
+  }
+
+  private closedTrackedProjects(exceptProjectId: string): string[] {
+    return [...this.entries.keys()].filter(
+      (trackedId) => trackedId !== exceptProjectId && this.deps.isProjectClosed(trackedId)
+    );
+  }
+
   private async doOpen(
     projectId: string,
     projectRoot: string,
@@ -304,15 +328,8 @@ export class ProjectPluginController {
     if (this.disposed) return;
     if (this.superseded(projectId, requested, requestedGeneration)) return;
 
-    // Safety net for closes this controller has not been told about yet — the
-    // notification is fire-and-forget, and the project store's own status
-    // reconciliation flips a row to "closed" without routing through one at all.
-    // Sweeping on the next project switch bounds how long a closed project's
-    // plugins can outlive it to one user action.
-    for (const trackedId of [...this.entries.keys()]) {
-      if (trackedId !== projectId && this.deps.isProjectClosed(trackedId)) {
-        await this.onProjectClosed(trackedId);
-      }
+    for (const trackedId of this.closedTrackedProjects(projectId)) {
+      await this.onProjectClosed(trackedId);
     }
 
     // The sweep awaits, so re-check before reading a generation off the entry:

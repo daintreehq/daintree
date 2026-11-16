@@ -1164,9 +1164,13 @@ export class PluginService {
    * repeat open of one is a warm switch back into a view that already holds
    * the snapshot, while the watcher keeps its plugins in step with disk, so it
    * skips rediscovery and the replay. Cleared by anything that could make the
-   * last open's result wrong: a close, a trust change, a manual reload.
+   * last open's result wrong: a close, a trust or mute change, a manual
+   * reload, or the watcher losing sight of the folder.
    */
-  private readonly establishedProjectOpens = new Map<string, string>();
+  private readonly establishedProjectOpens = new Map<
+    string,
+    { readonly root: string; readonly observation: number }
+  >();
   /** The full open in flight per project, so a second switch joins it rather than queueing another. */
   private readonly pendingProjectOpens = new Map<
     string,
@@ -6684,24 +6688,35 @@ export class PluginService {
    * Only the first open of a project, or one after anything that invalidates
    * it, does that work (#17039). A warm switch back into a project already
    * open at the same root joins the open still in flight or, once that has
-   * landed, only wakes launch waiters and re-ensures the watcher: contribution
-   * broadcasts reach cached and frozen views alike, and a renderer that is
-   * actually new gets its own snapshot when it loads.
+   * landed and the watcher has kept the folder in sight since, only sweeps
+   * closed projects, wakes launch waiters and re-ensures the watcher:
+   * contribution broadcasts reach cached and frozen views alike, and a
+   * renderer that is actually new gets its own snapshot when it loads.
    */
   async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
     if (this.disposed) return;
     const pending = this.pendingProjectOpens.get(projectId);
     if (pending?.root === projectRoot) return pending.promise;
-    if (
-      !pending &&
-      this.establishedProjectOpens.get(projectId) === projectRoot &&
-      this.openProjectRoots.get(projectId) === projectRoot
-    ) {
+    if (!pending && this.isProjectOpenEstablished(projectId, projectRoot)) {
       this.wakeProjectOpenWaiters(projectId);
+      await this.projectPlugins.sweepClosedProjects(projectId);
+      if (this.disposed) return;
       await this.syncProjectPluginWatcher(projectId, projectRoot);
       return;
     }
     return this.reconcileProjectOpen(projectId, projectRoot);
+  }
+
+  private isProjectOpenEstablished(projectId: string, projectRoot: string): boolean {
+    const established = this.establishedProjectOpens.get(projectId);
+    return (
+      established?.root === projectRoot &&
+      this.openProjectRoots.get(projectId) === projectRoot &&
+      // The controller's own closed-row sweep drops a project without a close
+      // reaching this service.
+      this.projectPlugins.isTracking(projectId) &&
+      this.projectPluginWatcherRegistry?.observationToken(projectId) === established.observation
+    );
   }
 
   private reconcileProjectOpen(projectId: string, projectRoot: string): Promise<void> {
@@ -6709,13 +6724,17 @@ export class PluginService {
     const isCurrent = (): boolean => this.pendingProjectOpens.get(projectId)?.promise === promise;
     const promise: Promise<void> = this.runProjectOpen(projectId, projectRoot).then(
       () => {
+        // No watcher (disabled trust, a subscribe that failed) means nothing
+        // keeps the plugins in step with disk, so every switch reconciles.
+        const observation = this.projectPluginWatcherRegistry?.observationToken(projectId) ?? null;
         if (
           isCurrent() &&
           !this.disposed &&
+          observation !== null &&
           this.openProjectRoots.get(projectId) === projectRoot &&
           !this.failedDiscoveryRoots.has(projectRoot)
         ) {
-          this.establishedProjectOpens.set(projectId, projectRoot);
+          this.establishedProjectOpens.set(projectId, { root: projectRoot, observation });
         }
         if (isCurrent()) this.pendingProjectOpens.delete(projectId);
       },
@@ -6878,6 +6897,7 @@ export class PluginService {
   }
 
   async activateStagedProjectPlugin(projectId: string, pluginId: string): Promise<void> {
+    this.forgetProjectOpen(projectId);
     await this.projectPlugins.activateStaged(projectId, pluginId);
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
@@ -6890,6 +6910,8 @@ export class PluginService {
    * be told what is no longer there.
    */
   async setProjectPluginMuted(projectId: string, pluginId: string, muted: boolean): Promise<void> {
+    // Muting can free an installed instance's id for the next reconcile.
+    this.forgetProjectOpen(projectId);
     await this.projectPlugins.setMuted(projectId, pluginId, muted);
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
@@ -7121,9 +7143,8 @@ export class PluginService {
     const root = projectStore.getProjectById(projectId)?.path;
     if (!root) return;
     if (this.disposed) return;
-    const pending = this.pendingProjectOpens.get(projectId);
-    if (pending) await pending.promise.catch(() => {});
-    if (this.disposed) return;
+    // Queued now, behind any open in flight, so a close requested after it
+    // still supersedes it in the controller's chain.
     await this.reconcileProjectOpen(projectId, root);
   }
 
@@ -7340,6 +7361,7 @@ export class PluginService {
     manifestId: string,
     enabled: boolean
   ): Promise<void> {
+    this.forgetProjectOpen(projectId);
     if (!isProjectWorkspaceId(projectId)) {
       throw new Error(`setProjectInstanceEnabled: "${projectId}" is not a project id`);
     }

@@ -1211,6 +1211,7 @@ describe("warm reopen of an already open project (#17039)", () => {
     root: string;
     rediscover: ReturnType<typeof vi.spyOn>;
     replay: ReturnType<typeof vi.spyOn>;
+    discoverOriginal: (projectId: string, root: string) => Promise<void>;
   }> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
     extraTempRoots.push(root);
@@ -1218,9 +1219,11 @@ describe("warm reopen of an already open project (#17039)", () => {
     openedServices.push(service);
     await service.initialize();
     const seam = service as unknown as OpenSeam;
-    const rediscover = vi.spyOn(seam.projectPlugins, "onProjectOpened");
+    const controller = seam.projectPlugins;
+    const discoverOriginal = controller.onProjectOpened.bind(controller);
+    const rediscover = vi.spyOn(controller, "onProjectOpened");
     const replay = vi.spyOn(seam, "pushSnapshotToProject");
-    return { service, root, rediscover, replay };
+    return { service, root, rediscover, replay, discoverOriginal };
   }
 
   it("rediscovers and replays only on the first open at a root", async () => {
@@ -1235,22 +1238,69 @@ describe("warm reopen of an already open project (#17039)", () => {
   });
 
   it("joins an open still in flight instead of queueing another", async () => {
-    const { service, root, rediscover, replay } = await startWithProject();
+    const { service, root, rediscover, replay, discoverOriginal } = await startWithProject();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    rediscover.mockImplementationOnce(async (...args: [string, string]) => {
+      await gate;
+      return discoverOriginal(...args);
+    });
 
-    await Promise.all([
-      service.onProjectOpened(PROJECT_A, root),
-      service.onProjectOpened(PROJECT_A, root),
-    ]);
+    const first = service.onProjectOpened(PROJECT_A, root);
+    let secondSettled = false;
+    const second = service.onProjectOpened(PROJECT_A, root).then(() => {
+      secondSettled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    // Joining means waiting for the first open's work, not returning early.
+    expect(secondSettled).toBe(false);
 
+    release();
+    await Promise.all([first, second]);
+    expect(secondSettled).toBe(true);
     expect(rediscover).toHaveBeenCalledTimes(1);
     expect(replay).toHaveBeenCalledTimes(1);
   });
 
-  it("still wakes a launch waiting on the project's plugins", async () => {
-    const { service, root } = await startWithProject();
+  it("does the full open again once the watcher has lost sight of the folder", async () => {
+    const { service, root, rediscover } = await startWithProject();
     await service.onProjectOpened(PROJECT_A, root);
 
-    await expect(service.waitForProjectPlugins(PROJECT_A, 1_000)).resolves.toBe(true);
+    (
+      service as unknown as { projectPluginWatcherRegistry: { stop(id: string): void } }
+    ).projectPluginWatcherRegistry.stop(PROJECT_A);
+    await service.onProjectOpened(PROJECT_A, root);
+
+    expect(rediscover).toHaveBeenCalledTimes(2);
+  });
+
+  it("does the full open again after a mute or an instance toggle", async () => {
+    const { service, root, rediscover } = await startWithProject();
+    await service.onProjectOpened(PROJECT_A, root);
+
+    await service.setProjectPluginMuted(PROJECT_A, "acme.none", true).catch(() => {});
+    await service.onProjectOpened(PROJECT_A, root);
+    expect(rediscover).toHaveBeenCalledTimes(2);
+
+    await service.setProjectInstanceEnabled(PROJECT_A, root, "acme.none", false).catch(() => {});
+    await service.onProjectOpened(PROJECT_A, root);
+    expect(rediscover).toHaveBeenCalledTimes(3);
+  });
+
+  it("does the full open again after the closed-row sweep dropped the project", async () => {
+    const { service, root, rediscover } = await startWithProject();
+    const rootB = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
+    extraTempRoots.push(rootB);
+    await service.onProjectOpened(PROJECT_A, root);
+
+    // A's row closes without a close notification; switching to B sweeps it.
+    projectStoreMock.getProjectById.mockImplementation(((id: string) =>
+      id === PROJECT_A ? { path: root, status: "closed" } : null) as never);
+    await service.onProjectOpened(PROJECT_B, rootB);
+    projectStoreMock.getProjectById.mockImplementation(() => null);
+
+    await service.onProjectOpened(PROJECT_A, root);
+    expect(rediscover).toHaveBeenCalledTimes(3);
   });
 
   it("does the full open again after a close, a root change, a trust change or a reload", async () => {
