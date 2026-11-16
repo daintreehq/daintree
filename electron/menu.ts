@@ -197,7 +197,10 @@ function isInstalledMenuCurrent(): boolean {
 
 /** Item fields kept current on the installed menu in place, so no rebuild is needed for them. */
 function liveMenuItemFields(id: string): readonly string[] | undefined {
-  if (id === CLOSE_WINDOW_MENU_ITEM_ID || (PROJECT_MENU_ITEM_IDS as readonly string[]).includes(id)) {
+  if (
+    id === CLOSE_WINDOW_MENU_ITEM_ID ||
+    (PROJECT_MENU_ITEM_IDS as readonly string[]).includes(id)
+  ) {
     return ["enabled"];
   }
   if (isOpenWindowMenuItemId(id)) return ["label", "checked", "visible"];
@@ -364,7 +367,8 @@ export function createApplicationMenu(
       items.push({
         label: item.label,
         accelerator: item.accelerator ? convertShortcutToAccelerator(item.accelerator) : undefined,
-        click: (_item, browserWindow) => sendAction(actionId, getTargetBrowserWindow(browserWindow)),
+        click: (_item, browserWindow) =>
+          sendAction(actionId, getTargetBrowserWindow(browserWindow)),
       });
       clickTargets.push(`action:${actionId}`);
     }

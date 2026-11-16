@@ -3489,7 +3489,10 @@ describe("a build that would install the menu already there (#17040)", () => {
   it("rebuilds for another window or CLI service, which its commands fall back to", () => {
     const service = cli({});
     createApplicationMenu(win, service);
-    createApplicationMenu({ ...mockBrowserWindow, id: 2 } as unknown as Electron.BrowserWindow, service);
+    createApplicationMenu(
+      { ...mockBrowserWindow, id: 2 } as unknown as Electron.BrowserWindow,
+      service
+    );
     expect(builds()).toBe(2);
 
     createApplicationMenu(win, service);
