@@ -152,6 +152,7 @@ beforeEach(() => {
   // than inheriting whichever answer the previous one installed.
   probeGitMarkerMock.mockResolvedValue("present");
   projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: true });
+  resetGitMarkerCacheForTesting();
 });
 
 vi.mock("../../../window/portDistribution.js", () => ({
@@ -190,6 +191,7 @@ import {
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+import { resetGitMarkerCacheForTesting } from "../projectCrud/switch.js";
 import { installRemoteProjectResidency } from "../../../remote/hybrid/residency.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
@@ -624,6 +626,88 @@ describe("project switch/reopen refuses a row whose repository is gone (#11649)"
       expect.objectContaining({ code: "NOT_A_GIT_REPO" })
     );
     expect(resumeProject).not.toHaveBeenCalled();
+  });
+
+  // #17039: a warm switch to a view the window already holds no longer waits
+  // on a fresh `.git` stat when one was seen recently; the probe still runs,
+  // off the critical path, and a vanished marker is caught by the next switch.
+  describe.each(CHANNEL_CASES)("warm reuse of a recent marker (%s)", (channel) => {
+    function makeWarmPvm(state: "cached" | "loading" = "cached") {
+      return {
+        ...makePvm(),
+        getAllViews: vi.fn(() => [
+          {
+            projectId: "proj-gone",
+            state,
+            view: { webContents: { isDestroyed: () => false } },
+          },
+        ]),
+      };
+    }
+
+    it("does not block a warm switch on the probe once a marker was seen", async () => {
+      registerProject();
+      const handler = handlerFor(channel, makeWarmPvm());
+      await handler({ sender: { id: 10 } }, "proj-gone");
+      expect(probeGitMarkerMock).toHaveBeenCalledTimes(1);
+
+      // A probe that never answers would hang a blocking check forever.
+      probeGitMarkerMock.mockReturnValue(new Promise(() => {}));
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).resolves.toEqual(
+        expect.objectContaining({ outcome: "switched" })
+      );
+      // Still revalidated, just not awaited.
+      expect(probeGitMarkerMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("blocks the switch after a background probe finds the marker gone", async () => {
+      registerProject();
+      const pvm = makeWarmPvm();
+      const handler = handlerFor(channel, pvm);
+      await handler({ sender: { id: 10 } }, "proj-gone");
+
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+      // Let back in once on the cached verdict; its background probe sees the loss.
+      await handler({ sender: { id: 10 } }, "proj-gone");
+      await new Promise((resolve) => setImmediate(resolve));
+      pvm.switchTo.mockClear();
+
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+        expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+      );
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+    });
+
+    it("always blocks on the probe when the view is still loading", async () => {
+      registerProject();
+      const handler = handlerFor(channel, makeWarmPvm("loading"));
+      await handler({ sender: { id: 10 } }, "proj-gone");
+
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+        expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+      );
+    });
+
+    it("blocks on the probe once the cached verdict is older than a minute", async () => {
+      registerProject();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      try {
+        const handler = handlerFor(channel, makeWarmPvm());
+        await handler({ sender: { id: 10 } }, "proj-gone");
+
+        now.mockReturnValue(1_000_000 + 60_001);
+        probeGitMarkerMock.mockResolvedValue("missing");
+        projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+        await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+          expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+        );
+      } finally {
+        now.mockRestore();
+      }
+    });
   });
 
   it("probes the project's own root", async () => {

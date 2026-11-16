@@ -1199,3 +1199,92 @@ describe("launch records of a package's instances (#16240)", () => {
     expect(stored()).toEqual(["t-repo"]);
   });
 });
+
+describe("warm reopen of an already open project (#17039)", () => {
+  type OpenSeam = {
+    projectPlugins: { onProjectOpened(projectId: string, root: string): Promise<void> };
+    pushSnapshotToProject(projectId: string): Promise<void>;
+  };
+
+  async function startWithProject(): Promise<{
+    service: PluginService;
+    root: string;
+    rediscover: ReturnType<typeof vi.spyOn>;
+    replay: ReturnType<typeof vi.spyOn>;
+  }> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
+    extraTempRoots.push(root);
+    const service = new PluginService(tmpDir);
+    openedServices.push(service);
+    await service.initialize();
+    const seam = service as unknown as OpenSeam;
+    const rediscover = vi.spyOn(seam.projectPlugins, "onProjectOpened");
+    const replay = vi.spyOn(seam, "pushSnapshotToProject");
+    return { service, root, rediscover, replay };
+  }
+
+  it("rediscovers and replays only on the first open at a root", async () => {
+    const { service, root, rediscover, replay } = await startWithProject();
+
+    await service.onProjectOpened(PROJECT_A, root);
+    await service.onProjectOpened(PROJECT_A, root);
+    await service.onProjectOpened(PROJECT_A, root);
+
+    expect(rediscover).toHaveBeenCalledTimes(1);
+    expect(replay).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins an open still in flight instead of queueing another", async () => {
+    const { service, root, rediscover, replay } = await startWithProject();
+
+    await Promise.all([
+      service.onProjectOpened(PROJECT_A, root),
+      service.onProjectOpened(PROJECT_A, root),
+    ]);
+
+    expect(rediscover).toHaveBeenCalledTimes(1);
+    expect(replay).toHaveBeenCalledTimes(1);
+  });
+
+  it("still wakes a launch waiting on the project's plugins", async () => {
+    const { service, root } = await startWithProject();
+    await service.onProjectOpened(PROJECT_A, root);
+
+    await expect(service.waitForProjectPlugins(PROJECT_A, 1_000)).resolves.toBe(true);
+  });
+
+  it("does the full open again after a close, a root change, a trust change or a reload", async () => {
+    const { service, root, rediscover } = await startWithProject();
+    const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
+    extraTempRoots.push(otherRoot);
+
+    await service.onProjectOpened(PROJECT_A, root);
+    await service.onProjectClosed(PROJECT_A);
+    await service.onProjectOpened(PROJECT_A, root);
+    expect(rediscover).toHaveBeenCalledTimes(2);
+
+    await service.onProjectOpened(PROJECT_A, otherRoot);
+    expect(rediscover).toHaveBeenCalledTimes(3);
+
+    await service.setProjectPluginTrust(PROJECT_A, "session");
+    await service.onProjectOpened(PROJECT_A, otherRoot);
+    expect(rediscover).toHaveBeenCalledTimes(4);
+
+    projectStoreMock.getProjectById.mockImplementation(() => ({ path: otherRoot }));
+    await service.reloadProjectPlugins(PROJECT_A);
+    expect(rediscover).toHaveBeenCalledTimes(5);
+    await service.onProjectOpened(PROJECT_A, otherRoot);
+    expect(rediscover).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not treat a close during the open as established", async () => {
+    const { service, root, rediscover } = await startWithProject();
+
+    const opening = service.onProjectOpened(PROJECT_A, root);
+    const closing = service.onProjectClosed(PROJECT_A);
+    await Promise.all([opening, closing]);
+    await service.onProjectOpened(PROJECT_A, root);
+
+    expect(rediscover).toHaveBeenCalledTimes(2);
+  });
+});

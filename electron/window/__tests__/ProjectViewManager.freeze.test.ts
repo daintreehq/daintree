@@ -530,26 +530,15 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(initialWc);
   });
 
-  it("resets the CPU rate BEFORE unfreezing on warm reactivation", async () => {
+  it("unfreezes on warm reactivation without a CPU-rate reset (#17039)", async () => {
     await manager.switchTo("proj-b", "/path/b");
     vi.mocked(unthrottleCpuWebContents).mockClear();
     vi.mocked(unfreezeWebContents).mockClear();
 
     await manager.switchTo("proj-a", "/path/a");
 
-    // The reset only acts on an already-attached debugger session, and the
-    // thaw attaches one — so the reset has to go first or it always fires.
-    const resetIdx = vi
-      .mocked(unthrottleCpuWebContents)
-      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
-    const unfreezeIdx = vi
-      .mocked(unfreezeWebContents)
-      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
-    expect(resetIdx).toBeGreaterThanOrEqual(0);
-    expect(unfreezeIdx).toBeGreaterThanOrEqual(0);
-    const resetOrder = vi.mocked(unthrottleCpuWebContents).mock.invocationCallOrder[resetIdx]!;
-    const unfreezeOrder = vi.mocked(unfreezeWebContents).mock.invocationCallOrder[unfreezeIdx]!;
-    expect(resetOrder).toBeLessThan(unfreezeOrder);
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalled();
   });
 
   it("warm reactivation clears the cached mark", async () => {
