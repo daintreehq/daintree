@@ -307,21 +307,25 @@ export function MoveTerminalsToAccountDialog({
     const choice = choices.find((candidate) => (candidate.id ?? DEFAULT_LOGIN_VALUE) === value);
     if (choice) setRequest(buildMovePanesRequest(agentId, choice));
   };
+  // An account removed while the dialog is open can take nothing: the restart
+  // would refuse every pane, so the dialog asks for an account again.
+  const live =
+    request !== null &&
+    (request.account.id === null || choices.some((choice) => choice.id === request.account.id))
+      ? request
+      : null;
 
   return (
     <AccountSwitchConfirm
       agentId={agentId}
-      request={request}
+      request={live}
       onClose={onClose}
       accountPicker={
         <div className="space-y-1.5">
           <label htmlFor={pickerId} className="block text-sm font-medium text-text-primary">
             Account
           </label>
-          <Select
-            value={request ? (request.account.id ?? DEFAULT_LOGIN_VALUE) : ""}
-            onValueChange={pick}
-          >
+          <Select value={live ? (live.account.id ?? DEFAULT_LOGIN_VALUE) : ""} onValueChange={pick}>
             <SelectTrigger id={pickerId} className="w-full">
               <SelectValue placeholder="Choose an account…" />
             </SelectTrigger>

@@ -477,6 +477,46 @@ describe("MoveTerminalsToAccountDialog (#17089)", () => {
     expect(getInfoMock).not.toHaveBeenCalled();
   });
 
+  it("restarts the boxes as left, a ticked working agent included", async () => {
+    renderMove(COMPANY);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Parser" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 2 terminals" }));
+    });
+
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    expect(dispatchMock.mock.calls.map((call) => call[1].terminalId)).toEqual(["b", "c"]);
+    expect(getInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("asks for an account again once the picked one is removed", () => {
+    renderMove(COMPANY);
+    expect(screen.getByText("Restart 2 terminals on 'Company'?")).toBeTruthy();
+
+    act(() => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: {
+              accounts: [{ ...PERSONAL, configDir: "/Users/me/.claude-personal" }],
+            },
+          },
+        } as unknown as AgentSettings,
+      });
+    });
+
+    expect(screen.getByText("Move Claude terminals to which account?")).toBeTruthy();
+    expect(screen.queryByTestId("account-switch-panes")).toBeNull();
+    const confirm = screen.getByRole("button", { name: "Restart 0 terminals" });
+    expect(
+      confirm.hasAttribute("disabled") || confirm.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
+  });
+
   it("calls out a working agent once it is ticked", () => {
     renderMove(COMPANY);
 

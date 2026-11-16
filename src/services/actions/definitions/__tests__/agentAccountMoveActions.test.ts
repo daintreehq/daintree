@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { ActionContext, ActionDefinition } from "@shared/types/actions";
+import type { ActionContext } from "@shared/types/actions";
 import type { AgentSettings } from "@shared/types";
-import type { ActionRegistry } from "../../actionTypes";
+import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerAgentAccountMoveActions } from "../agentAccountMoveActions";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useMoveTerminalsDialogStore } from "@/store/moveTerminalsDialogStore";
 
-function definitions(): Map<string, ActionDefinition> {
+function definitions(): Map<string, AnyActionDefinition> {
   const registry: ActionRegistry = new Map();
   registerAgentAccountMoveActions(registry);
-  return new Map([...registry].map(([id, factory]) => [id, factory() as ActionDefinition]));
+  return new Map([...registry].map(([id, factory]) => [id, factory()]));
 }
 
-function claudeMove(): ActionDefinition {
+function claudeMove(): AnyActionDefinition {
   const definition = definitions().get("agent.moveTerminalsToAccount.claude");
   if (!definition) throw new Error("no move action for claude");
   return definition;
@@ -84,6 +84,36 @@ describe("agent.moveTerminalsToAccount.<agent> (#17089)", () => {
   it("opens nothing for an account that isn't saved", async () => {
     saveAccounts([{ id: "company", name: "Company" }]);
     await expect(claudeMove().run({ accountId: "gone" }, ctx)).rejects.toThrow(/gone/);
+    expect(useMoveTerminalsDialogStore.getState().opening).toBeNull();
+  });
+
+  it("is a palette command that runs with no arguments, and refuses unknown ones", async () => {
+    saveAccounts([{ id: "company", name: "Company" }]);
+    const { ActionService } = await import("@/services/ActionService");
+    const service = new ActionService();
+    for (const definition of definitions().values()) service.register(definition);
+
+    const entry = service.list({}).find((e) => e.id === "agent.moveTerminalsToAccount.claude");
+    expect(entry).toMatchObject({ enabled: true, requiresArgs: false });
+    expect(entry?.paletteHidden).toBeUndefined();
+    expect(entry?.paletteRedirectTo).toBeUndefined();
+
+    for (const args of [undefined, {}]) {
+      useMoveTerminalsDialogStore.getState().close();
+      const result = await service.dispatch("agent.moveTerminalsToAccount.claude", args, {
+        source: "user",
+      });
+      expect(result.ok).toBe(true);
+      expect(useMoveTerminalsDialogStore.getState().opening?.agentId).toBe("claude");
+    }
+
+    useMoveTerminalsDialogStore.getState().close();
+    const refused = await service.dispatch(
+      "agent.moveTerminalsToAccount.claude",
+      { accountId: "company", worktreeId: "wt-1" },
+      { source: "user" }
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
     expect(useMoveTerminalsDialogStore.getState().opening).toBeNull();
   });
 
