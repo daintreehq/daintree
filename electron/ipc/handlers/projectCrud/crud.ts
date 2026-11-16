@@ -23,7 +23,6 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
-import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { logError } from "../../../utils/logger.js";
 import { captureProjectLayoutSeed } from "../../../services/plugin/projectLayoutSeeds.js";
 
@@ -397,6 +396,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         // Best-effort: an uncaught rejection would be relabelled INTERNAL by
         // the catch below and abort a close the user asked for.
         try {
+          const { helpSessionService } = await import("../../../services/HelpSessionService.js");
           await helpSessionService.revokeByProjectId(projectId);
         } catch (revokeError) {
           logError("project-close-help-revoke-failed", revokeError, { projectId });

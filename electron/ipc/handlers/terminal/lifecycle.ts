@@ -16,7 +16,7 @@ import {
   mcpPaneConfigService,
   type PanePluginServer,
 } from "../../../services/McpPaneConfigService.js";
-import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { loadedHelpSessionService } from "../../../services/helpSessionRuntime.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
@@ -179,9 +179,14 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 // keeps the wiring ahead of each one.
 /** So the Assistant's panel shows its plugin tool calls beside its calls to Daintree's own server. */
 function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void {
-  mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
-    helpSessionService.getAssistantPluginLane(terminalId)
+  mcpServerService.setAssistantPluginLaneResolver(
+    (terminalId) => loadedHelpSessionService()?.getAssistantPluginLane(terminalId) ?? null
   );
+}
+
+/** An Assistant's pane, by its binding; none is bound before the service loads. */
+function isHelpTerminal(terminalId: string): boolean {
+  return loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false;
 }
 
 /**
@@ -666,10 +671,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // of `tier`), so a `core` session can still skip permission prompts and a
     // `full` session can still respect them.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
-    const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
+    // Only the service mints help tokens, so with it not loaded a token here
+    // is stale or the user's own and validates as nothing.
+    const helpSessions = helpToken ? loadedHelpSessionService() : null;
+    const helpTier = helpSessions?.validateToken(helpToken) ?? false;
     const isAssistantAgent =
       typeof launchAgentId === "string" && getAssistantWiredAgentIds().includes(launchAgentId);
-    const isHelpLaunch = helpTier !== false && isAssistantAgent && safeCommand.length > 0;
+    const isHelpLaunch =
+      helpSessions !== null && helpTier !== false && isAssistantAgent && safeCommand.length > 0;
     // The rejection below keys off this rather than `isAssistantAgent`, which
     // now also requires an implemented `mcpInjection` mode: an agent excluded
     // on that new ground would otherwise sail past the throw and fall through
@@ -853,7 +862,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
-      const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
+      const bypassPermissions = helpSessions.getBypassPermissions(helpToken);
       // A `waitForReply` send holds its call until the agent answers, and
       // Claude Code's own MCP call timeout would cut it off first.
       if (launchAgentId === "claude" && spawnEnv?.MCP_TOOL_TIMEOUT === undefined) {
@@ -901,7 +910,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // token reused with `launchAgentId: "codex"`) — refuse to spawn
       // rather than silently launching Codex without its MCP wiring.
       if (launchAgentId === "codex") {
-        const codexArgs = helpSessionService.getCodexLaunchArgs(helpToken);
+        const codexArgs = helpSessions.getCodexLaunchArgs(helpToken);
         if (codexArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Codex session; refusing to spawn"
@@ -919,7 +928,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A `null` return is the agent-mismatch signal (e.g. a Claude help
       // token reused with `launchAgentId: "copilot"`) — refuse to spawn.
       if (launchAgentId === "copilot") {
-        const copilotArgs = helpSessionService.getCopilotLaunchArgs(helpToken);
+        const copilotArgs = helpSessions.getCopilotLaunchArgs(helpToken);
         if (copilotArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Copilot session; refusing to spawn"
@@ -935,7 +944,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // the lane's session-only trust and allow-rule file. Same `null`
       // contract: another agent's help token refuses to spawn.
       if (launchAgentId === "antigravity") {
-        const antigravityArgs = helpSessionService.getAntigravityLaunchArgs(helpToken);
+        const antigravityArgs = helpSessions.getAntigravityLaunchArgs(helpToken);
         if (antigravityArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to an Antigravity session; refusing to spawn"
@@ -955,7 +964,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // belong to a Claude session is a cross-agent reuse and refuses to spawn.
       let claudeArgs: string[] = [];
       if (launchAgentId === "claude") {
-        const laneArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
+        const laneArgs = helpSessions.getClaudeLaunchArgs(helpToken);
         if (laneArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Claude session; refusing to spawn"
@@ -971,7 +980,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // instruction surface and an env var for shell substitution. Merged
       // unconditionally — the path is cleared on every app start and stays
       // valid for the lifetime of this process.
-      const scratchEnv = helpSessionService.getAssistantScratchEnv(helpToken);
+      const scratchEnv = helpSessions.getAssistantScratchEnv(helpToken);
       if (scratchEnv) {
         spawnEnv = { ...(spawnEnv ?? {}), ...scratchEnv };
       }
@@ -985,7 +994,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       let pluginArgs: string[] = [];
       let pluginsPrepared = false;
       const pluginLaunch =
-        launchMcp !== undefined ? helpSessionService.getPluginLaunchContext(helpToken) : null;
+        launchMcp !== undefined ? helpSessions.getPluginLaunchContext(helpToken) : null;
       if (launchMcp !== undefined && pluginLaunch !== null) {
         try {
           // A name the Assistant's own servers or the user's assistant folder
@@ -1051,7 +1060,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (e.g. a stale resume against a session a sibling provision
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
-      if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
+      if (!helpSessions.markTerminalForToken(helpToken, id, launchAgentId)) {
         if (pluginsPrepared) await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
@@ -1060,7 +1069,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A session whose teardown began while its plugin servers were prepared
       // still binds — its capture needs the PTY — but must not hand them over:
       // that teardown already revoked whatever its old PTY held.
-      if (pluginsPrepared && helpSessionService.getPluginLaunchContext(helpToken) === null) {
+      if (pluginsPrepared && helpSessions.getPluginLaunchContext(helpToken) === null) {
         pluginMcpGrantRegistry.revokeTerminal(id);
       }
     } else if (launchMcp !== undefined && safeCommand.length > 0 && resolvedProject) {
@@ -1123,7 +1132,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // none of the session's own wiring either. Plugin servers reach the
         // Assistant only through its own launch, checked against its session
         // and its answer, so this one gets none.
-        const isHelpTerminal = helpSessionService.isHelpTerminal(id);
+        const isHelpTerminal = isHelpTerminal(id);
         const pluginReport = isHelpTerminal
           ? null
           : await resolveLaunchPluginsReport(
@@ -1280,7 +1289,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (requiredPluginTools.length > 0 && requiredPluginToolStatuses.length === 0) {
         requiredPluginToolStatuses = requiredPluginToolsAll(
           requiredPluginTools,
-          helpSessionService.isHelpTerminal(id) ? "unavailable" : "config-failed"
+          isHelpTerminal(id) ? "unavailable" : "config-failed"
         );
       }
       if (requiredPluginToolStatuses.length > 0) {
@@ -1300,7 +1309,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (preparedForThisLaunch) {
           await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         }
-      } else if (!helpSessionService.isHelpTerminal(id)) {
+      } else if (!isHelpTerminal(id)) {
         pluginToolsLaunchProjectId = resolvedProject.id;
       }
     } else if (requiredPluginTools.length > 0) {
@@ -1479,7 +1488,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         typeof launchAgentId === "string" &&
         safeCommand.length > 0 &&
         !isHelpLaunch &&
-        !helpSessionService.isHelpTerminal(id) &&
+        !isHelpTerminal(id) &&
         validatedOptions.scheduledRun === undefined &&
         validatedOptions.restore !== true &&
         getLifecycleLedger().currentGeneration(id) === undefined &&
@@ -1527,7 +1536,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
         // unbinds the session on a restart's kill. Without it, Restart All
         // Terminals would quietly strip the assistant's identity.
-        isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
+        isAssistantTerminal: isHelpLaunch || isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         scheduledRun: validatedOptions.scheduledRun,
@@ -1573,7 +1582,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
         try {
-          helpSessionService
+          helpSessions
             .recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
             .catch((err) => {
               console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
@@ -1595,7 +1604,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // If we bound this terminalId to a help session above, unbind now so a
       // future provision doesn't try to kill a PTY that never spawned.
       if (isHelpLaunch) {
-        helpSessionService.unbindTerminal(id);
+        helpSessions.unbindTerminal(id);
       }
       const errorMessage = formatErrorMessage(error, "Failed to spawn terminal");
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);

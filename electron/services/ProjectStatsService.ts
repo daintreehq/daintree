@@ -9,7 +9,7 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
-import { helpSessionService } from "./HelpSessionService.js";
+import { loadedHelpSessionService } from "./helpSessionRuntime.js";
 import {
   getSharedTerminalSnapshot,
   invalidateSharedTerminalSnapshot,
@@ -383,11 +383,12 @@ export class ProjectStatsService {
         // Same visibility gate the pull path applies. Omitting it on either
         // side is the drift the shared helper exists to prevent: the push
         // suppresses unchanged payloads, so a row hydrated with a hidden
-        // assistant would keep reporting it until agent state next moved.
-        (id) => helpSessionService.isPanelVisible(id),
+        // assistant would keep reporting it until agent state next moved. A
+        // service that hasn't loaded has no panel open and no assistant slot.
+        (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
         // Lets concurrent assistants be ranked by who needs the user,
         // rather than by whichever started last (#12108).
-        (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+        (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
         // Tells a finished turn from a real ask and keeps parked runs out of
         // attention. The pull path passes the same two, for the reason above.
         runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
