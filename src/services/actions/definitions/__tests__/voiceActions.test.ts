@@ -26,11 +26,14 @@ const runtime = vi.hoisted(() => {
   return {
     service,
     loaded: service as typeof service | null,
+    // Runs while the service loads, as anything can.
+    duringLoad: null as (() => void) | null,
     pendingPress: null as null | { code: string; released: boolean },
   };
 });
 vi.mock("@/services/voiceRecordingRuntime", () => ({
   loadVoiceRecordingService: vi.fn(async () => {
+    runtime.duringLoad?.();
     runtime.loaded = runtime.service;
     return runtime.service;
   }),
@@ -143,6 +146,7 @@ describe("dictation locks and recalls only a pane with a composer (#14955)", () 
     toggle.mockClear();
     stopPanelDictation.mockClear();
     runtime.loaded = runtime.service;
+    runtime.duringLoad = null;
     useVoiceRecordingStore.getState().setLastError(null);
     vi.mocked(notify).mockClear();
     useVoiceRecordingStore.getState().unlockTarget();
@@ -195,6 +199,17 @@ describe("dictation locks and recalls only a pane with a composer (#14955)", () 
     expect(stopPanelDictation).toHaveBeenCalledWith("shell-1");
     expect(toggle).not.toHaveBeenCalled();
     expect(useVoiceRecordingStore.getState().lastError).toBeNull();
+  });
+
+  it("starts nothing in a recalled pane that lost its composer while the service loaded (#17031)", async () => {
+    dictatable.add("agent-1");
+    runtime.loaded = null;
+    runtime.duringLoad = () => dictatable.delete("agent-1");
+
+    await runAction("voiceInput.recallRecentTarget", { panelId: "agent-1" });
+
+    expect(toggle).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().lastError?.code).toBe("recall_target_unavailable");
   });
 
   it("finds nothing to stop in a recalled pane before the service has loaded (#17031)", async () => {

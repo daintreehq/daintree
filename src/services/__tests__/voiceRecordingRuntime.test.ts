@@ -1,27 +1,41 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceInputSettings, VoiceLiveSessionUpdate } from "@shared/types";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
+
+type StoredSettings = Pick<
+  VoiceInputSettings,
+  "enabled" | "transcriptionProvider" | "openaiApiKey"
+>;
 
 // Stands in for the recording service: counts how often its module is
-// evaluated, and initializes the way the real one does, by telling the runtime.
+// evaluated, can hold its import back or fail it, and records what it is
+// initialized with.
 const fake = vi.hoisted(() => ({
   imports: 0,
+  failNextImport: false,
+  importGate: null as Promise<void> | null,
   initialize: vi.fn(),
+  refreshConfiguration: vi.fn(async () => true),
   recordsPresses: false,
 }));
 function mockRecordingService() {
   // Registered afresh for each test's module graph, so every import counts.
   vi.doMock("../VoiceRecordingService", async () => {
     fake.imports++;
-    const runtime = await import("../voiceRecordingRuntime");
-    const voiceRecordingService = {
-      initialize(settings?: VoiceInputSettings) {
-        fake.initialize(settings);
-        runtime.setInitializedVoiceRecordingService(voiceRecordingService as never);
+    if (fake.importGate) await fake.importGate;
+    if (fake.failNextImport) {
+      fake.failNextImport = false;
+      throw new Error("chunk failed to load");
+    }
+    return {
+      voiceRecordingService: {
+        initialize: fake.initialize,
+        refreshConfiguration: fake.refreshConfiguration,
+        recordsShortcutPresses: () => fake.recordsPresses,
       },
-      recordsShortcutPresses: () => fake.recordsPresses,
     };
-    return { voiceRecordingService };
   });
 }
 
@@ -32,18 +46,15 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
-const ON: VoiceInputSettings = {
-  enabled: true,
-  transcriptionProvider: "openai",
-  openaiApiKey: "sk-test",
-} as VoiceInputSettings;
-const OFF: VoiceInputSettings = { ...ON, enabled: false };
+const ON: StoredSettings = { enabled: true, transcriptionProvider: "openai", openaiApiKey: "sk" };
+const OFF: StoredSettings = { ...ON, enabled: false };
 
-function stubVoiceInput(settings: Promise<VoiceInputSettings>) {
+function stubVoiceInput(initial: StoredSettings) {
+  const stored = { settings: initial };
   let liveSession: ((update: VoiceLiveSessionUpdate) => void) | null = null;
   const unsubscribeLive = vi.fn();
   const voiceInput = {
-    getSettings: vi.fn(() => settings),
+    getSettings: vi.fn(async () => stored.settings),
     onLiveSession: vi.fn((callback: (update: VoiceLiveSessionUpdate) => void) => {
       liveSession = callback;
       return unsubscribeLive;
@@ -51,48 +62,71 @@ function stubVoiceInput(settings: Promise<VoiceInputSettings>) {
   };
   vi.stubGlobal("electron", { voiceInput });
   return {
+    stored,
     voiceInput,
     unsubscribeLive,
     reportLiveSession: (update: VoiceLiveSessionUpdate) => liveSession?.(update),
   };
 }
 
+const teardowns: Array<() => void> = [];
+
 async function loadRuntime() {
-  return import("../voiceRecordingRuntime");
+  const runtime = await import("../voiceRecordingRuntime");
+  return {
+    ...runtime,
+    startVoiceRecordingRuntime: () => {
+      const stop = runtime.startVoiceRecordingRuntime();
+      teardowns.push(stop);
+      return stop;
+    },
+  };
 }
 
-const keydown = (init: Partial<KeyboardEvent>) => ({ ...init }) as KeyboardEvent;
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const changeSettingsHere = () =>
+  window.dispatchEvent(new Event(VOICE_INPUT_SETTINGS_CHANGED_EVENT));
+
+function keydown(init: KeyboardEventInit, timeStamp = 42): KeyboardEvent {
+  return Object.defineProperty(new KeyboardEvent("keydown", init), "timeStamp", {
+    value: timeStamp,
+  });
+}
 const release = (code: string) => window.dispatchEvent(new KeyboardEvent("keyup", { code }));
 
-const PRESS = { code: "Period", key: ".", metaKey: true, repeat: false, timeStamp: 42 };
+const PRESS: KeyboardEventInit = { code: "Period", key: ".", metaKey: true };
 
 beforeEach(() => {
   vi.resetModules();
   mockRecordingService();
   fake.imports = 0;
+  fake.failNextImport = false;
+  fake.importGate = null;
   fake.initialize.mockClear();
+  fake.refreshConfiguration.mockClear();
   fake.recordsPresses = false;
 });
 
 afterEach(() => {
+  for (const stop of teardowns.splice(0)) stop();
   vi.unstubAllGlobals();
 });
 
 describe("startVoiceRecordingRuntime (#17031)", () => {
   it("never imports the service while voice input is off", async () => {
-    const { voiceInput } = stubVoiceInput(Promise.resolve(OFF));
+    const { voiceInput } = stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
     runtime.startVoiceRecordingRuntime();
-    await vi.waitFor(() => expect(voiceInput.getSettings).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
 
+    expect(voiceInput.getSettings).toHaveBeenCalledTimes(1);
     expect(fake.imports).toBe(0);
     expect(runtime.getLoadedVoiceRecordingService()).toBeNull();
   });
 
   it("loads the service once, handing it the settings it read, when dictation is configured", async () => {
-    stubVoiceInput(Promise.resolve(ON));
+    stubVoiceInput(ON);
     const runtime = await loadRuntime();
 
     runtime.startVoiceRecordingRuntime();
@@ -106,87 +140,136 @@ describe("startVoiceRecordingRuntime (#17031)", () => {
   });
 
   it("loads nothing for a settings read that lands after teardown", async () => {
-    let land!: (settings: VoiceInputSettings) => void;
-    stubVoiceInput(new Promise((resolve) => (land = resolve)));
+    stubVoiceInput(ON);
     const runtime = await loadRuntime();
 
-    const stop = runtime.startVoiceRecordingRuntime();
-    stop();
-    land(ON);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    runtime.startVoiceRecordingRuntime()();
+    await settle();
 
     expect(fake.imports).toBe(0);
   });
 
-  it("loads the service when Settings turn dictation on in this view", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+  it("loads the service when Settings turn dictation on in this view, from what main stored", async () => {
+    const { stored } = stubVoiceInput(OFF);
     const runtime = await loadRuntime();
-    const { dispatchVoiceInputSettingsChanged } = await import("@/lib/voiceInputSettingsEvents");
     runtime.startVoiceRecordingRuntime();
+    await settle();
 
-    dispatchVoiceInputSettingsChanged({ ...ON, openaiApiKey: "" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    changeSettingsHere();
+    await settle();
     expect(fake.imports).toBe(0);
 
-    dispatchVoiceInputSettingsChanged(ON);
+    stored.settings = ON;
+    changeSettingsHere();
     await vi.waitFor(() => expect(runtime.getLoadedVoiceRecordingService()).not.toBeNull());
-    // The service reads the settings afresh rather than trusting the tab's copy.
-    expect(fake.initialize).toHaveBeenCalledWith(undefined);
+    expect(fake.initialize).toHaveBeenCalledWith(ON);
+  });
+
+  it("rereads the settings once loaded when they changed while the service was loading", async () => {
+    const { stored } = stubVoiceInput(ON);
+    let letImportFinish!: () => void;
+    fake.importGate = new Promise((resolve) => (letImportFinish = resolve));
+    const runtime = await loadRuntime();
+    runtime.startVoiceRecordingRuntime();
+    await vi.waitFor(() => expect(fake.imports).toBe(1));
+
+    // Turned off while the chunk is still on its way: the boot read it was
+    // handed is stale by the time it initializes.
+    stored.settings = OFF;
+    changeSettingsHere();
+    letImportFinish();
+
+    await vi.waitFor(() => expect(fake.refreshConfiguration).toHaveBeenCalledTimes(1));
+    expect(fake.initialize).toHaveBeenCalledWith(ON);
+  });
+
+  it("tries again on the next change after the service failed to load", async () => {
+    const { stored } = stubVoiceInput(ON);
+    fake.failNextImport = true;
+    const runtime = await loadRuntime();
+    runtime.startVoiceRecordingRuntime();
+    await vi.waitFor(() => expect(fake.imports).toBe(1));
+    await settle();
+    expect(runtime.getLoadedVoiceRecordingService()).toBeNull();
+
+    stored.settings = { ...ON };
+    changeSettingsHere();
+
+    await vi.waitFor(() => expect(runtime.getLoadedVoiceRecordingService()).not.toBeNull());
+    expect(fake.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("trusts no boot read a settings change overtook", async () => {
+    const { voiceInput, stored } = stubVoiceInput(ON);
+    let landBootRead!: (settings: StoredSettings) => void;
+    voiceInput.getSettings.mockImplementationOnce(
+      () => new Promise<StoredSettings>((resolve) => (landBootRead = resolve))
+    );
+    const runtime = await loadRuntime();
+    runtime.startVoiceRecordingRuntime();
+
+    stored.settings = OFF;
+    changeSettingsHere();
+    landBootRead(ON);
+    await settle();
+
+    expect(fake.imports).toBe(0);
   });
 
   it("shows another view's session at once and loads the service to follow it", async () => {
-    const { reportLiveSession, unsubscribeLive } = stubVoiceInput(Promise.resolve(OFF));
+    const { reportLiveSession, unsubscribeLive } = stubVoiceInput(OFF);
     const runtime = await loadRuntime();
     const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
     runtime.startVoiceRecordingRuntime();
+    await settle();
 
     reportLiveSession({ revision: 1, session: null });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     expect(fake.imports).toBe(0);
 
     const session = {
       sessionId: "s1",
-      hostId: "local",
+      hostId: LOCAL_HOST_ID,
       projectId: "p2",
       projectName: "Other",
       details: null,
-    } as const;
+    };
     reportLiveSession({ revision: 2, session });
 
     expect(useVoiceRecordingStore.getState().sessionElsewhere).toEqual(session);
-    expect(unsubscribeLive).toHaveBeenCalled();
     await vi.waitFor(() => expect(runtime.getLoadedVoiceRecordingService()).not.toBeNull());
+    expect(unsubscribeLive).toHaveBeenCalled();
   });
 });
 
 describe("withVoiceRecordingService (#17031)", () => {
   it("runs at once against a loaded service, as a direct call would", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
     const service = await runtime.loadVoiceRecordingService();
 
-    const use = vi.fn();
-    runtime.withVoiceRecordingService(use);
+    const run = vi.fn();
+    runtime.withVoiceRecordingService(run);
 
-    expect(use).toHaveBeenCalledWith(service);
+    expect(run).toHaveBeenCalledWith(service);
   });
 
   it("loads the service first when nothing has yet", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
-    const use = vi.fn();
-    runtime.withVoiceRecordingService(use);
-    expect(use).not.toHaveBeenCalled();
+    const run = vi.fn();
+    runtime.withVoiceRecordingService(run);
+    expect(run).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(use).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(fake.imports).toBe(1);
   });
 });
 
 describe("noteVoiceShortcutKeydown (#17031)", () => {
   it("keeps a voice key pressed before the service could hear it, until a start takes it", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
     runtime.noteVoiceShortcutKeydown(keydown(PRESS));
@@ -205,7 +288,7 @@ describe("noteVoiceShortcutKeydown (#17031)", () => {
     ["Meta's release", () => release("MetaLeft")],
     ["the window losing focus", () => window.dispatchEvent(new Event("blur"))],
   ])("marks the kept press released on %s", async (_what, letGo) => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
     runtime.noteVoiceShortcutKeydown(keydown(PRESS));
@@ -215,7 +298,7 @@ describe("noteVoiceShortcutKeydown (#17031)", () => {
   });
 
   it("keeps nothing for a repeat, another key, or a press the service records itself", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
     runtime.noteVoiceShortcutKeydown(keydown({ ...PRESS, repeat: true }));
@@ -231,11 +314,11 @@ describe("noteVoiceShortcutKeydown (#17031)", () => {
   });
 
   it("drops an older press no start took when the next voice key goes down", async () => {
-    stubVoiceInput(Promise.resolve(OFF));
+    stubVoiceInput(OFF);
     const runtime = await loadRuntime();
 
-    runtime.noteVoiceShortcutKeydown(keydown(PRESS));
-    runtime.noteVoiceShortcutKeydown(keydown({ ...PRESS, timeStamp: 99 }));
+    runtime.noteVoiceShortcutKeydown(keydown(PRESS, 1));
+    runtime.noteVoiceShortcutKeydown(keydown(PRESS, 99));
 
     expect(runtime.takePendingVoiceShortcutPress()?.timeStamp).toBe(99);
   });

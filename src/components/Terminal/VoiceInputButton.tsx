@@ -139,6 +139,16 @@ export function VoiceInputButton({
   const trackRef = useRef<HTMLSpanElement>(null);
   const iconRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number>(0);
+  // A click that has to load the service first starts nothing once the
+  // button, and the composer the words were for, has gone.
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOrbiting) return;
@@ -268,7 +278,9 @@ export function VoiceInputButton({
       ...(otherHostId !== undefined ? { otherHostId } : {}),
       ...(canopyRow !== undefined ? { canopyRow } : {}),
     };
-    withVoiceRecordingService((voice) => voice.toggle(target));
+    withVoiceRecordingService((voice) => {
+      if (mountedRef.current) void voice.toggle(target);
+    });
   }, [
     disabled,
     blockedWhenDisabled,

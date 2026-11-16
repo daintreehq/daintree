@@ -192,22 +192,33 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     run: async (args: unknown) => {
       const parsed = recallRecentTargetArgsSchema.safeParse(args);
       if (!parsed.success) return;
-      const target = resolveDictationTarget(parsed.data.panelId);
-      if (!target) {
-        // Only a start needs the composer: one already running there still stops.
-        const stopping = getLoadedVoiceRecordingService()?.stopPanelDictation(parsed.data.panelId);
-        if (stopping) {
-          await stopping;
-          return;
-        }
+      const { panelId } = parsed.data;
+      const refuse = () =>
         useVoiceRecordingStore.getState().setLastError({
           severity: "transient",
           code: "recall_target_unavailable",
           message: "That panel is no longer available for dictation.",
         });
+      const target = resolveDictationTarget(panelId);
+      if (!target) {
+        // Only a start needs the composer: one already running there still stops.
+        const stopping = getLoadedVoiceRecordingService()?.stopPanelDictation(panelId);
+        if (stopping) {
+          await stopping;
+          return;
+        }
+        refuse();
         return;
       }
-      await (await loadVoiceRecordingService()).toggle(target);
+      const loaded = getLoadedVoiceRecordingService();
+      const service = loaded ?? (await loadVoiceRecordingService());
+      // The pane can go while the service loads.
+      const current = loaded ? target : resolveDictationTarget(panelId);
+      if (!current) {
+        refuse();
+        return;
+      }
+      await service.toggle(current);
     },
   }));
 

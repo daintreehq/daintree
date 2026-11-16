@@ -4,6 +4,7 @@ import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 
 const voice = vi.hoisted(() => ({
   initialize: vi.fn(),
+  adoptShortcutPress: vi.fn(),
   toggleFocusedPanel: vi.fn(async (_options?: { returnToTarget?: boolean }) => {}),
   stopAndSend: vi.fn(async () => {}),
 }));
@@ -90,6 +91,19 @@ describe("the Canopy window's dictation keys", () => {
     expect(voice.toggleFocusedPanel).toHaveBeenCalledTimes(2);
     expect(voice.toggleFocusedPanel).toHaveBeenLastCalledWith({ returnToTarget: true });
     expect(reached).toEqual([]);
+  });
+
+  // Dictation turned on in a project window after this one read its settings
+  // leaves the service's own listener deaf to the press (#17031).
+  it("hands the dictation key's press to the service before the toggle claims it", () => {
+    press(reply, "d");
+
+    expect(voice.adoptShortcutPress).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "KeyD", released: false })
+    );
+    expect(voice.adoptShortcutPress.mock.invocationCallOrder[0]).toBeLessThan(
+      voice.toggleFocusedPanel.mock.invocationCallOrder[0]!
+    );
   });
 
   it("follows a rebound shortcut, and leaves the old one to the reply", () => {

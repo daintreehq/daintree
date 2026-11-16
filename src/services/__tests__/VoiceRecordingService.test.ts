@@ -4777,13 +4777,10 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       recordingMode: "push-to-talk",
     });
     const { windowListeners } = setupGlobals(electron);
-    const { keybindingService } = (await import("@/services/KeybindingService")) as unknown as {
-      keybindingService: {
-        matchesEvent: ReturnType<typeof vi.fn>;
-        getEffectiveCombos: ReturnType<typeof vi.fn>;
-      };
-    };
-    keybindingService.matchesEvent.mockImplementation(
+    const { keybindingService } = await import("@/services/KeybindingService");
+    const matchesEvent = vi.mocked(keybindingService.matchesEvent);
+    const getEffectiveCombos = vi.mocked(keybindingService.getEffectiveCombos);
+    matchesEvent.mockImplementation(
       (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
     );
     const { voiceRecordingService } = await import("../VoiceRecordingService");
@@ -4793,8 +4790,8 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       expect(electron.voiceInput.getSettings).toHaveBeenCalled();
     });
     await Promise.resolve();
-    keybindingService.matchesEvent.mockClear();
-    keybindingService.getEffectiveCombos.mockClear();
+    matchesEvent.mockClear();
+    getEffectiveCombos.mockClear();
 
     const downEvent = {
       code: "Period",
@@ -4804,12 +4801,12 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
       shiftKey: false,
       altKey: false,
       ctrlKey: false,
-    } as unknown as KeyboardEvent;
+    };
     for (const listener of windowListeners["keydown"] ?? []) listener(downEvent);
 
     expect(voiceRecordingService.recordsShortcutPresses()).toBe(false);
-    expect(keybindingService.getEffectiveCombos).not.toHaveBeenCalled();
-    expect(keybindingService.matchesEvent).not.toHaveBeenCalled();
+    expect(getEffectiveCombos).not.toHaveBeenCalled();
+    expect(matchesEvent).not.toHaveBeenCalled();
     await startFromPress(voiceRecordingService);
     for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
     expect(stopSpy).not.toHaveBeenCalled();

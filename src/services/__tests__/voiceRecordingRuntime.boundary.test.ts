@@ -8,7 +8,9 @@ const SRC = path.resolve(__dirname, "../..");
 // rides in a project view's bundle.
 const ALLOWED = new Set(["canopyWindow/canopyWindowKeys.ts"]);
 
-const STATIC_IMPORT = /^\s*import\s+(type\s+)?[^;]*?\s+from\s+"[^"]*\/VoiceRecordingService";/gm;
+// Re-exports count: a barrel passing the service on loads it as surely.
+const STATIC_IMPORT =
+  /^\s*(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+"[^"]*\/VoiceRecordingService";/gm;
 
 describe("the recording service's import boundary (#17031)", () => {
   it("is reached in a project view only through the runtime, which loads it on demand", () => {

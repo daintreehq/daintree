@@ -5,6 +5,7 @@ import { isDragCancelEscape } from "@/lib/dragCancelEscape";
 import { keybindingService } from "@/services/KeybindingService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { logDebug, logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { VoiceSendOptions, voiceRecordingService } from "./VoiceRecordingService";
 
 // The recording service is one of the renderer's largest chunks, and voice
@@ -40,39 +41,42 @@ export function loadVoiceRecordingService(
   settings?: VoiceInputSettings
 ): Promise<VoiceRecordingServiceInstance> {
   if (service) return Promise.resolve(service);
-  loading ??= import("./VoiceRecordingService").then(
-    ({ voiceRecordingService }) => {
+  loading ??= import("./VoiceRecordingService")
+    .then(({ voiceRecordingService }) => {
       voiceRecordingService.initialize(settings);
+      service = voiceRecordingService;
       return voiceRecordingService;
-    },
-    (error: unknown) => {
+    })
+    .catch((error: unknown) => {
+      // Nothing cached, so the next caller tries again.
       loading = null;
       throw error;
-    }
-  );
+    });
   return loading;
 }
 
+function logLoadFailure(error: unknown): void {
+  logWarn(`${LOG_PREFIX} Couldn't load voice dictation`, {
+    error: formatErrorMessage(error, "Voice dictation failed to load"),
+  });
+}
+
 /**
- * Runs `use` with the service: at once when it is loaded, as a click handler
+ * Runs `run` with the service: at once when it is loaded, as a click handler
  * calling it directly would, else once it loads. A load that fails is logged.
  */
 export function withVoiceRecordingService(
-  use: (service: VoiceRecordingServiceInstance) => unknown
+  run: (service: VoiceRecordingServiceInstance) => unknown
 ): void {
   if (service) {
-    use(service);
+    run(service);
     return;
   }
   loadVoiceRecordingService()
     .then((loaded) => {
-      use(loaded);
+      run(loaded);
     })
-    .catch((error: unknown) => {
-      logWarn(`${LOG_PREFIX} Couldn't load voice dictation`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    .catch(logLoadFailure);
 }
 
 /**
@@ -217,24 +221,63 @@ export function startVoiceRecordingRuntime(): () => void {
   }
 
   let disposed = false;
+  let loadRequested = false;
+  // Bumped by every settings change: a read it overtook is not trusted.
+  let generation = 0;
   const unsubscribers: Array<() => void> = [];
   const stopWatching = () => {
     for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
   };
   const load = (settings?: VoiceInputSettings) => {
-    stopWatching();
-    if (disposed) return;
-    loadVoiceRecordingService(settings).catch((error: unknown) => {
-      logWarn(`${LOG_PREFIX} Couldn't load voice dictation`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    if (disposed || loadRequested) return;
+    loadRequested = true;
+    const requestedAt = generation;
+    loadVoiceRecordingService(settings).then(
+      (loaded) => {
+        // The service watches from here. A change made while its chunk loaded
+        // reached neither it nor the settings it was handed.
+        stopWatching();
+        if (generation !== requestedAt) {
+          loaded.refreshConfiguration().catch((error: unknown) => {
+            logDebug(`${LOG_PREFIX} Couldn't read voice settings`, {
+              error: formatErrorMessage(error, "Voice settings read failed"),
+            });
+          });
+        }
+      },
+      (error: unknown) => {
+        // Still watching, so the next change or session tries again.
+        loadRequested = false;
+        logLoadFailure(error);
+      }
+    );
   };
 
-  const handleSettingsChanged = (event: Event) => {
-    const settings = (event as CustomEvent<VoiceInputSettings | undefined>).detail;
-    // Read afresh by the service: the event carries what the tab last saw.
-    if (service || (settings && isVoiceInputConfigured(settings))) load();
+  const readSettings = () => {
+    const readAt = generation;
+    voiceInput
+      .getSettings()
+      .then((settings) => {
+        if (disposed || service || generation !== readAt) return;
+        if (isVoiceInputConfigured(settings)) load(settings);
+      })
+      .catch((error: unknown) => {
+        logDebug(`${LOG_PREFIX} Couldn't read voice settings`, {
+          error: formatErrorMessage(error, "Voice settings read failed"),
+        });
+      });
+  };
+
+  // Read afresh rather than taken from the event: it carries what the tab
+  // last saw, not what main stored.
+  const handleSettingsChanged = () => {
+    generation++;
+    // Loaded some other way (an action, a click), the service has its own.
+    if (service) {
+      stopWatching();
+      return;
+    }
+    if (!loadRequested) readSettings();
   };
   window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
   unsubscribers.push(() =>
@@ -257,17 +300,7 @@ export function startVoiceRecordingRuntime(): () => void {
     })
   );
 
-  voiceInput
-    .getSettings()
-    .then((settings) => {
-      if (disposed || service) return;
-      if (isVoiceInputConfigured(settings)) load(settings);
-    })
-    .catch((error: unknown) => {
-      logDebug(`${LOG_PREFIX} Couldn't read voice settings`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  readSettings();
 
   return () => {
     disposed = true;
