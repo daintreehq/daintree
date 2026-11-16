@@ -12,6 +12,7 @@ import {
   parseAnswers,
   parseMessages,
   sealAnswerContent,
+  sealQuestionContent,
   serializeAnswers,
   serializeMessages,
   type AnswerEntry,
@@ -2056,5 +2057,71 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
     await until(() => h.client.submitted.length === 1);
     expect(h.client.submitted[0].text).toContain("text: Sent after it.");
     expect(h.client.submitted[0].text).not.toContain("Held for a person.");
+  });
+});
+
+describe("AnswerDelivery question reads (#17097)", () => {
+  const OWN = { projectId: "project-1", terminalId: PANE };
+
+  async function withContent(store: DaintreeLocalStore, id: string, question: string) {
+    await store.updateQuestion(id, {
+      content_sealed: await sealQuestionContent({ identity }, id, { question }),
+    });
+  }
+
+  it("reads a question whose answer was typed, after it has left the pane's state", async () => {
+    const h = setup();
+    await answeredAndTyped(h.store, Q1, 1);
+    await withContent(h.store, Q1, "Approve the migration?");
+    await followedUp(h.store, Q1, M1, "Run it after lunch.", {
+      delivery: { status: "terminal-delivered" },
+    });
+
+    const read = await h.delivery.questionContent(OWN, Q1);
+
+    expect(read).toMatchObject({
+      result: "read",
+      question: {
+        questionId: Q1,
+        question: "Approve the migration?",
+        status: "human-answered",
+        deliveryStatus: "terminal-delivered",
+        thread: [
+          { type: "answer", from: "person", text: "Go with approve.", unreadable: false },
+          { type: "message", from: "person", text: "Run it after lunch." },
+        ],
+      },
+    });
+  });
+
+  it("finds nothing for another pane, another project, or a question the store doesn't hold", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await withContent(h.store, Q1, "Approve the migration?");
+
+    for (const [scope, id] of [
+      [{ ...OWN, terminalId: "pane-2" }, Q1],
+      [{ ...OWN, projectId: "project-2" }, Q1],
+      [{ ...OWN, projectId: null }, Q1],
+      [OWN, Q2],
+    ] as const) {
+      await expect(h.delivery.questionContent(scope, id)).resolves.toEqual({
+        result: "not-found",
+      });
+    }
+  });
+
+  it("names each question asked for once, in order, and only the pane's own", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await withContent(h.store, Q1, "Approve the migration?\nIt drops a column.");
+    await answered(h.store, Q2, 2, "deny", { origin: { ...ORIGIN, pane_id: "pane-2" } });
+    await withContent(h.store, Q2, "Delete the branch?");
+
+    await expect(h.delivery.questionSummaries(OWN, [Q2, Q1, CRASHED, Q1])).resolves.toEqual([
+      { questionId: Q2, result: "not-found" },
+      { questionId: Q1, result: "read", line: "Approve the migration?" },
+      { questionId: CRASHED, result: "not-found" },
+    ]);
   });
 });

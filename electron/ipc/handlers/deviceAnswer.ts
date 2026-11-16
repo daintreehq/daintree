@@ -77,6 +77,12 @@ import type {
   SetDecisionsModelPayload,
   SetDecisionsModelThresholdPayload,
 } from "../../../shared/types/decisionsModel.js";
+import type {
+  DecisionQuestionContentResult,
+  DecisionQuestionSummariesResult,
+  GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesPayload,
+} from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -269,6 +275,20 @@ const reassignAnswerSchema = z
 
 const markAnswerHandledSchema = z.object({ questionId: questionIdSchema }).strict();
 
+const questionTerminalIdSchema = z.string().min(1).max(256);
+
+const getQuestionContentSchema = z
+  .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
+  .strict();
+
+// A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
+const getQuestionSummariesSchema = z
+  .object({
+    terminalId: questionTerminalIdSchema,
+    questionIds: z.array(questionIdSchema).max(64),
+  })
+  .strict();
+
 // The decision model's CLIs, named here rather than imported from the
 // setting's module, which would make it eager; the sanitiser drops any other.
 const modelAdapterSchema = z.enum(["claude", "codex", "gemini"]).nullable();
@@ -333,6 +353,39 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
       }
+    ),
+    // A pane's question with its content opened (#17097), and the opening
+    // lines its list names. `host`, like the pane state, so a view on a Remote
+    // Host reads the Host's store; scoped to the asking view's project, which
+    // comes from the request's context, never from the renderer.
+    getQuestionContent: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
+      getQuestionContentSchema,
+      async (ctx, payload: GetDecisionQuestionPayload): Promise<DecisionQuestionContentResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionContent(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    getQuestionSummaries: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES,
+      getQuestionSummariesSchema,
+      async (
+        ctx,
+        payload: GetDecisionQuestionSummariesPayload
+      ): Promise<DecisionQuestionSummariesResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionSummaries(ctx.projectId, payload);
+      },
+      { withContext: true }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an
     // answer waits behind one. Kept whatever the switch says, so turning

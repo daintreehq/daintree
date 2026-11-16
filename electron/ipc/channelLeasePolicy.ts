@@ -172,6 +172,8 @@ export const CHANNEL_LEASE_POLICY = {
   "copytree:progress": "free",
   "copytree:test-config": "free",
   "decisions:get-pane-state": "free",
+  "decisions:get-question-content": "free",
+  "decisions:get-question-summaries": "free",
   "decisions:report-composer-drafts": "free",
   "dev-preview:all-sessions-changed": "free",
   "dev-preview:ensure": "driver",

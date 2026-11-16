@@ -878,6 +878,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:get-question-content": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
+  };
+  "decisions:get-question-summaries": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
+  };
   "decisions:get-setup-check": {
     args: [];
     result: import("../decisions.js").DecisionsSetupCheckRun | null;

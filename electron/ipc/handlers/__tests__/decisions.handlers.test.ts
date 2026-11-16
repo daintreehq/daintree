@@ -28,6 +28,12 @@ import type {
   DecisionsHostsResult,
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
+import type {
+  DecisionQuestionContentResult,
+  DecisionQuestionSummariesResult,
+  GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesPayload,
+} from "../../../../shared/types/decisionsQuestion.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -43,6 +49,18 @@ const decisionsEntry = vi.hoisted(() => ({
   libraries: 0,
   getDecisionsStatus: vi.fn(async (): Promise<DecisionsStatus> => ({ state: "not-connected" })),
   getDecisionsPaneState: vi.fn((): PaneDecisionState | null => null),
+  getDecisionQuestionContent: vi.fn(
+    async (
+      _projectId: string | null,
+      _payload: GetDecisionQuestionPayload
+    ): Promise<DecisionQuestionContentResult> => ({ result: "not-found" })
+  ),
+  getDecisionQuestionSummaries: vi.fn(
+    async (
+      _projectId: string | null,
+      _payload: GetDecisionQuestionSummariesPayload
+    ): Promise<DecisionQuestionSummariesResult> => ({ result: "read", summaries: [] })
+  ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
   })),
@@ -200,6 +218,8 @@ vi.mock("../../../services/decisions/index.js", () => {
   return {
     getDecisionsStatus: decisionsEntry.getDecisionsStatus,
     getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
+    getDecisionQuestionContent: decisionsEntry.getDecisionQuestionContent,
+    getDecisionQuestionSummaries: decisionsEntry.getDecisionQuestionSummaries,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -264,6 +284,14 @@ const getStatus = decisionsNamespace.ops.getStatus
 const getPaneState = decisionsNamespace.ops.getPaneState.handler as unknown as (
   terminalId: string
 ) => Promise<PaneDecisionState | null>;
+const getQuestionContent = decisionsNamespace.ops.getQuestionContent.handler as unknown as (
+  ctx: { projectId: string | null },
+  payload: GetDecisionQuestionPayload
+) => Promise<DecisionQuestionContentResult>;
+const getQuestionSummaries = decisionsNamespace.ops.getQuestionSummaries.handler as unknown as (
+  ctx: { projectId: string | null },
+  payload: GetDecisionQuestionSummariesPayload
+) => Promise<DecisionQuestionSummariesResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -367,9 +395,13 @@ const RESTORE: RestoreDecisionsIdentityPayload = {
 
 type SafeParse = { safeParse(value: unknown): { success: boolean } };
 
+const QUESTION_ID = "0190f0aa11112222333344445555aa01";
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
+  CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
+  CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -407,6 +439,8 @@ describe("decisions IPC", () => {
     _resetDecisionsModuleForTesting();
     decisionsEntry.getDecisionsStatus.mockClear();
     decisionsEntry.getDecisionsPaneState.mockClear();
+    decisionsEntry.getDecisionQuestionContent.mockClear();
+    decisionsEntry.getDecisionQuestionSummaries.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -490,6 +524,43 @@ describe("decisions IPC", () => {
       expect(decisionsEntry.libraries).toBe(0);
     }
   );
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+    ["a non-boolean switch", { enabled: "true" }],
+  ])(
+    "reads no question with the setting %s, saying it's off, loading none of Decisions",
+    async (_label, value) => {
+      saved.value = value;
+      const ctx = { projectId: "project-1" };
+
+      await expect(
+        getQuestionContent(ctx, { terminalId: "pane-a", questionId: QUESTION_ID })
+      ).resolves.toEqual({ result: "off" });
+      await expect(
+        getQuestionSummaries(ctx, { terminalId: "pane-a", questionIds: [QUESTION_ID] })
+      ).resolves.toEqual({ result: "off" });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("reads no question once quit has sealed the loader, without loading it", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+    const ctx = { projectId: "project-1" };
+
+    await expect(
+      getQuestionContent(ctx, { terminalId: "pane-a", questionId: QUESTION_ID })
+    ).resolves.toEqual({ result: "not-running" });
+    await expect(
+      getQuestionSummaries(ctx, { terminalId: "pane-a", questionIds: [] })
+    ).resolves.toEqual({ result: "not-running" });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
 
   it("reads no pane state once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
@@ -892,6 +963,55 @@ describe("decisions IPC", () => {
     await expect(getPaneState("pane-b")).resolves.toBeNull();
 
     expect(decisionsEntry.getDecisionsPaneState.mock.calls).toEqual([["pane-a"], ["pane-b"]]);
+  });
+
+  it("reads a question for the asking view's own project once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const payload = { terminalId: "pane-a", questionId: QUESTION_ID };
+    const summaries = { terminalId: "pane-a", questionIds: [QUESTION_ID] };
+
+    await expect(getQuestionContent({ projectId: "project-1" }, payload)).resolves.toEqual({
+      result: "not-found",
+    });
+    await expect(getQuestionSummaries({ projectId: null }, summaries)).resolves.toEqual({
+      result: "read",
+      summaries: [],
+    });
+
+    expect(decisionsEntry.getDecisionQuestionContent).toHaveBeenCalledExactlyOnceWith(
+      "project-1",
+      payload
+    );
+    expect(decisionsEntry.getDecisionQuestionSummaries).toHaveBeenCalledExactlyOnceWith(
+      null,
+      summaries
+    );
+  });
+
+  it("takes only a pane and bounded question ids, never a project", () => {
+    const content = decisionsNamespace.ops.getQuestionContent.schema as SafeParse;
+    const summaries = decisionsNamespace.ops.getQuestionSummaries.schema as SafeParse;
+    expect(content.safeParse({ terminalId: "pane-a", questionId: QUESTION_ID }).success).toBe(true);
+    expect(
+      summaries.safeParse({ terminalId: "pane-a", questionIds: Array(64).fill(QUESTION_ID) })
+        .success
+    ).toBe(true);
+    for (const bad of [
+      {},
+      { terminalId: "", questionId: QUESTION_ID },
+      { terminalId: "pane-a", questionId: "../q" },
+      { terminalId: "pane-a", questionId: QUESTION_ID, projectId: "project-2" },
+    ]) {
+      expect(content.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    for (const bad of [
+      { terminalId: "pane-a" },
+      { terminalId: "pane-a", questionIds: Array(65).fill(QUESTION_ID) },
+      { terminalId: "pane-a", questionIds: ["q 1"] },
+      { terminalId: "pane-a", questionIds: [], projectId: "project-2" },
+    ]) {
+      expect(summaries.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it("checks a relay through Decisions itself once the setting is on", async () => {

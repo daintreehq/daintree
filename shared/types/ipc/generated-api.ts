@@ -502,6 +502,12 @@ export interface GeneratedElectronAPI {
     getPolicy(
       ...args: IpcInvokeMap["decisions:get-policy"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-policy"]["result"]>;
+    getQuestionContent(
+      ...args: IpcInvokeMap["decisions:get-question-content"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-content"]["result"]>;
+    getQuestionSummaries(
+      ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;
     getSetupCheck(
       ...args: IpcInvokeMap["decisions:get-setup-check"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-setup-check"]["result"]>;

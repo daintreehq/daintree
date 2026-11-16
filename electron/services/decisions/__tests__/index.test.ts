@@ -468,6 +468,8 @@ import {
   exportData,
   prepareRelayDeploy,
   exportRecoveryKit,
+  getDecisionQuestionContent,
+  getDecisionQuestionSummaries,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -500,6 +502,8 @@ import {
   terminalSnapshotsAllowed,
   verifyRecoveryKit,
 } from "../index.js";
+import type { AnswerDelivery } from "../answerDelivery.js";
+import { RetiredAttemptError } from "../relayTransport.js";
 
 const RELAY = {
   relayOrigin: "https://relay.example.com",
@@ -953,6 +957,75 @@ describe("Decisions entry", () => {
       // Learning stays off, and its agreement stays.
       expect(saved.value).toMatchObject({ modelLearning: false });
       expect(cleared.consentedAt).toBeGreaterThan(0);
+    });
+  });
+
+  describe("question reads (#17097)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
+    });
+
+    const PAYLOAD = { terminalId: "pane-1", questionId: "0190f0aa11112222333344445555aa01" };
+
+    async function running(delivery: Partial<AnswerDelivery> | null) {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const current = { delivery: delivery as AnswerDelivery | null };
+      vi.spyOn(peekDecisionsService()!, "getAnswerDelivery").mockImplementation(
+        () => current.delivery
+      );
+      return current;
+    }
+
+    it("reads through the running delivery, for the asking view's project", async () => {
+      const read = { result: "not-found" } as const;
+      const questionContent = vi.fn(async () => read);
+      const questionSummaries = vi.fn(async () => []);
+      await running({ questionContent, questionSummaries });
+
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toBe(read);
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "read", summaries: [] });
+
+      expect(questionContent).toHaveBeenCalledExactlyOnceWith(
+        { projectId: "project-1", terminalId: "pane-1" },
+        PAYLOAD.questionId
+      );
+    });
+
+    it("is not running with no delivery, and makes no service before Decisions runs", async () => {
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toEqual({
+        result: "not-running",
+      });
+      expect(peekDecisionsService()).toBeNull();
+
+      await running(null);
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "not-running" });
+    });
+
+    it("is not running when the delivery stopped under the read, whatever the read returned", async () => {
+      const current = await running(null);
+      current.delivery = {
+        questionContent: async () => {
+          current.delivery = null;
+          return { result: "unreadable" };
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toEqual({
+        result: "not-running",
+      });
+
+      current.delivery = {
+        questionSummaries: async () => {
+          throw new RetiredAttemptError();
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "not-running" });
     });
   });
 
