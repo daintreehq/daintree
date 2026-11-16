@@ -31,7 +31,9 @@ import {
   clearGitLabCaches,
   findPRByBranchImpl,
   findPRsByBranchesImpl,
+  findPRsByNumbersImpl,
   getCIStatusImpl,
+  getCIStatusesImpl,
   getGitLabCacheGeneration,
   getIssueImpl,
   getIssueTooltipImpl,
@@ -252,6 +254,13 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
   findPRByBranch: findPRByBranchImpl,
   findPRsByBranches: findPRsByBranchesImpl,
   getCIStatus: getCIStatusImpl,
+  // One GraphQL read answers both, so polling K merge requests costs a query
+  // per chunk instead of an MR read and a pipeline read per MR. No open-list
+  // probe: revalidation re-reads tracked MRs through this batch instead.
+  batchLookups: {
+    findPRsByNumbers: findPRsByNumbersImpl,
+    getCIStatuses: getCIStatusesImpl,
+  },
   getRepoMetadata: getRepoMetadataImpl,
 
   buildIssueUrl(repo: RepoRef, number: number): string {

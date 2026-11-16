@@ -2782,10 +2782,12 @@ export class WorkspaceService {
             await Promise.allSettled([
               this.refreshAll(reason === "focus"),
               // Discovery can outlast a lock or a pause; a focus pass then
-              // leaves PRs to the poller's restart.
+              // leaves PRs to the poller's restart. A focus pass also keeps a
+              // not-found issue's retry delay; only the user's own refresh
+              // looks it up again straight away.
               reason === "focus" && !this.appliedPermissions.status
                 ? undefined
-                : pullRequestService.refresh(),
+                : pullRequestService.refresh({ preserveIssueBackoff: reason === "focus" }),
             ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
@@ -2973,7 +2975,9 @@ export class WorkspaceService {
       }
       // The status pass above can take a while; a screen locked in the
       // meantime leaves the PR catch-up to the poller's own restart.
-      if (this.appliedPermissions.status) await pullRequestService.refresh();
+      if (this.appliedPermissions.status) {
+        await pullRequestService.refresh({ preserveIssueBackoff: true });
+      }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
