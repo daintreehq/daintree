@@ -154,7 +154,7 @@ describe("SharedBaseRefResolver", () => {
     await resolver.resolve(request(repo, "b"));
     expect(probes(repo)).toBe(2);
 
-    writeFileSync(join(commonDir, "config"), '[include]\n\tpath = shared.inc\n');
+    writeFileSync(join(commonDir, "config"), "[include]\n\tpath = shared.inc\n");
     mtimes.set(join(commonDir, "config"), 2_000);
     await resolver.resolve(request(repo, "a"));
     await resolver.resolve(request(repo, "b"));
@@ -168,7 +168,9 @@ describe("SharedBaseRefResolver", () => {
     await resolver.resolve(request(repo, "a"));
     await resolver.resolve(request(repo, "b", { baseBranch: "develop" }));
     await resolver.resolve(
-      request(repo, "c", { wslInvocation: { distro: "Ubuntu" } as SharedBaseRequest["wslInvocation"] })
+      request(repo, "c", {
+        wslInvocation: { distro: "Ubuntu" } as SharedBaseRequest["wslInvocation"],
+      })
     );
     await resolver.resolve(request(repo, "d", { baseBranch: "develop" }));
 
@@ -184,10 +186,7 @@ describe("SharedBaseRefResolver", () => {
 
     const led = resolver.resolve(request(repo, "a", { signal: leader.signal }));
     await vi.waitFor(() => expect(probes(repo)).toBe(1));
-    const joined = [
-      resolver.resolve(request(repo, "b")),
-      resolver.resolve(request(repo, "c")),
-    ];
+    const joined = [resolver.resolve(request(repo, "b")), resolver.resolve(request(repo, "c"))];
     await settle();
 
     leader.abort();

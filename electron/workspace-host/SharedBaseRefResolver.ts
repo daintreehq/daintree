@@ -166,7 +166,11 @@ export class SharedBaseRefResolver {
     return stamp === null || stamp === entry.stamp;
   }
 
-  private async probe(key: string, entry: Entry, request: SharedBaseRequest): Promise<ProbeOutcome> {
+  private async probe(
+    key: string,
+    entry: Entry,
+    request: SharedBaseRequest
+  ): Promise<ProbeOutcome> {
     const { signal } = request;
     const git = await request.createGit(signal);
     // Shared with the rebase/merge handlers (#12092) so the ref an operation
@@ -264,7 +268,10 @@ export class SharedBaseRefResolver {
 }
 
 /** Settles with the promise, or with {@link ABANDONED} as soon as `signal` aborts. */
-function waitUnlessAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | typeof ABANDONED> {
+function waitUnlessAborted<T>(
+  promise: Promise<T>,
+  signal: AbortSignal
+): Promise<T | typeof ABANDONED> {
   if (signal.aborted) return Promise.resolve(ABANDONED);
   return new Promise((resolve, reject) => {
     const onAbort = () => resolve(ABANDONED);

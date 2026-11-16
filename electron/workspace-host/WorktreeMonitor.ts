@@ -873,11 +873,7 @@ export class WorktreeMonitor {
         return monitor._pollAbortController.signal;
       },
     };
-    this.baseDivergence = new BaseDivergence(
-      baseDivergenceHost,
-      this.statPrecheck,
-      sharedBaseRefs
-    );
+    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck, sharedBaseRefs);
 
     const gitStatusPassHost: GitStatusPassHost = {
       get id() {
