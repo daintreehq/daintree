@@ -1500,6 +1500,16 @@ function CanopyInbox({
     </p>
   );
 
+  // Built outside the JSX: inline, the `|| undefined` over a list of ternaries
+  // is a shape React Compiler can't lower, and it gives up on the whole view.
+  const searchControls = [
+    listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
+    sectionAssistants.length > 0 ? "canopy-assistants" : null,
+    archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+  ]
+    .filter((id) => id !== null)
+    .join(" ");
+
   return (
     <CanopySurface isOpen={isOpen}>
       <AppDialog.Header>
@@ -1774,15 +1784,7 @@ function CanopyInbox({
                   aria-describedby={searchNotes.length > 0 ? "canopy-search-notes" : undefined}
                   role="combobox"
                   aria-expanded={visible.length > 0}
-                  aria-controls={
-                    [
-                      listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
-                      sectionAssistants.length > 0 ? "canopy-assistants" : null,
-                      archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
-                    ]
-                      .filter((id) => id !== null)
-                      .join(" ") || undefined
-                  }
+                  aria-controls={searchControls || undefined}
                   aria-autocomplete="list"
                   aria-activedescendant={
                     selectedAssistant !== null

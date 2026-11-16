@@ -165,6 +165,36 @@ function DevServerPlaceholder() {
   );
 }
 
+// The one launcher button whose action can legitimately refuse: it resolves
+// its own target (focused worktree, else the project or scratch root), and a
+// workspace with nothing to browse makes it throw. `dispatch` turns that into
+// `ok: false` rather than a rejection, so without this the press would do
+// nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
+// At module scope so the Retry can name it: React Compiler can't hoist a named
+// function expression inside a component, and gives up on the whole toolbar.
+function openFileBrowser() {
+  void actionService
+    .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
+    .then((result) => {
+      if (result.ok) return;
+      // A full grid is the one refusal `addPanel` has already reported, with
+      // an accurate message and the actual recovery. Saying "no folder
+      // resolved" on top of it would name the wrong cause (#11666).
+      if (isPanelLimitError(result.error.message)) return;
+      notify({
+        type: "error",
+        title: "Couldn't open the file browser",
+        message: "No folder resolved for this workspace. Select a worktree and try again.",
+        // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+        // (inbox only), which would leave this refusal — and its Retry — with
+        // no visible signal at all.
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+        action: { label: "Retry", onClick: openFileBrowser },
+      });
+    });
+}
+
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
   onSettings: () => void;
@@ -407,35 +437,6 @@ export function Toolbar({
   // already-shown one isn't dismissed by the click, so it would sit beside the
   // completion toast in the same corner. The tooltip still shows the shortcut.
   const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowserPanel");
-
-  // The one launcher button whose action can legitimately refuse: it resolves
-  // its own target (focused worktree, else the project or scratch root), and a
-  // workspace with nothing to browse makes it throw. `dispatch` turns that into
-  // `ok: false` rather than a rejection, so without this the press would do
-  // nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
-  // A named function expression so the retry action can name itself.
-  const openFileBrowser = useCallback(function openFileBrowser() {
-    void actionService
-      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
-      .then((result) => {
-        if (result.ok) return;
-        // A full grid is the one refusal `addPanel` has already reported, with
-        // an accurate message and the actual recovery. Saying "no folder
-        // resolved" on top of it would name the wrong cause (#11666).
-        if (isPanelLimitError(result.error.message)) return;
-        notify({
-          type: "error",
-          title: "Couldn't open the file browser",
-          message: "No folder resolved for this workspace. Select a worktree and try again.",
-          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
-          // (inbox only), which would leave this refusal — and its Retry — with
-          // no visible signal at all.
-          priority: "high",
-          context: { eventKind: "uiFeedback" },
-          action: { label: "Retry", onClick: openFileBrowser },
-        });
-      });
-  }, []);
 
   // The shared launcher's own inventory and workspace context (#11691). The
   // toolbar had none of this before — its launcher owned every store read
@@ -1328,7 +1329,6 @@ export function Toolbar({
       pluginConfigs,
       devServerCombo,
       devServerHintHover,
-      openFileBrowser,
       fileBrowserCombo,
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
@@ -1606,7 +1606,6 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
-      openFileBrowser,
       handleCopyTreeClick,
       onSettings,
       onToggleProblems,

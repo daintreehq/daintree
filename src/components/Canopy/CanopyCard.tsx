@@ -803,8 +803,11 @@ export function CanopyCard({
     if (watchId === null && mountedRef.current) return false;
     countUse();
     const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
+    // Decided before the `try`: React Compiler can't lower a logical inside a
+    // try block and would give up on the whole card.
+    const throughStream = mountedRef.current && watchId !== null;
     try {
-      if (mountedRef.current && watchId !== null) {
+      if (throughStream) {
         await terminalApi.terminalSubmit(watchId, text, images);
       } else {
         await terminalApi.submitReply(item.runId, { spawnedAt: run.spawnedAt }, text, images);
