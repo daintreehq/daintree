@@ -31,6 +31,20 @@ const SURFACES = {
   "src/components/Canopy/useCanopyInboxActions.ts": ["useCanopyInboxActions"],
 };
 
+// One cache per compiled function, called through whatever local name the
+// compiler gave the runtime's `c`: `_c` usually, `_c2` when the file already
+// has a `_c` of its own.
+function memoCacheCount(code) {
+  const runtime = code.match(
+    /import\s*\{\s*c\s+as\s+([\w$]+)\s*\}\s*from\s*["']react\/compiler-runtime["']/
+  );
+  if (!runtime) return 0;
+  return (
+    code.match(new RegExp(`(?<![\\w$])${runtime[1].replace(/\$/g, "\\$")}\\(\\d+\\)`, "g"))
+      ?.length ?? 0
+  );
+}
+
 function describeFailure(event) {
   const detail = event.detail ?? {};
   const loc = typeof detail.primaryLocation === "function" ? detail.primaryLocation() : detail.loc;
@@ -49,8 +63,7 @@ describe("React Compiler on the app shell's hot surfaces", () => {
       expect(failures).toEqual([]);
       const compiled = events.filter((e) => e.kind === "CompileSuccess").map((e) => e.fnName);
       expect(compiled).toEqual(expect.arrayContaining(expected));
-      const caches = code.match(/\b_c\(\d+\)/g) ?? [];
-      expect(caches.length).toBeGreaterThanOrEqual(expected.length);
+      expect(memoCacheCount(code)).toBeGreaterThanOrEqual(expected.length);
     });
   }
 });
