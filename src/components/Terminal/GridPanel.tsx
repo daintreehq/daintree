@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import { XCircle } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
-import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -17,6 +16,7 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import { getGridLayoutSnapshot } from "./gridLayoutSnapshot";
+import { useGridPanel } from "./gridPanelSelection";
 
 export interface GridPanelProps {
   terminalId: string;
@@ -61,10 +61,9 @@ export const GridPanel = React.memo(function GridPanel({
   onAddTab,
   onAddTabForPanel,
 }: GridPanelProps) {
-  // Subscribe to the terminal slice keyed by id. `useShallow` does per-field
-  // identity comparison, so re-renders fire only when fields of THIS terminal
-  // change — sibling panel mutations no longer cascade through the grid.
-  const terminal = usePanelStore(useShallow((state) => state.panelsById[terminalId]));
+  // Re-renders only when a field of THIS panel that the grid draws changes:
+  // sibling mutations and the store's own bookkeeping writes don't cascade.
+  const terminal = useGridPanel(terminalId);
 
   const toggleMaximize = usePanelStore((state) => state.toggleMaximize);
   const getPanelGroup = usePanelStore((state) => state.getPanelGroup);

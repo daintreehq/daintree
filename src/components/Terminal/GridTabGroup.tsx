@@ -1,9 +1,8 @@
 import React, { useCallback, useMemo, useEffect, useRef } from "react";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
-import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -28,6 +27,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useStableGridTabs } from "./stableGridTabs";
+import { useGridGroupPanels } from "./gridPanelSelection";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -42,18 +42,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   isMultiPanelGrid,
   isMaximized = false,
 }: GridTabGroupProps) {
-  // Subscribe to this group's panels keyed by `group.panelIds`. `useShallow`
-  // does element-by-element identity comparison on the resolved array, so
-  // updates to unrelated panels don't trigger a re-render here.
-  const panels = usePanelStore(
-    useShallow((state) =>
-      group.panelIds
-        // Render-eligibility, not type-narrowing: a tab group may hold a
-        // plugin-contributed panel, which must stay in the rendered set (#10512).
-        .map((id) => getRenderablePanel(state.panelsById, id))
-        .filter((p): p is PanelInstance => p !== undefined)
-    )
-  );
+  // This group's panels, in group order. Updates to unrelated panels, and the
+  // store's bookkeeping writes to these ones, don't re-render the group.
+  const panels = useGridGroupPanels(group.panelIds);
 
   const setFocused = usePanelStore((state) => state.setFocused);
   const setActiveTab = usePanelStore((state) => state.setActiveTab);
@@ -291,9 +282,12 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   // Handle add tab - duplicate the current panel as a new tab. Delegates to the
   // shared module-level helper so the create → add-to-group → activate sequence
   // (and its orphan-cleanup on a failed add) lives in one place (#10441).
+  // Duplicates the live panel: the one this group holds may carry stale
+  // bookkeeping fields.
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
-    await addTabForPanel(activePanel);
+    const live = getRenderablePanel(usePanelStore.getState().panelsById, activePanel.id);
+    await addTabForPanel(live ?? activePanel);
   }, [activePanel]);
 
   if (!activePanel) {
