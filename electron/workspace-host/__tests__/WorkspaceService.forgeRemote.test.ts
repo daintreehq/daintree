@@ -1137,6 +1137,17 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   });
 
   describe("while backgrounded (#12519)", () => {
+    const OFF_SCREEN_POLICY = {
+      statusAllowed: false,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    };
+    const ON_SCREEN_POLICY = {
+      statusAllowed: true,
+      backgroundWorkAllowed: true,
+      attenuated: false,
+    };
+
     beforeEach(() => {
       vi.spyOn(os, "setPriority").mockImplementation(() => {});
       // Stands in for a load that initialized PR detection, so resume() starts it.
@@ -1242,6 +1253,82 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       releases[0]();
       await vi.advanceTimersByTimeAsync(0);
       expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("a window coming back on screen mid-settle still waits for the settle (#17060)", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      service.setWorkspacePowerPolicy(OFF_SCREEN_POLICY);
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      service.setWorkspacePowerPolicy(ON_SCREEN_POLICY);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+    });
+
+    it("a screen locked mid-settle holds PR work for a window, credential change included (#17060)", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+      mockPullRequestService.refresh.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      service.setWorkspacePowerPolicy(OFF_SCREEN_POLICY);
+      service.updateForgeCredentials(GITHUB_PROVIDER_ID, { kind: "bearer", value: "token" });
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+      service.setWorkspacePowerPolicy(ON_SCREEN_POLICY);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+    });
+
+    it("an owed settings refresh waits for a later resume's settle (#17060)", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.setWorkspacePowerPolicy(OFF_SCREEN_POLICY);
+      service.updateForgeSettings({
+        forgeProviderOverride: GITHUB_PROVIDER_ID,
+        forgeDefaultProviderId: null,
+        forgeRemote: null,
+      });
+      mockPullRequestService.refresh.mockClear();
+      let finishCheck: () => void = () => {};
+      mockPullRequestService.start
+        .mockReturnValueOnce(
+          new Promise<void>((resolve) => {
+            finishCheck = resolve;
+          })
+        )
+        .mockResolvedValueOnce(undefined);
+
+      service.setWorkspacePowerPolicy(ON_SCREEN_POLICY);
+      service.pause();
+      const releases = holdConfigStats();
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      finishCheck();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
     });
 
     it("a settle superseded by a pause does not restart PR polling in the next cycle", async () => {

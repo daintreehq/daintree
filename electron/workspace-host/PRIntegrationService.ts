@@ -87,6 +87,10 @@ export class PRIntegrationService {
   private prEventUnsubscribers: (() => void)[] = [];
   private initializedForPath: string | null = null;
   private readonly isWorker: boolean;
+  // Set by `pause()`, cleared by `resume()`. Outlives `cleanup()`, so a reset,
+  // a sign-out or a project load landing while paused re-arms detection state
+  // without starting the poller that `resume()` will start.
+  private paused = false;
 
   constructor(
     private readonly prService: PullRequestServiceLike,
@@ -103,7 +107,7 @@ export class PRIntegrationService {
    * (`refresh()`) bypass this intentionally.
    */
   private startPolling(startupDelayMs?: number): Promise<void> {
-    if (this.isWorker) return Promise.resolve();
+    if (this.isWorker || this.paused) return Promise.resolve();
     return this.prService.start(startupDelayMs);
   }
 
@@ -243,19 +247,22 @@ export class PRIntegrationService {
   }
 
   pause(): void {
+    this.paused = true;
     this.prService.stop();
   }
 
-  resume(): void {
+  /** Resolves once the restarted poller's first check has run. */
+  resume(): Promise<void> {
+    this.paused = false;
     // Nothing to resume before `initialize()`: a non-git workspace never
     // initializes, and a foreground can land while a load is still
     // enumerating. Starting anyway only logs "not initialized" (#12519) —
     // `initialize()` starts polling itself once it runs.
-    if (this.initializedForPath === null) return;
+    if (this.initializedForPath === null) return Promise.resolve();
     // Focus-restore, not a crash-recovery path — skip the startup jitter so
     // the user sees fresh PR state promptly. The 5s checkForPRs() floor still
     // prevents a double-check if a poll just ran.
-    void this.startPolling(0);
+    return this.startPolling(0);
   }
 
   updateForgeCredentials(

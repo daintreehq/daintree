@@ -561,15 +561,21 @@ export class WorkspaceService {
   private backgrounded = false;
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
-  // Credential changes that reached this host while backgrounded, the latest
-  // per provider, replayed once PR work resumes — they would otherwise fetch
-  // every worktree and poll PRs in a host nothing is looking at. Per provider
-  // because a set and a clear have different effects, and one provider's
-  // must not swallow another's.
+  // Credential changes that reached this host while backgrounded or with no
+  // window on screen, the latest per provider, replayed once PR work resumes —
+  // they would otherwise fetch every worktree and poll PRs in a host nothing is
+  // looking at. Per provider because a set and a clear have different effects,
+  // and one provider's must not swallow another's.
   private readonly deferredCredentialUpdates = new Map<
     string,
     import("../../shared/types/forge.js").Credentials | null
   >();
+  // A forge-settings change held back the same way. Owed as a full refresh:
+  // only that re-detects worktrees resolved against the previous provider.
+  private settingsRefreshOwed = false;
+  // Bumped by each restart that would run the owed refresh, and by a project
+  // switch or teardown, so only the latest restart's continuation may run it.
+  private owedRefreshGeneration = 0;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -2775,7 +2781,11 @@ export class WorkspaceService {
             }
             await Promise.allSettled([
               this.refreshAll(reason === "focus"),
-              pullRequestService.refresh(),
+              // Discovery can outlast a lock or a pause; a focus pass then
+              // leaves PRs to the poller's restart.
+              reason === "focus" && !this.appliedPermissions.status
+                ? undefined
+                : pullRequestService.refresh(),
             ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
@@ -2961,7 +2971,9 @@ export class WorkspaceService {
           }
         }
       }
-      await pullRequestService.refresh();
+      // The status pass above can take a while; a screen locked in the
+      // meantime leaves the PR catch-up to the poller's own restart.
+      if (this.appliedPermissions.status) await pullRequestService.refresh();
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
@@ -5399,8 +5411,20 @@ export class WorkspaceService {
    * what they may run. Replayed by main on host restart.
    */
   setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    const wasOnScreen = this.appPolicy.statusAllowed;
     this.appPolicy = { ...policy };
     this.reconcilePolling();
+    // PR polling follows status work: off with every window hidden, the screen
+    // locked, or the machine asleep.
+    if (policy.statusAllowed === wasOnScreen) return;
+    if (!policy.statusAllowed) {
+      this.prService.pause();
+      return;
+    }
+    // A paused host restarts it on its own resume(), and a resume still
+    // settling its remotes restarts it once they settle.
+    if (this.backgrounded || this.pendingResumeSettle) return;
+    this.resumePRWork();
   }
 
   /**
@@ -5519,6 +5543,9 @@ export class WorkspaceService {
 
   /** The PR side of `resume()`, run once the remotes have settled. */
   private resumePRWork(): void {
+    // Foregrounded with nothing on screen: the poller and any held-back
+    // credential change wait for a window to come back.
+    if (!this.appPolicy.statusAllowed) return;
     // A credential change held back while backgrounded refreshes PRs, so it
     // waits for the same settle the poller does.
     const deferred = [...this.deferredCredentialUpdates];
@@ -5526,7 +5553,21 @@ export class WorkspaceService {
     for (const [providerId, credentials] of deferred) {
       this.updateForgeCredentials(providerId, credentials);
     }
-    this.prService.resume();
+    const restarted = this.prService.resume();
+    if (!this.settingsRefreshOwed) return;
+    // After the restart's own check, which would otherwise re-resolve worktrees
+    // from the caches the refresh is clearing and leave it nothing to detect.
+    // Still owed if PR work stopped or began settling again meanwhile: the next
+    // restart runs it.
+    const generation = ++this.owedRefreshGeneration;
+    void restarted
+      .catch(() => {})
+      .then(() => {
+        if (generation !== this.owedRefreshGeneration || !this.settingsRefreshOwed) return;
+        if (!this.appliedPermissions.status || this.pendingResumeSettle) return;
+        this.settingsRefreshOwed = false;
+        void pullRequestService.refresh();
+      });
   }
 
   getPRStatus(requestId: string): void {
@@ -5547,9 +5588,15 @@ export class WorkspaceService {
     pullRequestService.setForgeSettings(args);
     // The issues binding may be what changed; its branch keys go with it.
     this.refreshIssueBranchClaim();
-    // A backgrounded host re-resolves when it is foregrounded; refreshing now
-    // would query the forge for a project nothing is showing (#12519).
-    if (!this.backgrounded) void pullRequestService.refresh();
+    // A backgrounded or off-screen host re-resolves when its poller restarts;
+    // refreshing now would query the forge for a project nothing is showing
+    // (#12519).
+    if (this.appliedPermissions.status) {
+      this.settingsRefreshOwed = false;
+      void pullRequestService.refresh();
+    } else {
+      this.settingsRefreshOwed = true;
+    }
     this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 
@@ -5570,7 +5617,7 @@ export class WorkspaceService {
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    if (this.backgrounded || this.pendingResumeSettle) {
+    if (this.backgrounded || this.pendingResumeSettle || !this.appPolicy.statusAllowed) {
       this.deferredCredentialUpdates.set(providerId, credentials);
       return;
     }
@@ -5654,6 +5701,8 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5823,6 +5872,8 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
     this.resourceActionExecutor.dispose();
     this.attachmentService.dispose();
     this.setupCoordinator.dispose();

@@ -70,6 +70,9 @@ const UPDATE_DEBOUNCE_MS = 100;
 
 // Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
 const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
+// With no window focused nobody is reading the badges, and focus regain re-arms
+// at the focused cadence, so a merge or close only has to land eventually.
+const BLURRED_REVALIDATION_INTERVAL_MS = 5 * 60 * 1000;
 
 // Adaptive boost: when any resolved PR has CI in-flight (pending), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
@@ -137,6 +140,7 @@ class PullRequestService {
   private revalidationsRunning = 0;
   private earlyRevalidationAt: number | undefined;
   private pollIntervalMs: number = FOCUSED_POLL_INTERVAL_MS;
+  private focused = true;
   private cwd: string = "";
   private isPolling: boolean = false;
   private consecutiveErrors: number = 0;
@@ -153,6 +157,8 @@ class PullRequestService {
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
+  // The current start()'s first check, which a repeat start() joins.
+  private initialCheck: Promise<void> = Promise.resolve();
 
   get isEnabled(): boolean {
     return this.nextRetryAt === 0 || Date.now() >= this.nextRetryAt;
@@ -770,7 +776,8 @@ class PullRequestService {
    * synchronised PR refetch burst. Pass `startupDelayMs = 0` to check
    * immediately (focus-restore / resume(), which is not a crash-recovery
    * path). The returned promise resolves after the (delayed) first check, or
-   * immediately if stop()/reset() cancels the pending delay.
+   * immediately if stop()/reset() cancels the pending delay. A repeat call
+   * while polling joins that same first check.
    */
   public start(startupDelayMs?: number): Promise<void> {
     if (this.isPolling) {
@@ -778,7 +785,7 @@ class PullRequestService {
       // the project-switch hot path, where each sync log write adds main-thread
       // I/O. Diagnostic only, so keep it at debug.
       logDebug("PullRequestService already polling");
-      return Promise.resolve();
+      return this.initialCheck;
     }
 
     if (!this.cwd) {
@@ -802,10 +809,11 @@ class PullRequestService {
     });
 
     if (delay <= 0) {
-      return this.runInitialCheck();
+      this.initialCheck = this.runInitialCheck();
+      return this.initialCheck;
     }
 
-    return new Promise<void>((resolve) => {
+    this.initialCheck = new Promise<void>((resolve) => {
       this.startupDelayResolve = resolve;
       this.startupDelayTimer = setTimeout(() => {
         this.startupDelayTimer = null;
@@ -813,6 +821,7 @@ class PullRequestService {
         void this.runInitialCheck().finally(resolve);
       }, delay);
     });
+    return this.initialCheck;
   }
 
   /**
@@ -1003,10 +1012,11 @@ class PullRequestService {
   /**
    * Switch poll cadence based on global window-focus state. Focused = ~30s
    * (snappy enough that PR transitions surface promptly), blurred = ~120s
-   * (conserves GitHub API quota during long background sessions). Called
-   * from main via the workspace-host IPC pipe; powerMonitor.ts is the focus
-   * aggregator and idempotency guard, so this method is only invoked on a
-   * real focus-state transition.
+   * (conserves GitHub API quota during long background sessions). Resolved-PR
+   * revalidation follows the same signal. Called from main via the
+   * workspace-host IPC pipe; powerMonitor.ts is the focus aggregator and
+   * idempotency guard, so this method is only invoked on a real focus-state
+   * transition.
    *
    * On focus regain, also fires an immediate catch-up poll throttled to
    * FOCUS_CATCHUP_THROTTLE_MS (5s) — protects against rapid alt-tabbing
@@ -1017,6 +1027,11 @@ class PullRequestService {
   public setFocusCadence(focused: boolean): void {
     const targetInterval = focused ? FOCUSED_POLL_INTERVAL_MS : BLURRED_POLL_INTERVAL_MS;
     this.updatePollInterval(targetInterval);
+    const focusChanged = focused !== this.focused;
+    this.focused = focused;
+    if (focusChanged && this.isPolling) {
+      this.scheduleRevalidation();
+    }
 
     if (!focused || !this.isPolling) {
       return;
@@ -1236,7 +1251,8 @@ class PullRequestService {
    * `delayMs` asks for the next tick sooner than the cadence would. The
    * request is a deadline every later reschedule honours until a tick runs, so
    * a cadence change in between can't push it back out. A pass already under
-   * way reschedules when it settles, so it isn't raced by a second one.
+   * way re-arms when it settles, so nothing scheduled meanwhile can race it
+   * with a second one.
    */
   private scheduleRevalidation(delayMs?: number): void {
     if (!this.isPolling) {
@@ -1246,12 +1262,16 @@ class PullRequestService {
     if (delayMs !== undefined) {
       const at = Date.now() + delayMs;
       this.earlyRevalidationAt = Math.min(this.earlyRevalidationAt ?? at, at);
-      if (this.revalidationsRunning > 0) return;
+      // Blurred, the deadline waits for focus regain, and the armed tick keeps
+      // its time rather than being pushed back by every push.
+      if (!this.focused && this.revalidationTimer) return;
     }
 
     if (this.revalidationTimer) {
       clearTimeout(this.revalidationTimer);
+      this.revalidationTimer = null;
     }
+    if (this.revalidationsRunning > 0) return;
 
     if (!this.isEnabled) {
       const delay = this.nextRetryAt - Date.now();
@@ -1269,12 +1289,13 @@ class PullRequestService {
     if (this.boostExpiresAt !== null && this.boostExpiresAt <= Date.now()) {
       this.boostExpiresAt = null;
     }
-    const cadenceMs =
-      this.boostExpiresAt !== null
+    const cadenceMs = !this.focused
+      ? BLURRED_REVALIDATION_INTERVAL_MS
+      : this.boostExpiresAt !== null
         ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
     const intervalMs =
-      this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
+      this.focused && this.earlyRevalidationAt !== undefined
         ? Math.min(Math.max(0, this.earlyRevalidationAt - Date.now()), cadenceMs)
         : cadenceMs;
 
