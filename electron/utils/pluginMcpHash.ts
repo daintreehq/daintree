@@ -80,22 +80,26 @@ function normalizeKeys(
   value: unknown,
   seen: WeakSet<object>,
   meter: Meter | null,
-  depth: number
+  depth: number,
+  linePrepaid = false
 ): unknown {
   if (meter !== null) {
-    charge(meter, 2 * depth + 1 + (typeof value === "string" ? value.length : 0));
+    const line = linePrepaid ? 0 : 2 * depth + 1;
+    charge(meter, line + (typeof value === "string" ? value.length : 0));
   }
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
   if (Array.isArray(value)) {
-    // Every slot prints a line at the next indent, holes included, and
-    // `map` never visits a hole to charge it.
+    // Every slot prints a line at the next indent, holes included, and `map`
+    // never visits a hole to charge it, so the lines are paid for up front.
     if (meter !== null) charge(meter, value.length * (2 * depth + 3));
-    return value.map((v) => normalizeKeys(v, seen, meter, depth + 1));
+    return value.map((v) => normalizeKeys(v, seen, meter, depth + 1, true));
   }
-  // A typed array's indices are its keys: charged before they are listed.
-  if (meter !== null && ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+  // A typed array's indices are its keys: their lines are paid for before
+  // they are listed.
+  const isTypedArray = ArrayBuffer.isView(value) && !(value instanceof DataView);
+  if (meter !== null && isTypedArray) {
     charge(meter, (typedArrayLength.call(value) as number) * (2 * depth + 3));
   }
   const entries = Object.entries(value as Record<string, unknown>);
@@ -103,6 +107,8 @@ function normalizeKeys(
   if (meter !== null) for (const [key] of entries) charge(meter, key.length + 1);
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const out: Record<string, unknown> = {};
-  for (const [key, v] of entries) out[key] = normalizeKeys(v, seen, meter, depth + 1);
+  for (const [key, v] of entries) {
+    out[key] = normalizeKeys(v, seen, meter, depth + 1, isTypedArray);
+  }
   return out;
 }

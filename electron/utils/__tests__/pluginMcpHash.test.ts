@@ -90,6 +90,18 @@ describe("boundedStableArgsSha256 (#17069)", () => {
     expect(() => stableArgsSha256([view])).not.toThrow();
   });
 
+  it("hashes a small view whose own length property lies, by its real length", () => {
+    const view = new Uint8Array([4, 5]);
+    Object.defineProperty(view, "length", { value: Number.NaN });
+    expect(boundedStableArgsSha256([view], 10_000)).toBe(stableArgsSha256([view]));
+  });
+
+  it("charges an array's slots once, so a few thousand numbers still hash", () => {
+    // About 45 KB of canonical JSON: inside the budget, and so hashed.
+    const args = [{ ids: new Array<number>(5_000).fill(0) }];
+    expect(boundedStableArgsSha256(args, 64 * 1024)).toBe(stableArgsSha256(args));
+  });
+
   it("meters a view by its real length, whatever its own length property says", () => {
     const buffer = new ArrayBuffer(1_000);
     const views = Array.from({ length: 5 }, () => {
