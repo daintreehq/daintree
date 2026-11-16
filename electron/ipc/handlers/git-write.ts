@@ -47,6 +47,7 @@ import {
   invalidateStagingDiffStatCache,
   resolveHeadOidFromGitDir,
 } from "../../utils/git.js";
+import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -1197,6 +1198,26 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
   },
 });
 
+/**
+ * Whether HEAD names a commit, which decides how an unstage runs: a branch with
+ * no commit yet has nothing to reset to, so it unstages with `rm --cached`.
+ * Read from the git dir when it proves a commit; a miss there is no proof of an
+ * unborn branch, so it then asks git.
+ */
+async function hasHeadCommit(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "revparse">,
+  cwd: string
+): Promise<boolean> {
+  const gitDir = await resolveGitDirFromFs(cwd);
+  if (gitDir && (await resolveHeadOidFromGitDir(gitDir))) return true;
+  try {
+    await git.revparse(["HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -1222,14 +1243,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = await createHardenedGit(payload.cwd);
 
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
+    if (await hasHeadCommit(git, payload.cwd)) {
       await git.reset(["HEAD", "--", payload.filePath]);
     } else {
       await git.raw(["rm", "--cached", "--", payload.filePath]);
@@ -1271,14 +1285,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = await createHardenedGit(payload.cwd);
 
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
+    if (await hasHeadCommit(git, payload.cwd)) {
       await git.reset(["HEAD", "--", ...paths]);
     } else {
       await git.raw(["rm", "--cached", "--", ...paths]);
@@ -1303,14 +1310,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = await createHardenedGit(cwd);
 
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
+    if (await hasHeadCommit(git, cwd)) {
       await git.reset(["HEAD"]);
     } else {
       await git.raw(["rm", "--cached", "-r", "."]);
@@ -1880,9 +1880,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let pushDestination: StagingStatus["pushDestination"] = null;
     let pullSource: StagingStatus["pullSource"] = null;
     if (hasRemote && currentBranch) {
-      const resolved = await resolveGitPushAndUpstream(git, currentBranch, remoteNames).catch(
-        () => null
-      );
+      // Shows the destination only, so whether a push would set tracking is
+      // never read.
+      const resolved = await resolveGitPushAndUpstream(git, currentBranch, remoteNames, {
+        skipTrackingSetup: true,
+      }).catch(() => null);
       const push = resolved?.push;
       const pull = resolved?.upstream;
       if (push?.status === "resolved") {
