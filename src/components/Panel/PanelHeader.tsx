@@ -700,7 +700,16 @@ function PanelHeaderComponent({
   // A pick whose overlay is still loading; a menu opening or a different panel
   // drops it.
   const [deferredOpener] = useState(createDeferredOverlayOpener);
-  useEffect(() => deferredOpener.cancel, [deferredOpener, id]);
+  useEffect(
+    () => () => {
+      deferredOpener.cancel();
+      // A menu close landing after this would otherwise start a pick for a
+      // header that's gone.
+      pendingMovePickerRef.current = null;
+      pendingEmojiDialogRef.current = null;
+    },
+    [deferredOpener, id]
+  );
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);

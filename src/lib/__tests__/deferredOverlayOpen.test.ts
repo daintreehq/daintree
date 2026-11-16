@@ -81,6 +81,20 @@ describe("createDeferredOverlayOpener", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it("hears Escape before a control that stops it", async () => {
+    const opener = createDeferredOverlayOpener();
+    const target = overlay(false);
+    const onOpen = vi.fn();
+    const control = focusable();
+    control.addEventListener("keydown", (event) => event.stopPropagation());
+    opener.open(target, closeEvent(), onOpen);
+    await tick();
+    control.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    target.land();
+    await tick();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("keeps the pick through other keys", async () => {
     const opener = createDeferredOverlayOpener();
     const target = overlay(false);
