@@ -232,8 +232,9 @@ describe("probing a pane across a turn's reads (#17044)", () => {
     expect(await readCodexPaneContextUsage("t-1", signal(), listing)).toEqual(miss);
     clock += 1_500;
     expect(await readCodexPaneContextUsage("t-1", signal(), listing)).toEqual(miss);
-    expect(run.mock.calls.map(([file, args]) => `${file} ${args.includes("-A") ? "-A" : ""}`))
-      .toEqual(["ps -A", "lsof ", "ps "]);
+    expect(
+      run.mock.calls.map(([file, args]) => `${file} ${args.includes("-A") ? "-A" : ""}`)
+    ).toEqual(["ps -A", "lsof ", "ps "]);
 
     clock += CODEX_PROBE_MISS_REUSE_MS;
     await readCodexPaneContextUsage("t-1", signal(), listing);

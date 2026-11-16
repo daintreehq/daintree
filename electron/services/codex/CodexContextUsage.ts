@@ -87,16 +87,13 @@ export function createCodexProbeMemo(now: () => number = () => performance.now()
       const forget = () => {
         if (entries.get(terminalId) === entry) entries.delete(terminalId);
       };
-      entry.probe.then(
-        (observed) => {
-          if (observed.status === "unknown" && REUSABLE_MISSES.has(observed.reason)) {
-            if (entries.get(terminalId) === entry) entry.missedAt = now();
-          } else {
-            forget();
-          }
-        },
-        forget
-      );
+      entry.probe.then((observed) => {
+        if (observed.status === "unknown" && REUSABLE_MISSES.has(observed.reason)) {
+          if (entries.get(terminalId) === entry) entry.missedAt = now();
+        } else {
+          forget();
+        }
+      }, forget);
       entries.set(terminalId, entry);
       return entry.probe;
     },

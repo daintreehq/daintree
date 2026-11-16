@@ -479,8 +479,9 @@ describe("probeCodexSessionFile", () => {
       sessionMeta(ROOT_ID, { base_instructions: "x".repeat(200 * 1024) })
     );
     const accepted = runner(await lsofFor([{ fd: "37", access: "u", name: large }]));
-    await expect(probeCodexSessionFile(100, { platform: "darwin", run: accepted })).resolves
-      .toMatchObject({ status: "observed", sessionId: ROOT_ID });
+    await expect(
+      probeCodexSessionFile(100, { platform: "darwin", run: accepted })
+    ).resolves.toMatchObject({ status: "observed", sessionId: ROOT_ID });
 
     const oversized = await writeRollout(
       ROOT_ID,
@@ -528,12 +529,13 @@ describe("probeCodexSessionFile", () => {
     const handlePrototype = Object.getPrototypeOf(probe) as FileHandle;
     await probe.close();
     const original = handlePrototype.read as (...args: unknown[]) => Promise<unknown>;
-    const read = vi
-      .spyOn(handlePrototype, "read")
-      .mockImplementation(function (this: FileHandle, ...args: unknown[]) {
-        const [buffer, offset, length, position] = args;
-        return original.call(this, buffer, offset, Math.min(Number(length), 1_000), position);
-      } as never);
+    const read = vi.spyOn(handlePrototype, "read").mockImplementation(function (
+      this: FileHandle,
+      ...args: unknown[]
+    ) {
+      const [buffer, offset, length, position] = args;
+      return original.call(this, buffer, offset, Math.min(Number(length), 1_000), position);
+    } as never);
 
     try {
       await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toMatchObject({
