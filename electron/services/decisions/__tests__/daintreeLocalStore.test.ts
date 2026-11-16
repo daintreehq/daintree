@@ -258,6 +258,39 @@ describe("DaintreeLocalStore", () => {
     expect(await second.nextAlias()).toBe(2);
   });
 
+  it("lists questions by status and pane in alias order, decoding only the rows it returns", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1, { local_status: "queued" }), item("o1", "q1"));
+    await store.commitNewQuestion(row("q2", 2, { local_status: "cancelled" }), item("o2", "q2"));
+    await store.commitNewQuestion(
+      row("q3", 3, { local_status: "queued", origin: origin({ pane_id: "pane-2" }) }),
+      item("o3", "q3")
+    );
+    await store.commitNewQuestion(row("q4", 4, { local_status: "open" }), item("o4", "q4"));
+    // A settled row the filter leaves out is never parsed, so one that wouldn't
+    // parse can't fail a read of the open questions.
+    sqlite
+      .prepare(
+        "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id = ?"
+      )
+      .run("q2");
+
+    const ids = async (filter?: Parameters<DaintreeLocalStore["listQuestions"]>[0]) =>
+      (await store.listQuestions(filter)).map((q) => q.question_id);
+    expect(await ids({ status: ["queued", "open"] })).toEqual(["q1", "q3", "q4"]);
+    expect(await ids({ status: ["queued"], paneId: "pane-1" })).toEqual(["q1"]);
+    expect(await ids({ paneId: "pane-2" })).toEqual(["q3"]);
+    expect(await ids({ status: [] })).toEqual([]);
+    await expect(store.listQuestions()).rejects.toThrow();
+
+    const plan = sqlite
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT * FROM decisions_questions WHERE local_status IN (?, ?) ORDER BY alias ASC"
+      )
+      .all("queued", "open") as { detail: string }[];
+    expect(plan.map((step) => step.detail).join("\n")).toContain("decisions_questions_status_idx");
+  });
+
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const other = reader();

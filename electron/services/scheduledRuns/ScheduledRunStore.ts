@@ -262,6 +262,29 @@ export class ScheduledRunStore {
     );
   }
 
+  /** The id of the schedule's run for this occurrence, read from its unique index without decoding any record. */
+  findIdByOccurrence(scheduleId: string, occurrenceKey: string): string | null {
+    const id = this.sqlite
+      .prepare("SELECT id FROM scheduled_runs WHERE schedule_id = ? AND occurrence_key = ?")
+      .pluck()
+      .get(scheduleId, occurrenceKey) as string | undefined;
+    return id ?? null;
+  }
+
+  /**
+   * The schedule's open runs, newest first, as {@link listBySchedule}. Only
+   * live rows are decoded: every open run is live, and settled history is not.
+   */
+  listOpenBySchedule(scheduleId: string): ScheduledRun[] {
+    return this.decodeAll(
+      this.sqlite
+        .prepare(
+          "SELECT id, record FROM scheduled_runs WHERE schedule_id = ? AND live = 1 ORDER BY created_at DESC, rowid DESC"
+        )
+        .all(scheduleId) as RunRow[]
+    ).filter((run) => run.settlement.state === "open");
+  }
+
   /**
    * Drops the schedule's runs past its newest {@link SCHEDULED_RUN_HISTORY_LIMIT},
    * except live ones, which go once they're over and the next prune runs.

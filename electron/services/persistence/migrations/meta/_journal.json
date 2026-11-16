@@ -204,6 +204,13 @@
       "when": 1794182400000,
       "tag": "0028_add_project_clone_state",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1794268800000,
+      "tag": "0029_status_and_live_run_indexes",
+      "breakpoints": true
     }
   ]
 }

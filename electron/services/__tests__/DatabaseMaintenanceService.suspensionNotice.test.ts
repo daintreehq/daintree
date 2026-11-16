@@ -27,9 +27,21 @@ const mockDbModule = vi.hoisted(() => ({
   clearRecoveryPending: vi.fn(),
 }));
 
-const mockRunDbWork = vi.hoisted(() =>
-  vi.fn((_op: unknown, fallback: () => unknown) => Promise.resolve(fallback()))
-);
+// The DB worker as the service sees it: a periodic backup copies and probes
+// there (through the mocked handle and probe, so the final backup on main and
+// the worker's read the same), and every other op runs its main-thread
+// fallback, as the client does when the worker is disabled or degraded.
+const runOnWorker = vi.hoisted(() => (op: unknown, fallback: () => unknown): Promise<unknown> => {
+  const request = op as { op: string; destPath?: string };
+  if (request.op === "backup") {
+    return Promise.resolve(mockSqlite.backup(request.destPath)).then(() =>
+      mockDbModule.probeDbFile(request.destPath)
+    );
+  }
+  return Promise.resolve(fallback());
+});
+
+const mockRunDbWork = vi.hoisted(() => vi.fn(runOnWorker));
 
 vi.mock("electron", () => ({ powerMonitor: mockPowerMonitor }));
 vi.mock("../SystemSleepService.js", () => ({
@@ -71,9 +83,7 @@ async function drainMicrotasks(): Promise<void> {
 
 function quickCheckReturns(result: string): void {
   mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
-    (op as { op: string }).op === "quickCheck"
-      ? Promise.resolve(result)
-      : Promise.resolve(fallback())
+    (op as { op: string }).op === "quickCheck" ? Promise.resolve(result) : runOnWorker(op, fallback)
   );
 }
 
@@ -110,9 +120,7 @@ describe("DatabaseMaintenanceService backup suspension notices", () => {
     mockDbModule.isRecoveryPending.mockReturnValue(false);
     mockSqlite.backup.mockResolvedValue(undefined);
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
-    mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
-      Promise.resolve(fallback())
-    );
+    mockRunDbWork.mockImplementation(runOnWorker);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.statSync).mockImplementation(((file: fs.PathLike) => {
       if (file !== BACKUP_PATH) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -279,7 +287,7 @@ describe("DatabaseMaintenanceService backup suspension notices", () => {
         ? new Promise((resolve) => {
             resolveCheck = resolve;
           })
-        : Promise.resolve(fallback())
+        : runOnWorker(op, fallback)
     );
     startSession(true);
     await idleTicks(1);

@@ -193,6 +193,79 @@ describe("ScheduledRunStore", () => {
     expect(store.listByProject("project-2").map((r) => r.id)).toEqual(["elsewhere"]);
   });
 
+  it("finds a schedule's run for an occurrence by its key alone", () => {
+    const logWarn = vi.fn();
+    const store = new ScheduledRunStore(sqlite, logWarn);
+    const key = occurrenceKeyFor(T0);
+    const origin = {
+      trigger: "scheduled" as const,
+      dueAt: T0,
+      occurrenceKey: key,
+      coalesced: null,
+    };
+    store.insert(run("keyed", { origin }));
+    store.insert(run("other-schedule", { scheduleId: "schedule-2", origin }));
+    store.insert(run("unkeyed"));
+    // Its record no longer reads, but the occurrence is still taken: a second
+    // run for it would only fail on the unique index.
+    sqlite.prepare("UPDATE scheduled_runs SET record = 'not json' WHERE id = ?").run("keyed");
+
+    expect(store.findIdByOccurrence("schedule-1", key)).toBe("keyed");
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(store.findIdByOccurrence("schedule-2", key)).toBe("other-schedule");
+    expect(store.findIdByOccurrence("schedule-1", occurrenceKeyFor(T0 + 1))).toBeNull();
+  });
+
+  it("lists a schedule's open runs newest first, leaving settled and still-running ones out", () => {
+    const logWarn = vi.fn();
+    const store = new ScheduledRunStore(sqlite, logWarn);
+    store.insert(run("open-older", { createdAt: T0 - 1, settlement: { state: "open" } }));
+    store.insert(run("open-first", { createdAt: T0, settlement: { state: "open" } }));
+    store.insert(run("open-second", { createdAt: T0, settlement: { state: "open" } }));
+    store.insert(run("settled", { createdAt: T0 + 1 }));
+    // Live, since its agent was last seen running, but settled: not open.
+    store.insert(
+      run("settled-running", {
+        createdAt: T0 + 2,
+        process: { agent: { state: "running", startedAt: T0 }, pty: { state: "not-started" } },
+      })
+    );
+    store.insert(run("elsewhere", { scheduleId: "schedule-2", settlement: { state: "open" } }));
+    // Settled history isn't read at all: a record of it that no longer parses
+    // goes unnoticed.
+    sqlite.prepare("UPDATE scheduled_runs SET record = 'not json' WHERE id = ?").run("settled");
+
+    expect(store.listOpenBySchedule("schedule-1").map((r) => r.id)).toEqual([
+      "open-second",
+      "open-first",
+      "open-older",
+    ]);
+    expect(logWarn).not.toHaveBeenCalled();
+
+    const [newest] = store.listOpenBySchedule("schedule-1");
+    store.update({
+      ...newest!,
+      settlement: {
+        state: "settled",
+        settledAt: T0 + 3,
+        outcome: "done",
+        evidence: { kind: "exit", process: "pty", exitCode: 0, signal: null },
+      },
+    });
+    expect(store.listOpenBySchedule("schedule-1").map((r) => r.id)).toEqual([
+      "open-first",
+      "open-older",
+    ]);
+    const plan = sqlite
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT id, record FROM scheduled_runs WHERE schedule_id = ? AND live = 1 ORDER BY created_at DESC, rowid DESC"
+      )
+      .all("schedule-1") as { detail: string }[];
+    expect(plan.map((step) => step.detail).join("\n")).toContain(
+      "scheduled_runs_schedule_live_idx"
+    );
+  });
+
   it("prunes a schedule past its newest runs, but never one still live", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(run("open-oldest", { createdAt: T0 - 10, settlement: { state: "open" } }));

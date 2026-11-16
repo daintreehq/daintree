@@ -20,6 +20,10 @@ export type DbWorkerOp =
   // connection) — used to verify a freshly written backup before it replaces
   // the last known-good one. Resolves true only on an exact "ok".
   | { op: "probePath"; dbPath: string }
+  // Copies the database into `destPath` with SQLite's backup API, then runs
+  // probePath on the copy and resolves its verdict. Never promotes the copy:
+  // main owns the rename over the last known-good backup.
+  | { op: "backup"; destPath: string }
   // Atomic full replacement of a ring (first write, recovery, reordering).
   | { op: "ringWriteAll"; ring: string; rows: RingRow[]; maxRecords: number }
   // Keyed delta against the ring's last acknowledged contents.
@@ -31,7 +35,7 @@ export type DbWorkerOp =
 // user_version inside its immediate write transaction and no-ops any ring
 // write whose epoch no longer matches — this is how main invalidates stale
 // queued snapshots after a degrade or a shutdown-drain timeout. Idempotent ops
-// (checkpoint, quickCheck, probePath) ignore it.
+// (checkpoint, quickCheck, probePath, backup) ignore it.
 export type DbWorkerRequest = DbWorkerOp & { id: number; fence: number };
 
 export type DbWorkerResponse =
