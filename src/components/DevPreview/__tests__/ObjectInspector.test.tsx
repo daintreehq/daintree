@@ -9,6 +9,7 @@ import type {
 } from "@shared/types/ipc/webviewConsole";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectInspector } from "../ObjectInspector";
+import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 
 const getConsoleProperties =
   vi.fn<
@@ -146,5 +147,68 @@ describe("ObjectInspector property values", () => {
     fireEvent.click(marker(total)!);
     await act(async () => {});
     expect(getConsoleProperties).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ObjectInspector released values (#17067)", () => {
+  function renderValue(objectId: string) {
+    return render(
+      <TooltipProvider delayDuration={0}>
+        <ObjectInspector
+          arg={{ type: "object", objectId, preview: "{a: 1}" }}
+          webContentsId={7}
+          paneId="pane-1"
+          rowId={3}
+          path="0"
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
+    useConsoleCaptureStore.getState().addStructuredMessage({
+      id: 3,
+      paneId: "pane-1",
+      level: "log",
+      cdpType: "log",
+      args: [{ type: "object", objectId: "obj-1", preview: "{a: 1}" }],
+      summaryText: "{a: 1}",
+      groupDepth: 0,
+      timestamp: 0,
+      navigationGeneration: 0,
+    });
+    flushConsoleCaptureBuffer();
+  });
+
+  afterEach(() => {
+    useConsoleCaptureStore.getState().removePane("pane-1");
+  });
+
+  it("stops offering the value when main says the row's handles are gone", async () => {
+    getConsoleProperties.mockResolvedValue({ properties: [], released: true });
+    renderValue("obj-1");
+
+    const disclosure = screen.getByRole("button", { name: /\{a: 1\}/ });
+    fireEvent.click(disclosure);
+    await waitFor(() => {
+      const [row] = useConsoleCaptureStore.getState().getMessages("pane-1");
+      expect(row!.args[0]).toMatchObject({ type: "object", objectId: "" });
+    });
+    // Not opened onto an empty tree.
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows a released value as its preview, with no control, and says why", async () => {
+    renderValue("");
+
+    expect(screen.queryByRole("button")).toBeNull();
+    const preview = screen.getByText("{a: 1}");
+    const reason = preview.querySelector(".sr-only")?.textContent ?? "";
+    expect(reason).not.toBe("");
+
+    fireEvent.pointerMove(preview, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBeTruthy();
+    expect(getConsoleProperties).not.toHaveBeenCalled();
   });
 });

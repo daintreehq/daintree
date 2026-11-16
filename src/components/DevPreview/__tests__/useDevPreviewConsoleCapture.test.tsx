@@ -191,6 +191,30 @@ describe("useDevPreviewConsoleCapture", () => {
     await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
   });
 
+  it("keeps the rows but stops offering their values once capture stops (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    const webview = makeWebviewElement();
+    const { rerender } = renderHook(
+      ({ evicted }: { evicted: boolean }) =>
+        useDevPreviewConsoleCapture(PANE_ID, webview, true, evicted),
+      { initialProps: { evicted: false } }
+    );
+    addRowViaCb(
+      row({
+        paneId: PANE_ID,
+        args: [{ type: "object", objectId: "obj-1", preview: "{}" }],
+      })
+    );
+
+    rerender({ evicted: true });
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
+
+    const [kept] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(kept?.args[0]).toMatchObject({ type: "object", objectId: "", preview: "{}" });
+  });
+
   it("stops capture when the panel becomes evicted", async () => {
     const webview = makeWebviewElement();
     const { rerender } = renderHook(

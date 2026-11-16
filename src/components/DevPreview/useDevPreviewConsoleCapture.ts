@@ -164,6 +164,9 @@ export function useDevPreviewConsoleCapture(
         .then(() => {
           if (activeCaptureTokenRef.current !== captureToken) return;
           activeCaptureTokenRef.current = null;
+          // Stopping releases every handle main holds for this pane; the rows
+          // stay on screen as previews.
+          useConsoleCaptureStore.getState().releaseHandles(paneId);
           return window.electron.webview.stopConsoleCapture(webContentsId, paneId);
         });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });

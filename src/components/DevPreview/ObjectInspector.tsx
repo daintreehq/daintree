@@ -8,6 +8,7 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { DisclosureChevron } from "./DisclosureChevron";
 import { DISCLOSURE_TOGGLE_CLASS } from "./StackTrace";
 import { useRowFocusTooltip } from "./rowFocusTooltip";
+import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 
 interface ObjectInspectorProps {
   arg: CdpRemoteArg;
@@ -196,6 +197,9 @@ export function ObjectInspector({
     }
 
     setIsLoading(true);
+    // Before the request, as main pins it on receipt: the row must not lose its
+    // object ids to the live window while the answer is on its way.
+    useConsoleCaptureStore.getState().markInspected(paneId, rowId);
     try {
       const result = await window.electron.webview.getConsoleProperties(
         webContentsId,
@@ -203,6 +207,12 @@ export function ObjectInspector({
         rowId,
         arg.objectId
       );
+      if (result.released) {
+        // The row's values were freed before this request reached them. Blanking
+        // its ids re-renders this value as a plain preview.
+        useConsoleCaptureStore.getState().releaseRowHandles(paneId, rowId);
+        return;
+      }
       // A successful retry takes its button away; focus moves to the value
       // it opened rather than falling to the page.
       const retryHadFocus =
@@ -239,6 +249,20 @@ export function ObjectInspector({
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">Value unavailable after navigation</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  if (!arg.objectId && depth === 0) {
+    return (
+      <Tooltip open={staleTooltip.open} onOpenChange={staleTooltip.onOpenChange}>
+        <TooltipTrigger asChild>
+          <span className="text-text-secondary" {...staleTooltip.triggerProps}>
+            {displayText}
+            <span className="sr-only"> (no longer inspectable)</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">Only recent messages keep their values to inspect</TooltipContent>
       </Tooltip>
     );
   }
