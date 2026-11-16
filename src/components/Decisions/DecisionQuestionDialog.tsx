@@ -255,7 +255,8 @@ export function DecisionQuestionDialog() {
     // Reads can land out of order; only the newest one started may paint.
     let latest = 0;
     const read = () => {
-      const seq = ++latest;
+      latest += 1;
+      const seq = latest;
       const accept = (result: Read) => {
         if (live && seq === latest) setTagged({ key: thisKey, read: result });
       };
