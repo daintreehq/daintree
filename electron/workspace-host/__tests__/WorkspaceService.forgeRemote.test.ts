@@ -1137,8 +1137,16 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   });
 
   describe("while backgrounded (#12519)", () => {
-    const OFF_SCREEN_POLICY = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
-    const ON_SCREEN_POLICY = { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false };
+    const OFF_SCREEN_POLICY = {
+      statusAllowed: false,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    };
+    const ON_SCREEN_POLICY = {
+      statusAllowed: true,
+      backgroundWorkAllowed: true,
+      attenuated: false,
+    };
 
     beforeEach(() => {
       vi.spyOn(os, "setPriority").mockImplementation(() => {});
