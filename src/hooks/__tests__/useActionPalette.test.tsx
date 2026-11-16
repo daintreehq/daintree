@@ -1972,6 +1972,28 @@ describe("useActionPalette", () => {
       expect(result.current.results[0]!.promptsForArgs).toBe(true);
     });
 
+    // Rows are memoized and every one takes executeAction as its click handler,
+    // so it must keep its identity while the user types and still act on the
+    // query as it stands when the row is clicked.
+    it("keeps one executeAction across queries that acts on the latest query", async () => {
+      paletteArgsMock.mockReturnValue(spec);
+      const { result } = await openPalette([pluginEntry()]);
+      const execute = result.current.executeAction;
+
+      act(() => result.current.setQuery("depl"));
+      await waitFor(() => expect(result.current.results.map((r) => r.id)).toEqual([
+        "plugin.acme.deploy",
+      ]));
+      expect(result.current.executeAction).toBe(execute);
+
+      act(() => execute(result.current.results[0]!));
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Environment", step: 1 });
+      expect(result.current.executeAction).toBe(execute);
+
+      act(() => result.current.argBack());
+      expect(result.current.query).toBe("depl");
+    });
+
     it("collects typed arguments step by step and dispatches them once", async () => {
       paletteArgsMock.mockReturnValue(spec);
       const { result } = await openPalette([pluginEntry()]);
