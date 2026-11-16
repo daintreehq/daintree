@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useEffect, useState } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
+import type { IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { useWorktrees } from "./useWorktrees";
@@ -7,7 +7,12 @@ import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import type { AgentState } from "@shared/types/agent";
 import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
-import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalette";
+import {
+  useSearchablePalette,
+  type FuseResultMatch,
+  type PaletteSearchResult,
+} from "./useSearchablePalette";
+import { createFuseSearch } from "@/lib/fuseIndex";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -81,6 +86,11 @@ export interface UseQuickSwitcherReturn {
 // No `type` key: "terminal", "worktree" and "plugin" are never drawn on a row,
 // so a query fuzzily matching them listed rows with nothing visible to explain
 // why ("lin" found every panel through "terminal").
+//
+// One index ranks and highlights. Its match floor stays at Fuse's default of
+// one character: `minMatchCharLength` also decides membership, so raising it
+// would drop single-letter queries from the results. The two-character floor
+// for highlights is applied to the ranges instead (`highlightRanges`).
 const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   keys: [
     { name: "title", weight: 2 },
@@ -88,20 +98,29 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   ],
   threshold: 0.4,
   includeScore: true,
-};
-
-/**
- * The ranking index's options plus match ranges. Kept on a second index so
- * ranking itself pays nothing for them, and with a two-character floor so a
- * fuzzy hit doesn't sprinkle single-letter bands across a row.
- */
-const FUSE_MATCH_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
-  ...FUSE_OPTIONS,
   includeMatches: true,
-  minMatchCharLength: 2,
 };
 
-const EMPTY_MATCHES: ReadonlyMap<string, readonly FuseResultMatch[]> = new Map();
+const searchBuiltinItems = createFuseSearch(FUSE_OPTIONS);
+
+/** Shortest range worth marking: a fuzzy hit shouldn't sprinkle single-letter bands across a row. */
+const MIN_HIGHLIGHT_LENGTH = 2;
+
+function highlightRanges(
+  matches: readonly FuseResultMatch[] | undefined
+): readonly FuseResultMatch[] | null {
+  if (!matches) return null;
+  const kept: FuseResultMatch[] = [];
+  for (const match of matches) {
+    const indices = match.indices.filter(([start, end]) => end - start + 1 >= MIN_HIGHLIGHT_LENGTH);
+    if (indices.length > 0) kept.push({ ...match, indices });
+  }
+  return kept.length > 0 ? kept : null;
+}
+
+function emptyMatches(): Map<string, readonly FuseResultMatch[]> {
+  return new Map();
+}
 
 const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
@@ -239,32 +258,40 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     pruneMru(validIds);
   }, [builtinItems, mruList, pruneMru]);
 
-  const fuse = useMemo(() => new Fuse(builtinItems, FUSE_OPTIONS), [builtinItems]);
-
-  const filterFn = useCallback(
-    (_allItems: QuickSwitcherItem[], query: string): QuickSwitcherItem[] => {
+  const searchFn = useCallback(
+    (_allItems: QuickSwitcherItem[], query: string): PaletteSearchResult<QuickSwitcherItem> => {
       // Plugin rows answer one (scope, query); for any other they are stale,
       // and left out in the same render the input changed, so neither Enter
       // nor a click can open a row from the previous query.
       const live =
         pluginState.scopeKey === activeScopeKey && pluginState.query === query ? pluginItems : [];
-      if (activeScopeKey !== null) return live;
+      if (activeScopeKey !== null) return { items: live, matchesById: emptyMatches() };
 
       const mruIndexMap = new Map<string, number>();
       mruList.forEach((id, index) => mruIndexMap.set(id, index));
       const mruSize = mruList.length;
 
-      if (!query.trim()) {
+      // Closed, the list is the browse order whatever query was left behind
+      // when another palette took over: a closed switcher never searches.
+      if (!paletteIsOpen || !query.trim()) {
         // Empty query: return items in MRU order (MRU items first, then others)
-        return [...builtinItems].sort((a, b) => {
+        const items = [...builtinItems].sort((a, b) => {
           const aIndex = mruIndexMap.get(a.id) ?? Infinity;
           const bIndex = mruIndexMap.get(b.id) ?? Infinity;
           return aIndex - bIndex;
         });
+        return { items, matchesById: emptyMatches() };
       }
 
-      // Non-empty query: Fuse search with MRU boost (lower score = better match)
-      const fuseResults = fuse.search(query);
+      // Non-empty query: Fuse search with MRU boost (lower score = better match).
+      // A plugin reply or MRU change re-runs this for the same query and gets
+      // the cached hits back rather than a second search.
+      const fuseResults = searchBuiltinItems(builtinItems, query);
+      const matchesById = emptyMatches();
+      for (const r of fuseResults) {
+        const ranges = highlightRanges(r.matches);
+        if (ranges) matchesById.set(r.item.id, ranges);
+      }
       const ranked = fuseResults
         .map((r) => {
           const rank = mruIndexMap.get(r.item.id);
@@ -276,10 +303,13 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         .map((r) => r.item);
       // Blended rows go after the built-in budget, in arrival order, so one
       // landing late never moves a row already on screen.
-      if (live.length === 0) return ranked;
-      return [...ranked.slice(0, MAX_RESULTS), ...live, ...ranked.slice(MAX_RESULTS)];
+      if (live.length === 0) return { items: ranked, matchesById };
+      return {
+        items: [...ranked.slice(0, MAX_RESULTS), ...live, ...ranked.slice(MAX_RESULTS)],
+        matchesById,
+      };
     },
-    [fuse, mruList, builtinItems, pluginItems, pluginState, activeScopeKey]
+    [paletteIsOpen, mruList, builtinItems, pluginItems, pluginState, activeScopeKey]
   );
 
   const {
@@ -288,6 +318,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     results,
     totalResults,
     selectedIndex,
+    matchesById,
     open,
     close,
     toggle,
@@ -297,9 +328,11 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     selectNext,
   } = useSearchablePalette<QuickSwitcherItem>({
     items,
-    filterFn,
+    searchFn,
     maxResults: MAX_RESULTS + pluginItems.length,
     paletteId: "quick-switcher",
+    // Opened from the action registry through the store, not through `open()`.
+    resetOnStoreOpen: true,
   });
 
   const { request: requestPluginSearch, providers: pluginProviders } = pluginSearch;
@@ -331,16 +364,6 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     [setQuery]
   );
   const exitScope = useCallback(() => setScopeKey(null), []);
-
-  const matchFuse = useMemo(() => new Fuse(builtinItems, FUSE_MATCH_OPTIONS), [builtinItems]);
-  const matchesById = useMemo(() => {
-    if (!query.trim()) return EMPTY_MATCHES;
-    const byId = new Map<string, readonly FuseResultMatch[]>();
-    for (const r of matchFuse.search(query)) {
-      if (r.matches) byId.set(r.item.id, r.matches);
-    }
-    return byId;
-  }, [matchFuse, query]);
 
   const restoreBackgroundTerminal = usePanelStore((state) => state.restoreBackgroundTerminal);
   const activateTerminal = usePanelStore((state) => state.activateTerminal);

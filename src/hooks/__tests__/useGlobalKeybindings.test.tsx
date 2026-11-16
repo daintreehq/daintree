@@ -122,6 +122,7 @@ const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore"
 function makePaletteState(activePaletteId: PaletteId | null) {
   return {
     activePaletteId,
+    openRequestId: 0,
     openPalette: vi.fn(),
     closePalette: vi.fn(),
   };

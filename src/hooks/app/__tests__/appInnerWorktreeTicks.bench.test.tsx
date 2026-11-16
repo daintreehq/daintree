@@ -7,9 +7,25 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 // A worktree status tick (modifiedCount, lastActivityTimestamp, ahead/behind)
 // replaces the store's Map. AppInner's app-root hooks only need the active
-// worktree's path/existence and — while a worktree palette or the overview is
-// open — the list, so a tick on an unrelated worktree must not commit the
-// root or hand ModalHostLayer a new resumeSession.
+// worktree's path/existence; the list belongs to the worktree palette's and the
+// overview's own hosts, live only while one is open. So a tick on an unrelated
+// worktree must not commit the root or hand ModalHostLayer a new resumeSession.
+
+const shown = vi.hoisted(() => ({
+  worktreePalette: null as null | { results: WorktreeState[] },
+  overview: null as null | { worktrees: WorktreeState[] },
+}));
+vi.mock("@/lazyPanels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lazyPanels")>()),
+  LazyWorktreePalette: (props: { results: WorktreeState[] }) => {
+    shown.worktreePalette = props;
+    return null;
+  },
+  LazyWorktreeOverviewModal: (props: { worktrees: WorktreeState[] }) => {
+    shown.overview = props;
+    return null;
+  },
+}));
 
 vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: "/home/user" }) }));
 
@@ -40,7 +56,7 @@ vi.stubGlobal(
   })
 );
 
-const { usePaletteWiring } = await import("../usePaletteWiring");
+const { WorktreePaletteHost, WorktreeOverviewHost } = await import("@/PaletteHosts");
 const { useActiveWorktreeSync } = await import("../useActiveWorktreeSync");
 const { useResumeAgentSession } = await import("@/hooks/useResumeAgentSession");
 const { WorktreeStoreContext } = await import("@/contexts/WorktreeStoreContext");
@@ -97,16 +113,11 @@ let commits = 0;
 let actualMs = 0;
 let hostRenders = 0;
 let resumeIdentities = 0;
-type Wiring = ReturnType<typeof usePaletteWiring>;
-
 interface HostProps {
-  worktreePalette: Wiring["worktreePalette"];
   resumeSession: ReturnType<typeof useResumeAgentSession>;
   defaultTerminalCwd: string;
   activeWorktreeId: string | null;
   isWorktreeOverviewOpen: boolean;
-  worktrees: WorktreeState[];
-  isLoading: boolean;
 }
 
 let lastResume: HostProps["resumeSession"] | null = null;
@@ -130,22 +141,29 @@ function ModalHostSpy(props: HostProps) {
   return null;
 }
 
+const noop = () => {};
+
+// AppInner's own worktree hooks, plus the two hosts ModalHostLayer mounts that
+// show the list, so a commit anywhere in them counts against the root.
 function AppInnerHarness({ isWorktreeOverviewOpen }: { isWorktreeOverviewOpen: boolean }) {
-  const { worktrees, isLoading, worktreePalette } = usePaletteWiring({
-    isWorktreeOverviewOpen,
-  });
   const { activeWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   const resumeSession = useResumeAgentSession();
   return (
-    <ModalHostSpy
-      worktreePalette={worktreePalette}
-      resumeSession={resumeSession}
-      defaultTerminalCwd={defaultTerminalCwd}
-      activeWorktreeId={activeWorktreeId}
-      isWorktreeOverviewOpen={isWorktreeOverviewOpen}
-      worktrees={worktrees}
-      isLoading={isLoading}
-    />
+    <>
+      <ModalHostSpy
+        resumeSession={resumeSession}
+        defaultTerminalCwd={defaultTerminalCwd}
+        activeWorktreeId={activeWorktreeId}
+        isWorktreeOverviewOpen={isWorktreeOverviewOpen}
+      />
+      <WorktreePaletteHost />
+      <WorktreeOverviewHost
+        isOpen={isWorktreeOverviewOpen}
+        onClose={noop}
+        activeWorktreeId={activeWorktreeId}
+        onSelectWorktree={noop}
+      />
+    </>
   );
 }
 
@@ -215,6 +233,8 @@ const setActiveCalls = () =>
 
 describe("AppInner worktree-tick re-renders", () => {
   beforeEach(() => {
+    shown.worktreePalette = null;
+    shown.overview = null;
     resumeSessionIntoPanel.mockClear();
     request.mockClear();
     _resetHostAppliedActivationForTesting();
@@ -244,7 +264,7 @@ describe("AppInner worktree-tick re-renders", () => {
     expect(r.resumeIdentities).toBe(0);
   });
 
-  const worktreePaletteRows = () => host().worktreePalette.results;
+  const worktreePaletteRows = () => shown.worktreePalette!.results;
 
   it("gives the worktree palette the live list on open and holds it through close", () => {
     const { store } = mount();
@@ -276,7 +296,7 @@ describe("AppInner worktree-tick re-renders", () => {
         <AppInnerHarness isWorktreeOverviewOpen />
       </WorktreeStoreContext.Provider>
     );
-    const rows = () => host().worktrees;
+    const rows = () => shown.overview!.worktrees;
     expect(rows()).toHaveLength(WORKTREE_COUNT);
     act(() => tick(store, OTHER, 3));
     expect(rows().find((w) => w.id === OTHER)!.modifiedCount).toBe(3);

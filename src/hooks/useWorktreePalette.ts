@@ -41,15 +41,17 @@ export function useWorktreePalette({
   const filterWorktrees = useCallback(
     (items: WorktreeState[], query: string): WorktreeState[] => {
       if (!query.trim()) return items;
-      const score = (worktree: WorktreeState) =>
-        scoreWorktree(worktree, query, customTitles[worktree.id]);
-      const matched = items.filter((worktree) => score(worktree) > 0);
-      return [...matched].sort((a, b) => {
-        const scoreA = score(a);
-        const scoreB = score(b);
-        if (scoreA !== scoreB) return scoreB - scoreA;
-        return 0;
-      });
+      // Scored once per row: scoring inside the comparator re-ran the match
+      // across every field for both sides of each of the sort's n·log n
+      // comparisons. The sort is stable, so equal scores keep the incoming
+      // active/main/name order.
+      const scored: { worktree: WorktreeState; score: number }[] = [];
+      for (const worktree of items) {
+        const score = scoreWorktree(worktree, query, customTitles[worktree.id]);
+        if (score > 0) scored.push({ worktree, score });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      return scored.map((entry) => entry.worktree);
     },
     [customTitles]
   );
@@ -60,6 +62,8 @@ export function useWorktreePalette({
       filterFn: filterWorktrees,
       maxResults: 20,
       paletteId: "worktree",
+      // Opened from the action registry through the store, not through `open()`.
+      resetOnStoreOpen: true,
     });
 
   const handleSelect = useCallback(

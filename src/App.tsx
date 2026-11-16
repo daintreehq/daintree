@@ -91,7 +91,8 @@ import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 import { useHostConnectionSync } from "./hooks/useHostConnection";
-import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
+import { useProjectSwitcherPalette } from "./hooks/useProjectSwitcherPalette";
+import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 
 import {
   LazyModalHostLayer,
@@ -111,6 +112,7 @@ import {
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
+import type { PaletteId } from "./store/paletteStore";
 import { useEmptyCanvasContent } from "./hooks/app/useEmptyCanvasContent";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
@@ -135,6 +137,10 @@ import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard"
 // a bare void call would surface an unhandled rejection — the swallowed early
 // failure is retried by hydrateAppState's own await.
 void ensureHydrationBootstrap().catch(() => {});
+
+// Opens through the store rather than a palette hook: each palette's search
+// state lives in its own host, so the shell holds no hook that could open it.
+const openPalette = (id: PaletteId) => usePaletteStore.getState().openPalette(id);
 
 function AppInner() {
   useErrors();
@@ -184,32 +190,14 @@ function AppInner() {
     openWorktreeOverview,
     closeWorktreeOverview,
   } = useWorktreeOverview();
-  const {
-    worktrees,
-    isLoading,
-    panelPalette,
-    projectSwitcherPalette,
-    actionPalette,
-    quickSwitcher,
-    sendToAgentPalette,
-    worktreePalette,
-    quickCreatePalette,
-    isThemePaletteOpen,
-    isLogLevelPaletteOpen,
-    isResumeSessionsPaletteOpen,
-    isRecentDictationsPaletteOpen,
-    isProjectSwitcherModalOpen,
-    shouldMountQuickSwitcher,
-    shouldMountSendToAgentPalette,
-    shouldMountWorktreePalette,
-    shouldMountQuickCreatePalette,
-    shouldMountPanelPalette,
-    shouldMountThemePalette,
-    shouldMountResumeSessionsPalette,
-    shouldMountRecentDictationsPalette,
-    shouldMountLogLevelPalette,
-    shouldMountActionPalette,
-  } = usePaletteWiring({ isWorktreeOverviewOpen });
+  // The other palettes keep their search state in their own hosts
+  // (PaletteHosts.tsx), so typing in one never re-renders this shell. The
+  // project switcher stays here: the toolbar's dropdown and the modal share one
+  // controller.
+  const projectSwitcherPalette = useProjectSwitcherPalette();
+  const isProjectSwitcherModalOpen =
+    projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
+  useProjectMruSwitcher();
   const worktreeStore = useWorktreeStoreApi();
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
@@ -371,14 +359,6 @@ function AppInner() {
     [launchAgent]
   );
 
-  const closeThemePalette = useCallback(() => {
-    usePaletteStore.getState().closePalette("theme");
-  }, []);
-
-  const closeLogLevelPalette = useCallback(() => {
-    usePaletteStore.getState().closePalette("log-level");
-  }, []);
-
   useAppEventListeners();
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
@@ -413,15 +393,15 @@ function AppInner() {
     onToggleFocusMode: handleToggleFocusMode,
     onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
     onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
-    onOpenActionPalette: actionPalette.open,
-    onOpenQuickSwitcher: quickSwitcher.open,
-    onOpenWorktreePalette: worktreePalette.open,
-    onOpenQuickCreatePalette: quickCreatePalette.open,
+    onOpenActionPalette: () => openPalette("action"),
+    onOpenQuickSwitcher: () => openPalette("quick-switcher"),
+    onOpenWorktreePalette: () => openPalette("worktree"),
+    onOpenQuickCreatePalette: () => openPalette("quick-create"),
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
-    onOpenPanelPalette: panelPalette.open,
-    onOpenResumeSessionsPalette: () => usePaletteStore.getState().openPalette("resume-sessions"),
+    onOpenPanelPalette: () => openPalette("panel"),
+    onOpenResumeSessionsPalette: () => openPalette("resume-sessions"),
     onOpenProjectSwitcherPalette: projectSwitcherPalette.toggle,
     onConfirmCloseActiveProject: (projectId: string) => {
       void projectSwitcherPalette.removeProject(projectId);
@@ -614,38 +594,14 @@ function AppInner() {
 
             <Suspense fallback={null}>
               <LazyModalHostLayer
-                quickSwitcher={quickSwitcher}
-                shouldMountQuickSwitcher={shouldMountQuickSwitcher}
-                sendToAgentPalette={sendToAgentPalette}
-                shouldMountSendToAgentPalette={shouldMountSendToAgentPalette}
-                worktreePalette={worktreePalette}
-                shouldMountWorktreePalette={shouldMountWorktreePalette}
-                quickCreatePalette={quickCreatePalette}
-                shouldMountQuickCreatePalette={shouldMountQuickCreatePalette}
-                panelPalette={panelPalette}
-                shouldMountPanelPalette={shouldMountPanelPalette}
                 resumeSession={resumeSession}
                 handleLaunchAgent={handleLaunchAgent}
                 defaultTerminalCwd={defaultTerminalCwd}
                 activeWorktreeId={activeWorktreeId}
                 isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
                 projectSwitcherPalette={projectSwitcherPalette}
-                isThemePaletteOpen={isThemePaletteOpen}
-                shouldMountThemePalette={shouldMountThemePalette}
-                closeThemePalette={closeThemePalette}
-                isResumeSessionsPaletteOpen={isResumeSessionsPaletteOpen}
-                shouldMountResumeSessionsPalette={shouldMountResumeSessionsPalette}
-                isRecentDictationsPaletteOpen={isRecentDictationsPaletteOpen}
-                shouldMountRecentDictationsPalette={shouldMountRecentDictationsPalette}
-                isLogLevelPaletteOpen={isLogLevelPaletteOpen}
-                shouldMountLogLevelPalette={shouldMountLogLevelPalette}
-                closeLogLevelPalette={closeLogLevelPalette}
-                actionPalette={actionPalette}
-                shouldMountActionPalette={shouldMountActionPalette}
                 isWorktreeOverviewOpen={isWorktreeOverviewOpen}
                 closeWorktreeOverview={closeWorktreeOverview}
-                worktrees={worktrees}
-                isLoading={isLoading}
                 selectWorktree={selectWorktree}
                 availability={availability}
                 crossDiffDialog={crossDiffDialog}

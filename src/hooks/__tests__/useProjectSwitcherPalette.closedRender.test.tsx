@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The switcher hook lives at the app root (via `usePaletteWiring`), and its
+ * The switcher hook lives at the app root (in `AppInner`), and its
  * return value is handed to the unmemoized shell. Every project-stats push —
  * one per agent state change — used to re-render that whole shell even while
  * the switcher was closed. These specs pin the closed palette to zero shell

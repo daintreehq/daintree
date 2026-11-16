@@ -253,6 +253,8 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       maxResults: 60,
       canNavigate: (item) => !item.isStale,
       paletteId: "panel",
+      // Opened from the action registry through the store, not through `open()`.
+      resetOnStoreOpen: true,
     });
 
   useEffect(() => {
