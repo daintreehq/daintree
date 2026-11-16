@@ -4,6 +4,7 @@ import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { composePilotRunTitle } from "@/components/Pilot/pilotRows";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcEventMap } from "@shared/types/ipc/maps";
 
@@ -13,6 +14,10 @@ import type { IpcEventMap } from "@shared/types/ipc/maps";
 let ipcListenerAttached = false;
 
 type ParkReleasedPayload = IpcEventMap["terminal:park-released"];
+
+// The newest release heard for each run still waiting on a pull, so an older
+// one whose pull resolves late never supersedes the newer one's notification.
+const pendingRelease = new Map<string, ParkReleasedPayload>();
 
 function findRun(snapshot: FleetSnapshot | null | undefined, runId: string) {
   return snapshot?.runs.find((candidate) => candidate.runId === runId);
@@ -92,19 +97,28 @@ export function useParkReleaseNotifications(): void {
     window.electron.events.on("terminal:park-released", (payload) => {
       const run = findRun(useFleetSnapshotStore.getState().snapshot, payload.id);
       if (run !== undefined) {
+        pendingRelease.delete(payload.id);
         notifyParkReleased(payload, run);
         return;
       }
+      pendingRelease.set(payload.id, payload);
       // A view that was frozen hears this before the fleet snapshot naming the
       // run, which waits for its thaw (#17038), so ask main for the current one.
       // A failed read still hands the run back, just without its name.
-      void window.electron.fleet
-        .getSnapshot()
-        .then(
-          (snapshot) => findRun(snapshot, payload.id),
-          () => undefined
-        )
-        .then((pulled) => notifyParkReleased(payload, pulled));
+      safeFireAndForget(
+        window.electron.fleet
+          .getSnapshot()
+          .then(
+            (snapshot) => findRun(snapshot, payload.id),
+            () => undefined
+          )
+          .then((pulled) => {
+            if (pendingRelease.get(payload.id) !== payload) return;
+            pendingRelease.delete(payload.id);
+            notifyParkReleased(payload, pulled);
+          }),
+        { context: "park-release notification" }
+      );
     });
 
     // Latch only after a successful subscribe so a throwing preload doesn't

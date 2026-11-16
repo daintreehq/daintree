@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 
 interface NotifyArg {
   title?: string;
@@ -60,6 +61,11 @@ function seedRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// The rows carry only what the hook reads.
+function snapshotOf(runs: Array<ReturnType<typeof seedRun>>): FleetSnapshot {
+  return { runs, changedAt: NOW, degraded: false, lastSuccessfulAt: NOW } as FleetSnapshot;
+}
+
 describe("useParkReleaseNotifications", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -101,12 +107,7 @@ describe("useParkReleaseNotifications", () => {
   it("hands the run back with its title, the note, and an Open action", async () => {
     const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
     useFleetSnapshotStore.setState({
-      snapshot: {
-        runs: [seedRun()] as never,
-        changedAt: NOW,
-        degraded: false,
-        lastSuccessfulAt: NOW,
-      },
+      snapshot: snapshotOf([seedRun()]),
     });
     renderHook(() => useParkReleaseNotifications());
 
@@ -141,12 +142,7 @@ describe("useParkReleaseNotifications", () => {
   it("says so when the gate closed rather than finished — and still carries the note", async () => {
     const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
     useFleetSnapshotStore.setState({
-      snapshot: {
-        runs: [seedRun()] as never,
-        changedAt: NOW,
-        degraded: false,
-        lastSuccessfulAt: NOW,
-      },
+      snapshot: snapshotOf([seedRun()]),
     });
     renderHook(() => useParkReleaseNotifications());
 
@@ -197,6 +193,30 @@ describe("useParkReleaseNotifications", () => {
     });
     // The store stays the push path's; the pull only names the run.
     expect(useFleetSnapshotStore.getState().snapshot).toBeNull();
+  });
+
+  it("never lets a late pull supersede a newer release of the same run", async () => {
+    const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
+    let resolvePull!: (snapshot: unknown) => void;
+    getSnapshotMock.mockReturnValueOnce(new Promise((resolve) => (resolvePull = resolve)));
+    renderHook(() => useParkReleaseNotifications());
+
+    act(() => {
+      captured!({ id: "t1", gateRunId: "g1", note: "older", reason: "gate-ready", timestamp: NOW });
+    });
+    // The fleet push lands, then the run is parked and released again.
+    useFleetSnapshotStore.setState({
+      snapshot: snapshotOf([seedRun()]),
+    });
+    act(() => {
+      captured!({ id: "t1", gateRunId: "g1", note: "newer", reason: "gate-ready", timestamp: NOW });
+    });
+    await act(async () => {
+      resolvePull({ runs: [seedRun()], changedAt: NOW, degraded: false, lastSuccessfulAt: NOW });
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyArg(0).message).toContain("newer");
   });
 
   it("still hands the run back, unnamed, when main can't be asked", async () => {
