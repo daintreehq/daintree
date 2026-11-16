@@ -503,7 +503,10 @@ describe("DeletedWorktreeCard", () => {
       expect(seconds(container)).toBe("36s");
     });
 
-    it("recaptures against the current time when the TTL changes under a hold", () => {
+    // The sweep answers a TTL change with a full window of the new TTL, held
+    // or not, so the frozen readout must too, and keep it through the sweeps
+    // that follow.
+    it("shows a full window of a TTL changed under the hold", () => {
       const { container, rerender } = renderCard(sweptAt(base, "agent"));
       act(() => {
         vi.advanceTimersByTime(30_000);
@@ -512,6 +515,29 @@ describe("DeletedWorktreeCard", () => {
       act(() => {
         usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 300 });
       });
+      expect(seconds(container)).toBe("300s");
+
+      for (let pass = 1; pass <= 3; pass += 1) {
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        rerenderWith(rerender, {
+          ...worktree,
+          expiresAt: base + 30_000 + pass * 1000 + 300_000,
+          holdReason: "agent",
+        });
+        expect(seconds(container)).toBe("300s");
+      }
+    });
+
+    it("captures a re-armed hold against the current time, not the clock it slept on", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
+      rerenderWith(rerender, { ...worktree, expiresAt: null, holdReason: null });
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      rerenderWith(rerender, sweptAt(base + 30_000, "agent"));
 
       expect(seconds(container)).toBe("38s");
     });

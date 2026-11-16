@@ -64,24 +64,23 @@ export function useDeletedWorktreeCountdown(worktree: DeletedWorktree): DeletedW
   // tick, so each pins a value exactly one interval apart and the readout
   // alternates between N and N+1 forever — a held row visibly flips
   // 38s/37s/38s. Freezing is also the honest reading: a held countdown is not
-  // advancing. The key follows the sweep's own capture: once per hold, again
-  // only if the TTL preference changes underneath it, and never for a change of
-  // reason alone (agent working, then a confirm opening), which the sweep
-  // carries through on the same remaining.
+  // advancing. The capture follows the sweep's own (`deletedWorktreeCleanup.ts`):
+  // once per hold, kept through a change of reason alone (agent working, then a
+  // confirm opening), and replaced by a full window of the new TTL when the
+  // preference changes underneath it, which is what the sweep re-arms to.
   // Captured in state, not a ref: this value IS render output, and refs may not
   // be read or written during render (React Compiler enforces it). This is the
   // documented "adjust state when a prop changes" pattern — React re-runs the
   // component immediately, before paint, so no torn frame is observable.
   const holdKey = hold === undefined ? null : `held:${cleanupMs}`;
-  // The clock stops while held, so it is resynced before paint whenever the
-  // hold starts, re-keys or lifts; `clockKey` says which of those it was synced
-  // for. A capture waits for that sync, so it never reads a deadline against
-  // the stale `now` the hold left behind.
+  // The clock stops while held or disarmed, so it is resynced before paint
+  // whenever the countdown arms, holds, re-keys or lifts; `clockKey` says which
+  // hold it was synced for (null for none). A hold's capture waits for that
+  // sync, so it never reads a deadline against the stale `now` left behind.
   const [clockKey, setClockKey] = useState<string | null>(null);
   useLayoutEffect(() => {
-    if (!hasCountdown) return;
-    setNowTick(Date.now());
-    setClockKey(holdKey);
+    if (hasCountdown) setNowTick(Date.now());
+    setClockKey(hasCountdown ? holdKey : null);
   }, [hasCountdown, holdKey]);
   const [heldRemaining, setHeldRemaining] = useState<{
     key: string;
@@ -89,12 +88,13 @@ export function useDeletedWorktreeCountdown(worktree: DeletedWorktree): DeletedW
   } | null>(null);
   if (holdKey === null) {
     if (heldRemaining !== null) setHeldRemaining(null);
-  } else if (heldRemaining?.key !== holdKey && clockKey === holdKey) {
+  } else if (heldRemaining !== null) {
+    if (heldRemaining.key !== holdKey) setHeldRemaining({ key: holdKey, remainingMs: cleanupMs });
+  } else if (clockKey === holdKey) {
     setHeldRemaining({ key: holdKey, remainingMs: derivedRemainingMs });
   }
-  // Until the capture lands, a re-keyed hold keeps showing what it captured
-  // before, and a new hold the derived value (the clock was still running up
-  // to it); either way the layout effect re-renders before paint.
+  // A new hold shows the derived value until its capture lands; the clock was
+  // running up to it, and the layout effect re-renders before paint anyway.
   const remainingMs = heldRemaining !== null ? heldRemaining.remainingMs : derivedRemainingMs;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   // Snap the top of the range to exactly full: the tick that arms the row lands
