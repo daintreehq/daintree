@@ -3,11 +3,17 @@ import { useLayoutEffect, useState } from "react";
 /** Space kept between the maximized readout and anything it might meet. */
 const READOUT_CLEARANCE_PX = 12;
 
+/**
+ * Marks a container that keeps live panes mounted while showing none of them
+ * (the dock's parking container). Nothing inside it is measured.
+ */
+export const PANEL_PARKING_ATTRIBUTE = "data-panel-parking";
+
 interface FrameMeasure {
   /** Ask for a measurement; every request before the next frame shares one. */
   schedule: () => void;
-  /** Measure now, dropping any frame already requested. */
-  flush: () => void;
+  /** Measure now, dropping any frame already requested; false if it could not. */
+  flush: () => boolean;
   dispose: () => void;
 }
 
@@ -15,31 +21,36 @@ interface FrameMeasure {
  * Coalesces a header's layout reads into one per frame, and none while the
  * element renders nothing. Live readings tick their text many times a frame
  * across every pane, so measuring per mutation forced a layout each time. A
- * pane parked by the dock sits under `content-visibility: hidden`
- * (DockPanelOffscreenContainer), where a read forces layout of a subtree the
- * engine is otherwise skipping; `checkVisibility()` answers that from style
- * alone. While hidden, an IntersectionObserver waits for the element to render
- * again so the reveal is measured even when nothing else changes.
+ * pane parked by the dock sits under `content-visibility: hidden`, where a read
+ * forces layout of a subtree the engine is otherwise skipping; the parking
+ * marker answers that from the DOM alone, and `checkVisibility()` catches any
+ * other way the element stopped rendering (a container query's `display:
+ * none`). While hidden, an IntersectionObserver waits for the element to render
+ * again, so a reveal is measured even when nothing else changes: skipped
+ * content counts as not intersecting.
  */
 function createFrameMeasure(el: HTMLElement, measure: () => void): FrameMeasure {
   let frame: number | null = null;
   let reveal: IntersectionObserver | null = null;
   let disposed = false;
 
-  const renders = () => typeof el.checkVisibility !== "function" || el.checkVisibility();
+  const renders = () =>
+    !el.closest(`[${PANEL_PARKING_ATTRIBUTE}]`) &&
+    (typeof el.checkVisibility !== "function" || el.checkVisibility());
 
-  const run = () => {
-    if (disposed || !el.isConnected) return;
+  const run = (): boolean => {
+    if (disposed || !el.isConnected) return false;
     if (!renders()) {
       if (reveal === null && typeof IntersectionObserver !== "undefined") {
         reveal = new IntersectionObserver(schedule);
         reveal.observe(el);
       }
-      return;
+      return false;
     }
     reveal?.disconnect();
     reveal = null;
     measure();
+    return true;
   };
 
   function schedule() {
@@ -65,7 +76,7 @@ function createFrameMeasure(el: HTMLElement, measure: () => void): FrameMeasure 
     schedule,
     flush: () => {
       cancelFrame();
-      run();
+      return run();
     },
     dispose: () => {
       disposed = true;
@@ -92,17 +103,18 @@ export function useReadoutClearance(readout: HTMLElement | null, active: boolean
       setClear(true);
       return;
     }
-    let targetsStale = true;
+    let targetsStale = false;
+    // Obstacles come and go (a chip, a tab strip), so the set is re-observed
+    // after the bar's tree changes rather than once at mount.
+    const observeTargets = () => {
+      targetsStale = false;
+      resizes.disconnect();
+      resizes.observe(bar);
+      resizes.observe(readout);
+      bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
+    };
     const measure = () => {
-      // Obstacles come and go (a chip, a tab strip), so the set is re-observed
-      // after the bar's tree changes rather than once at mount.
-      if (targetsStale) {
-        targetsStale = false;
-        resizes.disconnect();
-        resizes.observe(bar);
-        resizes.observe(readout);
-        bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
-      }
+      if (targetsStale) observeTargets();
       const r = readout.getBoundingClientRect();
       const blocked = Array.from(bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")).some(
         (el) => {
@@ -123,9 +135,11 @@ export function useReadoutClearance(readout: HTMLElement | null, active: boolean
       frame.schedule();
     });
     mutations.observe(bar, { childList: true, subtree: true });
+    observeTargets();
     // Settled before the first paint, so the readout never flashes over the
-    // title it is about to stand aside for.
-    frame.flush();
+    // title it is about to stand aside for. One that cannot be measured yet (a
+    // narrow header hides it) stays out of sight until it has been.
+    if (!frame.flush()) setClear(false);
     return () => {
       frame.dispose();
       mutations.disconnect();
@@ -154,17 +168,37 @@ export function useWholeItemFit(row: HTMLElement | null): void {
       const items = Array.from(row.children).filter(
         (child): child is HTMLElement => child instanceof HTMLElement
       );
-      for (const item of items) item.removeAttribute("hidden");
-      if (!overflows()) return;
       const leaving = items
         .map((item, index) => ({ item, index, priority: Number(item.dataset.fitPriority ?? 0) }))
-        .sort((a, b) => a.priority - b.priority || b.index - a.index);
-      for (const { item } of leaving) {
-        if (!overflows()) break;
+        .sort((a, b) => a.priority - b.priority || b.index - a.index)
+        .map(({ item }) => item)
         // Never pulled out from under the keyboard: a reading or chip being
         // read stays until focus leaves it, and the clip covers the rest.
-        if (item.contains(document.activeElement)) continue;
-        item.setAttribute("hidden", "");
+        .filter((item) => !item.contains(document.activeElement));
+      // A fit always leaves the first `out` items of that order hidden and the
+      // rest shown. While that still holds, a tick only moves the boundary: one
+      // read when nothing moves, rather than revealing every item and taking
+      // them out again one forced layout at a time. Anything else (a priority
+      // or focus change, an item added) starts from everything shown.
+      let out = items.filter((item) => item.hasAttribute("hidden")).length;
+      if (!leaving.slice(0, out).every((item) => item.hasAttribute("hidden"))) {
+        for (const item of items) item.removeAttribute("hidden");
+        out = 0;
+      }
+      if (overflows()) {
+        while (out < leaving.length) {
+          leaving[out++]!.setAttribute("hidden", "");
+          if (!overflows()) return;
+        }
+        return;
+      }
+      while (out > 0) {
+        const item = leaving[--out]!;
+        item.removeAttribute("hidden");
+        if (overflows()) {
+          item.setAttribute("hidden", "");
+          return;
+        }
       }
     };
     const frame = createFrameMeasure(row, fit);

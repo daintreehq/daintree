@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useState } from "react";
-import { useReadoutClearance, useWholeItemFit } from "../panelHeaderFit";
+import { PANEL_PARKING_ATTRIBUTE, useReadoutClearance, useWholeItemFit } from "../panelHeaderFit";
 
 // jsdom has no layout, so the row's geometry is modelled: each item's width is
 // its `data-w`, items sit 6px apart, and the row is `rowWidth` wide. Every read
@@ -11,6 +11,7 @@ import { useReadoutClearance, useWholeItemFit } from "../panelHeaderFit";
 const layout = {
   rowWidth: 400,
   parked: false,
+  visibilityChecks: 0,
   log: [] as string[],
   rects: new Map<string, { left: number; width: number }>(),
 };
@@ -121,6 +122,7 @@ async function flushMutations() {
 beforeEach(() => {
   layout.rowWidth = 400;
   layout.parked = false;
+  layout.visibilityChecks = 0;
   layout.log = [];
   layout.rects = new Map();
   frames = new Map();
@@ -142,6 +144,7 @@ beforeEach(() => {
   Object.defineProperty(Element.prototype, "checkVisibility", {
     configurable: true,
     value() {
+      layout.visibilityChecks++;
       return !layout.parked;
     },
   });
@@ -252,16 +255,26 @@ describe("useWholeItemFit", () => {
     const { container } = render(<Row items={items} />);
     layout.log = [];
 
+    // Each tick reaches the observers on its own, as live readings do.
     setText(container, "cost", "$1.10");
+    await flushMutations();
     setText(container, "tokens", "12k");
+    await flushMutations();
+    fireResize();
     setText(container, "cost", "$1.20");
     await flushMutations();
     expect(layout.log).toEqual([]);
     expect(frames.size).toBe(1);
 
     flushFrame();
-    expect(layout.log.filter((op) => op === "read").length).toBeGreaterThan(0);
-    expect(frames.size).toBe(0);
+    expect(layout.log).toEqual(["read"]);
+
+    // The next frame's ticks get a frame of their own.
+    setText(container, "cost", "$1.30");
+    await flushMutations();
+    expect(frames.size).toBe(1);
+    flushFrame();
+    expect(layout.log).toEqual(["read", "read"]);
   });
 
   it("writes nothing when everything already fits", async () => {
@@ -273,6 +286,55 @@ describe("useWholeItemFit", () => {
     flushFrame();
     expect(layout.log).toEqual(["read"]);
     expect(hiddenIds(container)).toEqual([]);
+  });
+
+  it("probes only the last item out on a tick that moves nothing", async () => {
+    layout.rowWidth = 140;
+    const { container } = render(<Row items={items} />);
+    expect(hiddenIds(container)).toEqual(["cost", "tokens"]);
+    layout.log = [];
+
+    setText(container, "queue", "3 queued");
+    await flushMutations();
+    flushFrame();
+    // Rather than revealing both and taking them out again, one read per side
+    // of the boundary.
+    expect(layout.log).toEqual(["read", "write", "read", "write"]);
+    expect(hiddenIds(container)).toEqual(["cost", "tokens"]);
+  });
+
+  it("takes the next item out when the row narrows, without revealing any", () => {
+    layout.rowWidth = 140;
+    const { container } = render(<Row items={items} />);
+    layout.log = [];
+
+    layout.rowWidth = 70;
+    fireResize();
+    flushFrame();
+    expect(hiddenIds(container)).toEqual(["queue", "cost", "tokens"]);
+    expect(layout.log).toEqual(["read", "write", "read"]);
+  });
+
+  it("re-weighs from scratch when a priority changes the leaving order", async () => {
+    layout.rowWidth = 140;
+    const { container } = render(<Row items={items} />);
+    expect(hiddenIds(container)).toEqual(["cost", "tokens"]);
+
+    // The cost reading now outranks everything: the queue count leaves first.
+    container.querySelector("[data-testid='cost']")!.setAttribute("data-fit-priority", "3");
+    await flushMutations();
+    flushFrame();
+    expect(hiddenIds(container)).toEqual(["queue", "tokens"]);
+  });
+
+  it("gives back only what fits when the row widens part way", () => {
+    layout.rowWidth = 140;
+    const { container } = render(<Row items={items} />);
+
+    layout.rowWidth = 200;
+    fireResize();
+    flushFrame();
+    expect(hiddenIds(container)).toEqual(["tokens"]);
   });
 
   it("brings items back when the row widens", () => {
@@ -317,6 +379,25 @@ describe("useWholeItemFit", () => {
     expect(hiddenIds(container)).toEqual([]);
   });
 
+  it("knows a pane in the dock's parking container is parked without asking the engine", async () => {
+    layout.rowWidth = 140;
+    const { container } = render(
+      <div data-testid="parking" {...{ [PANEL_PARKING_ATTRIBUTE]: "" }}>
+        <Row items={items} />
+      </div>
+    );
+    setText(container, "cost", "$5.00");
+    await flushMutations();
+    flushFrame();
+    expect(layout.log).toEqual([]);
+    expect(layout.visibilityChecks).toBe(0);
+
+    container.querySelector("[data-testid='parking']")!.removeAttribute(PANEL_PARKING_ATTRIBUTE);
+    fireIntersection(true);
+    flushFrame();
+    expect(hiddenIds(container)).toEqual(["cost", "tokens"]);
+  });
+
   it("attaches to a row that mounts after the header", () => {
     layout.rowWidth = 140;
     const { container, rerender } = render(<Row items={items} show={false} />);
@@ -329,10 +410,25 @@ describe("useWholeItemFit", () => {
     setText(container, "cost", "$4.00");
     await flushMutations();
     expect(frames.size).toBe(1);
+    const row = container.querySelector("[data-testid='row']")!;
 
     unmount();
     expect(frames.size).toBe(0);
     expect(resizeObservers.every((ro) => ro.targets.size === 0)).toBe(true);
+
+    // Nothing left listening: a late tick on the detached row schedules nothing.
+    row.firstChild!.firstChild!.nodeValue = "late";
+    await flushMutations();
+    expect(frames.size).toBe(0);
+  });
+
+  it("stops waiting for a reveal once unmounted", () => {
+    layout.parked = true;
+    const { unmount } = render(<Row items={items} />);
+    expect(intersectionObservers.some((io) => !io.disconnected)).toBe(true);
+
+    unmount();
+    expect(intersectionObservers.every((io) => io.disconnected)).toBe(true);
   });
 });
 
@@ -375,19 +471,32 @@ describe("useReadoutClearance", () => {
     fireResize();
     expect(layout.log).toEqual([]);
     flushFrame();
+    // One measurement: the readout and its one obstacle.
+    expect(layout.log).toEqual(["read", "read"]);
     expect(readoutClear(container)).toBe("false");
   });
 
-  it("skips measurement while the readout renders nothing", () => {
+  it("keeps an unmeasured readout out of sight until it renders and is measured", () => {
     layout.parked = true;
-    layout.rects.set("title", { left: 380, width: 100 });
+    layout.rects.set("title", { left: 0, width: 100 });
     const { container } = render(<Bar active />);
     expect(layout.log).toEqual([]);
-    expect(readoutClear(container)).toBe("true");
+    expect(readoutClear(container)).toBe("false");
 
     layout.parked = false;
     fireIntersection(true);
     flushFrame();
-    expect(readoutClear(container)).toBe("false");
+    expect(readoutClear(container)).toBe("true");
+  });
+
+  it("wakes on a resize too, when the readout first renders", () => {
+    layout.parked = true;
+    layout.rects.set("title", { left: 0, width: 100 });
+    const { container } = render(<Bar active />);
+
+    layout.parked = false;
+    fireResize();
+    flushFrame();
+    expect(readoutClear(container)).toBe("true");
   });
 });

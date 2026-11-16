@@ -326,6 +326,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       <div
         ref={offscreenContainerRef}
         className="dock-panel-offscreen-container"
+        data-panel-parking=""
         style={
           {
             contentVisibility: "hidden",
