@@ -181,7 +181,10 @@ export function useWholeItemFit(row: HTMLElement | null): void {
       // them out again one forced layout at a time. Anything else (a priority
       // or focus change, an item added) starts from everything shown.
       let out = items.filter((item) => item.hasAttribute("hidden")).length;
-      if (!leaving.slice(0, out).every((item) => item.hasAttribute("hidden"))) {
+      if (
+        out > leaving.length ||
+        !leaving.slice(0, out).every((item) => item.hasAttribute("hidden"))
+      ) {
         for (const item of items) item.removeAttribute("hidden");
         out = 0;
       }
