@@ -10,12 +10,13 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
   },
 }));
 
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   applyContextReferenceProviders,
   contextReferenceChipField,
   currentContextReferenceProvidersEffects,
+  setContextReferenceProviders,
   type ContextReferenceChipProvider,
 } from "../inputEditorExtensions/contextReferenceChip";
 import { createFileChipField } from "../inputEditorExtensions/fileChip";
@@ -81,5 +82,22 @@ describe("context reference chips (#13795)", () => {
     expect(chips(view, ".cm-context-chip")).toEqual([]);
     view.dispatch({ effects: currentContextReferenceProvidersEffects(view) });
     expect(chips(view, ".cm-context-chip")).toEqual(["Kanban@rec:1"]);
+  });
+
+  it("never reads a draft whole while no provider holds a prefix", () => {
+    let state = EditorState.create({ doc: "see @rec:1", extensions: [contextReferenceChipField] });
+    const toString = vi.spyOn(Text.prototype, "toString");
+    try {
+      for (const ch of " and") {
+        state = state.update({ changes: { from: state.doc.length, insert: ch } }).state;
+      }
+      state = state.update({ effects: setContextReferenceProviders.of(new Map()) }).state;
+      expect(toString).not.toHaveBeenCalled();
+    } finally {
+      toString.mockRestore();
+    }
+
+    state = state.update({ effects: setContextReferenceProviders.of(KANBAN) }).state;
+    expect(state.field(contextReferenceChipField).tokens.map((t) => t.id)).toEqual(["1"]);
   });
 });
