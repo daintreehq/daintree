@@ -7,7 +7,8 @@ import { pluralize } from "@/lib/pluralize";
  * terminal — never a reading of what the agent is doing.
  */
 
-export type DecisionItemKind = "attention" | "uncertain" | "answer" | "expired" | "open" | "queued";
+export type DecisionItemKind =
+  "attention" | "uncertain" | "answer" | "expired" | "open" | "queued" | "cancelling";
 
 /**
  * What an answer for this pane waits on before it's typed in (#16282): a
@@ -58,6 +59,7 @@ const KIND_ORDER: Record<DecisionItemKind, number> = {
   expired: 3,
   open: 4,
   queued: 5,
+  cancelling: 6,
 };
 
 /**
@@ -107,6 +109,8 @@ const REASONS: Record<string, string> = {
   resume_failed: "Resuming the agent failed.",
 };
 
+const NO_IDS: ReadonlySet<string> = new Set();
+
 function aliasLabel(alias: number): string {
   return `q-${alias}`;
 }
@@ -117,10 +121,16 @@ function epoch(iso: string | null): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** Every outstanding question for the pane, worst first, then in the order they were asked. */
+/**
+ * Every outstanding question for the pane, worst first, then in the order
+ * they were asked. `cancelling` holds the questions a person withdrew here
+ * that main has committed but the relay hasn't confirmed: each stays listed,
+ * as cancelling, until the pane's state no longer lists it as waiting.
+ */
 export function decisionItems(
   state: PaneDecisionState,
-  wait: PaneWait = "composer"
+  wait: PaneWait = "composer",
+  cancelling: ReadonlySet<string> = NO_IDS
 ): DecisionItem[] {
   const items: DecisionItem[] = [];
   for (const entry of state.needsAttention) {
@@ -158,11 +168,16 @@ export function decisionItems(
   }
   for (const question of state.openQuestions) {
     const queued = question.status === "queued";
+    const withdrawn = cancelling.has(question.questionId);
     items.push({
       questionId: question.questionId,
       label: aliasLabel(question.alias),
-      kind: queued ? "queued" : "open",
-      status: queued ? "Queued to send" : "Waiting for an answer",
+      kind: withdrawn ? "cancelling" : queued ? "queued" : "open",
+      status: withdrawn
+        ? "Cancelling, waiting for the relay to confirm"
+        : queued
+          ? "Queued to send"
+          : "Waiting for an answer",
       reason: null,
       waitsFor: null,
       askedAt: epoch(question.askedAt),
@@ -175,6 +190,25 @@ export function decisionItems(
 
 function isAttention(item: DecisionItem): boolean {
   return item.kind === "attention" || item.kind === "uncertain";
+}
+
+/** Still waiting for an answer, so a person may withdraw it. */
+export function isCancellable(item: DecisionItem): boolean {
+  return item.kind === "open" || item.kind === "queued";
+}
+
+/**
+ * Why some rows offer no cancel: an answered question's answer is already
+ * the agent's, and an expired one is over. Null when every row is waiting,
+ * or already being cancelled.
+ */
+export function cancelNote(items: readonly DecisionItem[]): string | null {
+  const answered = items.some((item) => item.kind === "answer" || isAttention(item));
+  const expired = items.some((item) => item.kind === "expired");
+  if (answered && expired) return "Answered and expired questions can't be cancelled";
+  if (answered) return "Answered questions can't be cancelled";
+  if (expired) return "Expired questions can't be cancelled";
+  return null;
 }
 
 /** A person has to decide what happens to at least one answer. */
@@ -214,6 +248,8 @@ export function chipLabel(items: readonly DecisionItem[]): ChipLabel {
       return { text: `${item.label} expired`, detail: null };
     case "queued":
       return { text: `${item.label} queued`, detail: null };
+    case "cancelling":
+      return { text: `${item.label} cancelling`, detail: null };
     default:
       return { text: item.label, detail: null };
   }
@@ -228,7 +264,10 @@ export function deliveryNotes(
   wait: PaneWait = "composer"
 ): string[] {
   const notes: string[] = [];
-  const waitsHere = items.some((item) => !isAttention(item) && item.waitsFor !== "host");
+  // A question being withdrawn has no answer coming.
+  const waitsHere = items.some(
+    (item) => !isAttention(item) && item.kind !== "cancelling" && item.waitsFor !== "host"
+  );
   if (waitsHere) notes.push(`Answers are typed in here ${WAIT_PHRASES[wait]}`);
   if (items.some((item) => item.waitsFor === "host")) {
     notes.push("Answers for a host that's away are typed in once it's back");
@@ -244,6 +283,8 @@ export function itemSentence(item: DecisionItem): string {
       return `Question ${item.label} is waiting for an answer`;
     case "queued":
       return `Question ${item.label} is queued to send`;
+    case "cancelling":
+      return `Question ${item.label} is being cancelled, waiting for the relay to confirm`;
     case "answer":
     case "expired":
       return `${item.status} (${item.label})`;
@@ -286,6 +327,7 @@ const SUMMARY_GROUPS: Array<{
     many: "waiting for an answer",
   },
   { matches: (item) => item.kind === "queued", one: "queued to send", many: "queued to send" },
+  { matches: (item) => item.kind === "cancelling", one: "cancelling", many: "cancelling" },
 ];
 
 export function chipSummary(items: readonly DecisionItem[]): string {

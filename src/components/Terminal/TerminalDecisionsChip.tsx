@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -30,12 +30,16 @@ import {
   POPOVER_TITLE_CLASS,
 } from "@/components/ui/popoverHeader";
 import { pluralize } from "@/lib/pluralize";
+import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
+import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
+  cancelNote,
   chipLabel,
   chipSummary,
   decisionItems,
   deliveryNotes,
+  isCancellable,
   itemSentence,
   needsAttention,
   paneWaitOf,
@@ -125,18 +129,23 @@ function DecisionRow({
   item,
   line,
   onOpen,
+  onCancel,
 }: {
   item: DecisionItem;
   line: string | null;
   onOpen: () => void;
+  /** Null for a question that can't be withdrawn now. */
+  onCancel: (() => void) | null;
 }) {
   const attention = ATTENTION_KINDS.has(item.kind);
   const focusRestore = useOverlayFocusRestore();
   return (
-    <li>
+    // Two sibling controls, never one inside the other: the row opens the
+    // question, and Cancel asks before withdrawing it.
+    <li className="flex items-start hover:bg-overlay-subtle">
       <button
         type="button"
-        className="flex w-full items-start gap-2 px-3 py-2 text-left outline-hidden hover:bg-overlay-subtle focus-visible:bg-overlay-subtle focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        className="flex min-w-0 flex-1 items-start gap-2 px-3 py-2 text-left outline-hidden focus-visible:bg-overlay-subtle focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         onClick={() => {
           // The question view takes focus; the popover mustn't take it back.
           focusRestore?.expectHandoff();
@@ -189,6 +198,22 @@ function DecisionRow({
           />
         )}
       </button>
+      {onCancel !== null && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="mt-1.5 mr-2 shrink-0"
+          aria-label={`Cancel question ${item.label}…`}
+          onClick={() => {
+            // The confirmation takes focus; the popover mustn't take it back.
+            focusRestore?.expectHandoff();
+            onCancel();
+          }}
+          data-testid="terminal-decisions-cancel"
+        >
+          Cancel…
+        </Button>
+      )}
     </li>
   );
 }
@@ -216,118 +241,174 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   });
   const wait = paneWaitOf({ hasDraft, queuesInput });
   const openQuestion = useDecisionsQuestionViewStore((s) => s.open);
-  const items = state === null ? [] : decisionItems(state, wait);
+  // Withdrawals main committed and the relay hasn't confirmed, held in memory
+  // for as long as this view shows the pane; each shows until the pane's state drops it.
+  const [cancelling, setCancelling] = useState<ReadonlySet<string>>(() => new Set());
+  const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
+    null
+  );
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const items = state === null ? [] : decisionItems(state, wait, cancelling);
   const questionIds = items.map((item) => item.questionId);
   const lines = useQuestionLines(terminalId, questionIds, open);
 
-  if (items.length === 0) return null;
+  // Outside the popover and the chip, so neither closing nor the last row going takes it away.
+  const cancelDialog = (
+    <DecisionCancelDialog
+      target={cancel?.target ?? null}
+      isOpen={cancel?.open === true}
+      waiting={
+        cancel !== null &&
+        items.some((item) => item.questionId === cancel.target.questionId && isCancellable(item))
+      }
+      onClose={() =>
+        setCancel((current) => (current === null ? null : { ...current, open: false }))
+      }
+      onCancelling={(questionId) => setCancelling((current) => new Set(current).add(questionId))}
+      restoreFocusTo={() => {
+        const chip = chipRef.current;
+        if (chip?.isConnected) return chip;
+        const escaped = CSS.escape(terminalId);
+        return (
+          document.querySelector<HTMLElement>(
+            `[data-panel-id="${escaped}"][data-panel-location="grid"]`
+          ) ?? document.querySelector<HTMLElement>(`[data-panel-id="${escaped}"]`)
+        );
+      }}
+    />
+  );
+
+  if (items.length === 0) return cancelDialog;
 
   const attention = needsAttention(items);
   const summary = chipSummary(items);
   const label = chipLabel(items);
+  const unavailable = cancelNote(items);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {/* Selecting the pane would close the popover this opens. */}
-      <span className="contents" onClick={holdPaneSelection} data-fit-priority="80">
-        {/* Several questions make a sentence too long to read in the usual
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        {/* Selecting the pane would close the popover this opens. */}
+        <span className="contents" onClick={holdPaneSelection} data-fit-priority="80">
+          {/* Several questions make a sentence too long to read in the usual
             2.5 s, so this one stays while hovered or focused. */}
-        <Tooltip autoDismiss={false} disableHoverableContent={false}>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  HEADER_CHIP_CLASS,
-                  HEADER_CHIP_SURFACE,
-                  HEADER_CHIP_TRIGGER_CLASS,
-                  HEADER_CHIP_FOCUS_CLASS,
-                  "hover:text-text-primary"
-                )}
-                aria-label={summary}
-                data-testid="terminal-decisions-chip"
-              >
-                {/* The mark says whose chip this is in every state; the warning
+          <Tooltip autoDismiss={false} disableHoverableContent={false}>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  ref={chipRef}
+                  type="button"
+                  className={cn(
+                    HEADER_CHIP_CLASS,
+                    HEADER_CHIP_SURFACE,
+                    HEADER_CHIP_TRIGGER_CLASS,
+                    HEADER_CHIP_FOCUS_CLASS,
+                    "hover:text-text-primary"
+                  )}
+                  aria-label={summary}
+                  data-testid="terminal-decisions-chip"
+                >
+                  {/* The mark says whose chip this is in every state; the warning
                     glyph follows the alias or count, so a count never reads as
                     that many warnings, and comes before the delivering detail,
                     so it never reads as belonging to the answer being typed in.
                     Shape as well as hue, for forced colours. */}
-                <DecisionsIcon className="w-3 h-3 shrink-0" size={12} />
-                <span className="tabular-nums">{label.text}</span>
-                {attention && (
-                  <TriangleAlert
-                    className="w-3 h-3 shrink-0 text-status-warning"
-                    aria-hidden="true"
-                  />
-                )}
-                {/* A narrow header keeps the count and the warning; the
+                  <DecisionsIcon className="w-3 h-3 shrink-0" size={12} />
+                  <span className="tabular-nums">{label.text}</span>
+                  {attention && (
+                    <TriangleAlert
+                      className="w-3 h-3 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {/* A narrow header keeps the count and the warning; the
                     breakdown is in the tooltip and the popover. */}
-                {label.detail !== null && (
-                  <span className="tabular-nums @max-[480px]/header:hidden">{label.detail}</span>
-                )}
-              </button>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {items.length === 1 ? itemSentence(items[0]!) : summary}
-          </TooltipContent>
-        </Tooltip>
-      </span>
-      <PopoverContent
-        side="bottom"
-        align="end"
-        className="w-96 p-0"
-        aria-labelledby={headingId}
-        data-testid="terminal-decisions-popover"
-        // A click here must not select the pane underneath.
-        onClick={(event) => event.preventDefault()}
-      >
-        <div className={POPOVER_HEADER_CLASS}>
-          <span id={headingId} className={POPOVER_TITLE_CLASS}>
-            Decisions
-          </span>
-          <span className={POPOVER_HEADER_META_CLASS}>{pluralize(items.length, "question")}</span>
-        </div>
-        <ul
-          className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
-          aria-label="Questions"
+                  {label.detail !== null && (
+                    <span className="tabular-nums @max-[480px]/header:hidden">{label.detail}</span>
+                  )}
+                </button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {items.length === 1 ? itemSentence(items[0]!) : summary}
+            </TooltipContent>
+          </Tooltip>
+        </span>
+        <PopoverContent
+          side="bottom"
+          align="end"
+          className="w-96 p-0"
+          aria-labelledby={headingId}
+          data-testid="terminal-decisions-popover"
+          // A click here must not select the pane underneath.
+          onClick={(event) => event.preventDefault()}
         >
-          {items.map((item) => (
-            <DecisionRow
-              key={item.questionId}
-              item={item}
-              line={lines.get(item.questionId) ?? null}
-              onOpen={() => {
-                setOpen(false);
-                openQuestion(terminalId, questionIds, item.questionId);
-              }}
-            />
-          ))}
-        </ul>
-        <div className="flex flex-col gap-0.5 border-t border-divider px-3 py-2 text-2xs text-text-secondary">
-          {deliveryNotes(items, wait).map((note) => (
-            <p key={note}>{note}</p>
-          ))}
-        </div>
-        {/* The list reads this computer's answers; a Remote Host keeps its own panes'. */}
-        {attention && !isRemoteWindow() && (
-          <div className="flex justify-end border-t border-divider px-3 py-2">
-            {/* The answers that need a person are acted on in the list, which
-                also holds those whose pane is gone. */}
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => {
-                setOpen(false);
-                openAttention(terminalId);
-              }}
-              data-testid="terminal-decisions-review"
-            >
-              Review answers
-            </Button>
+          <div className={POPOVER_HEADER_CLASS}>
+            <span id={headingId} className={POPOVER_TITLE_CLASS}>
+              Decisions
+            </span>
+            <span className={POPOVER_HEADER_META_CLASS}>{pluralize(items.length, "question")}</span>
           </div>
-        )}
-      </PopoverContent>
-    </Popover>
+          <ul
+            className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
+            aria-label="Questions"
+          >
+            {items.map((item) => (
+              <DecisionRow
+                key={item.questionId}
+                item={item}
+                line={lines.get(item.questionId) ?? null}
+                onOpen={() => {
+                  setOpen(false);
+                  openQuestion(terminalId, questionIds, item.questionId);
+                }}
+                onCancel={
+                  isCancellable(item)
+                    ? () => {
+                        setOpen(false);
+                        setCancel({
+                          target: {
+                            terminalId,
+                            questionId: item.questionId,
+                            label: item.label,
+                            line: lines.get(item.questionId) ?? null,
+                            queued: item.kind === "queued",
+                          },
+                          open: true,
+                        });
+                      }
+                    : null
+                }
+              />
+            ))}
+          </ul>
+          <div className="flex flex-col gap-0.5 border-t border-divider px-3 py-2 text-2xs text-text-secondary">
+            {deliveryNotes(items, wait).map((note) => (
+              <p key={note}>{note}</p>
+            ))}
+            {unavailable !== null && <p>{unavailable}</p>}
+          </div>
+          {/* The list reads this computer's answers; a Remote Host keeps its own panes'. */}
+          {attention && !isRemoteWindow() && (
+            <div className="flex justify-end border-t border-divider px-3 py-2">
+              {/* The answers that need a person are acted on in the list, which
+                also holds those whose pane is gone. */}
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  setOpen(false);
+                  openAttention(terminalId);
+                }}
+                data-testid="terminal-decisions-review"
+              >
+                Review answers
+              </Button>
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
+      {cancelDialog}
+    </>
   );
 }
