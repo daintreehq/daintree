@@ -2,11 +2,33 @@
 # accounts live in each developer's ~/.config/spotexec/config.toml.
 #
 #   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
-#   sx test-all                              the whole unit suite on 9 VMs (~4 min warm)
-#   sx typecheck / sx lint / sx check        typecheck, lint and guards each on a whole VM
+#   sx test-all                              the whole unit suite in one run
+#   sx typecheck / sx lint / sx check        typecheck, lint, guards and format
 version = 1
 timeout = "15m"
+# Commands past the instance cap wait for a slot; test-all holds a whole VM for
+# its full run.
+queue_timeout = "60m"
+pool = ["aws"]
 env_allow = ["NODE_OPTIONS", "TZ"]
+
+# One shared pool for every command: 8-vCPU VMs with at least 32 GiB, up to two
+# jobs to a VM (exclusive tasks take a whole one), and at most eight VMs per
+# machine. Past that, even a workflow of thirty agents queues for a slot
+# instead of launching more. Starting a VM costs a minute or more, and every VM
+# then bills its idle timeout after its last job, so a few warm VMs beat many
+# cold ones. Builds on the machine's global runner named aws (its account,
+# regions, and its baked images and fleet state, which follow the runner's
+# name), or else its first aws-spot runner.
+[runners.aws]
+extends = "aws"
+extends_type = "aws-spot"
+vcpus = 8
+min_memory_gib = 32
+instance_types = ["m6a.*", "m7a.*", "m8a.*", "r6a.*", "r7a.*", "r8a.*"]
+max_slots = 2
+max_instances = 8
+idle_timeout = "10m"
 
 [sync]
 mode = "auto"
@@ -64,44 +86,22 @@ npm run prepare --workspaces --if-present && mkdir -p .tmp && echo "$key" > "$st
 [tasks.test]
 run = "npx vitest run {args}"
 
-# `sx test-all` gets a VM per part, with all of its CPUs (Vitest caps itself at
-# 8 workers). perf-liveness takes about 3.5 minutes on its own VM whatever the
-# split, and 8 unit shards finish inside that: warm, the suite takes 3.6
-# minutes on 9 VMs, where 16 shards take 3.5 on 17 and two parts per VM 4.3.
-# 18 instances let two runs from one machine overlap.
-[runners.test-fleet]
-extends = "aws"
-extends_type = "aws-spot"
-max_slots = 1
-max_instances = 18
-
-[tasks.unit]
-run = "npx vitest run --shard={shard}/{shards} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts {args}"
-shards = 8
-pool = ["test-fleet"]
-timeout = "30m"
-
-# Spawns a child per perf scenario; CI gives it its own job too.
-[tasks.perf-liveness]
-run = "npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts"
-pool = ["test-fleet"]
-timeout = "30m"
-
+# The whole suite in one Vitest run with all 8 CPUs, as `npm test` runs it. A
+# VM per shard spent about 3 of each part's 4 minutes starting up.
 [tasks.test-all]
-parallel = ["unit", "perf-liveness"]
-fail_fast = false
+run = "npx vitest run {args}"
+exclusive = true
+timeout = "30m"
 
-# Each takes a whole VM, as each gets its own runner in CI. `npm run typecheck`
-# runs three tsc projects at once, which peak past the 16 GB of an 8-vCPU VM,
+# `npm run typecheck` runs three tsc projects at once, which peaked past 16 GB,
 # so the projects run one at a time here (every one, even after a failure).
 [tasks.typecheck]
 run = '''projects=$(node -e 'import("./scripts/typecheck.mjs").then(m => console.log(m.PROJECTS.map(p => p.name).join(" ")))') && [ -n "$projects" ] || { echo "[typecheck] no projects found"; exit 1; }; status=0; for p in $projects; do s=$SECONDS; node scripts/typecheck.mjs --only "$p" && echo "[typecheck] $p ok ($((SECONDS - s))s)" || { echo "[typecheck] $p failed"; status=1; }; done; exit $status'''
-exclusive = true
 timeout = "30m"
 
 # Each ESLint thread builds its own typed program: CI's 2 threads suit its
 # 16 GB runners; 4 peak around 15.5 GB and take lint from 8 minutes to under 3
-# once warm.
+# once warm, so lint takes the whole VM.
 [tasks.lint]
 run = "ESLINT_CONCURRENCY=4 npm run lint:ratchet"
 exclusive = true
@@ -109,7 +109,6 @@ timeout = "30m"
 
 [tasks.guards]
 run = "npm run check:guards"
-exclusive = true
 timeout = "30m"
 
 # Prettier over the whole repo, three of guards' seven minutes when they ran together.
@@ -117,7 +116,7 @@ timeout = "30m"
 run = "npm run format:check"
 timeout = "30m"
 
-# `npm run check`, split across four parts.
+# `npm run check` in four parts.
 [tasks.check]
 parallel = ["typecheck", "lint", "guards", "format"]
 fail_fast = false
