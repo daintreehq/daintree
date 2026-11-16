@@ -487,8 +487,8 @@ describe("createSessionServerDeps", () => {
       await sessionDeps.dispatchAction(
         "actions.list",
         { limit: 100 },
-        false,
-        undefined,
+        true,
+        "skip-preference",
         undefined,
         WALK
       );
@@ -498,10 +498,10 @@ describe("createSessionServerDeps", () => {
         1,
         "actions.list",
         { limit: 100 },
-        false,
+        true,
         state.bearer,
         "external",
-        undefined,
+        "skip-preference",
         WALK
       );
       expect(deps.dispatchAction).toHaveBeenNthCalledWith(

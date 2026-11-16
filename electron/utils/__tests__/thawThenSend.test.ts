@@ -121,31 +121,39 @@ describe("thawThenSend", () => {
       expect(isWebContentsFrozen(asWc(wc))).toBe(false);
     });
 
-    it("thaws a view whose freeze is still in flight before it sends", async () => {
+    it("thaws a view whose freeze is still in flight, and sends once it is thawed", async () => {
       const wc = createMockWc();
-      let releaseEnable!: () => void;
-      wc.debugger.sendCommand.mockImplementationOnce(
-        () => new Promise<void>((resolve) => (releaseEnable = resolve))
-      );
-      const freezing = freezeWebContents(asWc(wc));
-      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+      // One debugger session answers in the order it was asked, so the thaw's
+      // commands queue behind the freeze's, and the first answer is held.
+      let releaseFirst!: () => void;
+      const firstAnswer = new Promise<void>((resolve) => (releaseFirst = resolve));
+      let answered: Promise<void> = Promise.resolve();
+      let asked = 0;
       const order: string[] = [];
-      wc.debugger.sendCommand.mockImplementation(async (method: string, params?: unknown) => {
+      wc.debugger.sendCommand.mockImplementation((method: string, params?: unknown) => {
         if (method === "Page.setWebLifecycleState") {
           order.push((params as { state: string }).state);
         }
+        const gate = asked++ === 0 ? firstAnswer : Promise.resolve();
+        answered = answered.then(() => gate);
+        return answered;
       });
-      const send = vi.fn(() => order.push("send"));
+      const freezing = freezeWebContents(asWc(wc));
+      expect(isWebContentsFrozen(asWc(wc))).toBe(true);
+      let frozenAtSend: boolean | undefined;
+      const send = vi.fn(() => {
+        frozenAtSend = isWebContentsFrozen(asWc(wc));
+        order.push("send");
+      });
 
       thawThenSend(asWc(wc), () => true, send);
       expect(send).not.toHaveBeenCalled();
-      releaseEnable();
+      releaseFirst();
       await freezing;
       await flush();
 
-      expect(send).toHaveBeenCalledTimes(1);
-      expect(order.indexOf("active")).toBeGreaterThanOrEqual(0);
-      expect(order.indexOf("active")).toBeLessThan(order.indexOf("send"));
+      expect(order).toEqual(["frozen", "active", "send"]);
+      expect(frozenAtSend).toBe(false);
     });
 
     it("skips the send when the request settled during the thaw", async () => {

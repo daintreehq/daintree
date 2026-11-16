@@ -943,10 +943,11 @@ export class ActionService {
 
   /**
    * The full manifest for a caller that hands it straight to IPC (#17036).
-   * Entries are fresh objects, but their schemas and examples are the cached
-   * ones rather than copies: the send's own structured clone is the isolation
-   * `list()` pays a second clone for. Never keep or write to what this
-   * returns; in DEV the cached schemas are frozen, so a write throws.
+   * Entries are fresh objects, but their schemas are the cached ones and their
+   * examples the definition's own, rather than copies: the send's own
+   * structured clone is the isolation `list()` pays a second clone for. Never
+   * keep or write to what this returns; in DEV the cached schemas are frozen,
+   * so a write to one throws.
    */
   listForTransfer(ctx?: ActionContext): ActionManifestEntry[] {
     return this.collectManifest(ctx, true, true);

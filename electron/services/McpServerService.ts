@@ -431,14 +431,23 @@ export class McpServerService {
       turnOutcomeService: this.turnOutcomeService,
       abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
-      dispatchAction: (actionId, args, confirmed, callerInfo, sessionOrigin, authorization) =>
+      dispatchAction: (
+        actionId,
+        args,
+        confirmed,
+        callerInfo,
+        sessionOrigin,
+        authorization,
+        options
+      ) =>
         this.bridge.dispatchAction(
           actionId,
           args,
           confirmed,
           callerInfo,
           sessionOrigin,
-          authorization
+          authorization,
+          options
         ),
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
       dispatchActionForWebContents: (
