@@ -844,7 +844,7 @@ export function installTerminalBoundListeners(
     if (!win) return;
     selectionDragWindow = null;
     win.removeEventListener("mouseup", onSelectionDragEnd);
-    win.removeEventListener("blur", onSelectionDragEnd);
+    win.removeEventListener("blur", onSelectionDragBlur);
   };
   // Bubble phase on the window, so it runs after xterm's document-level
   // release handler has reported the final selection.
@@ -852,13 +852,19 @@ export function installTerminalBoundListeners(
     stopSelectionDrag();
     if (selectionStale) syncSelection();
   };
+  // A release xterm never saw reports nothing, so take the selection as the
+  // drag left it.
+  const onSelectionDragBlur = () => {
+    stopSelectionDrag();
+    syncSelection();
+  };
   const onSelectionDragStart = (event: MouseEvent) => {
     if (event.button !== 0 || selectionDragWindow) return;
     const win = hostElement.ownerDocument.defaultView;
     if (!win) return;
     selectionDragWindow = win;
     win.addEventListener("mouseup", onSelectionDragEnd);
-    win.addEventListener("blur", onSelectionDragEnd);
+    win.addEventListener("blur", onSelectionDragBlur);
   };
   hostElement.addEventListener("mousedown", onSelectionDragStart, { capture: true });
   const selectionDisposable = terminal.onSelectionChange(() => {

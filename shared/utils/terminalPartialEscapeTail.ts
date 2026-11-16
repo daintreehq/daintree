@@ -44,7 +44,8 @@ function isExecutable(c: number): boolean {
   return c <= 0x17 || c === 0x19 || (c >= 0x1c && c <= 0x1f);
 }
 
-const decoder = new TextDecoder();
+// Keep every U+FEFF, wherever a window starts: `step` decides what one does.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 // First window `feedBytes` decodes; each later one doubles. Most sequences end
 // within a few bytes, so a chunk of plain output after one costs one window.
@@ -200,7 +201,13 @@ export class PartialEscapeTracker {
         continue;
       }
       if (op === T.Append) {
-        if (start === -1) start = i;
+        if (start === -1) {
+          start = i;
+        } else if (isStringState(this.state) && !isStringState(prev)) {
+          // Check the header against its own cap however the input was split.
+          this.append(data, start, i, prev);
+          start = i;
+        }
         continue;
       }
       // Drop: flush what precedes this unit and skip it.
@@ -218,9 +225,9 @@ export class PartialEscapeTracker {
     this.overflowed = false;
   }
 
-  private append(data: string, from: number, to: number): void {
+  private append(data: string, from: number, to: number, state: S = this.state): void {
     if (this.overflowed) return;
-    const cap = isStringState(this.state) ? STRING_CAP : HEADER_CAP;
+    const cap = isStringState(state) ? STRING_CAP : HEADER_CAP;
     if (this.buffer.length + (to - from) > cap) {
       this.buffer = "";
       this.overflowed = true;
@@ -237,10 +244,11 @@ export class PartialEscapeTracker {
   private step(c: number): T {
     const state = this.state;
 
-    // xterm's decoders discard U+FEFF anywhere in the stream, so its parser
-    // never sees one. That also makes the leading BOM `TextDecoder` strips from
-    // each `feedBytes` window immaterial.
-    if (c === 0xfeff) return T.Drop;
+    // xterm's decoders discard U+FEFF before its parser, except straight after
+    // an unpaired high surrogate, which has already grounded every header
+    // state. So it is a no-op outside a string, and string payload keeps it:
+    // the replayed tail goes through the same decoder.
+    if (c === 0xfeff && !isStringState(state)) return T.Drop;
 
     // "Anywhere" transitions. The string states' own terminators land here
     // too: ESC ends an OSC/DCS/APC string and leaves the parser in ESCAPE.

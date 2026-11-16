@@ -223,6 +223,18 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
     expect(holdSpy).toHaveBeenCalledWith("t1", 1000);
   });
 
+  it("getCachedSelection brings the cache up to date through the installer's resolver first", async () => {
+    await service.getOrCreate("t1", undefined, {});
+    const deps = installMock.mock.calls[0]?.[3] as {
+      setCachedSelection: (id: string, selection: string) => void;
+    };
+    deps.setCachedSelection("t1", "before the drag");
+    const managed = service.instances.get("t1") as { syncCachedSelection?: () => void };
+    managed.syncCachedSelection = () => deps.setCachedSelection("t1", "live drag");
+
+    expect(service.getCachedSelection("t1")).toBe("live drag");
+  });
+
   it("detach path: detachForProjectSwitch does not install listeners", () => {
     const managed = makeMockManaged();
     // Append hostElement to a container so the parented DOM-move branch in
