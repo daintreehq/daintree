@@ -10,6 +10,16 @@ import {
 import { usePanelStore } from "@/store/panelStore";
 import { useCanopyStore } from "@/store/canopyStore";
 
+type PanelGrid = ReturnType<typeof usePanelStore.getState>;
+
+/** The focused pane, when it is a terminal a look can be at. */
+function lookable(state: PanelGrid): string | null {
+  const id = state.focusedId;
+  if (id === null) return null;
+  const panel = state.panelsById[id];
+  return panel && isPtyPanel(panel) && panel.location !== "trash" ? id : null;
+}
+
 /**
  * Tells main when the user has a terminal in front of them: always, so main
  * can tell whether a run's hand-back has been seen, and to Canopy as well while
@@ -30,11 +40,7 @@ export function useCanopySeenTracking(): void {
     /** The pane in front of the user now, or null. */
     const inFront = (): string | null => {
       if (!canopyViewIsWatched() || useCanopyStore.getState().isOpen) return null;
-      const id = usePanelStore.getState().focusedId;
-      if (id === null) return null;
-      const panel = usePanelStore.getState().panelsById[id];
-      if (!panel || !isPtyPanel(panel) || panel.location === "trash") return null;
-      return id;
+      return lookable(usePanelStore.getState());
     };
 
     let current: string | null = null;
@@ -56,8 +62,11 @@ export function useCanopySeenTracking(): void {
     };
     sync();
 
+    // Only the focused pane can move the look: the rest of the grid changes
+    // at its own rate, many times a second while agents print, and every
+    // window has a grid whether Canopy is open or not.
     const offFocus = usePanelStore.subscribe((state, prev) => {
-      if (state.focusedId !== prev.focusedId || state.panelsById !== prev.panelsById) sync();
+      if (lookable(state) !== lookable(prev)) sync();
     });
     const offObservable = subscribeProjectViewObservability(sync);
     const offCanopy = useCanopyStore.subscribe((state, prev) => {
