@@ -419,13 +419,13 @@ export function TerminalSearchBar({
   // Radix describes the wrapper it anchors to, not the input, so the invalid
   // reason travels to the input explicitly; the cap note goes the same way,
   // since its tooltip hangs off the count, which takes no focus.
-  const describedBy =
-    [
-      searchStatus === "invalidRegex" && regexError ? regexErrorId : null,
-      atHighlightLimit ? limitNoteId : null,
-    ]
-      .filter(Boolean)
-      .join(" ") || undefined;
+  const describedByIds = [
+    searchStatus === "invalidRegex" && regexError ? regexErrorId : null,
+    atHighlightLimit ? limitNoteId : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const describedBy = describedByIds || undefined;
 
   const countClass = findBarCountClass(searchStatus === "found");
 

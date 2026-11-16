@@ -111,6 +111,22 @@ export interface WorktreeDetailsSectionProps {
   onResourceProvision?: () => void;
 }
 
+// The try/finally lives outside the component: React Compiler abandons a
+// component over a try block with no catch clause.
+async function dispatchRetrySetup(worktreeId: string, onSettled: () => void): Promise<void> {
+  try {
+    // Pin the action context to this card's worktree so `isEnabled` evaluates
+    // against the failed card, not whichever worktree happens to be focused.
+    await actionService.dispatch(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId },
+      { source: "user", contextOverride: { focusedWorktreeId: worktreeId } }
+    );
+  } finally {
+    onSettled();
+  }
+}
+
 export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const {
     worktree,
@@ -264,17 +280,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     e.stopPropagation();
     if (isRetryingSetup) return;
     setIsRetryingSetup(true);
-    try {
-      // Pin the action context to this card's worktree so `isEnabled` evaluates
-      // against the failed card, not whichever worktree happens to be focused.
-      await actionService.dispatch(
-        "worktree.lifecycle.retrySetup",
-        { worktreeId: worktree.id },
-        { source: "user", contextOverride: { focusedWorktreeId: worktree.id } }
-      );
-    } finally {
-      setIsRetryingSetup(false);
-    }
+    await dispatchRetrySetup(worktree.id, () => setIsRetryingSetup(false));
   };
 
   // Same rule the worktree menu's Runtime ▸ Environment section applies, so the

@@ -546,6 +546,31 @@ function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[
   return oldLines;
 }
 
+// try/catch stays out of the components: React Compiler abandons a component
+// whose try block holds a conditional or optional expression.
+function parseDiffFiles(diff: string): ReturnType<typeof parseDiff> {
+  try {
+    const parsed = parseDiff(diff);
+    // parseDiff is forgiving — nonsense input yields a synthetic file with
+    // empty paths and no hunks. Treat that shape as a parse failure.
+    const allEmpty = parsed.every(
+      (file) => !file.oldPath && !file.newPath && file.hunks.length === 0
+    );
+    return allEmpty ? [] : parsed;
+  } catch {
+    return [];
+  }
+}
+
+function expandFullFile(hunks: HunkData[], oldSource: string[]): HunkData[] | null {
+  try {
+    // `end` is exclusive, so the last line needs length + 1.
+    return expandFromRawCode(hunks, oldSource, 1, oldSource.length + 1);
+  } catch {
+    return null;
+  }
+}
+
 export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function DiffViewer(
   {
     diff,
@@ -611,19 +636,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   // Keep keystrokes responsive: highlighting re-tokenizes the whole file, so
   // the query lands as a deferred value and the table catches up after paint.
   const deferredSearchQuery = useDeferredValue(searchQuery ?? "");
-  const files = useMemo(() => {
-    try {
-      const parsed = parseDiff(diff);
-      // parseDiff is forgiving — nonsense input yields a synthetic file with
-      // empty paths and no hunks. Treat that shape as a parse failure.
-      const allEmpty = parsed.every(
-        (file) => !file.oldPath && !file.newPath && file.hunks.length === 0
-      );
-      return allEmpty ? [] : parsed;
-    } catch {
-      return [];
-    }
-  }, [diff]);
+  const files = useMemo(() => parseDiffFiles(diff), [diff]);
 
   // Raw per-file slices of the diff text, used by the per-file copy buttons.
   // Falls back to null (buttons hidden) when the segment count doesn't line up
@@ -1060,12 +1073,7 @@ function FileDiff({
   // expanded instead of discarding it.
   const renderedHunks = useMemo(() => {
     if (!fullFile || !oldSource) return hunks;
-    try {
-      // `end` is exclusive, so the last line needs length + 1.
-      return expandFromRawCode(file.hunks ?? [], oldSource, 1, oldSource.length + 1);
-    } catch {
-      return hunks;
-    }
+    return expandFullFile(file.hunks ?? [], oldSource) ?? hunks;
   }, [fullFile, oldSource, file, hunks]);
 
   // Progressive reveal for very large expanded files: committing tens of
