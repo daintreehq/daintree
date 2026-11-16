@@ -560,6 +560,11 @@ vi.mock("../pluginControl/hostInstall.js", () => ({
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
+// Boot reaps a crashed launch's advert from the real socket directory; not this machine's.
+vi.mock("../host/advertRecord.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../host/advertRecord.js")>()),
+  reapOrphanedAdvert: vi.fn(),
+}));
 // The real service over the real listener, with the system (store, launchd,
 // systemd, mDNS, keychain) faked: boot must never touch this machine.
 vi.mock("../host/hostModeDefaults.js", async () => {

@@ -54,6 +54,7 @@ let emit: ((event: RemoteHostsEvent) => void) | null = null;
 const list = vi.fn<() => Promise<HostListEntry[]>>();
 const isInUse = vi.fn(async () => true);
 const getSnapshots = vi.fn<() => Promise<HostMetricsSnapshot[]>>();
+const setFollowing = vi.fn<(payload: { following: boolean }) => Promise<void>>();
 // One slot per registration, so a duplicate subscription counts twice.
 const metricsListeners: Array<(event: HostMetricsEvent) => void> = [];
 
@@ -67,6 +68,7 @@ beforeEach(() => {
   list.mockReset();
   isInUse.mockReset().mockResolvedValue(true);
   getSnapshots.mockReset().mockResolvedValue([]);
+  setFollowing.mockReset().mockResolvedValue(undefined);
   metricsListeners.length = 0;
   emit = null;
   Object.defineProperty(window, "electron", {
@@ -85,6 +87,7 @@ beforeEach(() => {
       },
       hostMetrics: {
         getSnapshots,
+        setFollowing,
         onEvent: (cb: (event: HostMetricsEvent) => void) => {
           metricsListeners.push(cb);
           return () => {
@@ -398,6 +401,20 @@ describe("host status and host figures", () => {
     expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
   });
 
+  it("tells main this view follows host figures while any consumer is open, once per change", async () => {
+    list.mockResolvedValue([connectedHost("studio-01")]);
+    const following = () => setFollowing.mock.calls.map(([payload]) => payload.following);
+    const overview = renderHook(() => useHostFigures());
+    const placement = renderHook(() => useHostFigures());
+    await settle();
+    expect(following()).toEqual([true]);
+
+    overview.unmount();
+    expect(following()).toEqual([true]);
+    placement.unmount();
+    expect(following()).toEqual([true, false]);
+  });
+
   it("listens and seeds once under StrictMode's double effects", async () => {
     list.mockResolvedValue([connectedHost("studio-01")]);
     getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 3)] }]);
@@ -453,6 +470,8 @@ describe("host status and host figures", () => {
     expect(document.hidden).toBe(false);
     expect(metricsListeners.length).toBe(0);
     expect(figures.result.current.hosts[0]?.summary).toBeNull();
+    // A cached view shows no figures, so this machine needn't sample for it.
+    expect(setFollowing).toHaveBeenLastCalledWith({ following: false });
 
     act(() => lifecycle.active?.());
     await settle();

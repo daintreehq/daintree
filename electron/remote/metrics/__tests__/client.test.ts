@@ -90,6 +90,8 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
   const registryListeners = new Set<() => void>();
   const sessionListeners = new Set<(hostId: string, session: LinkSession) => void>();
   const states = new Map<string, HostConnectionState>();
+  const stateListeners = new Set<(hostId: string, state: HostConnectionState) => void>();
+  const figures = { followed: false, listeners: new Set<() => void>() };
   const calls: Array<{ hostId: string; method: string; payload: unknown }> = [];
   const connect = vi.fn();
   const emitted: HostMetricsEvent[] = [];
@@ -155,6 +157,10 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
             }
           : undefined,
       connectionState: (hostId) => states.get(hostId) ?? { status: "disconnected" },
+      onStateChange(listener) {
+        stateListeners.add(listener);
+        return () => stateListeners.delete(listener);
+      },
       localClient: { clientId: "launch-me", clientName: "greg-mbp" },
       onSessionOpened(listener) {
         sessionListeners.add(listener);
@@ -173,6 +179,13 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
       subscribe(listener) {
         localListeners.add(listener);
         return () => localListeners.delete(listener);
+      },
+    },
+    figuresDemand: {
+      followed: () => figures.followed,
+      onChange(listener) {
+        figures.listeners.add(listener);
+        return () => figures.listeners.delete(listener);
       },
     },
     emit: (event) => emitted.push(event),
@@ -201,6 +214,16 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
       list = next;
       for (const listener of registryListeners) listener();
     },
+    setState(hostId: string, state: HostConnectionState) {
+      states.set(hostId, state);
+      for (const listener of [...stateListeners]) listener(hostId, state);
+    },
+    setFollowed(followed: boolean) {
+      figures.followed = followed;
+      for (const listener of [...figures.listeners]) listener();
+    },
+    stateListeners,
+    figuresListeners: figures.listeners,
     openSession(hostId: string, session: LinkSession) {
       for (const listener of sessionListeners) listener(hostId, session);
     },
@@ -418,18 +441,63 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
-  it("samples this machine only while another host exists", () => {
-    const h = harness([]);
+  it("leaves this machine unsampled while its saved hosts are all disconnected and no view follows", () => {
+    const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
     h.client.start();
     expect(h.localListeners.size).toBe(0);
-    h.setHosts([descriptor("studio-01")]);
+    for (const status of ["connecting", "unreachable", "disconnected"] as const) {
+      h.setState("studio-01", { status } as HostConnectionState);
+      expect(h.localListeners.size).toBe(0);
+    }
+    h.client.dispose();
+  });
+
+  it("samples this machine while another host is connected, and lets go when the last one drops", () => {
+    const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
+    h.client.start();
+    h.setState("studio-01", { status: "connected" } as HostConnectionState);
     expect(h.localListeners.size).toBe(1);
     for (const listener of h.localListeners) listener(summary(5));
     expect(h.client.latest("local")?.sampledAt).toBe(5);
-    h.setHosts([]);
+
+    h.setState("studio-02", { status: "connected" } as HostConnectionState);
+    h.setState("studio-01", { status: "disconnected" });
+    expect(h.localListeners.size).toBe(1);
+
+    h.setState("studio-02", { status: "disconnected" });
     expect(h.localListeners.size).toBe(0);
+    // Nothing keeps it current now: the next reader waits for a fresh sample.
     expect(h.client.latest("local")).toBeNull();
     h.client.dispose();
+  });
+
+  it("samples this machine while a view follows host figures, only beside another host", () => {
+    const h = harness([]);
+    h.client.start();
+    h.setFollowed(true);
+    expect(h.localListeners.size).toBe(0);
+
+    h.setHosts([descriptor("studio-01")]);
+    expect(h.localListeners.size).toBe(1);
+    h.setFollowed(false);
+    expect(h.localListeners.size).toBe(0);
+
+    h.setFollowed(true);
+    expect(h.localListeners.size).toBe(1);
+    h.setHosts([]);
+    expect(h.localListeners.size).toBe(0);
+    h.client.dispose();
+  });
+
+  it("stops sampling and hearing demand on dispose", () => {
+    const h = harness([descriptor("studio-01")]);
+    h.client.start();
+    h.setFollowed(true);
+    expect(h.localListeners.size).toBe(1);
+    h.client.dispose();
+    expect(h.localListeners.size).toBe(0);
+    expect(h.stateListeners.size).toBe(0);
+    expect(h.figuresListeners.size).toBe(0);
   });
 
   it("keeps a bounded ring per host, stamped with this Shell's id for it", async () => {
