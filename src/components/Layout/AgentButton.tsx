@@ -77,6 +77,7 @@ import {
   Plug,
   Settings2,
   Sprout,
+  UserRound,
 } from "lucide-react";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -1200,6 +1201,34 @@ export function AgentButton({
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} />
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+          {hasAccounts && (
+            // Moves the agent's running terminals, in every worktree, and only
+            // those the confirm leaves checked (#17089). Unlike a pick in the
+            // launcher, it leaves the account new launches use alone.
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Move terminals to account
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ContextMenuActionItem
+                  actionId={`agent.moveTerminalsToAccount.${type}`}
+                  args={{ accountId: null }}
+                >
+                  Default login
+                </ContextMenuActionItem>
+                {accounts.map((account) => (
+                  <ContextMenuActionItem
+                    key={account.id}
+                    actionId={`agent.moveTerminalsToAccount.${type}`}
+                    args={{ accountId: account.id }}
+                  >
+                    {account.name}
+                  </ContextMenuActionItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}

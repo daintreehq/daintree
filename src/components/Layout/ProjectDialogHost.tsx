@@ -17,6 +17,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
 import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
+import { MoveTerminalsDialogHost } from "./MoveTerminalsDialogHost";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
@@ -277,6 +278,8 @@ function ProjectDialogHost() {
 
       <DecisionsAttentionHost />
       <DecisionQuestionHost />
+
+      <MoveTerminalsDialogHost />
 
       <ErrorBoundary
         variant="component"
