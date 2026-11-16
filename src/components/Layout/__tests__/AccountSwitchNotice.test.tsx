@@ -324,6 +324,8 @@ describe("AccountSwitchDialog (#16136)", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
     });
     expect(screen.getByText(/reopens this conversation/)).toBeTruthy();
+    // The box names the list it was offered for, not the panes still checked.
+    expect(screen.getByRole("checkbox", { name: "Keep their conversations" })).toBeTruthy();
   });
 
   it("names one pane's conversation when the list holds one pane", () => {
@@ -331,13 +333,22 @@ describe("AccountSwitchDialog (#16136)", () => {
     render(
       <AccountSwitchDialog request={buildAccountSwitchRequest(notice, ["a"])} onClose={() => {}} />
     );
-    expect(screen.getByRole("checkbox", { name: "Keep this conversation" })).toBeTruthy();
+    const keep = screen.getByRole("checkbox", { name: "Keep this conversation" });
+    expect(screen.getByText(/starts a new conversation/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(keep);
+    });
+    expect(screen.getByText(/reopens this conversation/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(keep);
+    });
+    expect(screen.getByText(/starts a new conversation/)).toBeTruthy();
   });
 
   it("offers no keep box for an agent whose refusal isn't recognised", async () => {
-    seed([pane({ id: "a", title: "Parser", launchAgentId: "kimi" })]);
+    seed([pane({ id: "a", title: "Parser", launchAgentId: "goose" })]);
     getInfoMock.mockResolvedValue({ id: "a", hasPty: true, usageLimitObservedAt: 1 });
-    const request = buildAccountSwitchRequest({ ...notice, agentId: "kimi", paneIds: ["a"] }, [
+    const request = buildAccountSwitchRequest({ ...notice, agentId: "goose", paneIds: ["a"] }, [
       "a",
     ]);
     render(<AccountSwitchDialog request={request} onClose={() => {}} />);
