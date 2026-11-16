@@ -504,7 +504,8 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
   }, [enabled]);
 }
 
-const subscribeToPendingChord = (callback: () => void) => keybindingService.subscribeChord(callback);
+const subscribeToPendingChord = (callback: () => void) =>
+  keybindingService.subscribeChord(callback);
 const getPendingChordSnapshot = () => keybindingService.getPendingChord();
 
 export function usePendingChord(): string | null {
