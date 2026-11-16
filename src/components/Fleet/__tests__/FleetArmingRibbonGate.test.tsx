@@ -18,6 +18,10 @@ import { useFleetArmingStore, type CrossHostFleetTarget } from "@/store/fleetArm
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 
+// Read before any test mounts a gate: the mocks count module evaluations, and a
+// module evaluates once per file.
+const loadedWithGate = { ribbon: h.ribbonLoads, rawInput: h.rawInputLoads };
+
 function resetFleet() {
   useFleetArmingStore.setState({ armedIds: new Set(), crossHostTargets: [] });
   useFleetFailureStore.setState({ failedIds: new Set() });
@@ -32,21 +36,16 @@ afterEach(() => {
 });
 
 describe("FleetArmingRibbonGate", () => {
-  it("registers raw fleet input without loading the ribbon, which waits for a member", async () => {
-    // A fresh module graph, so what the gate loads is measured from nothing.
-    vi.resetModules();
-    h.ribbonLoads = 0;
-    h.rawInputLoads = 0;
-    const { FleetArmingRibbonGate: Gate } = await import("../FleetArmingRibbonGate");
-    const { useFleetArmingStore: arming } = await import("@/store/fleetArmingStore");
-    expect(h.rawInputLoads).toBe(1);
+  it("registers raw fleet input as it loads, and leaves the ribbon's chunk alone", () => {
+    expect(loadedWithGate).toEqual({ ribbon: 0, rawInput: 1 });
+  });
 
-    render(<Gate />);
+  it("draws nothing for a view with no fleet, and the ribbon once one pane is armed", async () => {
+    render(<FleetArmingRibbonGate />);
     await act(async () => {});
-    expect(h.ribbonLoads).toBe(0);
     expect(screen.queryByTestId("fleet-ribbon")).toBeNull();
 
-    act(() => arming.setState({ armedIds: new Set(["a"]) }));
+    act(() => useFleetArmingStore.setState({ armedIds: new Set(["a"]) }));
 
     expect(await screen.findByTestId("fleet-ribbon")).toBeTruthy();
     expect(h.ribbonLoads).toBe(1);
