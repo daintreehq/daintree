@@ -149,10 +149,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
   // Forge-resolved committer avatar (#8514). Resolves to the provider's
   // profile picture when the email is public; `undefined` while loading or on
-  // miss, so the existing Gravatar tier transparently takes over.
+  // miss, so the existing Gravatar tier transparently takes over. Asked for
+  // only while the panel that shows it is open; the resting row's tooltip asks
+  // for its own when it opens (#17072).
   const forgeAuthorAvatarUrl = useForgeAuthorAvatar({
     email: worktree.worktreeChanges?.lastCommitAuthor?.email,
     cwd: worktree.path,
+    enabled: isExpanded,
   });
 
   const reviewChangeLine = useReviewChangeHint(worktree);
@@ -581,7 +584,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   commitMessage={worktree.worktreeChanges?.lastCommitMessage}
                   commitBody={worktree.worktreeChanges?.lastCommitBody}
                   commitSha={worktree.worktreeChanges?.headOid}
-                  forgeAvatarUrl={forgeAuthorAvatarUrl}
+                  forgeAvatarCwd={worktree.path}
                   lastActivityTimestamp={worktree.lastActivityTimestamp}
                 />
               )}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { Issue } from "@shared/types/forge";
@@ -78,12 +78,10 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { WorktreeDensitySubmenu } from "./WorktreeDensitySubmenu";
 import {
   CONTEXT_COMPONENTS,
-  WorktreeMenuItems,
+  WorktreeCardMenuItems,
   type WorktreeMenuActions,
 } from "./WorktreeMenuItems";
 import type { MenuActionSourceValue } from "@/components/ui/menu-source";
-import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
-import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentTerminalFleetEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
@@ -301,11 +299,6 @@ export function WorktreeCard({
   );
   const devServerState = devServerMenuState(devServerSession, devServerPanelExists);
 
-  const pluginMenuContext = useMemo<WhenClauseContext>(
-    () => ({ worktreeId: worktree.id }),
-    [worktree.id]
-  );
-  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
   // Only an explicit quiet: a folder without a repository resolves to hidden,
   // and its cards already have no git detail to move.
   const presentation = useResolvedPresentation();
@@ -1042,7 +1035,6 @@ export function WorktreeCard({
     onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
     onRestartDevServer: handleRestartDevServer,
-    pluginItems,
     quietGit,
     hideDevPreview,
   };
@@ -1795,7 +1787,7 @@ export function WorktreeCard({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-64">
-        <WorktreeMenuItems
+        <WorktreeCardMenuItems
           worktree={worktree}
           components={CONTEXT_COMPONENTS}
           isPinned={isPinned}

@@ -9,10 +9,12 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 
 interface StaticWorktreeRowProps {
   worktreeId: string;
-  activeWorktreeId: string | null;
-  focusedWorktreeId: string | null;
-  keyboardCursorId: string | null;
-  totalWorktreeCount: number;
+  // Booleans, not the selection ids, so memo skips this row when the cursor or
+  // selection moves between other rows (#17072).
+  isActive: boolean;
+  isFocused: boolean;
+  isKeyboardCursor: boolean;
+  isSingleWorktree: boolean;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
   availability: UseAgentLauncherReturn["availability"];
@@ -24,10 +26,10 @@ interface StaticWorktreeRowProps {
 
 function StaticWorktreeRow({
   worktreeId,
-  activeWorktreeId,
-  focusedWorktreeId,
-  keyboardCursorId,
-  totalWorktreeCount,
+  isActive,
+  isFocused,
+  isKeyboardCursor,
+  isSingleWorktree,
   selectWorktree,
   worktreeActions,
   availability,
@@ -65,9 +67,6 @@ function StaticWorktreeRow({
 
   if (!worktree) return null;
 
-  const isActive = worktreeId === activeWorktreeId;
-  const isKeyboardCursor = worktreeId === keyboardCursorId;
-
   return (
     <div
       role="row"
@@ -89,9 +88,9 @@ function StaticWorktreeRow({
           <WorktreeCard
             worktree={worktree}
             isActive={isActive}
-            isFocused={worktreeId === focusedWorktreeId}
+            isFocused={isFocused}
             isKeyboardCursor={isKeyboardCursor}
-            isSingleWorktree={totalWorktreeCount === 1}
+            isSingleWorktree={isSingleWorktree}
             onSelect={onSelect}
             onOpenEditor={onOpenEditor}
             onSaveLayout={onSaveLayout}

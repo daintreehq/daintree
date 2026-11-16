@@ -1366,10 +1366,12 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     it("threads keyboardCursorId through the Virtuoso context into both row paths", async () => {
       const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
       expect(source).toMatch(/keyboardCursorId:\s*string \| null/);
-      expect(source).toContain("keyboardCursorId={context.keyboardCursorId}");
+      // Each row gets its own boolean, so a cursor step re-renders only the two
+      // rows it moved between (#17072).
+      expect(source).toContain("item.worktreeId === context.keyboardCursorId");
       // The pinned (main + integration) rows live outside the Virtuoso surface
-      // and must receive the cursor id directly from the hook return.
-      expect(source).toContain("keyboardCursorId={keyboardCursorId}");
+      // and must receive the cursor directly from the hook return.
+      expect(source).toContain("isKeyboardCursor={mainWorktree.id === keyboardCursorId}");
     });
 
     it("flags the cursor row via data-keyboard-cursor in both static and sortable paths", async () => {

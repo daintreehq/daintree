@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act, waitFor, cleanup } from "@testing-library/react";
 import type { ForgeProviderEntry, ResolvedForgeProvider } from "@shared/types/forge";
 
 const GITHUB_ENTRY: ForgeProviderEntry = {
@@ -48,7 +49,10 @@ Object.defineProperty(window, "electron", {
   },
 });
 
-import { useResolvedForgeProvider } from "../useResolvedForgeProvider";
+import {
+  _resetResolvedForgeProviderForTesting,
+  useResolvedForgeProvider,
+} from "../useResolvedForgeProvider";
 import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
 
 let projectSeq = 0;
@@ -294,6 +298,10 @@ describe("useResolvedForgeProvider", () => {
       expect(remoteChangedCallbacks).toHaveLength(1);
 
       unmount();
+      // Let go a microtask later, past StrictMode's replayed remount.
+      await act(async () => {
+        await Promise.resolve();
+      });
       expect(remoteChangedCallbacks).toHaveLength(0);
 
       const callsAfterUnmount = resolveProviderMock.mock.calls.length;
@@ -332,9 +340,9 @@ describe("useResolvedForgeProvider", () => {
     });
 
     it("collapses a provenance-change fan-out across every mounted consumer", async () => {
-      // The larger of the two fan-outs: each consumer owns its own listener, so
-      // a naive "discard the in-flight request, then re-run" in every listener
-      // has each one throwing away the request the previous listener started.
+      // The larger of the two fan-outs: with a listener per consumer, a naive
+      // "discard the in-flight request, then re-run" in every listener has each
+      // one throwing away the request the previous listener started.
       resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
       const projectId = nextProjectId();
 
@@ -463,5 +471,356 @@ describe("useResolvedForgeProvider", () => {
 
       await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
     });
+  });
+
+  describe("shared per-project state (#17072)", () => {
+    // Every sidebar card mounts several consumers (its badges, its details), so
+    // the listeners and the answer are shared rather than held per instance.
+
+    it("holds one pair of invalidation listeners however many consumers mount", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+      const otherProjectId = nextProjectId();
+
+      const consumers = [
+        ...Array.from({ length: 5 }, () => renderHook(() => useResolvedForgeProvider(projectId))),
+        renderHook(() => useResolvedForgeProvider(otherProjectId)),
+      ];
+      for (const { result } of consumers) {
+        await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+      }
+
+      expect(provenanceCallbacks).toHaveLength(1);
+      expect(remoteChangedCallbacks).toHaveLength(1);
+      expect(resolveProviderMock.mock.calls.map(([id]) => id).sort()).toEqual(
+        [projectId, otherProjectId].sort()
+      );
+
+      // The listeners stay while any consumer of any project does.
+      for (const consumer of consumers.slice(0, 5)) consumer.unmount();
+      expect(provenanceCallbacks).toHaveLength(1);
+      consumers[5]!.unmount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(provenanceCallbacks).toHaveLength(0);
+      expect(remoteChangedCallbacks).toHaveLength(0);
+    });
+
+    it("asks once under StrictMode's replayed mount", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId), {
+        wrapper: StrictMode,
+      });
+      await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+      expect(resolveProviderMock).toHaveBeenCalledTimes(1);
+      expect(provenanceCallbacks).toHaveLength(1);
+    });
+
+    // The stale answer can land before the remount (it must not be cached) or
+    // after it (the remount must not have joined its request).
+    it.each(["before", "after"] as const)(
+      "never hands a remount a request that was out while nothing listened (answer lands %s)",
+      async (landing) => {
+        const releases: Array<(value: ResolvedForgeProvider) => void> = [];
+        resolveProviderMock.mockImplementation(
+          () =>
+            new Promise<ResolvedForgeProvider>((resolve) => {
+              releases.push(resolve);
+            })
+        );
+        const projectId = nextProjectId();
+        const first = renderHook(() => useResolvedForgeProvider(projectId));
+        first.unmount();
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(provenanceCallbacks).toHaveLength(0);
+
+        // A plugin disable could have landed unheard while nothing listened.
+        const releaseStale = () =>
+          act(async () => {
+            releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+          });
+        if (landing === "before") await releaseStale();
+        const second = renderHook(() => useResolvedForgeProvider(projectId));
+        expect(resolveProviderMock).toHaveBeenCalledTimes(2);
+        if (landing === "after") await releaseStale();
+        expect(second.result.current.loading).toBe(true);
+        expect(second.result.current.entry).toBeNull();
+
+        await act(async () => {
+          releases[1]!({ entry: null, resolvedVia: null });
+        });
+        expect(second.result.current.loading).toBe(false);
+        expect(second.result.current.entry).toBeNull();
+      }
+    );
+
+    it.each([
+      ["a provenance change", "before"],
+      ["a provenance change", "after"],
+      ["a remote change", "before"],
+      ["a remote change", "after"],
+    ] as const)(
+      "abandons an unwatched project's request on %s (answer lands %s the remount)",
+      async (event, landing) => {
+        const releases: Array<(value: ResolvedForgeProvider) => void> = [];
+        resolveProviderMock.mockResolvedValueOnce({ entry: null, resolvedVia: null });
+        const keepAliveId = nextProjectId();
+        const keepAlive = renderHook(() => useResolvedForgeProvider(keepAliveId));
+        await waitFor(() => expect(keepAlive.result.current.loading).toBe(false));
+
+        resolveProviderMock.mockImplementation(
+          () =>
+            new Promise<ResolvedForgeProvider>((resolve) => {
+              releases.push(resolve);
+            })
+        );
+        const projectId = nextProjectId();
+        renderHook(() => useResolvedForgeProvider(projectId)).unmount();
+        act(() => {
+          if (event === "a provenance change") fireProvenanceChanged();
+          else fireRemoteChanged(projectId);
+        });
+        const releaseStale = () =>
+          act(async () => {
+            releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+          });
+        if (landing === "before") await releaseStale();
+        const callsBeforeRemount = resolveProviderMock.mock.calls.length;
+
+        // The pre-change answer neither shows nor is joined.
+        const remount = renderHook(() => useResolvedForgeProvider(projectId));
+        expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeRemount + 1);
+        if (landing === "after") await releaseStale();
+        expect(remount.result.current.loading).toBe(true);
+        expect(remount.result.current.entry).toBeNull();
+        keepAlive.unmount();
+      }
+    );
+
+    it("invalidates a refresh's request on an event in a later task", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      const releases: Array<(value: ResolvedForgeProvider) => void> = [];
+      resolveProviderMock.mockImplementation(
+        () =>
+          new Promise<ResolvedForgeProvider>((resolve) => {
+            releases.push(resolve);
+          })
+      );
+      act(() => result.current.refresh());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const callsBeforeEvent = resolveProviderMock.mock.calls.length;
+
+      // The refresh's burst is over: the event must not join its request.
+      act(() => fireProvenanceChanged());
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeEvent + 1);
+      await act(async () => {
+        releases[1]!({ entry: null, resolvedVia: null });
+      });
+      await act(async () => {
+        releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      });
+      expect(result.current.entry).toBeNull();
+    });
+
+    it.each([
+      ["a provenance change, then a refresh", true],
+      ["a refresh, then a provenance change", false],
+    ])("shares one fresh request for %s in one burst", async (_label, eventFirst) => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      const callsBefore = resolveProviderMock.mock.calls.length;
+
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      act(() => {
+        if (eventFirst) fireProvenanceChanged();
+        result.current.refresh();
+        if (!eventFirst) fireProvenanceChanged();
+      });
+
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBefore + 1);
+      await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+    });
+
+    it("serves a consumer mounting beside a live one without another request", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+
+      const first = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(first.result.current.entry).toEqual(GITHUB_ENTRY));
+
+      const second = renderHook(() => useResolvedForgeProvider(projectId));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(second.result.current.entry).toEqual(GITHUB_ENTRY);
+      expect(resolveProviderMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks again once a project's last consumer has left and another mounts", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+
+      const first = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(first.result.current.loading).toBe(false));
+      first.unmount();
+
+      // Unheard while nothing listened: the remount must not trust the cache.
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const second = renderHook(() => useResolvedForgeProvider(projectId));
+      expect(second.result.current.loading).toBe(false);
+      await waitFor(() => expect(second.result.current.entry).toEqual(GITHUB_ENTRY));
+      expect(resolveProviderMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps a live project's answer through an invalidation until the new one lands", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+
+      let release: (value: ResolvedForgeProvider) => void = () => {};
+      resolveProviderMock.mockImplementation(
+        () =>
+          new Promise<ResolvedForgeProvider>((resolve) => {
+            release = resolve;
+          })
+      );
+      act(() => fireProvenanceChanged());
+      expect(result.current.loading).toBe(false);
+      expect(result.current.entry).toEqual(GITHUB_ENTRY);
+      // A consumer mounting mid-invalidation sees what its siblings show.
+      const late = renderHook(() => useResolvedForgeProvider(projectId));
+      expect(late.result.current.loading).toBe(false);
+      expect(late.result.current.entry).toEqual(GITHUB_ENTRY);
+
+      await act(async () => {
+        release({ entry: null, resolvedVia: null });
+      });
+      expect(result.current.entry).toBeNull();
+      expect(late.result.current.entry).toBeNull();
+    });
+
+    it("drops an unmounted project's answer on a provenance change", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+      const keepAliveId = nextProjectId();
+      const keepAlive = renderHook(() => useResolvedForgeProvider(keepAliveId));
+      const gone = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(gone.result.current.entry).toEqual(GITHUB_ENTRY));
+      gone.unmount();
+
+      act(() => fireProvenanceChanged());
+
+      // No stale provider from before an enable/disable nothing was showing.
+      resolveProviderMock.mockImplementation(() => new Promise(() => {}));
+      const remount = renderHook(() => useResolvedForgeProvider(projectId));
+      expect(remount.result.current.loading).toBe(true);
+      expect(remount.result.current.entry).toBeNull();
+      keepAlive.unmount();
+    });
+
+    it("hands a refresh's answer to every consumer of the project", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+      const consumers = Array.from({ length: 3 }, () =>
+        renderHook(() => useResolvedForgeProvider(projectId))
+      );
+      for (const { result } of consumers) {
+        await waitFor(() => expect(result.current.loading).toBe(false));
+      }
+
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      await act(async () => {
+        consumers[0]!.result.current.refresh();
+      });
+
+      for (const { result } of consumers) {
+        await waitFor(() => expect(result.current.entry).toEqual(GITHUB_ENTRY));
+      }
+      expect(resolveProviderMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("switches to the new project's answer on the render the id changes", async () => {
+      const projectA = nextProjectId();
+      const projectB = nextProjectId();
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const warmB = renderHook(() => useResolvedForgeProvider(projectB));
+      await waitFor(() => expect(warmB.result.current.entry).toEqual(GITHUB_ENTRY));
+
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const seen: Array<{ id: string; providerId: string | null }> = [];
+      const { result, rerender } = renderHook(
+        ({ id }) => {
+          const state = useResolvedForgeProvider(id);
+          seen.push({ id, providerId: state.providerId });
+          return state;
+        },
+        { initialProps: { id: projectA } }
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.entry).toBeNull();
+
+      // Never the outgoing project's provider under the incoming id, not even
+      // for the one render before an effect could catch up.
+      seen.length = 0;
+      rerender({ id: projectB });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((render) => render.id === projectB)).toBe(true);
+      expect(seen.every((render) => render.providerId === "daintree.github.github")).toBe(true);
+      warmB.unmount();
+    });
+
+    it.each(["before", "after"] as const)(
+      "forgets settled answers and requests still out on reset (stale answer lands %s)",
+      async (landing) => {
+        resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+        const projectId = nextProjectId();
+        const pendingProjectId = nextProjectId();
+        const first = renderHook(() => useResolvedForgeProvider(projectId));
+        await waitFor(() => expect(first.result.current.entry).toEqual(GITHUB_ENTRY));
+
+        let releaseStale: (value: ResolvedForgeProvider) => void = () => {};
+        resolveProviderMock.mockImplementationOnce(
+          () =>
+            new Promise<ResolvedForgeProvider>((resolve) => {
+              releaseStale = resolve;
+            })
+        );
+        renderHook(() => useResolvedForgeProvider(pendingProjectId));
+        cleanup();
+        _resetResolvedForgeProviderForTesting();
+
+        resolveProviderMock.mockImplementation(() => new Promise(() => {}));
+        const second = renderHook(() => useResolvedForgeProvider(projectId));
+        expect(second.result.current.loading).toBe(true);
+        expect(provenanceCallbacks).toHaveLength(1);
+
+        // A response from before the reset neither answers nor is joined by a
+        // consumer after it.
+        const settleStale = () =>
+          act(async () => {
+            releaseStale({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+          });
+        if (landing === "before") await settleStale();
+        const callsBefore = resolveProviderMock.mock.calls.length;
+        const pending = renderHook(() => useResolvedForgeProvider(pendingProjectId));
+        expect(resolveProviderMock.mock.calls.length).toBe(callsBefore + 1);
+        if (landing === "after") await settleStale();
+        expect(pending.result.current.loading).toBe(true);
+        expect(pending.result.current.entry).toBeNull();
+      }
+    );
   });
 });

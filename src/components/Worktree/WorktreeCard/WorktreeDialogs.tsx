@@ -50,27 +50,37 @@ export function WorktreeDialogs({
   // reopen of a lazily-loaded dialog.
   const deleteDialogMounted = useKeepMounted(showDeleteDialog);
   const issuePickerMounted = useKeepMounted(showIssuePicker);
+  // Every sidebar card holds these, so a closed dialog is never mounted until
+  // its first open: each mounted AppDialog subscribes to the portal store,
+  // which writes on every frame of a Portal Dock resize. Latched open after
+  // that, so the dialog's own presence gate still plays the exit.
+  const confirmDialogMounted = useKeepMounted(confirmDialog.isOpen);
+  const titleDialogMounted = useKeepMounted(showTitleDialog);
   return (
     <>
-      <ConfirmDialog
-        isOpen={confirmDialog.isOpen}
-        title={confirmDialog.isOpen ? confirmDialog.title : ""}
-        description={confirmDialog.isOpen ? confirmDialog.description : undefined}
-        confirmLabel={confirmDialog.isOpen ? confirmDialog.confirmLabel : ""}
-        variant={confirmDialog.isOpen ? confirmDialog.variant : "default"}
-        onConfirm={confirmDialog.isOpen ? confirmDialog.onConfirm : () => {}}
-        onClose={onCloseConfirm}
-      >
-        {confirmDialog.isOpen ? confirmDialog.children : undefined}
-      </ConfirmDialog>
+      {confirmDialogMounted && (
+        <ConfirmDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.isOpen ? confirmDialog.title : ""}
+          description={confirmDialog.isOpen ? confirmDialog.description : undefined}
+          confirmLabel={confirmDialog.isOpen ? confirmDialog.confirmLabel : ""}
+          variant={confirmDialog.isOpen ? confirmDialog.variant : "default"}
+          onConfirm={confirmDialog.isOpen ? confirmDialog.onConfirm : () => {}}
+          onClose={onCloseConfirm}
+        >
+          {confirmDialog.isOpen ? confirmDialog.children : undefined}
+        </ConfirmDialog>
+      )}
 
-      <EditWorktreeTitleDialog
-        isOpen={showTitleDialog}
-        onClose={onCloseTitleDialog}
-        worktreeId={worktree.id}
-        currentTitle={customTitle}
-        restoreFocusTo={restoreTitleDialogFocusTo}
-      />
+      {titleDialogMounted && (
+        <EditWorktreeTitleDialog
+          isOpen={showTitleDialog}
+          onClose={onCloseTitleDialog}
+          worktreeId={worktree.id}
+          currentTitle={customTitle}
+          restoreFocusTo={restoreTitleDialogFocusTo}
+        />
+      )}
 
       {deleteDialogMounted && (
         <Suspense fallback={null}>

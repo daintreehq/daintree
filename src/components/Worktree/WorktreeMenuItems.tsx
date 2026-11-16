@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import type { WorktreeAttachment } from "@shared/types/worktree";
@@ -90,7 +90,11 @@ import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
 import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
-import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import {
+  usePluginContextMenuItems,
+  type PluginContextMenuItemEntry,
+} from "@/hooks/usePluginContextMenuItems";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
@@ -288,8 +292,23 @@ export interface WorktreeMenuItemsProps {
  */
 export type WorktreeMenuActions = Omit<
   WorktreeMenuItemsProps,
-  "components" | "worktree" | "isPinned"
+  "components" | "worktree" | "isPinned" | "pluginItems"
 >;
+
+/**
+ * A worktree card's own menu body, with the worktree's plugin contributions
+ * read here rather than by the card. It mounts only with the open menu, so the
+ * closed menu every card carries evaluates no `when` clause and subscribes to
+ * nothing (#17072).
+ */
+export function WorktreeCardMenuItems(
+  props: Omit<WorktreeMenuItemsProps, "pluginItems"> & { worktree: WorktreeState }
+) {
+  const worktreeId = props.worktree.id;
+  const pluginMenuContext = useMemo<WhenClauseContext>(() => ({ worktreeId }), [worktreeId]);
+  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
+  return <WorktreeMenuItems {...props} pluginItems={pluginItems} />;
+}
 
 /** Drops the `false`/`undefined` slots a conditional row leaves behind. */
 function compact(...nodes: Array<React.ReactNode | false | undefined>): React.ReactNode[] {

@@ -706,16 +706,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
   // The seed deliberately lives in `fetchFn` (below) rather than in a
   // render-time effect. A layout effect could paint it one IPC round-trip
-  // sooner, but it would have to read the project and the resolved provider off
-  // the renderer's own stores — and neither is trustworthy at that moment:
-  // `useResolvedForgeProvider` resets its state in a passive effect, so on the
-  // render where the project id flips it still reports the *previous* project's
-  // provider, and `onProjectSwitch` fires from an IPC event whose ordering
-  // against the project store's own update is not guaranteed. Both orderings
-  // can seed the outgoing project's counts into the incoming project — exactly
-  // the class of bug #10761 exists to prevent. `fetchFn` reads the project
-  // through main and is guarded by the fetch epoch, so it is the one place that
-  // can seed safely.
+  // sooner, but it would have to read the project off the renderer's own store,
+  // which isn't trustworthy at that moment: `onProjectSwitch` fires from an IPC
+  // event whose ordering against the project store's own update is not
+  // guaranteed. Either ordering can seed the outgoing project's counts into the
+  // incoming project — exactly the class of bug #10761 exists to prevent.
+  // `fetchFn` reads the project through main and is guarded by the fetch epoch,
+  // so it is the one place that can seed safely.
 
   // Whether the one corrective refetch for the current provider resolution
   // has fired — see the effect below `usePollingLifecycle`. Declared here

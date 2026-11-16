@@ -71,8 +71,15 @@ vi.mock("@/hooks/app/useWorktreeDevServerSession", () => ({
   useWorktreeDevServerSession: () => undefined,
 }));
 
+const pluginMenuReads = vi.hoisted(() => ({
+  calls: [] as Array<{ location: string; ctx: unknown }>,
+  items: [] as unknown[],
+}));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({
-  usePluginContextMenuItems: () => [],
+  usePluginContextMenuItems: (location: string, ctx: unknown) => {
+    pluginMenuReads.calls.push({ location, ctx });
+    return pluginMenuReads.items;
+  },
 }));
 
 vi.mock("@/hooks/useForgeTooltip", () => {
@@ -237,6 +244,8 @@ function selectTextOf(node: Node) {
 
 beforeEach(() => {
   dispatch.mockClear();
+  pluginMenuReads.calls = [];
+  pluginMenuReads.items = [];
   mockTerminals = [SESSION];
   renderDialogLayer = () => null;
   deleteDialogOpen = false;
@@ -548,5 +557,48 @@ describe("WorktreeCard delete Retry", () => {
     act(() => store.setState({ deletingIds: new Set([WORKTREE.id]) }));
 
     expect(deleteDialogOpen).toBe(false);
+  });
+});
+
+// #17072 — every sidebar card carries a closed context menu and a closed ⋯
+// menu; their plugin rows are read only once one of them opens.
+describe("WorktreeCard plugin menu items", () => {
+  it("reads nothing while both menus are closed", () => {
+    renderCard({ isActive: false });
+    expect(pluginMenuReads.calls).toEqual([]);
+  });
+
+  const contribution = {
+    pluginId: "acme",
+    item: { location: "worktree" as const, label: "Do the thing", actionId: "acme.go" },
+  };
+
+  it("reads this worktree's items when the context menu opens", () => {
+    pluginMenuReads.items = [contribution];
+    renderCard({ isActive: false });
+    act(() => {
+      fireEvent.contextMenu(card());
+    });
+    expect(screen.getByText("Extensions")).toBeTruthy();
+    expect(pluginMenuReads.calls.length).toBeGreaterThan(0);
+    expect(pluginMenuReads.calls.at(-1)).toEqual({
+      location: "worktree",
+      ctx: { worktreeId: WORKTREE.id },
+    });
+  });
+
+  it("reads this worktree's items when the More actions menu opens", () => {
+    pluginMenuReads.items = [contribution];
+    renderCard({ isActive: false });
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    act(() => {
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    expect(screen.getByText("Extensions")).toBeTruthy();
+    expect(pluginMenuReads.calls.at(-1)).toEqual({
+      location: "worktree",
+      ctx: { worktreeId: WORKTREE.id },
+    });
   });
 });

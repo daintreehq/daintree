@@ -134,7 +134,7 @@ const WORKTREE_SKELETON_CARDS = [
   { id: "d", titleWidth: "36%", subtitleWidth: "48%" },
 ] as const;
 
-interface SidebarVirtuosoContext {
+export interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   keyboardCursorId: string | null;
@@ -198,7 +198,8 @@ function computeSidebarItemKey(_index: number, item: SidebarFlatItem): string {
   return item.id;
 }
 
-function renderSidebarFlatItem(
+/** @internal Exported for the row-render test; Virtuoso is its only caller. */
+export function renderSidebarFlatItem(
   _index: number,
   item: SidebarFlatItem,
   context: SidebarVirtuosoContext
@@ -244,14 +245,20 @@ function renderSidebarFlatItem(
       </div>
     );
   }
+  // The selection ids reach each row as its own booleans: a cursor step changes
+  // `context` for every row, and the memoized rows skip unless theirs flipped.
+  const isActive = item.worktreeId === context.activeWorktreeId;
+  const isFocused = item.worktreeId === context.focusedWorktreeId;
+  const isKeyboardCursor = item.worktreeId === context.keyboardCursorId;
+  const isSingleWorktree = context.totalWorktreeCount === 1;
   if (item.mode === "static") {
     return (
       <StaticWorktreeRow
         worktreeId={item.worktreeId}
-        activeWorktreeId={context.activeWorktreeId}
-        focusedWorktreeId={context.focusedWorktreeId}
-        keyboardCursorId={context.keyboardCursorId}
-        totalWorktreeCount={context.totalWorktreeCount}
+        isActive={isActive}
+        isFocused={isFocused}
+        isKeyboardCursor={isKeyboardCursor}
+        isSingleWorktree={isSingleWorktree}
         selectWorktree={context.selectWorktree}
         worktreeActions={context.worktreeActions}
         availability={context.availability}
@@ -264,10 +271,10 @@ function renderSidebarFlatItem(
   return (
     <SidebarWorktreeRow
       worktreeId={item.worktreeId}
-      activeWorktreeId={context.activeWorktreeId}
-      focusedWorktreeId={context.focusedWorktreeId}
-      keyboardCursorId={context.keyboardCursorId}
-      totalWorktreeCount={context.totalWorktreeCount}
+      isActive={isActive}
+      isFocused={isFocused}
+      isKeyboardCursor={isKeyboardCursor}
+      isSingleWorktree={isSingleWorktree}
       selectWorktree={context.selectWorktree}
       worktreeActions={context.worktreeActions}
       availability={context.availability}
@@ -1343,10 +1350,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <StaticWorktreeRow
               key={mainWorktree.id}
               worktreeId={mainWorktree.id}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              keyboardCursorId={keyboardCursorId}
-              totalWorktreeCount={deferredWorktrees.length}
+              isActive={mainWorktree.id === activeWorktreeId}
+              isFocused={mainWorktree.id === focusedWorktreeId}
+              isKeyboardCursor={mainWorktree.id === keyboardCursorId}
+              isSingleWorktree={deferredWorktrees.length === 1}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
               availability={availability}
