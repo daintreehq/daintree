@@ -1018,9 +1018,17 @@ export function createSessionServerDeps(
     // reaches the renderer for the assistant's own dispatches.
     const callerInfo = host.getBearerInfoForSession(sessionId) ?? undefined;
     if (actionsListWalk) {
-      return deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin, authorization, {
-        actionsListWalk: true,
-      });
+      return deps.dispatchAction(
+        actionId,
+        args,
+        confirmed,
+        callerInfo,
+        sessionOrigin,
+        authorization,
+        {
+          actionsListWalk: true,
+        }
+      );
     }
     return authorization !== undefined
       ? deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin, authorization)

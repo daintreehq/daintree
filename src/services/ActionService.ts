@@ -787,8 +787,7 @@ export class ActionService {
         dispatchDeadlineAt: options?.dispatchDeadlineAt,
         // Same unconditional stamp (#17036), agent only: it widens what one
         // `actions.list` page holds, which only main's own walk may ask for.
-        actionsListWalk:
-          source === "agent" && options?.actionsListWalk === true ? true : undefined,
+        actionsListWalk: source === "agent" && options?.actionsListWalk === true ? true : undefined,
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,

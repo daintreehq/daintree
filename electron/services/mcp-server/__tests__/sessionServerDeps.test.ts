@@ -484,7 +484,14 @@ describe("createSessionServerDeps", () => {
       const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "x", role: ROLE });
       state.bearer = { token4LastChars: "wxyz", userAgent: "client/1.0" };
 
-      await sessionDeps.dispatchAction("actions.list", { limit: 100 }, false, undefined, undefined, WALK);
+      await sessionDeps.dispatchAction(
+        "actions.list",
+        { limit: 100 },
+        false,
+        undefined,
+        undefined,
+        WALK
+      );
       await sessionDeps.dispatchAction("actions.list", { limit: 100 }, false);
 
       expect(deps.dispatchAction).toHaveBeenNthCalledWith(
