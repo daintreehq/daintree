@@ -17,6 +17,9 @@ interface GuardState {
   posix: boolean;
   children: Map<number, WeakRef<ChildProcess>>;
   adopted: Map<number, string>;
+  // Outlives the leader: its group lives on in the orphans it leaves, and the
+  // kernel never hands that PGID to another process while the group has members.
+  detachedGroups: Set<number>;
   violations: ProcessKillViolation[];
 }
 
@@ -128,8 +131,10 @@ function refusal(s: GuardState, pid: number): string | typeof ABSENT | null {
       const members = [...rows].filter(([, row]) => row.pgid === -pid).map(([member]) => member);
       if (members.length > 0) {
         if (members.every((member) => isSelfOrDescendant(rows, member))) return null;
+        if (s.detachedGroups.has(-pid) && !rows.has(-pid)) return null;
         return "its process group holds processes this test worker did not spawn";
       }
+      s.detachedGroups.delete(-pid);
     }
   }
 
@@ -167,6 +172,7 @@ export function installProcessKillGuard(): void {
     posix: process.platform !== "win32",
     children,
     adopted: new Map(),
+    detachedGroups: new Set(),
     violations,
   };
 
@@ -178,7 +184,12 @@ export function installProcessKillGuard(): void {
   const originalSpawn = proto.spawn;
   proto.spawn = function guardedSpawn(this: ChildProcess, ...args: unknown[]) {
     const result = originalSpawn.apply(this, args);
-    if (typeof this.pid === "number") children.set(this.pid, new WeakRef(this));
+    if (typeof this.pid === "number") {
+      children.set(this.pid, new WeakRef(this));
+      if (s.posix && (args[0] as { detached?: unknown } | undefined)?.detached) {
+        s.detachedGroups.add(this.pid);
+      }
+    }
     return result;
   };
 
@@ -225,11 +236,15 @@ export function adoptProcessForKill(pid: number): void {
   if (id !== null) s.adopted.set(pid, id);
 }
 
-/** Return and clear every refused `process.kill` call, and end every adoption. */
+/**
+ * Return and clear every refused `process.kill` call, end every adoption, and
+ * forget the groups detached children created.
+ */
 export function takeProcessKillViolations(): ProcessKillViolation[] {
   const s = state();
   if (!s) return [];
   s.adopted.clear();
+  s.detachedGroups.clear();
   return s.violations.splice(0);
 }
 
