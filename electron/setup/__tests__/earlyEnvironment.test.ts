@@ -1,28 +1,26 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: {}, dialog: {} }));
 
-type ErrorListener = (err: NodeJS.ErrnoException) => void;
-
-const streams = [process.stdout, process.stderr];
-let before: ErrorListener[][];
-
-function added(): ErrorListener[][] {
-  return streams.map((stream, i) =>
-    (stream.listeners("error") as ErrorListener[]).filter((l) => !before[i].includes(l))
-  );
-}
-
 const errno = (code: string) => Object.assign(new Error(code), { code });
 
 describe("stdio dead-fd guards", () => {
+  let stdout: EventEmitter;
+  let stderr: EventEmitter;
+
   beforeEach(() => {
     vi.resetModules();
-    before = streams.map((stream) => [...(stream.listeners("error") as ErrorListener[])]);
+    // Doubles, so errors go through EventEmitter's own dispatch (a `once`
+    // guard would be gone after the first) without touching the real streams.
+    stdout = new EventEmitter();
+    stderr = new EventEmitter();
+    vi.spyOn(process, "stdout", "get").mockReturnValue(stdout as typeof process.stdout);
+    vi.spyOn(process, "stderr", "get").mockReturnValue(stderr as typeof process.stderr);
   });
 
   afterEach(() => {
-    added().forEach((listeners, i) => listeners.forEach((l) => streams[i].off("error", l)));
+    vi.restoreAllMocks();
   });
 
   it("guards stdout and stderr once, however many callers ask", async () => {
@@ -31,18 +29,18 @@ describe("stdio dead-fd guards", () => {
     early.installStdioDeadFdGuards();
     early.installStdioDeadFdGuards();
 
-    expect(added().map((listeners) => listeners.length)).toEqual([1, 1]);
+    expect([stdout.listenerCount("error"), stderr.listenerCount("error")]).toEqual([1, 1]);
   });
 
-  it("swallows every dead-fd error, a second EPIPE included, and rethrows the rest", async () => {
+  it("keeps swallowing dead-fd errors after the first, and rethrows the rest", async () => {
     const early = await import("../earlyEnvironment.js");
     early.installStdioDeadFdGuards();
 
-    for (const [guard] of added()) {
-      for (const code of ["EPIPE", "EPIPE", "EIO", "EBADF", "ECONNRESET"]) {
-        expect(() => guard(errno(code))).not.toThrow();
+    for (const stream of [stdout, stderr]) {
+      for (const code of ["EPIPE", "EPIPE", "EIO", "EBADF", "ECONNRESET", "EPIPE"]) {
+        expect(() => stream.emit("error", errno(code))).not.toThrow();
       }
-      expect(() => guard(errno("ENOSPC"))).toThrow("ENOSPC");
+      expect(() => stream.emit("error", errno("ENOSPC"))).toThrow("ENOSPC");
     }
   });
 });

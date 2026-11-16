@@ -80,42 +80,63 @@ describe("discovery file parsing", () => {
   };
   const emoji = "\u{1F600}";
 
+  // Each fixture says whether the old schema accepts it, so a name that no
+  // longer matches its fixture fails instead of agreeing on a rejection.
   it.each([
-    ["the minimal file", good],
-    ["every field", { ...good, startedAt: "Wed Oct 22", command: ["/opt/Daintree", "/app"] }],
-    ["unknown keys", { ...good, extra: true, nested: { a: 1 } }],
-    ["a missing socket path", { ...good, socketPath: undefined }],
-    ["an empty socket path", { ...good, socketPath: "" }],
-    ["a socket path at its limit", { ...good, socketPath: "s".repeat(1024) }],
-    ["a socket path past its limit", { ...good, socketPath: "s".repeat(1025) }],
-    ["a socket path at its limit in code points", { ...good, socketPath: emoji.repeat(1024) }],
-    ["an uppercase token", { ...good, token: "A".repeat(64) }],
-    ["a numeric token", { ...good, token: 1 }],
-    ["a string version", { ...good, version: "1" }],
-    ["a negative pid", { ...good, pid: -1 }],
-    ["a fractional pid", { ...good, pid: 1.5 }],
-    ["an unsafe pid", { ...good, pid: 2 ** 60 }],
-    ["the largest safe pid", { ...good, pid: Number.MAX_SAFE_INTEGER }],
-    ["a string pid", { ...good, pid: "9" }],
-    ["a null startedAt", { ...good, startedAt: null }],
-    ["an empty startedAt", { ...good, startedAt: "" }],
-    ["a startedAt past its limit", { ...good, startedAt: "x".repeat(65) }],
-    ["a startedAt of 64 code points", { ...good, startedAt: emoji.repeat(64) }],
-    ["a startedAt of 65 code points", { ...good, startedAt: emoji.repeat(65) }],
-    ["a startedAt with a lone surrogate", { ...good, startedAt: "\ud83d" }],
-    ["a null command", { ...good, command: null }],
-    ["an empty command", { ...good, command: [] }],
-    ["a command of five parts", { ...good, command: ["a", "b", "c", "d", "e"] }],
-    ["a command with an empty part", { ...good, command: ["a", ""] }],
-    ["a command with a numeric part", { ...good, command: ["a", 1] }],
-    ["a command part past its limit", { ...good, command: ["p".repeat(4097)] }],
-    ["a string command", { ...good, command: "/opt/Daintree" }],
-    ["an array", [good]],
-    ["null", null],
-    ["a number", 1],
-  ])("agrees with the zod schema it replaced on %s", (_label, value) => {
+    ["the minimal file", good, true],
+    ["every field", { ...good, startedAt: "Wed Oct 22", command: ["/opt/Daintree", "/app"] }, true],
+    ["unknown keys", { ...good, extra: true, nested: { a: 1 } }, true],
+    ["a missing socket path", { ...good, socketPath: undefined }, false],
+    ["an empty socket path", { ...good, socketPath: "" }, false],
+    ["a one-character socket path", { ...good, socketPath: "s" }, true],
+    ["a socket path at its limit", { ...good, socketPath: "s".repeat(1024) }, true],
+    ["a socket path past its limit", { ...good, socketPath: "s".repeat(1025) }, false],
+    [
+      "a socket path at its limit in code points",
+      { ...good, socketPath: emoji.repeat(1024) },
+      true,
+    ],
+    [
+      "a socket path past its limit in code points",
+      { ...good, socketPath: emoji.repeat(1025) },
+      false,
+    ],
+    ["an uppercase token", { ...good, token: "A".repeat(64) }, false],
+    ["a 63-character token", { ...good, token: "a".repeat(63) }, false],
+    ["a numeric token", { ...good, token: 1 }, false],
+    ["a string version", { ...good, version: "1" }, false],
+    ["pid zero", { ...good, pid: 0 }, true],
+    ["a negative pid", { ...good, pid: -1 }, false],
+    ["a fractional pid", { ...good, pid: 1.5 }, false],
+    ["an unsafe pid", { ...good, pid: 2 ** 60 }, false],
+    ["the largest safe pid", { ...good, pid: Number.MAX_SAFE_INTEGER }, true],
+    ["a string pid", { ...good, pid: "9" }, false],
+    ["a null startedAt", { ...good, startedAt: null }, false],
+    ["an empty startedAt", { ...good, startedAt: "" }, false],
+    ["a one-character startedAt", { ...good, startedAt: "x" }, true],
+    ["a startedAt at its limit", { ...good, startedAt: "x".repeat(64) }, true],
+    ["a startedAt past its limit", { ...good, startedAt: "x".repeat(65) }, false],
+    ["a startedAt of 64 code points", { ...good, startedAt: emoji.repeat(64) }, true],
+    ["a startedAt of 65 code points", { ...good, startedAt: emoji.repeat(65) }, false],
+    ["a startedAt with a lone surrogate", { ...good, startedAt: "\ud83d" }, true],
+    ["a null command", { ...good, command: null }, false],
+    ["an empty command", { ...good, command: [] }, false],
+    ["a command of one part", { ...good, command: ["a"] }, true],
+    ["a command of four parts", { ...good, command: ["a", "b", "c", "d"] }, true],
+    ["a command of five parts", { ...good, command: ["a", "b", "c", "d", "e"] }, false],
+    ["a command with an empty part", { ...good, command: ["a", ""] }, false],
+    ["a command with a numeric part", { ...good, command: ["a", 1] }, false],
+    ["a command part at its limit", { ...good, command: ["p".repeat(4096)] }, true],
+    ["a command part past its limit", { ...good, command: ["p".repeat(4097)] }, false],
+    ["a string command", { ...good, command: "/opt/Daintree" }, false],
+    ["an array", [good], false],
+    ["null", null, false],
+    ["a number", 1, false],
+  ] as const)("agrees with the zod schema it replaced on %s", (_label, value, accepted) => {
     const text = JSON.stringify(value);
-    expect(parseDiscoveryInfo(text)).toEqual(viaZod(JSON.parse(text)));
+    const expected = viaZod(JSON.parse(text));
+    expect(expected !== null).toBe(accepted);
+    expect(parseDiscoveryInfo(text)).toEqual(expected);
   });
 
   it("compares tokens without accepting empty or different-length values", () => {

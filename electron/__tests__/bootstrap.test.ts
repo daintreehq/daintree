@@ -141,4 +141,36 @@ describe("bootstrap", () => {
       "exit:0",
     ]);
   });
+
+  it.each([
+    ["the relay's own exit code", async () => 3, 3, ""],
+    [
+      "1 with the reason when the relay fails",
+      async () => {
+        throw new Error("no discovery file");
+      },
+      1,
+      "daintree: attach failed: Error: no discovery file\n",
+    ],
+  ])("exits with %s, still with no boot", async (_label, relay, code, stderr) => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "bootstrap.js", "--attach-stdio"];
+    vi.doMock("../remote/host/attachStdioCli.js", () => ({ runAttachStdioCli: relay }));
+    const written: string[] = [];
+    const write = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      void import("../bootstrap.js");
+      await vi.waitFor(() => expect(electronMock.app.exit).toHaveBeenCalled());
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(electronMock.app.exit).toHaveBeenCalledWith(code);
+    expect(written.filter((chunk) => chunk.startsWith("daintree:")).join("")).toBe(stderr);
+    expect(trace).toEqual(["installStdioDeadFdGuards", "applyDevUserDataPath", `exit:${code}`]);
+  });
 });

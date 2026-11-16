@@ -84,12 +84,22 @@ function emittedInputs(metafile: Metafile, chunks: Iterable<string>): string[] {
   );
 }
 
-function externalImports(metafile: Metafile, chunks: Iterable<string>): string[] {
-  return [...chunks].flatMap((chunk) =>
-    metafile.outputs[chunk].imports
-      .filter((edge) => edge.external && edge.kind === "import-statement")
-      .map((edge) => edge.path)
-  );
+const isEagerExternal = (edge: { external?: boolean; kind: string }) =>
+  Boolean(edge.external) && (edge.kind === "import-statement" || edge.kind === "require-call");
+
+/** Packages left to Node's resolver (natives) that `sources` or `chunks` load eagerly. */
+function disallowedExternals(
+  metafile: Metafile,
+  sources: Iterable<string>,
+  chunks: Iterable<string>
+): string[] {
+  const specifiers = [
+    ...[...sources].flatMap((file) => metafile.inputs[file]?.imports ?? []),
+    ...[...chunks].flatMap((chunk) => metafile.outputs[chunk].imports),
+  ]
+    .filter(isEagerExternal)
+    .map((edge) => edge.path);
+  return [...new Set(specifiers)].filter((specifier) => !isAllowedExternal(specifier)).sort();
 }
 
 describe("bootstrap compile-cache boundary", () => {
@@ -123,12 +133,15 @@ describe("bootstrap compile-cache boundary", () => {
 
     const chunks = staticChunks(metafile, chunkOf(metafile, BOOTSTRAP));
     expect(forbidden(emittedInputs(metafile, chunks))).toEqual([]);
-    expect(externalImports(metafile, chunks).filter((s) => !isAllowedExternal(s))).toEqual([]);
+    expect(disallowedExternals(metafile, eager, chunks)).toEqual([]);
   });
 
   it("enters the --attach-stdio relay without the boot or any package", () => {
+    // Only a Windows build drops the Host role, and with it the relay; a
+    // define stuck at false would otherwise skip everything below.
+    const target = process.env.DAINTREE_BUILD_TARGET_PLATFORM || process.platform;
+    expect(hostRoleEnabled).toBe(target !== "win32");
     if (!hostRoleEnabled) {
-      // A build that can't be a Host has no relay to load.
       expect(Object.hasOwn(metafile.inputs, RELAY)).toBe(false);
       return;
     }
@@ -147,6 +160,6 @@ describe("bootstrap compile-cache boundary", () => {
       ...staticChunks(metafile, chunkOf(metafile, RELAY)),
     ]);
     expect(forbidden(emittedInputs(metafile, chunks))).toEqual([]);
-    expect(externalImports(metafile, chunks).filter((s) => !isAllowedExternal(s))).toEqual([]);
+    expect(disallowedExternals(metafile, eager, chunks)).toEqual([]);
   });
 });
