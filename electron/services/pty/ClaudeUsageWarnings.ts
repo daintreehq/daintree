@@ -25,20 +25,27 @@ const SCAN_LINES = 12;
  */
 const RIGHT_EDGE_SLACK = 4;
 
+// Glyphs reach the String.raw patterns as `${}` strings, which the build
+// escapes; a tagged template's own text ships as written, and one glyph there
+// makes the pty host's whole chunk a two-byte string (#17023).
 // What Claude draws a usage message behind: the tool-result gutter, a box or
 // border, a warning sign. The diff, list, quote and prompt markers the
 // rate-limit patterns also accept ("-", "*", ">", "❯") stay out: a message
 // behind one is someone's text.
-const CHROME = String.raw`[\s│┃╎╭╰─⎿⚠]*`;
+const CHROME_GLYPHS = "│┃╎╭╰─⎿⚠";
 // Border glyphs Claude may draw after a notification ("… ▔").
-const TRAILING_BORDER = String.raw`[\s▔▁─━╮╯╗╝│┃]*`;
+const BORDERS = "▔▁─━╮╯╗╝│┃";
+const APOSTROPHES = "'’";
+const SEPARATORS = "·∙•";
+const CHROME = String.raw`[\s${CHROME_GLYPHS}]*`;
+const TRAILING_BORDER = String.raw`[\s${BORDERS}]*`;
 const WINDOW = String.raw`(5[ -]?hour|session|weekly|opus|sonnet|fable)`;
-const YOUVE = String.raw`you(?:['’]ve|\s+have)`;
+const YOUVE = String.raw`you(?:[${APOSTROPHES}]ve|\s+have)`;
 // A message ends its row or runs into " · resets …" / " · <hint>" segments;
 // anything else after the limit is a sentence about one.
-const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[·∙•]\s*(.*)$)`;
+const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[${SEPARATORS}]\s*(.*)$)`;
 const SEGMENT_SEPARATOR = /[·∙•]/;
-const BORDER_GLYPHS = new Set("▔▁─━╮╯╗╝│┃");
+const BORDER_GLYPHS = new Set(BORDERS);
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
 const MESSAGE_START = /^(?:you|over|approaching)\b/i;

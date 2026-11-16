@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
+import { asciiOnlyOutputPlugin } from "./lib/ascii-only-chunks.mjs";
 import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 import { runProjectSync } from "./typecheck.mjs";
@@ -617,6 +618,9 @@ export function mainEsmConfig({ production, watch = false }) {
     chunkNames: "electron/chunks/[name]-[hash]",
     plugins: [
       ...mainBundlePlugins({ isProd: production }),
+      // Keeps the chunks Main, the pty host and its analysis workers load one
+      // byte per character in V8, which a regex literal's glyph undoes (#17023).
+      ...(production && !watch ? [asciiOnlyOutputPlugin()] : []),
       ...(watch ? [createReadyMarkerPlugin()] : []),
     ],
     // The import is aliased because the banner is raw text esbuild never renames
