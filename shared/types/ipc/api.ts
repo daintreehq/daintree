@@ -2647,6 +2647,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * reports moves it; until then, nothing may start after it.
          */
         dispatchDeadlineAt?: number;
+        /**
+         * Main's own `actions.list` walk (#17036), set only by main on a local
+         * send, so the view answers with one large page.
+         */
+        actionsListWalk?: boolean;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

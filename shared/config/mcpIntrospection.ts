@@ -17,3 +17,12 @@ export const ACTIONS_SEARCH_DEFAULT_LIMIT = 20;
  */
 export const ACTIONS_LIST_MAX_LIMIT = 100;
 export const ACTIONS_LIST_DEFAULT_LIMIT = 50;
+
+/**
+ * The page main's own `actions.list` walk asks a local view for (#17036), so a
+ * registry of a few hundred actions comes back in one round trip rather than
+ * one per hundred. Never a caller's: the tool's schema still caps a call at
+ * `ACTIONS_LIST_MAX_LIMIT`, and main pages the permitted set back down to the
+ * page the caller asked for.
+ */
+export const ACTIONS_LIST_WALK_LIMIT = 1000;

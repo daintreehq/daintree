@@ -181,6 +181,7 @@ describe("useMcpBridge", () => {
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
         dispatchDeadlineAt?: number;
+        actionsListWalk?: boolean;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -272,6 +273,30 @@ describe("useMcpBridge", () => {
 
     manifestHandler?.("req-2");
     expect(sendGetManifestResponse).toHaveBeenCalledWith("req-2", []);
+  });
+
+  it("passes main's own actions.list walk to the dispatch, and nothing for any other request (#17036)", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-walk",
+      actionId: "actions.list",
+      args: { limit: 100 },
+      actionsListWalk: true,
+    });
+    await dispatchHandler?.({
+      requestId: "req-plain",
+      actionId: "actions.list",
+      args: { limit: 100 },
+    });
+
+    expect(mocks.dispatch.mock.calls.map(([, , options]) => options.actionsListWalk)).toEqual([
+      true,
+      undefined,
+    ]);
   });
 
   it("dispatches safe actions immediately without surfacing a confirmation modal", async () => {

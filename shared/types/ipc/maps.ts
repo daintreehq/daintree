@@ -1819,6 +1819,8 @@ export interface IpcEventMap {
     requester?: import("./mcpServer.js").McpRequester;
     /** Main's deadline for the call as sent, epoch ms (#15648); set only by main. */
     dispatchDeadlineAt?: number;
+    /** Main's own `actions.list` walk (#17036); set only by main, on a local send. */
+    actionsListWalk?: boolean;
   };
 
   /**

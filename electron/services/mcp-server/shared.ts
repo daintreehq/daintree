@@ -199,6 +199,13 @@ export interface WorkspaceDispatchOptions {
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
+   * Main's own walk of `actions.list` (#17036): the view answers with a page of
+   * `ACTIONS_LIST_WALK_LIMIT`, so the registry comes back in one round trip.
+   * Sent to a local view only; another machine's still pages at the public
+   * maximum, which the walk handles. Set by the walk, never from a call.
+   */
+  actionsListWalk?: boolean;
+  /**
    * Another machine is timing this call and didn't say for how long (#14989):
    * a host too old to say, dispatching into the view this Shell drives it
    * from. Its view can't hold the call open past the plain deadline, which is

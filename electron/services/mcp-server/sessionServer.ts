@@ -82,6 +82,7 @@ import {
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "./tierAuth.js";
+import { ACTIONS_LIST_WALK_LIMIT } from "../../../shared/config/mcpIntrospection.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
@@ -236,6 +237,9 @@ import { announceCallStarted, settleCall } from "./sessionCallSettlement.js";
  * actions, so this only bounds a renderer that never stops reporting `hasMore`.
  */
 const MAX_LIST_PAGE_WALK = 20;
+
+/** What main's own `actions.list` walk passes its dispatch (#17036). */
+const ACTIONS_LIST_WALK = { actionsListWalk: true } as const;
 
 /**
  * The tools whose execution never touches a renderer, and which are therefore
@@ -3351,7 +3355,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
          * pages would return a short page whose `total`/`hasMore` counted actions
          * this session cannot dispatch. Walking the pages here lets the filter
          * page the *permitted* set instead, which keeps the contract coherent.
-         * Entries carry no schemas, so this is a handful of cheap round trips.
+         * A local view answers the walk with pages of `ACTIONS_LIST_WALK_LIMIT`
+         * (#17036), so the whole registry is one round trip; another machine's
+         * view pages at the public maximum.
          */
         const collectListPages = async (): Promise<DispatchEnvelope> => {
           const base = args && typeof args === "object" && !Array.isArray(args) ? args : {};
@@ -3371,20 +3377,29 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const envelope = await dispatchAction(
               actionId,
               { ...(base as Record<string, unknown>), offset, limit: ACTIONS_LIST_MAX_LIMIT },
-              dispatchConfirmed
+              dispatchConfirmed,
+              undefined,
+              undefined,
+              ACTIONS_LIST_WALK
             );
             confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
             pagedWorkspace = pagedWorkspace ?? envelope.dispatchedWorkspace;
             if (!envelope.result.ok) return envelope;
             const payload = envelope.result.result as
-              { actions?: unknown; hasMore?: unknown } | null | undefined;
+              { actions?: unknown; hasMore?: unknown; limit?: unknown } | null | undefined;
             if (!payload || !Array.isArray(payload.actions)) break;
             collected.push(...payload.actions);
             // Not stopped by an empty page: a Shell answering for this host
             // narrows each page to what a host may run (#13350), so one can
             // come back empty with more behind it.
             if (payload.hasMore !== true) break;
-            offset += ACTIONS_LIST_MAX_LIMIT;
+            // Moved on by the page the view says it served, never by what came
+            // back, which a Shell may have narrowed: the walk's large page from
+            // a local view, the public maximum from any other.
+            offset +=
+              payload.limit === ACTIONS_LIST_WALK_LIMIT
+                ? ACTIONS_LIST_WALK_LIMIT
+                : ACTIONS_LIST_MAX_LIMIT;
           }
           return {
             result: { ok: true, result: { actions: collected } },

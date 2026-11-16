@@ -1121,6 +1121,35 @@ describe("ActionService", () => {
         ]);
       });
 
+      // Main's own `actions.list` walk (#17036): it widens one page past the
+      // caller-facing cap, so only main's agent dispatch may set it.
+      it("stamps ctx.actionsListWalk only from an agent dispatch's options, never a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { actionsListWalk: true },
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.actionsListWalk)).toEqual([
+          true,
+          undefined,
+          undefined,
+        ]);
+      });
+
       // The push half (#15646): what a confirm showed, which `git.push` pins
       // the push to. A caller able to plant one could pin a push to a review
       // nobody saw, so it rides on the options alone.
