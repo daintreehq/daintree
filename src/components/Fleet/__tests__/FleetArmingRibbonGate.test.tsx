@@ -41,9 +41,11 @@ describe("FleetArmingRibbonGate", () => {
   });
 
   it("draws nothing for a view with no fleet, and the ribbon once one pane is armed", async () => {
+    const loadsBefore = h.ribbonLoads;
     render(<FleetArmingRibbonGate />);
     await act(async () => {});
     expect(screen.queryByTestId("fleet-ribbon")).toBeNull();
+    expect(h.ribbonLoads).toBe(loadsBefore);
 
     act(() => useFleetArmingStore.setState({ armedIds: new Set(["a"]) }));
 
@@ -61,13 +63,18 @@ describe("FleetArmingRibbonGate", () => {
       })
     );
 
-    expect(await screen.findByTestId("fleet-ribbon")).toBeTruthy();
+    const ribbon = await screen.findByTestId("fleet-ribbon");
+
+    act(() => useFleetArmingStore.setState({ crossHostTargets: [] }));
+    expect(screen.getByTestId("fleet-ribbon")).toBe(ribbon);
   });
 
   it("loads for a failure banner or a waiting confirmation with no member armed", async () => {
     const failure = render(<FleetArmingRibbonGate />);
     act(() => useFleetFailureStore.setState({ failedIds: new Set(["a"]) }));
-    expect(await failure.findByTestId("fleet-ribbon")).toBeTruthy();
+    const banner = await failure.findByTestId("fleet-ribbon");
+    act(() => useFleetFailureStore.setState({ failedIds: new Set() }));
+    expect(failure.getByTestId("fleet-ribbon")).toBe(banner);
     failure.unmount();
     resetFleet();
 
@@ -78,7 +85,9 @@ describe("FleetArmingRibbonGate", () => {
         pending: { kind: "kill", targetCount: 1, sessionLossCount: 0 },
       })
     );
-    expect(await confirm.findByTestId("fleet-ribbon")).toBeTruthy();
+    const confirmBar = await confirm.findByTestId("fleet-ribbon");
+    act(() => useFleetPendingActionStore.setState({ pending: null }));
+    expect(confirm.getByTestId("fleet-ribbon")).toBe(confirmBar);
   });
 
   it("keeps the ribbon mounted after the fleet drains", async () => {

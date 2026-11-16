@@ -1742,6 +1742,8 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
       expect(found).not.toBeNull();
       return found;
     });
+    // Whenever the chunk lands, the keyboard goes to the bar.
+    expect(document.activeElement).toBe(input);
     fireEvent.change(input!, { target: { value: "needle" } });
     await vi.waitFor(() =>
       expect(search.findNext).toHaveBeenCalledWith("needle", expect.anything())

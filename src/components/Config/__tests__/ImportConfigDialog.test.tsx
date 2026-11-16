@@ -136,6 +136,21 @@ async function open(preview: ConfigBundlePreview) {
 const bodyText = () => document.body.textContent ?? "";
 
 describe("ImportConfigDialog", () => {
+  it("starts one import per request, not per render", async () => {
+    previewImport.mockResolvedValue(REPLACING);
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<ImportConfigDialog request={1} />);
+    });
+    expect(previewImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => view.rerender(<ImportConfigDialog request={1} />));
+    expect(previewImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => view.rerender(<ImportConfigDialog request={2} />));
+    expect(previewImport).toHaveBeenCalledTimes(2);
+  });
+
   it("names what it replaces, not only how many", async () => {
     await open(REPLACING);
 

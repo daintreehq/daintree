@@ -4,6 +4,9 @@ import { Suspense } from "react";
 import { act, render, renderHook } from "@testing-library/react";
 import { lazyWhenLoaded, lazyWithPreload, usePreloadedComponent } from "../lazyWithPreload";
 
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }));
+vi.mock("@/utils/logger", () => ({ logError }));
+
 function Greeting({ name }: { name: string }) {
   return <p>hello {name}</p>;
 }
@@ -232,13 +235,18 @@ describe("lazyWhenLoaded", () => {
     const Deferred = lazyWhenLoaded(load, (m) => m.Greeting);
     expect(load).not.toHaveBeenCalled();
 
-    // No Suspense boundary above: a suspension here would throw.
-    const { container } = render(<Deferred name="ribbon" />);
+    // The sibling proves the tree committed: a suspension would hold it back.
+    const { container } = render(
+      <>
+        <span>shell</span>
+        <Deferred name="ribbon" />
+      </>
+    );
     expect(load).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toBe("shell");
 
     await act(async () => resolve({ Greeting }));
-    expect(container.textContent).toBe("hello ribbon");
+    expect(container.textContent).toBe("shellhello ribbon");
   });
 
   it("renders in the first commit once loaded", async () => {
@@ -254,16 +262,19 @@ describe("lazyWhenLoaded", () => {
     expect(container.textContent).toBe("hello search");
   });
 
-  it("draws nothing for a chunk that fails, and loads again on the next mount", async () => {
+  it("draws nothing for a chunk that fails, logs it, and loads again on the next mount", async () => {
+    const error = new Error("chunk missing");
     const load = vi
       .fn<() => Promise<{ Greeting: typeof Greeting }>>()
-      .mockRejectedValueOnce(new Error("chunk missing"))
+      .mockRejectedValueOnce(error)
       .mockResolvedValueOnce({ Greeting });
     const Deferred = lazyWhenLoaded(load, (m) => m.Greeting);
+    logError.mockClear();
 
     const first = render(<Deferred name="dialog" />);
     await act(async () => {});
     expect(first.container.textContent).toBe("");
+    expect(logError).toHaveBeenCalledWith(expect.any(String), error);
     first.unmount();
 
     const second = render(<Deferred name="dialog" />);

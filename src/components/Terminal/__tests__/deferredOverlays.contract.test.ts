@@ -35,7 +35,7 @@ function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) return sources(full);
-    return /\.tsx?$/.test(entry.name) && !entry.name.endsWith(".d.ts") ? [full] : [];
+    return /\.[mc]?[jt]sx?$/.test(entry.name) && !/\.d\.[mc]?ts$/.test(entry.name) ? [full] : [];
   });
 }
 
@@ -48,6 +48,17 @@ function resolveSpecifier(fromFile: string, specifier: string): string | null {
   return null;
 }
 
+/** The deferred modules `text` (the source of `file`) imports statically. */
+function deferredEdges(file: string, text: string): string[] {
+  const { specifiers, parseErrors } = parseStaticImports(text, file);
+  expect(parseErrors, file).toEqual([]);
+  return specifiers.flatMap((specifier) => {
+    const target = resolveSpecifier(file, specifier);
+    const key = target === null ? null : posix(relative(ROOT, target));
+    return key !== null && DEFERRED.includes(key) ? [key] : [];
+  });
+}
+
 /** Every source file that statically imports a deferred module, keyed by that module. */
 function staticImporters(includeTests: boolean): Record<string, string[]> {
   const names = DEFERRED.map((file) => basename(file).replace(/\.tsx$/, ""));
@@ -58,14 +69,7 @@ function staticImporters(includeTests: boolean): Record<string, string[]> {
     const text = readFileSync(file, "utf8");
     // A specifier that reaches one of these names it; skip parsing the rest.
     if (!names.some((name) => text.includes(name))) continue;
-    const { specifiers, parseErrors } = parseStaticImports(text, file);
-    expect(parseErrors, rel).toEqual([]);
-    for (const specifier of specifiers) {
-      const target = resolveSpecifier(file, specifier);
-      if (target === null) continue;
-      const key = posix(relative(ROOT, target));
-      if (key in found) found[key]!.push(rel);
-    }
+    for (const key of deferredEdges(file, text)) found[key]!.push(rel);
   }
   return found;
 }
@@ -73,6 +77,21 @@ function staticImporters(includeTests: boolean): Record<string, string[]> {
 describe("overlays a restored session never shows (#17035)", () => {
   it("are reached from renderer code only through import()", () => {
     expect(staticImporters(false)).toEqual(Object.fromEntries(DEFERRED.map((file) => [file, []])));
+  });
+
+  it("counts aliased imports and re-exports as edges, and type-only or dynamic imports not", () => {
+    const host = join(SRC, "components/Layout/AppLayout.tsx");
+    const source = [
+      'import { FleetArmingRibbon } from "@/components/Fleet/FleetArmingRibbon";',
+      'export { ArtifactOverlay } from "../Terminal/ArtifactOverlay";',
+      'import type { TerminalSearchTarget } from "@/components/Terminal/TerminalSearchBar";',
+      'const later = () => import("@/components/Terminal/UpdateCwdDialog");',
+    ].join("\n");
+
+    expect(deferredEdges(host, source)).toEqual([
+      "src/components/Fleet/FleetArmingRibbon.tsx",
+      "src/components/Terminal/ArtifactOverlay.tsx",
+    ]);
   });
 
   it("would be caught: each one's own suite imports it statically", () => {

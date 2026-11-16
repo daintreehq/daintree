@@ -1,4 +1,5 @@
 import { lazy, useEffect, useState, type ComponentType } from "react";
+import { logError } from "@/utils/logger";
 
 /**
  * `React.lazy` that renders synchronously once its chunk has been preloaded.
@@ -99,8 +100,8 @@ export function usePreloadedComponent(component: PreloadTarget): PreloadStatus {
  * for armed panes, a dialog someone asked for, an empty canvas.
  *
  * Not through Suspense, whose fallback would hold the first reveal back for
- * React's 300ms throttle. A chunk that fails to load draws nothing, and the
- * next mount tries again.
+ * React's 300ms throttle. A chunk that fails to load draws nothing and is
+ * logged, since nothing on screen says so; the next mount tries again.
  */
 export function lazyWhenLoaded<M, P extends object>(
   load: () => Promise<M>,
@@ -110,6 +111,10 @@ export function lazyWhenLoaded<M, P extends object>(
 
   function WhenLoaded(props: P) {
     const status = usePreloadedComponent(Preloadable);
+    const failure = status.status === "failed" ? status : null;
+    useEffect(() => {
+      if (failure !== null) logError("Deferred component failed to load", failure.error);
+    }, [failure]);
     return status.status === "ready" ? <Preloadable {...props} /> : null;
   }
 
