@@ -29,10 +29,6 @@ const m = vi.hoisted(() => {
   };
 });
 
-vi.mock("../host/hostModeDefaults.js", () => {
-  m.defaultsLoaded = true;
-  return { createHostModeService: m.createHostModeService };
-});
 vi.mock("../host/advertRecord.js", () => ({ reapOrphanedAdvert: m.reapOrphanedAdvert }));
 vi.mock("../host/appImageRelocation.js", () => ({ followAppImageMoves: m.followAppImageMoves }));
 vi.mock("../host/hostModeSettings.js", () => ({ readHostModeSettings: () => m.settings }));
@@ -59,6 +55,10 @@ beforeEach(async () => {
   // was evaluated is this case's doing, whatever ran before it.
   vi.resetModules();
   m.defaultsLoaded = false;
+  vi.doMock("../host/hostModeDefaults.js", () => {
+    m.defaultsLoaded = true;
+    return { createHostModeService: m.createHostModeService };
+  });
   ({ startHostRole } = await import("../hostBoot.js"));
   ({ getRemoteService, _resetRemoteServicesForTest } = await import("../runtime.js"));
 });
