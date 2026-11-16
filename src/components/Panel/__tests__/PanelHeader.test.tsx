@@ -2,6 +2,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { LazyMoveToWorktreePicker } from "../lazyMoveToWorktreePicker";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -1065,13 +1066,15 @@ describe("PanelHeader", () => {
       mockWorktreeIds = ["w-a", "w-b"];
       render(<PanelHeader {...makeProps()} />);
 
+      // Opening the menu fetches the picker's chunk ahead of the pick.
+      act(() => mockMenuOpenChange?.(true));
+      await LazyMoveToWorktreePicker.preload();
+
       fireEvent.click(findMenuButton("Move to worktree…")!);
       // Still inside the menu's teardown: opening now would race its focus return.
       expect(picker()).toBeNull();
 
       expect(finishMenuClose()).toBe(true);
-      // The picker's chunk loads on demand, so it mounts a tick after the close.
-      await waitFor(() => expect(picker()).not.toBeNull());
       expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
       expect(picker()?.getAttribute("data-current-worktree-id")).toBe("w-a");
       expect(mockDispatch).not.toHaveBeenCalled();
