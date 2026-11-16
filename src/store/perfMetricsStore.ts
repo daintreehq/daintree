@@ -101,7 +101,7 @@ function tick(): void {
     lastBucketTime = now;
     publishMetrics(fps);
   }
-  rafHandle = requestAnimationFrame(tick);
+  scheduleFrame();
 }
 
 interface LayoutShiftEntry extends PerformanceEntry {
@@ -159,6 +159,13 @@ function stopObservers(): void {
   clsEntries.length = 0;
 }
 
+// Re-checked at every scheduling point: a store subscriber notified mid-frame
+// can release the capture, restart it, or hide the view before this returns.
+function scheduleFrame(): void {
+  if (rafHandle !== null || captureRefCount === 0 || !isProjectViewObservable()) return;
+  rafHandle = requestAnimationFrame(tick);
+}
+
 function stopFrameLoop(): void {
   if (rafHandle !== null) {
     cancelAnimationFrame(rafHandle);
@@ -180,7 +187,7 @@ function applyObservability(observable: boolean): void {
   if (rafHandle !== null) return;
   frameCount = 0;
   lastBucketTime = performance.now();
-  rafHandle = requestAnimationFrame(tick);
+  scheduleFrame();
 }
 
 // Lazy ref-counted lifecycle so the rAF loop only runs while the Perf tab is

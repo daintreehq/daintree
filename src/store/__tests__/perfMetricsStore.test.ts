@@ -463,20 +463,38 @@ describe("perfMetricsStore live capture", () => {
 
   it("schedules no frames while the window is hidden, then reads afresh on return", () => {
     startLivePerfCapture();
-    runFrames(10);
+    runFrames(70);
+    expect(state().fps).not.toBeNull();
 
     setHidden(true);
     expect(frames.size).toBe(0);
     expect(state().isBackgrounded).toBe(true);
     expect(state().fps).toBeNull();
 
-    // Five seconds pass unseen. A bucket spanning them would read about 12fps.
+    // Five seconds pass unseen, partway into a bucket. A reading that spanned
+    // them, or kept the frames counted before them, would be off the rate.
     now += 5000;
     setHidden(false);
     expect(frames.size).toBe(1);
     expect(state().isBackgrounded).toBe(false);
-    runFrames(70);
+    runFrames(62);
+    expect(state().fps).toBeNull();
+    runFrames(1);
     expect(state().fps).toBeGreaterThan(55);
+    expect(state().fps).toBeLessThan(70);
+  });
+
+  it("schedules nothing when a store subscriber releases the capture mid-frame", () => {
+    startLivePerfCapture();
+    const off = usePerfMetricsStore.subscribe((next, previous) => {
+      if (next.fps !== previous.fps && next.fps !== null) stopLivePerfCapture();
+    });
+    try {
+      runFrames(70);
+      expect(frames.size).toBe(0);
+    } finally {
+      off();
+    }
   });
 
   it("schedules no frames in a cached view, which still reports itself visible", () => {

@@ -110,26 +110,38 @@ describe("appThemeViewTransition", () => {
     // MutationObserver records are delivered as a microtask.
     const flushMutations = () => Promise.resolve();
 
+    /** Listeners by query and event type, so only the right subscription counts. */
     function captureMediaListeners() {
-      const added = new Set<() => void>();
+      const added = new Map<string, Set<() => void>>();
+      const key = (query: string, type: string) => `${query}|${type}`;
       Object.defineProperty(window, "matchMedia", {
         writable: true,
         configurable: true,
         value: vi.fn().mockImplementation((query: string) => ({
           matches: false,
           media: query,
-          addEventListener: (_type: string, listener: () => void) => added.add(listener),
-          removeEventListener: (_type: string, listener: () => void) => added.delete(listener),
+          addEventListener: (type: string, listener: () => void) => {
+            const listeners = added.get(key(query, type)) ?? new Set();
+            listeners.add(listener);
+            added.set(key(query, type), listeners);
+          },
+          removeEventListener: (type: string, listener: () => void) => {
+            added.get(key(query, type))?.delete(listener);
+          },
         })),
       });
-      return added;
+      return {
+        dispatch: (query: string, type: string) =>
+          added.get(key(query, type))?.forEach((listener) => listener()),
+        count: () => [...added.values()].reduce((total, set) => total + set.size, 0),
+      };
     }
 
     it("hears the OS preference change", () => {
       const media = captureMediaListeners();
       const listener = vi.fn();
       const off = subscribeReducedMotion(listener);
-      media.forEach((notify) => notify());
+      media.dispatch("(prefers-reduced-motion: reduce)", "change");
       expect(listener).toHaveBeenCalledTimes(1);
       off();
     });
@@ -160,7 +172,7 @@ describe("appThemeViewTransition", () => {
       const media = captureMediaListeners();
       const listener = vi.fn();
       subscribeReducedMotion(listener)();
-      expect(media.size).toBe(0);
+      expect(media.count()).toBe(0);
       document.body.dataset.reduceAnimations = "true";
       await flushMutations();
       expect(listener).not.toHaveBeenCalled();

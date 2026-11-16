@@ -111,12 +111,26 @@ describe("toolbar strip — solid chrome without a backdrop blur (#17074)", () =
     }
   });
 
+  /** The at-rule's whole block, braces balanced, starting at `start`. */
+  function blockAt(start: number): string {
+    let depth = 0;
+    for (let i = css.indexOf("{", start); i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) return css.slice(start, i + 1);
+    }
+    return css.slice(start);
+  }
+
   it.each(["@media (prefers-reduced-transparency: reduce)", "@media (prefers-contrast: more)"])(
-    "restores the opaque toolbar surface under %s",
+    "restores the opaque toolbar surface under %s, after the base rule",
     (atRule) => {
+      const baseIdx = css.indexOf(".surface-toolbar {");
       const start = css.indexOf(atRule);
-      expect(start).toBeGreaterThan(-1);
-      const block = css.slice(start, css.indexOf("\n}\n", start) + 3);
+      expect(baseIdx).toBeGreaterThan(-1);
+      // Source order is the cascade: an earlier fallback loses to the base
+      // rule's translucent `--toolbar-bg`.
+      expect(start).toBeGreaterThan(baseIdx);
+      const block = blockAt(start);
       expect(block).toMatch(
         /\.surface-toolbar\s*{\s*background-color:\s*var\(--theme-surface-toolbar\);\s*}/
       );

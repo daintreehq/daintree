@@ -25,12 +25,23 @@ describe("buttonVariants", () => {
   // offscreen pass for every pill on screen (#17074).
   it("keeps the pill unblurred while its fills are opaque surfaces", () => {
     const tokens = buttonVariants({ variant: "pill" }).split(/\s+/);
-    const fills = tokens.filter((token) => /^(?:hover:)?bg-/.test(token));
-    expect(fills.length).toBeGreaterThan(0);
-    expect(fills.every((token) => /^(?:hover:)?bg-surface-[a-z-]+$/.test(token))).toBe(true);
-    // A backdrop utility at any variant prefix; the shared transition list may
-    // still name the property.
-    expect(tokens.some((token) => /^(?:[\w-]+:)*backdrop-/.test(token))).toBe(false);
+    const fills = tokens
+      .map((token) => /^(?:[^\s:]+:)*bg-surface-([a-z-]+)$/.exec(token)?.[1])
+      .filter((name): name is string => name !== undefined);
+    expect(fills.length).toBeGreaterThan(1);
+    // No fill may be anything but a surface token, and every surface it uses is
+    // opaque in every built-in theme, so nothing behind the pill ever shows.
+    expect(tokens.filter((token) => /(?:^|:)bg-/.test(token))).toHaveLength(fills.length);
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      for (const name of fills) {
+        const tokenName = `surface-${name}`;
+        const value = Object.entries(scheme.tokens).find(([key]) => key === tokenName)?.[1];
+        expect(value, `${scheme.id} ${tokenName}`).toMatch(/^#[0-9a-f]{6}$/i);
+      }
+    }
+    // A backdrop utility under any variant prefix; the shared transition list
+    // may still name the property.
+    expect(tokens.some((token) => /(?:^|:)backdrop-/.test(token))).toBe(false);
   });
 
   // A `truncate` label clips at its own box, and at `leading-none` that box is
