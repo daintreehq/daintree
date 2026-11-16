@@ -1,14 +1,24 @@
 // @vitest-environment jsdom
+/**
+ * A streaming terminal's grid cell renders only when something it draws
+ * changes (#17052). The store keeps bookkeeping on the panel (a flow-status
+ * ordering timestamp, the held-duration gauge, the last agent observation)
+ * that a pause and resume in one frame, a paused pane's 2s gauge, or a host
+ * confirmation rewrites without changing anything on screen. `GridPanel`'s
+ * own executions are counted through its panel hook, and the pane is a
+ * memoized spy, so each call it records is a render the real one would do.
+ */
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
-const spy = vi.hoisted(() => ({ renders: [] as Record<string, unknown>[] }));
+const spy = vi.hoisted(() => ({ pane: [] as Record<string, unknown>[], cell: 0 }));
 
 vi.mock("@/registry", async () => {
   const { memo } = await import("react");
   const Panel = memo(function PanelSpy(props: Record<string, unknown>) {
-    spy.renders.push(props);
+    spy.pane.push(props);
     return null;
   });
   const definitions = { terminal: { component: Panel } };
@@ -21,6 +31,17 @@ vi.mock("@/registry", async () => {
 vi.mock("@/store", async () => {
   const { usePanelStore } = await import("@/store/panelStore");
   return { usePanelStore };
+});
+
+vi.mock("../gridPanelSelection", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gridPanelSelection")>();
+  return {
+    ...actual,
+    useGridPanel: (id: string) => {
+      spy.cell++;
+      return actual.useGridPanel(id);
+    },
+  };
 });
 
 import { GridPanel } from "../GridPanel";
@@ -61,15 +82,37 @@ function pty(fields: Partial<PtyPanelData> = {}): PtyPanelData {
   };
 }
 
-describe("GridPanel while a terminal streams", () => {
+function current(): PtyPanelData {
+  return usePanelStore.getState().panelsById[ID] as PtyPanelData;
+}
+
+function patch(fields: Partial<PtyPanelData>) {
+  act(() => {
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, [ID]: { ...current(), ...fields } as PanelInstance },
+    }));
+  });
+}
+
+const counts = () => ({ cell: spy.cell, pane: spy.pane.length });
+const lastPane = () => spy.pane[spy.pane.length - 1]!;
+
+describe.each([
+  ["", false],
+  [" under StrictMode", true],
+])("GridPanel while a terminal streams%s", (_label, strict) => {
   beforeEach(() => {
-    spy.renders.length = 0;
+    spy.pane.length = 0;
+    spy.cell = 0;
     usePanelStore.setState({
       panelsById: { [ID]: pty() as PanelInstance },
       panelIds: [ID],
       focusedId: ID,
     });
-    render(<GridPanel terminalId={ID} isFocused />);
+    const tree = <GridPanel terminalId={ID} isFocused />;
+    render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    expect(spy.pane.length).toBeGreaterThan(0);
+    expect(spy.cell).toBeGreaterThan(0);
   });
 
   afterEach(() => {
@@ -79,7 +122,7 @@ describe("GridPanel while a terminal streams", () => {
   });
 
   it("renders nothing more across 120 frames of repeated status reports", () => {
-    const before = spy.renders.length;
+    const before = counts();
     const store = usePanelStore.getState();
     for (let frame = 0; frame < 120; frame++) {
       act(() => {
@@ -90,11 +133,11 @@ describe("GridPanel while a terminal streams", () => {
         store.updateLastObservedTitle(ID, "Fix auth");
       });
     }
-    expect(spy.renders.length).toBe(before);
+    expect(counts()).toEqual(before);
   });
 
   it("renders nothing more when a pause and resume land in one frame", () => {
-    const before = spy.renders.length;
+    const before = counts();
     for (let ts = 2; ts < 22; ts += 2) {
       act(() => {
         enqueueFlowStatusUpdate(ID, "paused-backpressure", ts);
@@ -102,31 +145,56 @@ describe("GridPanel while a terminal streams", () => {
         flushPanelStatusBuffer();
       });
     }
-    expect(usePanelStore.getState().panelsById[ID]).toMatchObject({
-      flowStatus: "running",
-      flowStatusTimestamp: 21,
-    });
-    expect(spy.renders.length).toBe(before);
+    expect(current()).toMatchObject({ flowStatus: "running", flowStatusTimestamp: 21 });
+    expect(counts()).toEqual(before);
   });
 
   it("renders nothing more while the held-duration gauge ticks", () => {
-    const before = spy.renders.length;
+    const before = counts();
     for (const ms of [2_000, 4_000, 6_000]) {
       act(() => {
         enqueueHeldDurationUpdate(ID, ms);
         flushPanelStatusBuffer();
       });
     }
-    expect(usePanelStore.getState().panelsById[ID]).toMatchObject({ heldDurationMs: 6_000 });
-    expect(spy.renders.length).toBe(before);
+    expect(current()).toMatchObject({ heldDurationMs: 6_000 });
+    expect(counts()).toEqual(before);
   });
 
-  it("still renders when a visible field changes", () => {
-    const before = spy.renders.length;
-    act(() =>
-      usePanelStore.getState().updateAgentState(ID, "waiting", undefined, Date.now(), "output")
-    );
-    expect(spy.renders.length).toBeGreaterThan(before);
-    expect(spy.renders.at(-1)?.agentState).toBe("waiting");
+  it("renders nothing more when the host confirms the state already shown", () => {
+    const before = counts();
+    act(() => usePanelStore.getState().updateAgentState(ID, "working", undefined, 5_000, "output"));
+    expect(current().lastAgentObservation).toEqual({ agentState: "working", at: 5_000 });
+    expect(counts()).toEqual(before);
+  });
+
+  it("renders a visible change that lands with a bookkeeping one", () => {
+    const before = counts();
+    patch({ flowStatusTimestamp: 30, title: "Renamed" });
+    expect(counts().pane).toBeGreaterThan(before.pane);
+    expect(lastPane().title).toBe("Renamed");
+  });
+
+  it.each<[string, Partial<PtyPanelData>, Record<string, unknown>]>([
+    ["agent state", { agentState: "waiting" }, { agentState: "waiting" }],
+    ["cwd", { cwd: "/elsewhere" }, { cwd: "/elsewhere" }],
+    ["flow status", { flowStatus: "paused-backpressure" }, {}],
+    ["activity", { activityHeadline: "Editing files" }, {}],
+    [
+      "extension state",
+      { extensionState: { k: 1 }, extensionStateVersion: 2 },
+      { extensionState: { k: 1 }, extensionStateVersion: 2 },
+    ],
+  ])("renders a %s change straight away", (_name, fields, expected) => {
+    const before = counts();
+    patch(fields);
+    expect(counts().cell).toBeGreaterThan(before.cell);
+    expect(counts().pane).toBeGreaterThan(before.pane);
+    expect(lastPane()).toMatchObject(expected);
+  });
+
+  it("renders the exit in the pane's chrome", () => {
+    patch({ runtimeStatus: "exited", exitCode: 1 });
+    expect((lastPane().chrome as { hasExited: boolean }).hasExited).toBe(true);
   });
 });

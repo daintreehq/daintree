@@ -17,7 +17,20 @@ import type { GridPanelProps } from "../GridPanel";
 const gridPanel = vi.hoisted(() => ({
   renders: [] as GridPanelProps[],
   ambient: [] as (AgentState | undefined)[],
+  groupRenders: 0,
 }));
+
+// Counts the group's own executions through its panel hook.
+vi.mock("../gridPanelSelection", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gridPanelSelection")>();
+  return {
+    ...actual,
+    useGridGroupPanels: (panelIds: readonly string[]) => {
+      gridPanel.groupRenders++;
+      return actual.useGridGroupPanels(panelIds);
+    },
+  };
+});
 
 vi.mock("../GridPanel", async () => {
   const { memo } = await import("react");
@@ -149,6 +162,7 @@ function renderGroup(strict = false) {
   const tree = <GridTabGroup group={group} focusedId={SHOWN} isMultiPanelGrid />;
   render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   expect(gridPanel.renders.length).toBeGreaterThan(0);
+  expect(gridPanel.groupRenders).toBeGreaterThan(0);
 }
 
 const renderCount = () => gridPanel.renders.length;
@@ -159,6 +173,7 @@ describe("GridTabGroup render isolation", () => {
   beforeEach(() => {
     gridPanel.renders.length = 0;
     gridPanel.ambient.length = 0;
+    gridPanel.groupRenders = 0;
     vi.mocked(requestPanelClose).mockClear();
   });
 
@@ -225,6 +240,29 @@ describe("GridTabGroup render isolation", () => {
         runtimeStatus: "running",
       });
       expect(renderCount()).toBe(before);
+    });
+
+    it.each([
+      ["shown", SHOWN],
+      ["background", BACK],
+    ])("leaves the group alone when the %s tab's bookkeeping moves", (_tab, id) => {
+      const before = { group: gridPanel.groupRenders, pane: renderCount() };
+      for (let ts = 2; ts < 12; ts += 2) {
+        flush(() => {
+          enqueueFlowStatusUpdate(id, "paused-backpressure", ts);
+          enqueueFlowStatusUpdate(id, "running", ts + 1);
+        });
+      }
+      for (const ms of [2_000, 4_000]) {
+        flush(() => enqueueHeldDurationUpdate(id, ms));
+      }
+      act(() => usePanelStore.getState().updateAgentState(id, "working", undefined, 5_000));
+      expect(usePanelStore.getState().panelsById[id]).toMatchObject({
+        flowStatusTimestamp: 11,
+        heldDurationMs: 4_000,
+        lastAgentObservation: { agentState: "working", at: 5_000 },
+      });
+      expect({ group: gridPanel.groupRenders, pane: renderCount() }).toEqual(before);
     });
 
     it("leaves the shown pane alone when a background tab's fields are replaced with equal ones", () => {
