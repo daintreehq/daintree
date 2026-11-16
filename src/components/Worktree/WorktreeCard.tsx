@@ -4,7 +4,7 @@ import type { WorktreeState } from "../../types";
 import type { Issue } from "@shared/types/forge";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
+import { selectPtyPanels, useWorktreeTerminalSummary } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
@@ -66,7 +66,7 @@ import {
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
-import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { LiveWorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
 import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
@@ -280,11 +280,15 @@ export function WorktreeCard({
     }
   };
 
+  // The summary, not the panels: a panel object is replaced on every activity
+  // write, and holding the panels re-rendered this whole card with each one
+  // (#17051). What the card needs from them is selected below as values; the
+  // terminal rows subscribe to the panels themselves.
   const {
     counts: terminalCounts,
-    terminals: worktreeTerminals,
+    terminalIds: worktreeTerminalIds,
     dominantAgentState,
-  } = useWorktreeTerminals(worktree.id);
+  } = useWorktreeTerminalSummary(worktree.id);
 
   const devServerSession = useWorktreeDevServerSession(worktree.id);
 
@@ -348,10 +352,6 @@ export function WorktreeCard({
   // input itself, not its outcome, so any agent-state staleness is irrelevant.
   // The hook watches the ping through a store subscription so only the card
   // that owns the pinged terminal re-renders.
-  const worktreeTerminalIds = useMemo(
-    () => worktreeTerminals.map((t) => t.id),
-    [worktreeTerminals]
-  );
   const receiptKey = useInputReceiptKey(worktreeTerminalIds);
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
@@ -374,21 +374,28 @@ export function WorktreeCard({
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
   const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
-  const gridCount = worktreeTerminals.filter(
-    (t) => t.location === "grid" || t.location === undefined
-  ).length;
-  const dockCount = worktreeTerminals.filter((t) => t.location === "dock").length;
   // Counts for the Sessions submenu's Select * items. "All" follows Fleet
   // broadcast membership (any live PTY); state-specific items are meaningful
   // only for terminals with agent state.
-  const eligibleTerminals = worktreeTerminals.filter(isFleetArmEligible);
-  const eligibleTerminalCount = eligibleTerminals.length;
-  const waitingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
-  ).length;
-  const workingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
-  ).length;
+  const { gridCount, dockCount, eligibleTerminalCount, waitingAgentCount, workingAgentCount } =
+    usePanelStore(
+      useShallow((state) => {
+        const terminals = selectPtyPanels(state, worktreeTerminalIds);
+        const eligible = terminals.filter(isFleetArmEligible);
+        return {
+          gridCount: terminals.filter((t) => t.location === "grid" || t.location === undefined)
+            .length,
+          dockCount: terminals.filter((t) => t.location === "dock").length,
+          eligibleTerminalCount: eligible.length,
+          waitingAgentCount: eligible.filter(
+            (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
+          ).length,
+          workingAgentCount: eligible.filter(
+            (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
+          ).length,
+        };
+      })
+    );
 
   const worktreeErrors = useErrorStore(
     useShallow((state) =>
@@ -808,11 +815,15 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const isInTrash = usePanelStore((state) => state.isInTrash);
+  const visibleAgentTerminalIds = usePanelStore(
+    useShallow((state) =>
+      selectPtyPanels(state, worktreeTerminalIds)
+        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, state.isInTrash, NO_WORKTREE_IDS))
+        .map((t) => t.id)
+    )
+  );
   const agentBuckets = useWorktreeAgentBuckets(
-    worktreeTerminals
-      .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
-      .map((t) => t.id),
+    visibleAgentTerminalIds,
     isWorktreeMergedForCleanup(worktree),
     worktree.id
   );
@@ -1716,7 +1727,7 @@ export function WorktreeCard({
                       />
                     </div>
 
-                    <WorktreeTerminalSection
+                    <LiveWorktreeTerminalSection
                       variant={variant}
                       worktreeId={worktree.id}
                       worktreeLabel={ariaName}
@@ -1725,7 +1736,7 @@ export function WorktreeCard({
                       inline={isSessionsFooterInline}
                       stateGlyphsElsewhere={variant === "sidebar"}
                       counts={terminalCounts}
-                      terminals={worktreeTerminals}
+                      terminalIds={worktreeTerminalIds}
                       onToggle={handleToggleTerminals}
                       onTerminalSelect={handleTerminalSelect}
                     />

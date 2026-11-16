@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -39,7 +39,22 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   ),
 }));
 
+// Only the component root reads this store, so its selector calls count the
+// root's renders and nothing beneath it (#17051).
+const rootRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/store/terminalPendingDestructiveActionStore", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/store/terminalPendingDestructiveActionStore")>();
+  const store = actual.useTerminalPendingDestructiveActionStore;
+  const counted = Object.assign((selector: Parameters<typeof store>[0]) => {
+    rootRenders.count += 1;
+    return store(selector);
+  }, store);
+  return { ...actual, useTerminalPendingDestructiveActionStore: counted };
+});
+
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
@@ -120,7 +135,66 @@ beforeEach(() => {
   setPanels([]);
 });
 
+// Patches a panel the way the status buffer does: a fresh object in a fresh
+// `panelsById`, with every bucket array left as it was.
+function patchPanel(id: string, fields: Partial<PtyPanelData>): void {
+  act(() => {
+    usePanelStore.setState((state) => {
+      const panel = state.panelsById[id];
+      if (!panel || !isPtyPanel(panel)) throw new Error(`no PTY panel ${id}`);
+      return { panelsById: { ...state.panelsById, [id]: { ...panel, ...fields } } };
+    });
+  });
+}
+
+function streamOutput(id: string, line: number): void {
+  patchPanel(id, {
+    activityHeadline: `line ${line}`,
+    activityStatus: "working",
+    lastCommand: `make ${line}`,
+  });
+}
+
 describe("DeletedWorktreeCard", () => {
+  it("does not re-render while its own or any other terminal streams output", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "elsewhere", worktreeId: "wt-live" },
+    ]);
+    renderCard();
+    const before = rootRenders.count;
+
+    for (let line = 0; line < 3; line++) {
+      streamOutput("t1", line);
+      streamOutput("elsewhere", line);
+    }
+
+    expect(rootRenders.count).toBe(before);
+    // The row still follows the stream: it subscribes to its panel itself.
+    expect(screen.getByText("make 2")).toBeTruthy();
+  });
+
+  // The row no longer re-renders for a panel write, so the dismiss must read
+  // the panels when it runs, not keep the ones it last rendered with.
+  it("previews the panels as they are when the dismiss is clicked", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1", title: "Old name" }]);
+    renderCard();
+    const before = rootRenders.count;
+    patchPanel("t1", { title: "New name" });
+    expect(rootRenders.count).toBe(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close 1 panel" }));
+
+    const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+    expect(pending?.preview).toEqual([
+      {
+        worktreeId: "wt-1",
+        worktreeTitle: "feature/login",
+        terminals: [{ terminalId: "t1", terminalTitle: "New name", hasRunningAgent: false }],
+      },
+    ]);
+  });
+
   it("shows the last-known title, path, and Deleted badge", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     renderCard();
@@ -218,6 +292,7 @@ describe("DeletedWorktreeCard", () => {
         ...worktree,
         expiresAt: at + pinnedRemainingMs,
         holdReason: "agent",
+        heldRemainingMs: pinnedRemainingMs,
       });
 
       const { container, rerender } = render(
@@ -307,6 +382,168 @@ describe("DeletedWorktreeCard", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A held readout is frozen, so a 1Hz tick behind it would only re-render the
+  // row for nothing (#17051).
+  it("runs no countdown interval while the countdown is held", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+      const held: DeletedWorktree = {
+        ...worktree,
+        expiresAt: base + 38_000,
+        holdReason: "agent",
+      };
+      const secondTicks = () => setIntervalSpy.mock.calls.filter(([, ms]) => ms === 1000).length;
+
+      const { rerender } = renderCard(held);
+      expect(secondTicks()).toBe(0);
+
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={{ ...held, holdReason: null }} />
+        </TooltipProvider>
+      );
+      expect(secondTicks()).toBe(1);
+    } finally {
+      setIntervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the running interval as soon as a hold starts", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+      const running: DeletedWorktree = { ...worktree, expiresAt: base + 38_000 };
+
+      const { rerender } = renderCard(running);
+      const tickIndex = setIntervalSpy.mock.calls.findIndex(([, ms]) => ms === 1000);
+      expect(tickIndex).toBeGreaterThanOrEqual(0);
+      const handle: unknown = setIntervalSpy.mock.results[tickIndex]?.value;
+
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={{ ...running, holdReason: "agent" }} />
+        </TooltipProvider>
+      );
+      expect(clearIntervalSpy).toHaveBeenCalledWith(handle);
+
+      const before = rootRenders.count;
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(rootRenders.count).toBe(before);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // The sweep re-pins a held deadline to `now + remaining` on every pass while
+  // the card's clock sleeps, so anything read against that sleeping clock
+  // reads the whole hold as time left.
+  // The sweep re-pins a held deadline to `now + remaining` on every pass while
+  // the card's clock sleeps, so a readout derived from that deadline reads the
+  // whole hold as time left. A held row shows what the sweep says it holds.
+  describe("against the sweep's re-pinned deadline", () => {
+    const base = 1_700_000_000_000;
+    const sweptAt = (
+      now: number,
+      holdReason: DeletedWorktree["holdReason"],
+      remaining = 38_000
+    ): DeletedWorktree => ({
+      ...worktree,
+      expiresAt: now + remaining,
+      holdReason,
+      ...(holdReason !== null && { heldRemainingMs: remaining }),
+    });
+    const rerenderWith = (rerender: (ui: ReactNode) => void, wt: DeletedWorktree) =>
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={wt} />
+        </TooltipProvider>
+      );
+    const seconds = (container: HTMLElement) =>
+      container.querySelector("[data-testid='deleted-worktree-countdown-seconds']")?.textContent;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(base);
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps the held remaining when the hold changes reason", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
+      expect(seconds(container)).toBe("38s");
+
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      rerenderWith(rerender, sweptAt(base + 30_000, "confirm"));
+
+      expect(seconds(container)).toBe("38s");
+    });
+
+    it("resumes from the held remaining, to the second, once the hold lifts", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      rerenderWith(rerender, sweptAt(base + 30_000, null));
+      expect(seconds(container)).toBe("38s");
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(seconds(container)).toBe("36s");
+    });
+
+    it("shows the full window the sweep re-arms a hold to when the TTL changes", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 300 });
+      });
+      rerenderWith(rerender, sweptAt(base + 30_000, "agent", 300_000));
+      expect(seconds(container)).toBe("300s");
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerenderWith(rerender, sweptAt(base + 31_000, "agent", 300_000));
+      expect(seconds(container)).toBe("300s");
+    });
+
+    // Changed and changed back between two passes, the sweep never sees a TTL
+    // change, so it keeps the remaining it had; so must the row.
+    it("keeps the held remaining through a TTL changed and changed back between sweeps", () => {
+      const { container, rerender } = renderCard(sweptAt(base, "agent"));
+      act(() => {
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 300 });
+      });
+      act(() => {
+        usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 60 });
+      });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerenderWith(rerender, sweptAt(base + 1000, "agent"));
+
+      expect(seconds(container)).toBe("38s");
+    });
   });
 
   it("names each hold condition in terms the user can act on", () => {

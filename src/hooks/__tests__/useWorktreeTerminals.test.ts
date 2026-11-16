@@ -10,6 +10,7 @@ import {
   aggregateAgentStates,
   countsFromKey,
   countsKey,
+  useWorktreeTerminalSummary,
   useWorktreeTerminals,
   type WorktreeTerminalCounts,
 } from "../useWorktreeTerminals";
@@ -375,6 +376,80 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(renders).toBe(rendersBefore);
       expect(result.current.terminals).toBe(before.terminals);
       expect(result.current.counts).toBe(before.counts);
+    });
+
+    // The summary is what the cards hold: an output write replaces the panel
+    // object, and holding the panels re-rendered the card with each (#17051).
+    it("the summary neither re-renders nor rebuilds when its own panels stream output", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "agent", worktreeId: "wt-s", agentState: "working" }),
+        term({ id: "shell", worktreeId: "wt-s" }),
+      ]);
+      let renders = 0;
+      const { result } = renderHook(() => {
+        renders += 1;
+        return useWorktreeTerminalSummary("wt-s");
+      });
+      advance(300);
+      const before = result.current;
+      const rendersBefore = renders;
+
+      for (let i = 0; i < 3; i++) {
+        patch("shell", {
+          activityHeadline: `line ${i}`,
+          activityStatus: i % 2 === 0 ? "working" : "success",
+          activityType: "interactive",
+          lastCommand: `make ${i}`,
+        });
+        advance(16);
+        patch("agent", { activityHeadline: `thinking ${i}`, heldDurationMs: i * 2000 });
+        advance(16);
+      }
+      advance(300);
+
+      expect(renders).toBe(rendersBefore);
+      expect(result.current.terminalIds).toBe(before.terminalIds);
+      expect(result.current.counts).toBe(before.counts);
+      expect(result.current.dominantAgentState).toBe(before.dominantAgentState);
+    });
+
+    it("the summary follows a count, state or membership change", () => {
+      vi.useFakeTimers();
+      seed([
+        term({ id: "agent", worktreeId: "wt-s", agentState: "working", detectedAgentId: "claude" }),
+      ]);
+      const { result } = renderHook(() => useWorktreeTerminalSummary("wt-s"));
+      const before = result.current;
+      expect(before.terminalIds).toEqual(["agent"]);
+      expect(before.counts.byState.working).toBe(1);
+      expect(before.dominantAgentState).toBe("working");
+
+      patch("agent", { agentState: "waiting" });
+      advance(300);
+      expect(result.current.counts.byState.working).toBe(0);
+      expect(result.current.dominantAgentState).toBe("waiting");
+      expect(result.current.terminalIds).toBe(before.terminalIds);
+
+      act(() => {
+        usePanelStore.setState((state) => ({
+          panelsById: {
+            ...state.panelsById,
+            shell: term({ id: "shell", worktreeId: "wt-s" }),
+          },
+          panelIdsByWorktreeId: { "wt-s": ["agent", "shell"] },
+        }));
+      });
+      advance(300);
+      expect(result.current.terminalIds).toEqual(["agent", "shell"]);
+      expect(result.current.counts.total).toBe(2);
+
+      act(() => {
+        usePanelStore.setState({ panelIdsByWorktreeId: { "wt-s": ["shell"] } });
+      });
+      advance(300);
+      expect(result.current.terminalIds).toEqual(["shell"]);
+      expect(result.current.dominantAgentState).toBeNull();
     });
   });
 });

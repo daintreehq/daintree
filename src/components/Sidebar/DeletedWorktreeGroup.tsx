@@ -11,12 +11,14 @@ import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripS
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import {
   getDeletedWorktreeTerminalIds,
+  selectDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
@@ -41,10 +43,18 @@ import {
   getEffectiveStateIcon,
 } from "@/components/Worktree/terminalStateConfig";
 import { buildDestructivePreview } from "@/utils/destructiveSessionConfirm";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { selectPtyPanels } from "@/hooks/useWorktreeTerminals";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { useDeletedWorktreeCountdown } from "./useDeletedWorktreeCountdown";
 import { Badge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+
+const ID_SEPARATOR = "\u0000";
+const LIST_SEPARATOR = "\u0001";
+
+function splitIds(part: string): string[] {
+  return part === "" ? [] : part.split(ID_SEPARATOR);
+}
 
 interface GroupMember {
   worktree: DeletedWorktree;
@@ -55,9 +65,9 @@ interface GroupMember {
    * the confirm is about to close, which is the #9699 mismatch class and a D2
    * consent violation besides.
    */
-  panels: PanelInstance[];
+  panelIds: string[];
   /** The rescuable subset — only a terminal can ride the accordion drag. */
-  terminals: PtyPanelData[];
+  terminalIds: string[];
 }
 
 interface DeletedWorktreeGroupProps {
@@ -82,8 +92,6 @@ interface DeletedWorktreeGroupProps {
  * needs no knowledge of this component at all.
  */
 export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGroupProps) {
-  const panelsById = usePanelStore((s) => s.panelsById);
-  const panelIdsByWorktreeId = usePanelStore((s) => s.panelIdsByWorktreeId);
   const setFocused = usePanelStore((s) => s.setFocused);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const pingTerminal = usePanelStore((s) => s.pingTerminal);
@@ -95,17 +103,30 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
 
   // Membership is derived, never snapshotted: a terminal rescued out of the
   // group shrinks it the same way it shrinks a single card (#11232).
-  const members = useMemo<GroupMember[]>(() => {
-    void panelIdsByWorktreeId;
-    return worktrees.map((worktree) => {
-      const panels = getDeletedWorktreeTerminalIds(worktree.id)
-        .map((id) => panelsById[id])
-        .filter((panel): panel is PanelInstance => panel != null);
-      return { worktree, panels, terminals: panels.filter(isPtyPanel) };
-    });
-  }, [worktrees, panelsById, panelIdsByWorktreeId]);
+  // Selected as one string per member rather than through `panelsById`: a
+  // panel object is replaced on every activity write, and that subscription
+  // re-rendered the group for output in any terminal in the app (#17051). A
+  // member's string changes only when its membership, order or PTY subset does,
+  // which also tells a rescue between two members apart from no change at all.
+  const membership = usePanelStore(
+    useShallow((s) =>
+      worktrees.map((worktree) => {
+        const ids = selectDeletedWorktreeTerminalIds(s, worktree.id);
+        const ptyIds = selectPtyPanels(s, ids).map((t) => t.id);
+        return `${ids.join(ID_SEPARATOR)}${LIST_SEPARATOR}${ptyIds.join(ID_SEPARATOR)}`;
+      })
+    )
+  );
+  const members = useMemo<GroupMember[]>(
+    () =>
+      worktrees.map((worktree, i) => {
+        const [panelPart = "", ptyPart = ""] = (membership[i] ?? "").split(LIST_SEPARATOR);
+        return { worktree, panelIds: splitIds(panelPart), terminalIds: splitIds(ptyPart) };
+      }),
+    [worktrees, membership]
+  );
 
-  const terminalCount = members.reduce((n, m) => n + m.panels.length, 0);
+  const terminalCount = members.reduce((n, m) => n + m.panelIds.length, 0);
 
   // A glanceable "next close" for the whole group. Only running members count:
   // a held member's deadline is re-pinned by the sweep on every pass, so it is
@@ -114,8 +135,8 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
   const cleanupSeconds = usePreferencesStore((s) => s.deletedWorktreeCleanupSeconds);
   const nextExpiresAt = useMemo(() => {
     let soonest: number | null = null;
-    for (const { worktree, panels } of members) {
-      if (panels.length === 0 || worktree.expiresAt === null || worktree.holdReason !== null) {
+    for (const { worktree, panelIds } of members) {
+      if (panelIds.length === 0 || worktree.expiresAt === null || worktree.holdReason !== null) {
         continue;
       }
       if (soonest === null || worktree.expiresAt < soonest) soonest = worktree.expiresAt;
@@ -136,9 +157,14 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
       : Math.ceil(Math.min(Math.max(0, nextExpiresAt - nowTick), cleanupSeconds * 1000) / 1000);
 
   const handleClearAll = useCallback(() => {
-    const preview: DestructivePreviewGroup[] = members
-      .filter((m) => m.panels.length > 0)
-      .flatMap((m) => buildDestructivePreview(m.panels, () => m.worktree.title));
+    // Read when clicked, so the confirm names what is there now.
+    const { panelsById } = usePanelStore.getState();
+    const preview: DestructivePreviewGroup[] = worktrees.flatMap((worktree) => {
+      const panels = getDeletedWorktreeTerminalIds(worktree.id)
+        .map((id) => panelsById[id])
+        .filter((panel): panel is PanelInstance => panel != null);
+      return panels.length > 0 ? buildDestructivePreview(panels, () => worktree.title) : [];
+    });
     if (preview.length === 0) return;
     const previewedTerminals = preview.reduce((n, entry) => n + entry.terminals.length, 0);
     requestDestructiveAction({
@@ -150,7 +176,7 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
       ),
       preview,
     });
-  }, [members, requestDestructiveAction]);
+  }, [worktrees, requestDestructiveAction]);
 
   const handleTerminalSelect = useCallback(
     (terminal: PtyPanelData) => {
@@ -254,16 +280,16 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
       ) : (
         <SortableContext
           id="deleted-worktree-group-rail"
-          items={members.flatMap((m) => m.terminals.map((t) => getAccordionDragId(t.id)))}
+          items={members.flatMap((m) => m.terminalIds.map(getAccordionDragId))}
           strategy={verticalListSortingStrategy}
         >
           <div className="flex flex-col gap-2 pb-3 pl-7.5 pr-4">
-            {members.map(({ worktree, terminals }) =>
-              terminals.length === 0 ? null : (
+            {members.map(({ worktree, terminalIds }) =>
+              terminalIds.length === 0 ? null : (
                 <DeletedWorktreeRailMember
                   key={worktree.id}
                   worktree={worktree}
-                  terminals={terminals}
+                  terminalIds={terminalIds}
                   onSelect={handleTerminalSelect}
                 />
               )
@@ -277,7 +303,7 @@ export function DeletedWorktreeGroup({ worktrees, homeDir }: DeletedWorktreeGrou
 
 interface DeletedWorktreeRailMemberProps {
   worktree: DeletedWorktree;
-  terminals: PtyPanelData[];
+  terminalIds: readonly string[];
   onSelect: (terminal: PtyPanelData) => void;
 }
 
@@ -289,9 +315,10 @@ interface DeletedWorktreeRailMemberProps {
  */
 function DeletedWorktreeRailMember({
   worktree,
-  terminals,
+  terminalIds,
   onSelect,
 }: DeletedWorktreeRailMemberProps) {
+  const terminals = usePanelStore(useShallow((s) => selectPtyPanels(s, terminalIds)));
   const { hasCountdown, hold, remainingSeconds } = useDeletedWorktreeCountdown(worktree);
   const listLabel = `Terminals from deleted worktree ${worktree.title}`;
 

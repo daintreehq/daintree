@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useInputReceiptKey } from "../useInputReceiptKey";
 import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeTerminalSummary } from "@/hooks/useWorktreeTerminals";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const ping = (id: string) => act(() => usePanelStore.getState().pingTerminal(id));
 
@@ -169,5 +171,53 @@ describe("useInputReceiptKey", () => {
 
     unmount();
     expect(disposers[1]).toHaveBeenCalledTimes(1);
+  });
+
+  // Fed the way the card feeds it: output replaces a panel object, and ids
+  // re-derived from the panels resubscribed on every write (#17051).
+  it("keeps its subscription while the card's terminals stream output", () => {
+    const panel = (id: string): PtyPanelData =>
+      ({
+        id,
+        kind: "terminal",
+        title: id,
+        worktreeId: "wt-1",
+        location: "grid",
+        cwd: "/repo",
+        cols: 80,
+        rows: 24,
+      }) as PtyPanelData;
+    usePanelStore.setState({
+      panelsById: { "t-1": panel("t-1"), "t-2": panel("t-2") },
+      panelIdsByWorktreeId: { "wt-1": ["t-1", "t-2"] },
+    });
+    const subscribe = usePanelStore.subscribe;
+    let subscriptions = 0;
+    vi.spyOn(usePanelStore, "subscribe").mockImplementation(
+      (...args: Parameters<typeof subscribe>) => {
+        subscriptions += 1;
+        return subscribe(...args);
+      }
+    );
+
+    const { result } = renderHook(() =>
+      useInputReceiptKey(useWorktreeTerminalSummary("wt-1").terminalIds)
+    );
+    const afterMount = subscriptions;
+
+    for (let i = 0; i < 5; i++) {
+      act(() => {
+        usePanelStore.setState((state) => ({
+          panelsById: {
+            ...state.panelsById,
+            "t-2": { ...panel("t-2"), activityHeadline: `line ${i}`, lastCommand: `make ${i}` },
+          },
+        }));
+      });
+    }
+    expect(subscriptions).toBe(afterMount);
+
+    ping("t-2");
+    expect(result.current).toBe(1);
   });
 });
