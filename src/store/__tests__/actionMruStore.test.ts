@@ -157,7 +157,6 @@ describe("actionMruStore persistence (#17026)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
-    vi.resetModules();
   });
 
   afterEach(() => {
@@ -165,11 +164,14 @@ describe("actionMruStore persistence (#17026)", () => {
   });
 
   async function freshStore() {
-    // Fresh module state, so earlier tests' baselines and in-flight writes can't leak in.
+    // Let earlier tests' writes reach the shared mock before clearing it, then
+    // load the store again so their baselines don't carry over.
+    await vi.dynamicImportSettled();
+    vi.resetModules();
     const { appClient } = await import("@/clients/appClient");
     const { useActionMruStore: store } = await import("../actionMruStore");
     const setState = vi.mocked(appClient.setState);
-    setState.mockClear();
+    setState.mockReset();
     return { store, setState };
   }
 
@@ -180,11 +182,12 @@ describe("actionMruStore persistence (#17026)", () => {
     const stale = NOW - USAGE_WINDOW_MS - DAY;
     store.getState().hydrateActionMru([]);
     store.getState().hydrateActionMru([{ id: "kept", uses: [stale, NOW - DAY] }]);
+    // An unchanged list notifying again matches the hydrated baseline.
+    store.setState({ actionUsageEntries: new Map(store.getState().actionUsageEntries) });
     store.getState().recordActionMru("kept");
 
     await vi.waitFor(() => expect(setState).toHaveBeenCalled());
-    expect(setState).toHaveBeenCalledTimes(1);
-    expect(setState).toHaveBeenCalledWith({
+    expect(setState).toHaveBeenCalledExactlyOnceWith({
       actionMruList: [{ id: "kept", uses: [NOW - DAY, NOW] }],
     });
   });
@@ -197,6 +200,23 @@ describe("actionMruStore persistence (#17026)", () => {
     await vi.waitFor(() => expect(setState).toHaveBeenCalled());
     expect(setState).toHaveBeenCalledExactlyOnceWith({
       actionMruList: [{ id: "legacy.action", uses: [NOW] }],
+    });
+  });
+
+  it("follows a write still in flight at hydration with the restored list", async () => {
+    const { store, setState } = await freshStore();
+    let release!: () => void;
+    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+
+    // A use recorded before hydration landed is still being written.
+    store.getState().recordActionMru("early");
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+    store.getState().hydrateActionMru([{ id: "kept", uses: [NOW - DAY] }]);
+    release();
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+    expect(setState).toHaveBeenLastCalledWith({
+      actionMruList: [{ id: "kept", uses: [NOW - DAY] }],
     });
   });
 });

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { createActionMruSlice, type ActionMruSlice } from "./slices/actionMruSlice";
 import type { ActionUsageEntry } from "@shared/types/actions";
 
-let lastPersisted = JSON.stringify([]);
+let lastPersisted: string | null = null;
 let inFlight = false;
 // Latest snapshot observed while a write is in flight. Coalesced (only the most
 // recent is kept) and flushed once the current write settles, so rapid usage
@@ -32,13 +32,17 @@ export const useActionMruStore = create<ActionMruSlice>()((set, get, store) => {
         hydrating = false;
       }
       const hydrated = toUsageList(get());
-      // A current-shape list hydrates to itself minus aged-out uses; writing that
-      // pruning back would bring the per-mount rewrite straight back, so it
-      // becomes the baseline. Legacy entries get synthetic timestamps rebuilt on
-      // every load and never decay until written once in the current shape.
-      if (list.every(hasUsesArray)) {
+      if (inFlight) {
+        // A use recorded before hydration landed is still being written, and
+        // would otherwise leave disk holding that instead of what was restored.
+        queued = hydrated;
+      } else if (list.every(hasUsesArray)) {
+        // A current-shape list hydrates to itself minus aged-out uses; writing
+        // that pruning back would bring the per-mount rewrite straight back.
         lastPersisted = JSON.stringify(hydrated);
       } else {
+        // Legacy entries get synthetic timestamps rebuilt on every load and
+        // never decay until written once in the current shape.
         persist(hydrated);
       }
     },

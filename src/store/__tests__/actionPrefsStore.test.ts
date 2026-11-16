@@ -130,22 +130,52 @@ describe("actionPrefsStore", () => {
 });
 
 describe("actionPrefsStore persistence (#17026)", () => {
-  beforeEach(() => {
+  async function freshStore() {
+    // Let earlier tests' writes reach the shared mock before resetting it, then
+    // load the store again so their baselines don't carry over.
+    await vi.dynamicImportSettled();
     vi.resetModules();
-  });
-
-  it("does not write the hydrated prefs back, and the next change sends only what changed", async () => {
-    // Fresh module state, so earlier tests' baselines and in-flight writes can't leak in.
     const { appClient } = await import("@/clients/appClient");
     const { useActionPrefsStore: store } = await import("../actionPrefsStore");
     const setState = vi.mocked(appClient.setState);
-    setState.mockClear();
+    setState.mockReset();
+    setState.mockResolvedValue(undefined);
+    return { store, setState };
+  }
+
+  it("does not write the hydrated prefs back, and each later change sends only its list", async () => {
+    const { store, setState } = await freshStore();
 
     store.getState().hydrateActionPrefs({ pinnedIds: ["a.one"], hiddenIds: ["x.one"] });
+    // Unchanged lists notifying again match the hydrated baseline.
+    store.setState({
+      pinnedActionIds: [...store.getState().pinnedActionIds],
+      hiddenActionIds: [...store.getState().hiddenActionIds],
+    });
+    store.getState().hideAction("x.two");
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledExactlyOnceWith({ actionHiddenIds: ["x.one", "x.two"] });
+
+    setState.mockClear();
     store.getState().pinAction("a.two");
 
     await vi.waitFor(() => expect(setState).toHaveBeenCalled());
-    expect(setState).toHaveBeenCalledTimes(1);
-    expect(setState).toHaveBeenCalledWith({ actionPinnedIds: ["a.one", "a.two"] });
+    expect(setState).toHaveBeenCalledExactlyOnceWith({ actionPinnedIds: ["a.one", "a.two"] });
+  });
+
+  it("follows a pin still being written at hydration with the restored list", async () => {
+    const { store, setState } = await freshStore();
+    let release!: () => void;
+    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+
+    // A pin made before hydration landed is still being written.
+    store.getState().pinAction("early");
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+    store.getState().hydrateActionPrefs({ pinnedIds: ["a.one"], hiddenIds: ["x.one"] });
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+    expect(setState).toHaveBeenLastCalledWith({ actionPinnedIds: ["a.one"] });
+    release();
   });
 });

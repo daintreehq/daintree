@@ -301,20 +301,24 @@ describe("shortcutHintStore", () => {
   // --- No redundant persistence (#17026) ---
 
   it("stops counting and sends no IPC once the count is past the last milestone", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 33 });
-    s.hydrateHintedHover(["terminal.new@2"]);
-    s.recordPointer(100, 200);
-    const before = shortcutHintStore.getState();
+    for (const count of [33, 34, 500]) {
+      const s = shortcutHintStore.getState();
+      s.hydrateCounts({ "nav.quickSwitcher": count });
+      s.hydrateHintedHover(["terminal.new@2"]);
+      s.recordPointer(100, 200);
+      const listener = vi.fn();
+      const unsubscribe = shortcutHintStore.subscribe(listener);
 
-    s.incrementCount("nav.quickSwitcher");
+      s.incrementCount("nav.quickSwitcher");
+      unsubscribe();
 
-    expect(window.electron?.shortcutHints?.incrementCount).not.toHaveBeenCalled();
-    expect(window.electron?.shortcutHints?.setHintedHover).not.toHaveBeenCalled();
-    expect(shortcutHintStore.getState().counts).toBe(before.counts);
-    expect(shortcutHintStore.getState().hintedHover).toBe(before.hintedHover);
-    expect(s.show("nav.quickSwitcher", "Cmd+K")).toBe(false);
-    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(window.electron?.shortcutHints?.incrementCount).not.toHaveBeenCalled();
+      expect(window.electron?.shortcutHints?.setHintedHover).not.toHaveBeenCalled();
+      expect(shortcutHintStore.getState().counts["nav.quickSwitcher"]).toBe(count);
+      expect(s.show("nav.quickSwitcher", "Cmd+K")).toBe(false);
+      expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+    }
   });
 
   it("still persists the step from the last milestone onto LAST + 1", () => {

@@ -25,14 +25,22 @@ export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) 
         hydrating = false;
       }
       const next = get();
-      lastPinned = JSON.stringify(next.pinnedActionIds);
-      lastHidden = JSON.stringify(next.hiddenActionIds);
+      // With no write outstanding, disk holds what was just read. A pin or hide
+      // made before hydration landed may still be writing; comparing against it
+      // sends the restored list so that write doesn't leave disk behind.
+      if (inflightPinned === null) lastPinned = JSON.stringify(next.pinnedActionIds);
+      if (inflightHidden === null) lastHidden = JSON.stringify(next.hiddenActionIds);
+      persist(next);
     },
   };
 });
 
 useActionPrefsStore.subscribe((state) => {
   if (hydrating) return;
+  persist(state);
+});
+
+function persist(state: ActionPrefsSlice): void {
   const pinnedJson = JSON.stringify(state.pinnedActionIds);
   const hiddenJson = JSON.stringify(state.hiddenActionIds);
 
@@ -83,4 +91,4 @@ useActionPrefsStore.subscribe((state) => {
       if (sentPinnedJson !== null && inflightPinned === sentPinnedJson) inflightPinned = null;
       if (sentHiddenJson !== null && inflightHidden === sentHiddenJson) inflightHidden = null;
     });
-});
+}
