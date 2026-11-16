@@ -16,6 +16,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
 import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
+import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
@@ -275,6 +276,7 @@ function ProjectDialogHost() {
       </ErrorBoundary>
 
       <DecisionsAttentionHost />
+      <DecisionQuestionHost />
 
       <ErrorBoundary
         variant="component"
