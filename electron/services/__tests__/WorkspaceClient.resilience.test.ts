@@ -826,6 +826,93 @@ describe("WorkspaceClient multi-process manager", () => {
     });
   });
 
+  describe("active worktree id reads (#17069)", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+    const requestsOf = (host: MockHost, type: string) =>
+      host.getAllRequests().filter((r: any) => r.type === type);
+
+    it("asks the window's host for the id alone, never for every snapshot", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const idPromise = client.getActiveWorktreeIdForWindowAsync(1);
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: "wt-a" });
+
+      expect(await idPromise).toBe("wt-a");
+      expect(requestsOf(h(0), "get-all-states")).toHaveLength(0);
+    });
+
+    it("answers null for a window no host serves, without contacting a host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(await client.getActiveWorktreeIdForWindowAsync(999)).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("reads a project's own host even after its window was rebound", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const idPromise = client.getActiveWorktreeIdForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: "wt-a" });
+
+      expect(await idPromise).toBe("wt-a");
+      expect(requestsOf(h(1), "get-active-worktree-id")).toHaveLength(0);
+    });
+
+    it("answers null when the entry's projectId does not match the caller's", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(
+        await client.getActiveWorktreeIdForProjectAsync("/project-a", idFor("/project-b"))
+      ).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("waits for the initial load before reading, so a partial monitor map never answers", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      h(0).simulateReady();
+      await tick();
+      const loadReq = h(0).getLastRequest()!;
+      expect(loadReq.type).toBe("load-project");
+
+      const idPromise = client.getActiveWorktreeIdForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      expect(requestsOf(h(0), "get-active-worktree-id")).toHaveLength(0);
+
+      h(0).resolveRequest(loadReq.requestId);
+      await loadA;
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: null });
+      expect(await idPromise).toBeNull();
+    });
+  });
+
   describe("getAllStatesForProjectAsync", () => {
     // Mirrors the ProjectStore mock: entry.projectId is minted from
     // resolveProjectIdForPath(normalizedPath) at host construction.

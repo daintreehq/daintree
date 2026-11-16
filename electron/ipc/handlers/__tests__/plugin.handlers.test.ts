@@ -89,11 +89,19 @@ function hidePluginInProject(projectId: string, pluginId: string): void {
   hiddenPlugins.add(`${projectId}|${pluginId}`);
 }
 
-const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
+const { mockStableArgsSha256, mockBoundedStableArgsSha256 } = vi.hoisted(() => ({
+  mockStableArgsSha256: vi.fn(),
+  mockBoundedStableArgsSha256: vi.fn(),
+}));
 vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
   mockStableArgsSha256.mockImplementation(actual.stableArgsSha256);
-  return { ...actual, stableArgsSha256: mockStableArgsSha256 };
+  mockBoundedStableArgsSha256.mockImplementation(actual.boundedStableArgsSha256);
+  return {
+    ...actual,
+    stableArgsSha256: mockStableArgsSha256,
+    boundedStableArgsSha256: mockBoundedStableArgsSha256,
+  };
 });
 
 const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeMetadata } =
@@ -236,8 +244,15 @@ vi.mock("../../../services/forgeProviderRegistry.js", () => ({
 }));
 
 const mockGetFileDecorationImpls = vi.fn();
+const mockHasForgeGatedFileDecorations = vi.fn((_scope: string) => false);
 vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
+  hasForgeGatedFileDecorations: (scope: string) => mockHasForgeGatedFileDecorations(scope),
+}));
+
+const mockResolveProjectForgeProvider = vi.fn();
+vi.mock("../forgeResolution.js", () => ({
+  resolveProjectForgeProvider: (...args: unknown[]) => mockResolveProjectForgeProvider(...args),
 }));
 
 const mockAuditAppend = vi.fn();
@@ -285,6 +300,7 @@ vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
 import { registerPluginHandlers } from "../plugin.js";
 import { notifyIpcEnvelopeRejected } from "../../envelopeRejections.js";
 import { PluginPayloadTooLargeError } from "../../../services/plugin/pluginPayloadLimits.js";
+import { PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES } from "../../../services/plugin/pluginAuditArgsHash.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
@@ -1365,6 +1381,29 @@ describe("registerPluginHandlers", () => {
       errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits a large accepted invoke without hashing its args on main (#17069)", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("boom"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    // Well inside the invoke cap, so it is dispatched, but large enough that
+    // sorting, serializing and digesting it would stall main on every record.
+    const large = "x".repeat(PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES + 1);
+    await expect(invokeHandler(trustedEvent, "x", "y", large)).rejects.toThrow("boom");
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error", argsHash: "" });
+    expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE meters refused args against the load live at the refusal", async () => {
@@ -2695,7 +2734,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
       expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
     });
@@ -2710,7 +2750,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(globalImpl.impl.provideDecorations).not.toHaveBeenCalled();
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
 
       mockGetProjectForWebContents.mockReturnValue("project-c");
@@ -2725,6 +2766,117 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({
         "a.ts": { badge: "A", tooltip: "G" },
       });
+    });
+  });
+
+  describe("forge-gated providers (#17069)", () => {
+    const github = {
+      entry: {
+        pluginId: "daintree.github",
+        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+      },
+      resolvedVia: "hostname",
+    };
+
+    beforeEach(() => {
+      mockHasForgeGatedFileDecorations.mockReset().mockReturnValue(false);
+      mockResolveProjectForgeProvider.mockReset();
+      mockGetFileDecorationImpls.mockReturnValue([]);
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+    });
+
+    it("resolves the sender project's code forge and filters activation and lookup by it", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledWith("project-a");
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.github.github"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.github.github"
+      );
+    });
+
+    it("hands a GitLab project's forge through, which no GitHub-gated provider matches", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue({
+        entry: {
+          pluginId: "daintree.gitlab",
+          contribution: { id: "gitlab", name: "GitLab", matches: ["gitlab.com"] },
+        },
+        resolvedVia: "hostname",
+      });
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.gitlab.gitlab"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.gitlab.gitlab"
+      );
+    });
+
+    it("waits for the plugin catalog before resolving, so a half-loaded registry can't decide", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      let releaseCatalog!: () => void;
+      vi.mocked(pluginService.waitForCatalog).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseCatalog = resolve;
+        })
+      );
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      const pull = getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(pluginService.waitForCatalog).toHaveBeenCalled();
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+
+      releaseCatalog();
+      await pull;
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves no forge when the project's remote can't be read", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockRejectedValue(new Error("stale remote"));
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        null
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
+    });
+
+    it("reads no git remote when no provider for the scope is gated", async () => {
+      await getHandler()(SENDER, "worktree-files:/r", ["a.ts"]);
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("resolves no forge for a sender with no project", async () => {
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockGetProjectForWebContents.mockReturnValue(null);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
     });
   });
 });

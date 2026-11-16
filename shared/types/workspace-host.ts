@@ -576,6 +576,9 @@ export type WorkspaceHostRequest =
   // Worktree queries
   | { type: "get-all-states"; requestId: string }
   | { type: "get-monitor"; requestId: string; worktreeId: string }
+  // Just the current worktree's id, for callers that would otherwise read every
+  // snapshot to find one flag.
+  | { type: "get-active-worktree-id"; requestId: string }
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
   | {
@@ -965,6 +968,7 @@ export type WorkspaceHostEvent =
       gitBacked?: boolean | null;
     }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
+  | { type: "active-worktree-id"; requestId: string; worktreeId: string | null }
   /**
    * Each part null when the worktree's monitor no longer exists, and
    * `unreadable` when that read failed, which a preview must say rather than

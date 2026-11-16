@@ -375,6 +375,34 @@ describe("WorkspaceService adversarial", () => {
     });
   });
 
+  describe("getActiveWorktreeId (#17069)", () => {
+    function monitor(id: string, isCurrent: boolean) {
+      return { id, isCurrent, getSnapshot: vi.fn(() => ({ id, worktreeId: id, isCurrent })) };
+    }
+
+    it("answers with the current monitor's id without building any snapshot", () => {
+      const monitors = [monitor("wt-a", false), monitor("wt-b", true), monitor("wt-c", false)];
+      for (const m of monitors) (service["monitors"] as Map<string, unknown>).set(m.id, m);
+
+      service.getActiveWorktreeId("req-active");
+
+      expect(sentEvents).toEqual([
+        { type: "active-worktree-id", requestId: "req-active", worktreeId: "wt-b" },
+      ]);
+      for (const m of monitors) expect(m.getSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("answers null when no worktree is current", () => {
+      (service["monitors"] as Map<string, unknown>).set("wt-a", monitor("wt-a", false));
+
+      service.getActiveWorktreeId("req-none");
+
+      expect(sentEvents).toEqual([
+        { type: "active-worktree-id", requestId: "req-none", worktreeId: null },
+      ]);
+    });
+  });
+
   describe("a folder with no git repository (#11405)", () => {
     /**
      * Every monitor is a `GitStatusPass` poller, and its first tick against a

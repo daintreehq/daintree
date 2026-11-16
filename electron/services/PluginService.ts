@@ -269,6 +269,7 @@ import { getHiddenSearchProviders } from "./plugin/searchProviderPreferences.js"
 import { unregisterForgeProviderImpls } from "./forgeProviderRegistry.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
+  decorationServesForge,
   scopeMatchesPattern,
   unregisterFileDecorationProviderImpls,
 } from "./fileDecorationRegistry.js";
@@ -348,7 +349,7 @@ import {
 } from "./plugin/projectPluginSetupSkips.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
-import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
+import { safeArgsHash } from "./plugin/pluginAuditArgsHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
@@ -548,19 +549,6 @@ function safeAppendAudit(
     getPluginActionAuditService().append(input);
   } catch (err) {
     console.error("[PluginService] Failed to append audit record:", err);
-  }
-}
-
-/**
- * SHA-256 of the dispatch args for forensic grouping, best-effort. A
- * serialization throw here must not mask the handler error, so it degrades to
- * an empty hash (the documented "hashing failed" sentinel).
- */
-function safeArgsHash(args: unknown[]): string {
-  try {
-    return stableArgsSha256(args);
-  } catch {
-    return "";
   }
 }
 
@@ -3689,16 +3677,23 @@ export class PluginService {
    * `projectId` is the requesting view's project, and is required for the
    * same reason the handler's impl filter needs it: a plugin that project
    * hides must not be started by its file views.
+   *
+   * `codeForgeProviderId` is that project's resolved code forge: a provider
+   * gated on a forge it is not stays asleep (#17069).
    */
   async activatePluginsForFileDecorationScope(
     scope: string,
-    projectId: string | null
+    projectId: string | null,
+    codeForgeProviderId: string | null = null
   ): Promise<void> {
     if (typeof scope !== "string" || scope.length === 0) return;
     const targets: string[] = [];
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
-        if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
+        if (
+          contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern)) &&
+          decorationServesForge(pluginId, contribution, codeForgeProviderId)
+        ) {
           targets.push(pluginId);
           break;
         }
@@ -4756,8 +4751,9 @@ export class PluginService {
     const client = this.workspaceClient;
     if (!client || windowId === undefined) return null;
     try {
-      const snapshots = await client.getAllStatesAsync(windowId);
-      return snapshots.find((s) => s.isCurrent === true)?.id ?? null;
+      // Only the id crosses from the workspace host: every snapshot would be
+      // cloned into main per invocation to read one flag.
+      return await client.getActiveWorktreeIdForWindowAsync(windowId);
     } catch (err) {
       console.error("[PluginService] Failed to resolve active worktree for window:", err);
       return null;

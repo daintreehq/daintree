@@ -218,6 +218,7 @@ import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
 import { PluginInvokeTimeoutError } from "../plugin/pluginInvokeDeadline.js";
+import { PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES } from "../plugin/pluginAuditArgsHash.js";
 import { type PluginIpcContext, type PluginManifest } from "../../../shared/types/plugin.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -402,6 +403,33 @@ describe("Plugin IPC handler registration", () => {
         expect(record.errorMessage).toBe("");
         expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
         expect(typeof record.durationMs).toBe("number");
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("audits large accepted args unhashed on success and on a throw (#17069)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const large = ["x".repeat(PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES + 1)];
+        service.registerHandler("acme.test-plugin", "ok", vi.fn().mockResolvedValue("ok"));
+        service.registerHandler(
+          "acme.test-plugin",
+          "boom",
+          vi.fn().mockRejectedValue(new Error("x"))
+        );
+
+        await service.dispatchHandler("acme.test-plugin", "ok", makeCtx("acme.test-plugin"), large);
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "boom", makeCtx("acme.test-plugin"), large)
+        ).rejects.toThrow("x");
+
+        expect(appendSpy.mock.calls.map((c) => [c[0].result, c[0].argsHash])).toEqual([
+          ["success", ""],
+          ["error", ""],
+        ]);
       } finally {
         appendSpy.mockRestore();
       }

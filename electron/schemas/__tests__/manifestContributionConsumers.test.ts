@@ -1868,6 +1868,16 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "scopeMatchesPattern routing" }],
       note: "Matched to route renderer decoration pulls to the provider.",
     },
+    forgeProvider: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/services/fileDecorationRegistry.ts",
+          symbol: "decorationServesForge",
+        },
+      ],
+      note: "Routes pulls to the provider only in projects whose code forge is that provider.",
+    },
   },
   worktreeDeleteNotes: {
     id: {

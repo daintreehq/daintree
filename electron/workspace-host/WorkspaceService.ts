@@ -2600,6 +2600,21 @@ export class WorkspaceService {
     return [...this.acknowledgedMutations];
   }
 
+  /**
+   * The id `getAllStates` would mark `isCurrent`, without building or sending
+   * a snapshot of every worktree to find it.
+   */
+  getActiveWorktreeId(requestId: string): void {
+    let worktreeId: string | null = null;
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isCurrent) {
+        worktreeId = monitor.id;
+        break;
+      }
+    }
+    this.sendEvent({ type: "active-worktree-id", requestId, worktreeId });
+  }
+
   getMonitor(requestId: string, worktreeId: string): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {

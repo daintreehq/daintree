@@ -266,6 +266,8 @@ export const FileDecorationContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     scopes: z.array(z.string().min(1)).min(1),
+    // One of this manifest's own `forgeProviders` ids, resolved in `superRefine`.
+    forgeProvider: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
   })
   .strict();
 

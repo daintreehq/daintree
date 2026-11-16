@@ -1808,6 +1808,12 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "forgeProvider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
               }
             },
             "required": [

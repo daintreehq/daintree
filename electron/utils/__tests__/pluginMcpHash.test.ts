@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sha256Hex, stableArgsSha256 } from "../pluginMcpHash.js";
+import { boundedStableArgsSha256, sha256Hex, stableArgsSha256 } from "../pluginMcpHash.js";
 import {
   safeSerializeToolResult,
   safeSerializeToolResultCompact,
@@ -53,5 +53,70 @@ describe("stableArgsSha256", () => {
 
     expect(stableArgsSha256(args)).toEqual(sha256Hex(safeSerializeToolResult(args)));
     expect(stableArgsSha256(args)).not.toEqual(sha256Hex(safeSerializeToolResultCompact(args)));
+  });
+});
+
+describe("boundedStableArgsSha256 (#17069)", () => {
+  it("hashes input within the budget exactly as stableArgsSha256 does", () => {
+    const shared = { k: "v" };
+    const cyclic: Record<string, unknown> = { name: "x" };
+    cyclic.self = cyclic;
+    for (const args of [
+      [{ b: 1, a: [1, "two", null] }],
+      [shared, shared],
+      cyclic,
+      [new Uint8Array([3, 1, 2])],
+    ]) {
+      expect(boundedStableArgsSha256(args, 10_000)).toBe(stableArgsSha256(args));
+    }
+  });
+
+  it("digests the key-sorted indented form, independently of how it is built", () => {
+    const args = { b: { d: [1, { z: 1, y: 2 }], c: "x" }, a: new Uint8Array([3, 1]) };
+    const sorted = { a: { "0": 3, "1": 1 }, b: { c: "x", d: [1, { y: 2, z: 1 }] } };
+    const expected = sha256Hex(safeSerializeToolResult(sorted));
+
+    expect(stableArgsSha256(args)).toBe(expected);
+    expect(boundedStableArgsSha256(args, 10_000)).toBe(expected);
+  });
+
+  it("reads no length the unmetered digest never read", () => {
+    const view = new Uint8Array([1, 2]);
+    Object.defineProperty(view, "length", {
+      get() {
+        throw new Error("length read");
+      },
+    });
+    expect(() => stableArgsSha256([view])).not.toThrow();
+  });
+
+  it("hashes a small view whose own length property lies, by its real length", () => {
+    const view = new Uint8Array([4, 5]);
+    Object.defineProperty(view, "length", { value: Number.NaN });
+    expect(boundedStableArgsSha256([view], 10_000)).toBe(stableArgsSha256([view]));
+  });
+
+  it("charges an array's slots once, so a few thousand numbers still hash", () => {
+    // About 45 KB of canonical JSON: inside the budget, and so hashed.
+    const args = [{ ids: new Array<number>(5_000).fill(0) }];
+    expect(boundedStableArgsSha256(args, 64 * 1024)).toBe(stableArgsSha256(args));
+  });
+
+  it("meters a view by its real length, whatever its own length property says", () => {
+    const buffer = new ArrayBuffer(1_000);
+    const views = Array.from({ length: 5 }, () => {
+      const view = new Uint8Array(buffer);
+      Object.defineProperty(view, "length", { value: Number.NaN });
+      return view;
+    });
+    expect(boundedStableArgsSha256(views, 2_000)).toBeNull();
+  });
+
+  it("answers null once canonicalizing would exceed the budget", () => {
+    expect(boundedStableArgsSha256(["x".repeat(100)], 50)).toBeNull();
+    expect(boundedStableArgsSha256([new Uint8Array(100)], 50)).toBeNull();
+    const wide = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i]));
+    expect(boundedStableArgsSha256(wide, 50)).toBeNull();
+    expect(boundedStableArgsSha256(["x".repeat(10)], 50)).toBe(stableArgsSha256(["x".repeat(10)]));
   });
 });

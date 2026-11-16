@@ -165,12 +165,26 @@ export function validateContextProviders(
 
 // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
 // declared views. Both were validated for shape only before (#10620).
+// `fileDecorationProviders[].forgeProvider` → one of this plugin's own forge
+// providers: a gate naming none would keep the decorator asleep everywhere.
 export function validateForgeProviderRefs(
   manifest: ParsedPluginManifest,
   ctx: z.RefinementCtx,
   context: ManifestValidationContext
 ): void {
   const { settingIds, viewIds } = context;
+  const forgeProviderIds = new Set(manifest.contributes.forgeProviders.map((p) => p.id));
+  manifest.contributes.fileDecorationProviders.forEach((decorator, index) => {
+    if (decorator.forgeProvider === undefined || forgeProviderIds.has(decorator.forgeProvider)) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["contributes", "fileDecorationProviders", index, "forgeProvider"],
+      message: `fileDecorationProvider forgeProvider "${decorator.forgeProvider}" matches no contributes.forgeProviders[].id.`,
+      params: { errorCode: "file_decoration_forge_provider_unknown" },
+    });
+  });
   manifest.contributes.forgeProviders.forEach((provider, index) => {
     if (provider.settingsScopeRef !== undefined && !settingIds.has(provider.settingsScopeRef)) {
       ctx.addIssue({

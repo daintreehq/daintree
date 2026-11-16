@@ -472,9 +472,15 @@ describe("Plugin worktree host API", () => {
     const getAllStatesResultAsync = vi.fn((_windowId: number): Promise<StatesResultLike> =>
       Promise.resolve({ status: "ok", projectId: "project-1", states })
     );
+    // The scalar read behind plugin:invoke's context: the id alone, so a
+    // regression back to a snapshot read shows up as a `getAllStatesAsync` call.
+    const getActiveWorktreeIdForWindowAsync = vi.fn((_windowId: number) =>
+      Promise.resolve(states.find((s) => s.isCurrent === true)?.id ?? null)
+    );
     const client = Object.assign(emitter, {
       getAllStatesAsync,
       getAllStatesResultAsync,
+      getActiveWorktreeIdForWindowAsync,
       setStates: (next: WorktreeSnapshotLike[]) => {
         states = next;
       },
@@ -570,7 +576,10 @@ describe("Plugin worktree host API", () => {
     expect(id).toBe("b");
     // Uses the id it was handed — the caller's real sender — not the
     // focused-window heuristic the host APIs fall back to.
-    expect(client.getAllStatesAsync).toHaveBeenCalledWith(7);
+    expect(client.getActiveWorktreeIdForWindowAsync).toHaveBeenCalledWith(7);
+    // Every invocation pays for this lookup, so no snapshot array crosses
+    // from the workspace host to answer it.
+    expect(client.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
   it("getActiveWorktreeIdForWindow returns null for an unresolved window without querying", async () => {
@@ -579,6 +588,7 @@ describe("Plugin worktree host API", () => {
     expect(
       await (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(undefined)
     ).toBeNull();
+    expect(client.getActiveWorktreeIdForWindowAsync).not.toHaveBeenCalled();
     expect(client.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
@@ -608,11 +618,14 @@ describe("Plugin worktree host API", () => {
     // This sits on the critical path of every plugin:invoke — a wedged
     // workspace host must cost the context, not the invocation.
     const { service, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
-    client.getAllStatesAsync.mockRejectedValueOnce(new Error("workspace host down"));
+    client.getActiveWorktreeIdForWindowAsync.mockRejectedValueOnce(
+      new Error("workspace host down")
+    );
 
     await expect(
       (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(7)
     ).resolves.toBeNull();
+    expect(client.getActiveWorktreeIdForWindowAsync).toHaveBeenCalledWith(7);
   });
 
   // ── #12174: telling an unavailable read from an empty project ──
