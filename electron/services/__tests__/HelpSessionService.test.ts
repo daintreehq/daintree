@@ -5859,9 +5859,11 @@ describe("HelpSessionService", () => {
     );
 
     it("hashes the bundled template again only when one of its files changes", async () => {
+      const templateClaude = path.join(helpFolder, "CLAUDE.md");
+      // A whole-second mtime, so putting it back below restores it exactly.
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
       await service.provisionSession(provisionInput());
       const readFile = vi.spyOn(fs, "readFile");
-      const templateClaude = path.join(helpFolder, "CLAUDE.md");
       const templateReads = () =>
         readFile.mock.calls.filter(([file]) => file === templateClaude).length;
 
@@ -5869,9 +5871,9 @@ describe("HelpSessionService", () => {
       expect(templateReads()).toBe(0);
 
       // Same length, and its mtime put back: only the change time shows it.
-      const { atime, mtime } = await fs.stat(templateClaude);
       await fs.writeFile(templateClaude, "# Hel!", "utf-8");
-      await fs.utimes(templateClaude, atime, mtime);
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
+      expect((await fs.stat(templateClaude)).mtimeMs).toBe(LONG_AGO_S * 1000);
       const third = await service.provisionSession(provisionInput());
       if (!third) throw new Error("expected third provision");
       expect(templateReads()).toBeGreaterThan(0);

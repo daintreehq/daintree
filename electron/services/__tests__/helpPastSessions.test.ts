@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from "fs/promises";
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "fs/promises";
 import os from "os";
 import path from "path";
 import {
@@ -21,6 +31,7 @@ import { HELP_PAST_SESSIONS_LIMIT } from "../../../shared/types/ipc/help.js";
 const fsHooks = vi.hoisted(() => ({
   reorder: null as ((names: string[]) => string[]) | null,
   opened: [] as string[],
+  beforeOpen: null as ((file: string) => Promise<void>) | null,
 }));
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
@@ -28,8 +39,9 @@ vi.mock("fs/promises", async (importOriginal) => {
     const names = await (actual.readdir as (...a: unknown[]) => Promise<unknown>)(...args);
     return fsHooks.reorder && Array.isArray(names) ? fsHooks.reorder(names as string[]) : names;
   };
-  const open = (...args: Parameters<typeof actual.open>) => {
+  const open = async (...args: Parameters<typeof actual.open>) => {
     fsHooks.opened.push(String(args[0]));
+    await fsHooks.beforeOpen?.(String(args[0]));
     return actual.open(...args);
   };
   return { ...actual, readdir, open };
@@ -38,6 +50,7 @@ vi.mock("fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fsHooks.reorder = null;
   fsHooks.opened.length = 0;
+  fsHooks.beforeOpen = null;
 });
 
 const A = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
@@ -295,6 +308,20 @@ describe("listClaudeHelpSessions", () => {
         await chmod(path.join(slugDir, `${A}.jsonl`), 0o644);
       }
     });
+  });
+
+  it("reads a transcript as long as it is when opened, not when the folder was listed", async () => {
+    const filePath = path.join(slugDir, `${A}.jsonl`);
+    await writeFile(filePath, transcript(prompt("Opening question")));
+    // The live conversation names itself between the listing and the read.
+    fsHooks.beforeOpen = async (file) => {
+      if (file === filePath) {
+        await appendFile(filePath, transcript(line({ type: "ai-title", aiTitle: "Named later" })));
+      }
+    };
+
+    const read = await listClaudeHelpSessions(sessionPath, projectsRoot);
+    expect(read.sessions.map((s) => s.title)).toEqual(["Named later"]);
   });
 
   it("lists newest first and keeps only the newest rows the cap allows", async () => {
