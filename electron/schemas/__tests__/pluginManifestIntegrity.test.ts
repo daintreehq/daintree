@@ -164,7 +164,9 @@ describe("forgeProvider cross-references (#10620)", () => {
   it("accepts a decoration provider gated on one of the plugin's own forge providers (#17069)", () => {
     const result = manifestWith({
       forgeProviders: [forgeProvider({})],
-      fileDecorationProviders: [{ id: "review", scopes: ["worktree-diff:*"], forgeProvider: "prov" }],
+      fileDecorationProviders: [
+        { id: "review", scopes: ["worktree-diff:*"], forgeProvider: "prov" },
+      ],
     });
     expect(result.success).toBe(true);
   });

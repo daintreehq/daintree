@@ -18,7 +18,10 @@ export const PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES = 64 * 1024;
  */
 export function safeArgsHash(args: unknown): string {
   try {
-    if (estimatePayloadBytes(args, PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES) > PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES) {
+    if (
+      estimatePayloadBytes(args, PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES) >
+      PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES
+    ) {
       return "";
     }
     return stableArgsSha256(args);
