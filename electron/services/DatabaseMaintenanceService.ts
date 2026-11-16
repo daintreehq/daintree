@@ -414,8 +414,7 @@ class DatabaseMaintenanceService {
     if (!sqlite) return;
 
     const backupPath = getBackupPath();
-    const tmpPath =
-      backupPath + (final ? FINAL_CANDIDATE_SUFFIX : PERIODIC_CANDIDATE_SUFFIX);
+    const tmpPath = backupPath + (final ? FINAL_CANDIDATE_SUFFIX : PERIODIC_CANDIDATE_SUFFIX);
 
     try {
       // Pre-create the candidate owner-only so it is never world-readable during

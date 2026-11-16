@@ -31,18 +31,15 @@ const mockDbModule = vi.hoisted(() => ({
 // there (through the mocked handle and probe, so the final backup on main and
 // the worker's read the same), and every other op runs its main-thread
 // fallback, as the client does when the worker is disabled or degraded.
-const runOnWorker = vi.hoisted(
-  () =>
-    (op: unknown, fallback: () => unknown): Promise<unknown> => {
-      const request = op as { op: string; destPath?: string };
-      if (request.op === "backup") {
-        return Promise.resolve(mockSqlite.backup(request.destPath)).then(() =>
-          mockDbModule.probeDbFile(request.destPath)
-        );
-      }
-      return Promise.resolve(fallback());
-    }
-);
+const runOnWorker = vi.hoisted(() => (op: unknown, fallback: () => unknown): Promise<unknown> => {
+  const request = op as { op: string; destPath?: string };
+  if (request.op === "backup") {
+    return Promise.resolve(mockSqlite.backup(request.destPath)).then(() =>
+      mockDbModule.probeDbFile(request.destPath)
+    );
+  }
+  return Promise.resolve(fallback());
+});
 
 const mockRunDbWork = vi.hoisted(() => vi.fn(runOnWorker));
 
@@ -86,9 +83,7 @@ async function drainMicrotasks(): Promise<void> {
 
 function quickCheckReturns(result: string): void {
   mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
-    (op as { op: string }).op === "quickCheck"
-      ? Promise.resolve(result)
-      : runOnWorker(op, fallback)
+    (op as { op: string }).op === "quickCheck" ? Promise.resolve(result) : runOnWorker(op, fallback)
   );
 }
 

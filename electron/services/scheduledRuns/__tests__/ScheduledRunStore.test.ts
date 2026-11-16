@@ -196,7 +196,12 @@ describe("ScheduledRunStore", () => {
   it("finds a schedule's run for an occurrence by its key alone", () => {
     const store = new ScheduledRunStore(sqlite);
     const key = occurrenceKeyFor(T0);
-    const origin = { trigger: "scheduled" as const, dueAt: T0, occurrenceKey: key, coalesced: null };
+    const origin = {
+      trigger: "scheduled" as const,
+      dueAt: T0,
+      occurrenceKey: key,
+      coalesced: null,
+    };
     store.insert(run("keyed", { origin }));
     store.insert(run("other-schedule", { scheduleId: "schedule-2", origin }));
     store.insert(run("unkeyed"));
@@ -246,7 +251,9 @@ describe("ScheduledRunStore", () => {
         "EXPLAIN QUERY PLAN SELECT id, record FROM scheduled_runs WHERE schedule_id = ? AND live = 1 ORDER BY created_at DESC, rowid DESC"
       )
       .all("schedule-1") as { detail: string }[];
-    expect(plan.map((step) => step.detail).join("\n")).toContain("scheduled_runs_schedule_live_idx");
+    expect(plan.map((step) => step.detail).join("\n")).toContain(
+      "scheduled_runs_schedule_live_idx"
+    );
   });
 
   it("prunes a schedule past its newest runs, but never one still live", () => {
