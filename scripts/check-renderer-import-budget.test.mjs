@@ -137,6 +137,26 @@ describe("findEntryKey", () => {
     ).toBe("src/main.tsx");
   });
 
+  it("skips the project shell entry, by name or by file", () => {
+    // The shell is emitted as an entry and can come first in the manifest; the
+    // renderer entry is still the HTML entry that loads it.
+    const shell = {
+      file: "assets/project-shell-Ab3_x-9Z.js",
+      isEntry: true,
+      imports: ["_boot.js"],
+      dynamicImports: ["src/App.tsx"],
+    };
+    expect(
+      findEntryKey({
+        "src/projectWindow/projectShell.tsx": { ...shell, name: "project-shell" },
+        ...makeManifest(),
+      })
+    ).toBe("src/main.tsx");
+    expect(
+      findEntryKey({ "src/projectWindow/projectShell.tsx": shell, ...makeManifest() })
+    ).toBe("src/main.tsx");
+  });
+
   it("skips the raw-view SDK hooks facade entry, by name or by file", () => {
     const facade = {
       file: "assets/host-daintreehq-plugin-sdk-react-Qr1st2Uv.js",

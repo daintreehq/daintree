@@ -4,6 +4,7 @@ import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import type { PanelMenuItemContribution, PanelToolbarItemContribution } from "../types/plugin.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/entityColors.js";
+import { PROJECT_SHELL_SOURCE } from "./projectShell.js";
 
 /**
  * One `contributes.panels[].toolbar` entry as the registry carries it. `actionId`
@@ -938,9 +939,9 @@ export function getFirstRenderSeeds(): string[] {
 }
 
 /**
- * The renderer entry (`src/main.tsx`) is a thin bootstrap shell that immediately
- * `await import("./App")`s the real app root. Because App sits behind that
- * dynamic-import boundary it is NOT part of the entry's static closure, so Vite
+ * The project window's shell (`src/projectWindow/projectShell.tsx`) immediately
+ * `await import("@/App")`s the real app root. Because App sits behind that
+ * dynamic-import boundary it is NOT part of any entry's static closure, so Vite
  * never auto-preloads it and — until this seed existed — the first-render budget
  * never measured it, even though every cold boot needs App (the build's largest
  * chunk) unconditionally before first interactive.
@@ -949,7 +950,8 @@ export const FIRST_RENDER_ROOT_SEED = "src/App.tsx";
 
 /**
  * The static first-render seed set: the chunks every cold boot needs whatever
- * the restored session contains — today just the app root. BOTH consumers of
+ * the restored session contains — the project shell, an entry chunk of its own
+ * that index.html never references, and the app root it imports. BOTH consumers of
  * the first-render closure read this single accessor — the
  * `<link rel="modulepreload">` injection and the build-time seed artifact the
  * budget gate measures — so the preloaded set and the gated set are derived from
@@ -963,7 +965,7 @@ export const FIRST_RENDER_ROOT_SEED = "src/App.tsx";
  * @returns Root-relative source paths matching Vite manifest keys
  */
 export function getFirstRenderPreloadSeeds(): string[] {
-  return [FIRST_RENDER_ROOT_SEED];
+  return [PROJECT_SHELL_SOURCE, FIRST_RENDER_ROOT_SEED];
 }
 
 /**

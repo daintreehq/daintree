@@ -9,6 +9,7 @@
     "./electron/setup/environment.ts",
     "./electron/setup/deepLinkUrlQueue.ts",
     "./src/main.tsx",
+    "./src/projectWindow/projectShell.tsx",
     "./src/lib/trustedTypesPolicy.ts",
     "./src/lib/canvasFontWhitespaceShim.ts",
     "./src/lib/bootIpcEager.ts",

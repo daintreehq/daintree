@@ -76,7 +76,9 @@ export function collectClosure(
 // Returns `{ files, matchedSeedCount }`. `files` is the eager static closure of
 // the matched seed chunks MINUS the entry chunks' eager static closure (what
 // Vite already auto-preloads), sorted and deduplicated — never following a
-// dynamicImports[] edge, so deferred subtrees stay off the first-paint path.
+// dynamicImports[] edge, so deferred subtrees stay off the first-paint path. A
+// seed that is itself an entry (the project shell, emitted for the entry to
+// load at runtime) is never subtracted: nothing auto-preloads it.
 // `matchedSeedCount` lets the caller warn on zero / partial seed resolution.
 export function computeFirstRenderPreloadFiles(chunks, seedSourcePaths, toRelativePosix) {
   const chunksByFileName = new Map();
@@ -86,10 +88,10 @@ export function computeFirstRenderPreloadFiles(chunks, seedSourcePaths, toRelati
   for (const output of chunks) {
     if (output.type !== "chunk") continue;
     chunksByFileName.set(output.fileName, output);
-    if (output.isEntry) entryFileNames.push(output.fileName);
-    if (output.facadeModuleId && seedSourcePaths.has(toRelativePosix(output.facadeModuleId))) {
-      seedFileNames.push(output.fileName);
-    }
+    const isSeed =
+      output.facadeModuleId != null && seedSourcePaths.has(toRelativePosix(output.facadeModuleId));
+    if (isSeed) seedFileNames.push(output.fileName);
+    else if (output.isEntry) entryFileNames.push(output.fileName);
   }
 
   if (seedFileNames.length === 0) {

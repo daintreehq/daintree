@@ -40,6 +40,8 @@ import {
   firstRenderModulePreloadPlugin,
   latin400FontPreloadPlugin,
 } from "./scripts/lib/vite-boot-preload.ts";
+import { projectShellChunkPlugin } from "./scripts/lib/vite-project-shell.ts";
+import { PROJECT_SHELL_SOURCE } from "./shared/config/projectShell.ts";
 
 const devServerConfig = getDevServerConfig();
 
@@ -79,6 +81,9 @@ export default defineConfig(({ command, mode }) => {
         ],
       }),
       tailwindcss(),
+      // Emits the project window's shell as its own entry chunk and rewrites
+      // the URL src/main.tsx loads it from (scripts/lib/vite-project-shell.ts).
+      projectShellChunkPlugin(),
       // Must precede hostImportMapPlugin: it emits (and validates) the facade
       // chunks that plugin's transformIndexHtml resolves the map targets from.
       hostFacadePlugin(),
@@ -347,18 +352,20 @@ export default defineConfig(({ command, mode }) => {
                 // preserved.
                 name: "boot",
                 tags: ["$initial"],
-                // Never capture the entry facade or Vite's virtual modules:
-                // swallowing src/main.tsx or the index.html proxy demotes the
-                // entry chunk (the manifest loses isEntry), which breaks the
-                // first-render budget scripts and the modulepreload seed
-                // derivation. Virtual modules (\0-prefixed helpers, html
-                // proxies) stay wherever automatic chunking puts them.
-                // `src/pluginUi` belongs to the `plugin-ui` group below.
+                // Never capture an entry facade or Vite's virtual modules:
+                // swallowing src/main.tsx, the project shell, or the
+                // index.html proxy demotes that entry chunk (the manifest
+                // loses isEntry), which breaks the first-render budget scripts
+                // and the modulepreload seed derivation. Virtual modules
+                // (\0-prefixed helpers, html proxies) stay wherever automatic
+                // chunking puts them. `src/pluginUi` belongs to the
+                // `plugin-ui` group below.
                 test: (id: string) => {
                   if (id.includes("\0") || id.includes(".html")) return false;
                   if (isPluginUiSourceModule(id)) return false;
                   if (isPluginSdkReactSourceModule(id)) return false;
-                  return !id.split(path.sep).join("/").endsWith("src/main.tsx");
+                  const posixId = id.split(path.sep).join("/");
+                  return !posixId.endsWith("src/main.tsx") && !posixId.endsWith(PROJECT_SHELL_SOURCE);
                 },
                 priority: 1,
                 maxSize: 400_000,
