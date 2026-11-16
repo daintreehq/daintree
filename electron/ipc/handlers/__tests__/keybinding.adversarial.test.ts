@@ -66,6 +66,11 @@ function getHandler(channel: string): Handler {
   return match[1] as Handler;
 }
 
+/** Under fake timers: past the coalescing delay, with the menu module loaded and the rebuild run. */
+async function rebuildSettles(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(100);
+}
+
 function fakeEvent(): Electron.IpcMainInvokeEvent {
   return {
     sender: {} as Electron.WebContents,
@@ -313,6 +318,7 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
   let cleanup: (() => void) | null = null;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     storeMock.get.mockReturnValue({});
   });
@@ -320,21 +326,140 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
   afterEach(() => {
     cleanup?.();
     cleanup = null;
+    vi.useRealTimers();
   });
 
-  it("rebuilds the application menu after set, remove, and reset-all", async () => {
+  const setOverride = (combo: string[]) =>
+    getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+      actionId: "nav.toggleSidebar",
+      combo,
+    });
+
+  it("rebuilds the application menu once for a run of set, remove, and reset-all", async () => {
     const win = liveWindow();
     cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
 
-    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
-      actionId: "nav.toggleSidebar",
-      combo: ["Cmd+Shift+B"],
-    });
+    await setOverride(["Cmd+Shift+B"]);
     await getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "nav.toggleSidebar");
     await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
 
-    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(3);
+    await rebuildSettles();
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(1);
     expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);
+
+    await setOverride(["Cmd+Shift+C"]);
+    await rebuildSettles();
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["set", () => setOverride(["Cmd+Shift+B"])],
+    [
+      "remove",
+      () => getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "nav.toggleSidebar"),
+    ],
+    ["reset-all", () => getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent())],
+    [
+      "import",
+      () => {
+        dialogMock.showOpenDialog.mockResolvedValue({
+          canceled: false,
+          filePaths: ["/tmp/x.json"],
+        });
+        fsMock.readFile.mockResolvedValue("{}");
+        profileIoMock.importProfile.mockReturnValue({
+          ok: true,
+          overrides: { "nav.toggleSidebar": ["Cmd+I"] },
+          applied: 1,
+          skipped: 0,
+          errors: [],
+        });
+        return getHandler(CHANNELS.KEYBINDING_IMPORT_PROFILE)(fakeEvent());
+      },
+    ],
+  ])("rebuilds the application menu after a %s on its own", async (_name, write) => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+
+    await write();
+    await rebuildSettles();
+
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no window is left", [] as unknown[]],
+    ["another window is left", [{ isDestroyed: () => false }]],
+  ])(
+    "rebuilds only for a live window when the registration window closes as menu.js loads and %s",
+    async (_case, survivors) => {
+      let destroyed = false;
+      const win = { isDestroyed: () => destroyed } as unknown as Electron.BrowserWindow;
+      const { BrowserWindow } = await import("electron");
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue(survivors as never);
+      cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
+      await setOverride(["Cmd+Shift+B"]);
+
+      vi.advanceTimersByTime(100);
+      destroyed = true;
+      await rebuildSettles();
+
+      expect(menuMock.createApplicationMenu.mock.calls.map(([w]) => w)).toEqual(
+        survivors.length > 0 ? [survivors[0]] : []
+      );
+    }
+  );
+
+  it("waits for writes to pause before rebuilding", async () => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+
+    await setOverride(["Cmd+Shift+B"]);
+    await vi.advanceTimersByTimeAsync(40);
+    await setOverride(["Cmd+Shift+C"]);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+
+    await rebuildSettles();
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a pending rebuild once the handlers are disposed", async () => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+    await setOverride(["Cmd+Shift+B"]);
+
+    cleanup();
+    cleanup = null;
+    await rebuildSettles();
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+  });
+
+  it("drops a rebuild whose handlers were disposed while the menu module loaded", async () => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+    await setOverride(["Cmd+Shift+B"]);
+
+    // The timer fires and the rebuild starts loading menu.js; disposal lands meanwhile.
+    vi.advanceTimersByTime(100);
+    cleanup();
+    cleanup = null;
+    await rebuildSettles();
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+  });
+
+  it("logs a rebuild that fails, the write it followed having already succeeded", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    menuMock.createApplicationMenu.mockImplementationOnce(() => {
+      throw new Error("native menu build failed");
+    });
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+
+    await expect(setOverride(["Cmd+Shift+B"])).resolves.toBeDefined();
+    await rebuildSettles();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("keybinding change"),
+      expect.objectContaining({ message: "native menu build failed" })
+    );
+    errorSpy.mockRestore();
   });
 
   it("does not rebuild on read-only handlers", async () => {
@@ -342,6 +467,7 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
 
     await getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES)(fakeEvent());
     await getHandler(CHANNELS.KEYBINDING_EXPORT_PROFILE)(fakeEvent());
+    await rebuildSettles();
 
     expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
   });
@@ -354,6 +480,7 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
     cleanup = registerKeybindingHandlers({ mainWindow: dead } as never);
 
     await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+    await rebuildSettles();
 
     expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(survivor, undefined);
   });
@@ -364,6 +491,7 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
     cleanup = registerKeybindingHandlers({} as never);
 
     await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+    await rebuildSettles();
 
     expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
   });
@@ -454,17 +582,23 @@ describe("keybinding handlers — every view hears a saved change (#15579)", () 
   });
 
   it("pushes before the menu rebuild, so pushes leave in the order writes land", async () => {
-    cleanup?.();
-    vi.mocked(ipcMain.handle).mockClear();
-    const win = { isDestroyed: () => false } as unknown as Electron.BrowserWindow;
-    cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
+    vi.useFakeTimers();
+    try {
+      cleanup?.();
+      vi.mocked(ipcMain.handle).mockClear();
+      const win = { isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+      cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
 
-    const write = getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+      const write = getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
 
-    expect(pushes().map((push) => push.overrides)).toEqual([{}]);
-    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
-    await write;
-    expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);
+      expect(pushes().map((push) => push.overrides)).toEqual([{}]);
+      expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+      await write;
+      await rebuildSettles();
+      expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pushes nothing for a rejected write", async () => {

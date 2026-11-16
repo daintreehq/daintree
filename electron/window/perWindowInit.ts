@@ -56,9 +56,18 @@ const CLI_AVAILABILITY_REUSE_MS = 5 * 60 * 1000;
 
 let pluginMenuInitSettled = false;
 
-/** Test-only: forget that plugin init has settled. */
+/**
+ * A plugin tour change awaits a menu rebuild. App-wide rather than per window:
+ * only the focused or elected window carries the rebuild out, and if that
+ * window closes before its timer fires, the next window that qualifies must
+ * still see that one is owed.
+ */
+let forcedMenuRebuildPending = false;
+
+/** Test-only: forget that plugin init has settled and any owed menu rebuild. */
 export function __resetPerWindowInitForTests(): void {
   pluginMenuInitSettled = false;
+  forcedMenuRebuildPending = false;
 }
 
 /**
@@ -68,6 +77,23 @@ export function __resetPerWindowInitForTests(): void {
  */
 function pushHostEventToRemoteViews(name: string, payload: unknown): void {
   broadcastToRemoteEndpoints(CHANNELS.EVENTS_PUSH, [{ name, payload }]);
+}
+
+/**
+ * Whether `win` is the one window that carries out a forced menu rebuild while
+ * no window is focused: the primary, being the window the menu shows
+ * (`menuProjectIdFor` in menu.ts), or with no live primary the first live
+ * window registered.
+ */
+function buildsUnfocusedMenu(
+  win: BrowserWindow,
+  windowRegistry: WindowRegistry | undefined
+): boolean {
+  if (!windowRegistry) return true;
+  const primary = windowRegistry.getPrimary()?.browserWindow;
+  if (primary && !primary.isDestroyed()) return primary === win;
+  const first = windowRegistry.all().find((ctx) => !ctx.browserWindow.isDestroyed());
+  return first?.browserWindow === win;
 }
 
 /**
@@ -165,21 +191,21 @@ export async function initPerWindowServices(
   // open windows (off macOS) gains or loses an item. Debounced: one plugin load
   // or unload can change the tour set several times in a tick.
   let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
-  let pluginMenuRebuildForced = false;
   const schedulePluginMenuRebuild = (force: boolean): void => {
-    if (force) pluginMenuRebuildForced = true;
+    if (force) forcedMenuRebuildPending = true;
     if (pluginMenuRebuild) return;
     pluginMenuRebuild = setTimeout(() => {
       pluginMenuRebuild = null;
-      const forced = pluginMenuRebuildForced;
-      pluginMenuRebuildForced = false;
       if (win.isDestroyed()) return;
+      const forced = forcedMenuRebuildPending;
       // The menu is app-wide but built against one window's state; let the
       // focused window build it when there is one. A context check needs the
       // focused window outright: with none focused, every window would build
-      // the menu for its own project in turn.
+      // the menu for its own project in turn. A forced rebuild with none focused
+      // still happens, but once, by the window the menu reflects.
       const focused = BrowserWindow.getFocusedWindow();
-      if (focused ? focused !== win : !forced) return;
+      if (focused ? focused !== win : !forced || !buildsUnfocusedMenu(win, windowRegistry)) return;
+      if (forced) forcedMenuRebuildPending = false;
       try {
         if (forced) createApplicationMenu(win, cliService);
         else rebuildApplicationMenuIfStale(win, cliService);
