@@ -211,7 +211,9 @@ type ReopeningStart = Parameters<VoiceRecordingServiceInstance["noteSendReopened
 
 // A send waits only on dictation, and dictation runs in the service: until it
 // has loaded there is no session to stop and no correction to wait for.
-const voice = getLoadedVoiceRecordingService;
+function loadedVoice() {
+  return getLoadedVoiceRecordingService();
+}
 const NO_SESSIONS: ReadonlySet<string> = new Set();
 const NOTHING_OBSERVED = { failed: () => false, release: () => {} };
 
@@ -577,7 +579,7 @@ export function useVoiceWaitSubmit({
           logRefusal("already_waiting");
           return;
         }
-        voice()?.noteSendReopened({ sessionId: reopener });
+        loadedVoice()?.noteSendReopened({ sessionId: reopener });
         callOffWait(waiting, voiceId, "reopened", false);
       }
 
@@ -587,7 +589,7 @@ export function useVoiceWaitSubmit({
       // Read before the stop: the sessions this send takes. One that starts
       // here while it waits reopens it instead (#15703).
       const target = voiceDraftNow();
-      const sessions = voice()?.sendSessions(target.panelId, target.projectId) ?? NO_SESSIONS;
+      const sessions = loadedVoice()?.sendSessions(target.panelId, target.projectId) ?? NO_SESSIONS;
       const byStopAndSend = options?.stayPut === true;
       // Set below, once there is an attempt for the key to cut short.
       let sendNow = () => {};
@@ -600,7 +602,7 @@ export function useVoiceWaitSubmit({
       const startedBefore = pendingStart?.panelId === voiceId ? pendingStart : null;
       // From before the stop, so a stop-time cleanup that fails before any
       // wait for it begins still counts.
-      const observed = voice()?.observeSendCorrections(voiceId, sessions) ?? NOTHING_OBSERVED;
+      const observed = loadedVoice()?.observeSendCorrections(voiceId, sessions) ?? NOTHING_OBSERVED;
       store.setVoiceSubmitting(voiceId, true);
 
       // Aborted by a second Enter, the wait ends and the send goes with the
@@ -643,7 +645,7 @@ export function useVoiceWaitSubmit({
         if (live.over) return;
         const reopener = startsDictationIn(voiceId, sessions, startedBefore, state, prev);
         if (!reopener) return;
-        voice()?.noteSendReopened(reopener);
+        loadedVoice()?.noteSendReopened(reopener);
         callOffWait(live, voiceId, "reopened", true);
       });
 
@@ -660,7 +662,7 @@ export function useVoiceWaitSubmit({
         let cleanup: VoiceSendCleanup | undefined;
         try {
           if (isVoiceSessionActiveFor(voiceId)) {
-            await voice()?.stop("Submitting command.", {
+            await loadedVoice()?.stop("Submitting command.", {
               preserveLiveText: true,
               announce: false,
               reason: "send",
@@ -675,8 +677,11 @@ export function useVoiceWaitSubmit({
           // to send what stands; the send drops what is still on its way
           // (#14611, #14780). A newer session's cleanup is neither waited for
           // nor dropped.
-          if (!controller.signal.aborted && voice()?.hasPendingCorrection(voiceId, sessions)) {
-            const landing = voice()?.expectedCorrectionWindow(voiceId, sessions);
+          if (
+            !controller.signal.aborted &&
+            loadedVoice()?.hasPendingCorrection(voiceId, sessions)
+          ) {
+            const landing = loadedVoice()?.expectedCorrectionWindow(voiceId, sessions);
             live.wait = {
               attempt: live.attempt,
               phase: "polishing",
@@ -687,7 +692,7 @@ export function useVoiceWaitSubmit({
               sessions,
             };
             live.seat?.setWait(live.wait);
-            await voice()?.waitForPendingCorrections(voiceId, controller.signal, sessions);
+            await loadedVoice()?.waitForPendingCorrections(voiceId, controller.signal, sessions);
             if (!isCurrentAttempt()) return;
           }
 
@@ -741,7 +746,7 @@ export function useVoiceWaitSubmit({
           }
           // Read with nothing awaited before the send: a cleanup still on its
           // way is one the send drops.
-          if (voice()?.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
+          if (loadedVoice()?.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
           else if (observed.failed()) cleanup = "failed";
           // Handed over, the text is the composer's: a dictation from here on
           // is the next prompt's.
@@ -835,7 +840,7 @@ export function useVoiceWaitSubmit({
           const asker = options?.asker ?? (spoken ? "spoken_send" : "session_panel_send");
           if (isDisabledRef.current?.()) {
             logVoiceSendRefused({ asker, reason: "composer_disabled", panelId: voiceId });
-            void voice()?.stop("Dictation stopped.", { reason: "send" });
+            void loadedVoice()?.stop("Dictation stopped.", { reason: "send" });
             return;
           }
           startVoiceWaitSubmit({ spoken, stayPut: !spoken, asker });
@@ -847,13 +852,13 @@ export function useVoiceWaitSubmit({
   // Read at the key press rather than from the last render: a hotkey stop
   // registers its correction before any render shows it.
   const hasPendingVoiceCorrection = useCallback(
-    () => voice()?.hasPendingCorrection(voiceId) === true,
+    () => loadedVoice()?.hasPendingCorrection(voiceId) === true,
     [voiceId]
   );
 
   /** A send from the editor that waits for dictation still finishing or being corrected. */
   const submitFromEditor = useCallback(() => {
-    if (isVoiceSessionActiveFor(voiceId) || voice()?.hasPendingCorrection(voiceId)) {
+    if (isVoiceSessionActiveFor(voiceId) || loadedVoice()?.hasPendingCorrection(voiceId)) {
       startVoiceWaitSubmit();
       return;
     }

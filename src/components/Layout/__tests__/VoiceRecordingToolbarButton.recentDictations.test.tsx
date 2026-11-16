@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { RecentDictation } from "@shared/types";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
@@ -117,6 +119,12 @@ const recording = () =>
     micSignal: "live",
     activeTarget: { panelId: "p1", panelTitle: "Claude" },
   });
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
   beforeEach(() => {

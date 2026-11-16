@@ -166,7 +166,7 @@ function forgetPendingPress(): void {
  */
 export function noteVoiceShortcutKeydown(e: KeyboardEvent): void {
   forgetPendingPress();
-  if (service && useVoiceRecordingStore.getState().isConfigured) return;
+  if (service?.recordsShortcutPresses()) return;
   if (e.repeat || !matchesVoiceStartShortcut(e)) return;
   const press: PendingVoiceShortcutPress = {
     code: e.code,

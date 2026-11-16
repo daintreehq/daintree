@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { fireEvent, render as rtlRender, screen, type RenderOptions } from "@testing-library/react";
 import { VoiceInputButton } from "../VoiceInputButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -28,6 +29,12 @@ function createVoiceInputApi() {
     validateApiKey: vi.fn(),
   };
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceInputButton", () => {
   beforeEach(() => {

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { MicTestRow } from "../MicTestRow";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types";
@@ -62,6 +64,12 @@ afterEach(() => {
     pendingTarget: null,
     sessionElsewhere: null,
   });
+});
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
 });
 
 describe("MicTestRow", () => {

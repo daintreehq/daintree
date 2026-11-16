@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     // By default every action fires on just its effective combo; tests that
     // need a second binding (Windows' Ctrl+F4) set their own.
     getTriggerCombos: vi.fn<(actionId: string) => string[]>(() => []),
+    getEffectiveCombos: vi.fn<(actionId: string) => string[]>(() => []),
     getChordCompletions: vi.fn<
       () => Array<{ actionId: string; secondKey: string; description: string }>
     >(() => []),

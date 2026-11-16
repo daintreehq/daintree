@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import path from "path";
 import type { ComponentType } from "react";
@@ -146,6 +148,12 @@ function openPanel() {
   fireEvent.click(mic());
   expect(panel()).not.toBeNull();
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
   it("opens the panel on click instead of jumping to the terminal", () => {

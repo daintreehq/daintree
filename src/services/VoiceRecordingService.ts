@@ -879,6 +879,9 @@ class VoiceRecordingService {
   private selectedDeviceId = "";
   private selectedDeviceLabel = "";
   private recordingMode: VoiceRecordingMode = "tap-or-hold";
+  // Whether the settings last read here have dictation on, so the keydown
+  // listener can turn every other keystroke away on one field read.
+  private configured = false;
   // The voice shortcut press that is down right now, outside toggle mode.
   // `claimed` once that press started (or resumed) a recording, so only its
   // release can end it. Cleared on release, stop, window blur, or Escape.
@@ -1034,6 +1037,7 @@ class VoiceRecordingService {
   initialize(settings?: VoiceInputSettings): void {
     if (this.initialized) return;
     this.initialized = true;
+    setInitializedVoiceRecordingService(this);
     logDebug(`${LOG_PREFIX} Initializing service`);
 
     const voiceInput = window.electron?.voiceInput;
@@ -1041,7 +1045,6 @@ class VoiceRecordingService {
       logWarn(`${LOG_PREFIX} window.electron.voiceInput not available`);
       return;
     }
-    setInitializedVoiceRecordingService(this);
 
     // A singleton replaced by HMR left its baselines in the store.
     const buffers = Object.values(useVoiceRecordingStore.getState().panelBuffers);
@@ -1693,7 +1696,7 @@ class VoiceRecordingService {
       // Every keystroke passes through here, so with dictation off it costs one
       // read. The keybinding resolver hands a voice key over instead then
       // (`noteVoiceShortcutKeydown`), for the start it dispatches to adopt.
-      if (!useVoiceRecordingStore.getState().isConfigured) return;
+      if (!this.configured) return;
       if (!matchesVoiceStartShortcut(e)) return;
       this.recordShortcutPress(e.code, e.timeStamp, performance.now());
     };
@@ -1742,6 +1745,7 @@ class VoiceRecordingService {
     // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = isVoiceInputConfigured(settings);
+    this.configured = isConfigured;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
@@ -2287,6 +2291,11 @@ class VoiceRecordingService {
     const claimed = this.claimedAt !== null && this.claimedAt >= timeStamp;
     this.claimedAt = null;
     this.heldPress = { code, pressedAt, claimed, speechChunks: 0 };
+  }
+
+  /** Whether this view's keydown listener records voice key presses itself. */
+  recordsShortcutPresses(): boolean {
+    return this.configured;
   }
 
   /**

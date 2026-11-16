@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import React from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 import { useVoiceRecordingStore, type VoiceMicNotice } from "@/store/voiceRecordingStore";
@@ -64,6 +66,12 @@ function renderNotice(notice: VoiceMicNotice) {
 function text(): string {
   return document.body.textContent ?? "";
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceMicNoticeBanner", () => {
   beforeEach(() => {
