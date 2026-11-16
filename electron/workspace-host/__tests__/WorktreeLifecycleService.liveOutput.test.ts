@@ -496,7 +496,7 @@ describe("WorktreeLifecycleService live output (#17115)", () => {
       await done;
     });
 
-    it("leaves a later setup run's status alone as it moves on and settles", async () => {
+    it("leaves a later setup run's status alone as it moves on, and still reports its own outcome", async () => {
       const runs = [controlledChild(), controlledChild()];
       mockSpawn.mockReturnValueOnce(runs[0].child).mockReturnValueOnce(runs[1].child);
       const monitor = makeMonitor();
@@ -520,9 +520,14 @@ describe("WorktreeLifecycleService live output (#17115)", () => {
       await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
       expect(monitor.lifecycleStatus).toBe(later);
 
+      // The coordinator reads the outcome back from the slot as this returns.
       runs[1].exit(1);
       await done;
-      expect(monitor.lifecycleStatus).toBe(later);
+      expect(monitor.lifecycleStatus).toMatchObject({
+        phase: "setup",
+        state: "failed",
+        startedAt: later.startedAt - 1,
+      });
     });
 
     it("leaves the slot to another phase that has taken it", async () => {

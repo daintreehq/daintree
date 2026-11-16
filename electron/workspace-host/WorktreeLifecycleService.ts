@@ -1260,6 +1260,8 @@ export class WorktreeLifecycleService {
       readFailureSummary: true,
       onProgress: (commandIndex, totalCommands, command) => {
         const m = ctx.getMonitor(worktreeId);
+        // A later setup (an environment switch starts one without stopping
+        // this) holds the slot: its commands are what the worktree is running.
         if (m && !heldByAnotherRun(m.lifecycleStatus, "setup", startedAt)) {
           m.setLifecycleStatus({
             phase: "setup",
@@ -1281,10 +1283,10 @@ export class WorktreeLifecycleService {
       },
     });
 
+    // Written whoever holds the slot: the coordinator reads this run's outcome
+    // back from it the moment the run returns.
     const finalMonitor = ctx.getMonitor(worktreeId);
-    // A later setup (an environment switch starts one without stopping this)
-    // has the slot: its run is what the worktree is doing now.
-    if (finalMonitor && !heldByAnotherRun(finalMonitor.lifecycleStatus, "setup", startedAt)) {
+    if (finalMonitor) {
       finalMonitor.setLifecycleStatus({
         phase: "setup",
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
