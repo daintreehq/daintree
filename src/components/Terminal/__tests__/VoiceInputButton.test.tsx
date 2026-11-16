@@ -346,6 +346,21 @@ describe("VoiceInputButton — a click that loads the voice service", () => {
     expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-1" }));
   });
 
+  it("starts nothing in a panel the button no longer serves once the service loads", async () => {
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const { getByRole, rerender } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" />
+    );
+
+    fireEvent.click(getByRole("button"));
+    // Its tab closed: the pane shows the next tab's panel through the same button.
+    rerender(<VoiceInputButton panelId="panel-2" projectId="project-1" />);
+
+    await vi.waitFor(() => expect(getLoadedVoiceRecordingService()).toBe(voiceRecordingService));
+    await Promise.resolve();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
   it("starts nothing when the button has gone by the time the service loads", async () => {
     const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
     const { getByRole, unmount } = render(

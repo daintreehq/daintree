@@ -139,16 +139,17 @@ export function VoiceInputButton({
   const trackRef = useRef<HTMLSpanElement>(null);
   const iconRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number>(0);
-  // A click that has to load the service first starts nothing once the
-  // button, and the composer the words were for, has gone.
-  const mountedRef = useRef(false);
+  // The panel the button serves now, null once it has gone: a click that has
+  // to load the service first starts nothing when the button has moved on to
+  // another tab's panel, or away.
+  const servedPanelRef = useRef<string | null>(null);
 
   useEffect(() => {
-    mountedRef.current = true;
+    servedPanelRef.current = panelId;
     return () => {
-      mountedRef.current = false;
+      servedPanelRef.current = null;
     };
-  }, []);
+  }, [panelId]);
 
   useEffect(() => {
     if (!isOrbiting) return;
@@ -279,7 +280,7 @@ export function VoiceInputButton({
       ...(canopyRow !== undefined ? { canopyRow } : {}),
     };
     withVoiceRecordingService((voice) => {
-      if (mountedRef.current) void voice.toggle(target);
+      if (servedPanelRef.current === target.panelId) void voice.toggle(target);
     });
   }, [
     disabled,
