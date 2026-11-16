@@ -117,6 +117,7 @@ function preparation(overrides: Partial<HostSwitchPreparation> = {}): HostSwitch
     toHostId: "studio-01",
     projectId: "p1",
     projectName: "daintree",
+    display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     worktreePath: "/Users/greg/Projects/daintree",
     branch: "feature/host-chip",
     branchCheck: { kind: "same-tip", remote: "origin", sha: "abc" },
@@ -252,6 +253,7 @@ describe("HostSwitchDialog", () => {
       source: { kind: "remote", url: "git@github.com:daintreehq/daintree.git" },
       destination: "/home/greg/Projects/daintree",
       branch: { name: "feature/host-chip", remoteBranch: "feature/host-chip" },
+      display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     });
   });
 
@@ -486,6 +488,7 @@ describe("HostSwitchDialog", () => {
       kind: "open",
       branch: null,
       navigateOnly: true,
+      display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     });
   });
 
