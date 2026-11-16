@@ -44,9 +44,30 @@ describe("safeArgsHash", () => {
     ],
     // A few KiB to clone, but each level indents every line below it.
     ["deep nesting", () => [nested(1200)]],
+    // Holes clone as nothing much, but each prints an indented `null`.
+    [
+      "a sparse array deep in the args",
+      () => {
+        let value: unknown = new Array(50_000);
+        for (let i = 0; i < 100; i++) value = { n: value };
+        return [value];
+      },
+    ],
   ])("leaves %s unhashed without serializing it", (_name, make) => {
     expect(safeArgsHash(make())).toBe("");
     expect(serializeSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses views over a shared buffer before listing any view's indices", () => {
+    const buffer = new ArrayBuffer(60_000);
+    const views = Array.from({ length: 20 }, () => new Uint8Array(buffer));
+    const entries = vi.spyOn(Object, "entries");
+    try {
+      expect(safeArgsHash(views)).toBe("");
+      expect(entries.mock.calls.some(([value]) => ArrayBuffer.isView(value))).toBe(false);
+    } finally {
+      entries.mockRestore();
+    }
   });
 
   it("degrades to an empty hash rather than throwing", () => {

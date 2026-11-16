@@ -60,29 +60,43 @@ interface Meter {
 
 const OVER_BUDGET = new Error("canonical args over budget");
 
-function charge(meter: Meter | null, units: number): void {
-  if (meter === null) return;
+/** `%TypedArray%.prototype.length`, which an own `length` property can't shadow. */
+const typedArrayLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  "length"
+)!.get!;
+
+function charge(meter: Meter, units: number): void {
   meter.remaining -= units;
-  if (meter.remaining < 0) throw OVER_BUDGET;
+  // Negated so a NaN charge stops the walk rather than disabling the meter.
+  if (!(meter.remaining >= 0)) throw OVER_BUDGET;
 }
 
+/**
+ * Sort keys at every depth. With a meter, charge the walk as it goes; without
+ * one, read nothing the unmetered digest never read, since those are persisted.
+ */
 function normalizeKeys(
   value: unknown,
   seen: WeakSet<object>,
   meter: Meter | null,
   depth: number
 ): unknown {
-  charge(meter, 2 * depth + 1 + (typeof value === "string" ? value.length : 0));
+  if (meter !== null) {
+    charge(meter, 2 * depth + 1 + (typeof value === "string" ? value.length : 0));
+  }
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
   if (Array.isArray(value)) {
-    charge(meter, value.length);
+    // Every slot prints a line at the next indent, holes included, and
+    // `map` never visits a hole to charge it.
+    if (meter !== null) charge(meter, value.length * (2 * depth + 3));
     return value.map((v) => normalizeKeys(v, seen, meter, depth + 1));
   }
   // A typed array's indices are its keys: charged before they are listed.
-  if (ArrayBuffer.isView(value) && "length" in value && typeof value.length === "number") {
-    charge(meter, value.length);
+  if (meter !== null && ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    charge(meter, (typedArrayLength.call(value) as number) * (2 * depth + 3));
   }
   const entries = Object.entries(value as Record<string, unknown>);
   // Keys are charged before the sort, which would otherwise be the cost.

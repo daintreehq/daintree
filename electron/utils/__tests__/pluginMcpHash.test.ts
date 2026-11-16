@@ -71,6 +71,35 @@ describe("boundedStableArgsSha256 (#17069)", () => {
     }
   });
 
+  it("digests the key-sorted indented form, independently of how it is built", () => {
+    const args = { b: { d: [1, { z: 1, y: 2 }], c: "x" }, a: new Uint8Array([3, 1]) };
+    const sorted = { a: { "0": 3, "1": 1 }, b: { c: "x", d: [1, { y: 2, z: 1 }] } };
+    const expected = sha256Hex(safeSerializeToolResult(sorted));
+
+    expect(stableArgsSha256(args)).toBe(expected);
+    expect(boundedStableArgsSha256(args, 10_000)).toBe(expected);
+  });
+
+  it("reads no length the unmetered digest never read", () => {
+    const view = new Uint8Array([1, 2]);
+    Object.defineProperty(view, "length", {
+      get() {
+        throw new Error("length read");
+      },
+    });
+    expect(() => stableArgsSha256([view])).not.toThrow();
+  });
+
+  it("meters a view by its real length, whatever its own length property says", () => {
+    const buffer = new ArrayBuffer(1_000);
+    const views = Array.from({ length: 5 }, () => {
+      const view = new Uint8Array(buffer);
+      Object.defineProperty(view, "length", { value: Number.NaN });
+      return view;
+    });
+    expect(boundedStableArgsSha256(views, 2_000)).toBeNull();
+  });
+
   it("answers null once canonicalizing would exceed the budget", () => {
     expect(boundedStableArgsSha256(["x".repeat(100)], 50)).toBeNull();
     expect(boundedStableArgsSha256([new Uint8Array(100)], 50)).toBeNull();
