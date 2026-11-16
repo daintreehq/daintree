@@ -20,7 +20,9 @@ export function getFrozenViewProjectIds(): string[] {
  * renderer's freeze flips or the set of project views changes, and only when
  * the set itself moved. Returns the stop.
  */
-export function startFrozenViewProjectsPublisher(publish: (projectIds: string[]) => void): () => void {
+export function startFrozenViewProjectsPublisher(
+  publish: (projectIds: string[]) => void
+): () => void {
   // The host starts with an empty set, so an empty one needs no message.
   let published = "[]";
   const sync = (): void => {

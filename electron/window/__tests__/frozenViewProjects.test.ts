@@ -12,7 +12,10 @@ vi.mock("../webContentsRegistry.js", () => ({
 }));
 
 import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
-import { getFrozenViewProjectIds, startFrozenViewProjectsPublisher } from "../frozenViewProjects.js";
+import {
+  getFrozenViewProjectIds,
+  startFrozenViewProjectsPublisher,
+} from "../frozenViewProjects.js";
 
 let nextId = 1;
 
