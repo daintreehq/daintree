@@ -18,6 +18,7 @@ import {
   MAX_PACKET_PAYLOAD,
   type BackpressureManager,
 } from "./backpressure.js";
+import { isTerminalAgentLive } from "../services/pty/agentLiveness.js";
 import type { IpcQueueManager } from "./ipcQueue.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 import type { RendererConnection, TerminalWorkerConnection } from "./handlers/types.js";
@@ -36,6 +37,8 @@ export interface VisualOutputRouterDeps {
   terminalWorkerConnections: ReadonlyMap<number, ReadonlyMap<string, TerminalWorkerConnection>>;
   windowProjectMap: ReadonlyMap<number, string | null>;
   fallbackEligibleProjects: ReadonlySet<string>;
+  /** Projects whose every view may be CDP-frozen, pushed by Main (#17038). */
+  frozenViewProjects: ReadonlySet<string>;
   ipcDataMirrorTerminals: ReadonlySet<string>;
   packetFramer: PacketFramer;
   getVisualBuffers: () => SharedRingBuffer[];
@@ -80,6 +83,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     terminalWorkerConnections,
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     ipcDataMirrorTerminals,
     packetFramer,
     getVisualBuffers,
@@ -516,9 +520,21 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     // Its own block, ahead of the primary fallback below: a different delivery
     // class with its own balance, and never a pause.
     if (isHiddenFallback) {
-      const dataString = toStringForIpc(data);
-      const dataBytes = utf8Length ?? Buffer.byteLength(dataString, "utf8");
-      if (ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES) {
+      // A frozen view drains none of this until it thaws, then parses all of
+      // it inside the warm paint gate, so a plain terminal skips it from the
+      // first byte (#17038). An agent's copies keep their budget: its xterm is
+      // the only one answering its terminal queries.
+      const audienceFrozen =
+        termProjectId !== null &&
+        frozenViewProjects.has(termProjectId) &&
+        terminalInfo !== undefined &&
+        !isTerminalAgentLive(terminalInfo);
+      const dataString = audienceFrozen ? "" : toStringForIpc(data);
+      const dataBytes = audienceFrozen ? 0 : (utf8Length ?? Buffer.byteLength(dataString, "utf8"));
+      if (
+        audienceFrozen ||
+        ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES
+      ) {
         // Nothing is lost: the host mirror holds every byte. The cached views
         // only need to know they must repaint, once per run of skips.
         if (ipcQueueManager.noteHiddenSkip(id)) {

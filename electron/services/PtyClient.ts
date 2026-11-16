@@ -525,6 +525,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
+  /** Last frozen-view project set pushed to the shards (#17038); replayed on shard boot. */
+  private frozenViewProjects: string[] = [];
   /** Drive leases a remote client is party to; replayed on shard boot. */
   private driveLeases: PtyHostDriveLease[] = [];
   /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
@@ -639,6 +641,7 @@ export class PtyClient extends EventEmitter {
         lastResourceProfile: this.lastResourceProfile,
         lastProcessTreePollIntervalMs: this.lastProcessTreePollIntervalMs,
         fallbackEligibleProjects: this.fallbackEligibleProjects,
+        frozenViewProjects: this.frozenViewProjects,
         driveLeases: this.driveLeases,
       }),
       hasPortRefreshConsumers: () => Boolean(this.onPortRefresh) || this.auxPortRefresh.size > 0,
@@ -2101,6 +2104,20 @@ export class PtyClient extends EventEmitter {
         type: "set-fallback-eligible-projects",
         projectIds: this.fallbackEligibleProjects,
       });
+    }
+  }
+
+  /**
+   * Tell every shard which projects have only views that may be CDP-frozen
+   * (#17038). While no window shows such a project, the host stops copying its
+   * plain terminals' output to views that cannot read it, and their panes
+   * repaint from the host mirror when they return. Sent to every shard for the
+   * same reason as {@link setFallbackEligibleProjects}.
+   */
+  setFrozenViewProjects(projectIds: string[]): void {
+    this.frozenViewProjects = [...projectIds];
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-frozen-view-projects", projectIds: this.frozenViewProjects });
     }
   }
 

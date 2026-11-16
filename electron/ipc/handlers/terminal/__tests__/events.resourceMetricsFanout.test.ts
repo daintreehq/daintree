@@ -33,6 +33,12 @@ const bus = vi.hoisted(() => {
   };
 });
 
+const frozenIds = vi.hoisted(() => new Set<number>());
+vi.mock("../../../../utils/webContentsLifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/webContentsLifecycle.js")>()),
+  isWebContentsFrozen: (wc: { id: number }) => frozenIds.has(wc.id),
+}));
+
 vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
@@ -114,6 +120,7 @@ describe("terminal resource-metrics fan-out", () => {
     // One visible view (project 0) and five cached views (projects 1-5).
     registry.projectViewsRegistered = true;
     registry.pruneOnRead = false;
+    frozenIds.clear();
     registry.views = Array.from({ length: PROJECTS }, (_, p) => makeView(p + 1, `p${p}`, p !== 0));
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: (id: string) => (id.includes("-") ? id.split("-")[0]! : null),
@@ -219,6 +226,33 @@ describe("terminal resource-metrics fan-out", () => {
       (v) => Object.keys((v.sends[0]?.args[0] as { metrics: object }).metrics).length
     );
     expect(sizes).toEqual([0, 0, 1, 0, 0, 0]);
+  });
+
+  it("sends a frozen cached view nothing, empty slice or not, until it thaws (#17038)", () => {
+    // p0's view is active, so a freeze it may still be leaving never holds it.
+    for (const view of registry.views) frozenIds.add(view.id);
+    const batch = { "p0-t0": { cpuPercent: 1 }, "p1-t0": { cpuPercent: 2 } };
+
+    for (let tick = 0; tick < 5; tick++) ptyClient.emit("resource-metrics", batch, tick);
+
+    expect(registry.views.map((v) => v.sends.length)).toEqual([5, 0, 0, 0, 0, 0]);
+
+    frozenIds.clear();
+    ptyClient.emit("resource-metrics", batch, 9);
+    expect(registry.views.map((v) => v.sends.length)).toEqual([6, 1, 1, 1, 1, 1]);
+    expect(registry.views[1]!.sends[0]!.args[0]).toEqual({
+      metrics: { "p1-t0": { cpuPercent: 2 } },
+      timestamp: 9,
+    });
+  });
+
+  it("leaves frozen cached views out of the whole-batch send too (#17038)", () => {
+    registry.projectViewsRegistered = false;
+    frozenIds.add(registry.views[3]!.id);
+
+    ptyClient.emit("resource-metrics", makeBatch(), 7);
+
+    expect(registry.views.map((v) => v.sends.length)).toEqual([1, 1, 1, 0, 1, 1]);
   });
 
   it("sends each view of a project the same slice", () => {

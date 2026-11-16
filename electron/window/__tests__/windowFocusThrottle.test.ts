@@ -193,6 +193,7 @@ describe("WindowFocusThrottle", () => {
     vi.doMock("../webContentsRegistry.js", () => ({
       getAppWebContents: vi.fn(),
       getAllAppWebContents: vi.fn(() => [{ isDestroyed: () => false, send: mockViewSend }]),
+      isCachedViewWebContents: vi.fn(() => false),
     }));
 
     vi.doMock("../../services/DiskSpaceMonitor.js", () => ({

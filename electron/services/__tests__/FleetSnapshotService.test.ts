@@ -21,7 +21,7 @@ const availabilityMock = vi.hoisted(() => ({
   isHelpTerminal: vi.fn<(id: string) => boolean>(() => false),
 }));
 
-vi.mock("../../ipc/utils.js", () => ({ typedBroadcast: broadcastMock }));
+vi.mock("../../ipc/utils.js", () => ({ typedBroadcastLatestWins: broadcastMock }));
 vi.mock("../events.js", () => ({ events: eventEmitter }));
 vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,

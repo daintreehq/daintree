@@ -23,6 +23,7 @@ type Terminal = {
   contentEpoch: number;
   lastInputTime: number;
   analysisEnabled: boolean;
+  launchAgentId?: string;
 };
 
 interface Harness {
@@ -37,7 +38,9 @@ interface Harness {
   batcherWrite: ReturnType<typeof vi.fn>;
   windowProjectMap: Map<number, string | null>;
   fallbackEligibleProjects: Set<string>;
+  frozenViewProjects: Set<string>;
   ipcDataMirrorTerminals: Set<string>;
+  terminals: Map<string, Terminal>;
 }
 
 function createHarness(terminalIds: string[], projectId: string, extra: string[] = []): Harness {
@@ -91,6 +94,7 @@ function createHarness(terminalIds: string[], projectId: string, extra: string[]
   ]);
   const windowProjectMap = new Map<number, string | null>();
   const fallbackEligibleProjects = new Set<string>();
+  const frozenViewProjects = new Set<string>();
   const ipcDataMirrorTerminals = new Set<string>();
 
   const ptyManager = {
@@ -108,6 +112,7 @@ function createHarness(terminalIds: string[], projectId: string, extra: string[]
     terminalWorkerConnections: new Map(),
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     ipcDataMirrorTerminals,
     packetFramer: {} as never,
     getVisualBuffers: () => [],
@@ -128,6 +133,7 @@ function createHarness(terminalIds: string[], projectId: string, extra: string[]
     terminalWorkerConnections: new Map(),
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     windowFocusedTerminalMap: new Map(),
     disconnectWindow: vi.fn(),
     disconnectTerminalWorkerPort: vi.fn(),
@@ -151,7 +157,9 @@ function createHarness(terminalIds: string[], projectId: string, extra: string[]
     batcherWrite,
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     ipcDataMirrorTerminals,
+    terminals,
   };
 }
 
@@ -410,5 +418,98 @@ describe("visual routing for a project no window shows (#16497)", () => {
     vi.advanceTimersByTime(IPC_MAX_PAUSE_MS);
     expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
     expect(h.coordinators.get("a1")!.isReadPaused).toBe(false);
+  });
+});
+
+describe("visual routing for a project whose every view is frozen (#17038)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function freeze(h: Harness, projectIds: string[]): void {
+    h.connection["set-frozen-view-projects"]!({
+      type: "set-frozen-view-projects",
+      projectIds,
+    } as never);
+  }
+
+  const notices = (h: Harness) =>
+    statusEvents(h).filter((e) => e.reason === HIDDEN_VIEW_SKIP_REASON);
+
+  it("copies nothing of a plain terminal's output, with one repaint notice for the stretch", () => {
+    const h = createHarness(["t1"], "proj-a");
+    h.ipcDataMirrorTerminals.add("t1");
+    show(h, "proj-b");
+    freeze(h, ["proj-a"]);
+
+    const written = runAgents(h, ["t1"], 1000);
+
+    expect(ipcDataFor(h, "t1")).toHaveLength(0);
+    expect(h.ipcQueue.getHiddenQueuedBytes("t1")).toBe(0);
+    expect(h.rawPauses.get("t1")).toBe(0);
+    expect(notices(h).map((e) => e.id)).toEqual(["t1"]);
+    // Main-side monitors still see every chunk.
+    expect(h.events.filter((e) => e.type === "data-mirror")).toHaveLength(written.get("t1")!);
+  });
+
+  it("keeps an agent terminal's copies on the hidden budget", () => {
+    const h = createHarness(["a1"], "proj-a");
+    h.terminals.get("a1")!.launchAgentId = "claude";
+    show(h, "proj-b");
+    freeze(h, ["proj-a"]);
+
+    h.router.routeOutput("a1", REDRAW, undefined);
+    expect(ipcDataFor(h, "a1")).toHaveLength(1);
+    expect(h.ipcQueue.getHiddenQueuedBytes("a1")).toBe(REDRAW_BYTES);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
+    expect(notices(h)).toHaveLength(0);
+
+    // Sustained output fills the hidden budget and no further, never holding the agent.
+    runAgents(h, ["a1"], IPC_MAX_PAUSE_MS * 2);
+    expect(ipcDataFor(h, "a1")).toHaveLength(
+      Math.floor(IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES / REDRAW_BYTES)
+    );
+    expect(h.rawPauses.get("a1")).toBe(0);
+    expect(notices(h)).toHaveLength(1);
+  });
+
+  it("copies again once the project's views thaw", () => {
+    const h = createHarness(["t1"], "proj-a");
+    show(h, "proj-b");
+    freeze(h, ["proj-a"]);
+    h.router.routeOutput("t1", REDRAW, undefined);
+    expect(ipcDataFor(h, "t1")).toHaveLength(0);
+
+    freeze(h, []);
+    h.router.routeOutput("t1", REDRAW, undefined);
+
+    expect(ipcDataFor(h, "t1")).toHaveLength(1);
+    expect(notices(h)).toHaveLength(1);
+  });
+
+  it("leaves a project on screen to its port whatever the set says", () => {
+    const h = createHarness(["t1"], "proj-a");
+    show(h, "proj-a");
+    freeze(h, ["proj-a"]);
+
+    h.router.routeOutput("t1", REDRAW, undefined);
+
+    expect(h.batcherWrite).toHaveBeenCalledTimes(1);
+    expect(notices(h)).toHaveLength(0);
+  });
+
+  it("keeps the current set when a payload is not a list of project ids", () => {
+    const h = createHarness(["t1"], "proj-a");
+    show(h, "proj-b");
+    freeze(h, ["proj-a"]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    freeze(h, ["proj-a", 7] as never);
+    warn.mockRestore();
+
+    expect([...h.frozenViewProjects]).toEqual(["proj-a"]);
   });
 });

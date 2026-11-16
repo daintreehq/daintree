@@ -516,6 +516,8 @@ const windowProjectMap = new Map<number, string | null>();
 // every consumer is already fed from one that still has a starving view, so it
 // suppressed both alike.
 const fallbackEligibleProjects = new Set<string>();
+// Projects whose every view may be CDP-frozen, pushed by Main (#17038).
+const frozenViewProjects = new Set<string>();
 // Per-window UI-focused terminal id (from the renderer's focusedId). Read by
 // each window's PortQueueManager/PortBatcher to prioritize the focused pane.
 const windowFocusedTerminalMap = new Map<number, string | null>();
@@ -775,6 +777,7 @@ const visualOutputRouter = createVisualOutputRouter({
   terminalWorkerConnections,
   windowProjectMap,
   fallbackEligibleProjects,
+  frozenViewProjects,
   ipcDataMirrorTerminals,
   packetFramer,
   getVisualBuffers: () => visualBuffers,
@@ -1364,6 +1367,7 @@ const hostContext: HostContext = {
   terminalWorkerConnections,
   windowProjectMap,
   fallbackEligibleProjects,
+  frozenViewProjects,
   windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
   analysisWorkerPool,

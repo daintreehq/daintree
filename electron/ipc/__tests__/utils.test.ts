@@ -78,6 +78,8 @@ import {
   typedHandle,
   typedHandleWithContext,
   typedSend,
+  typedBroadcastLatestWins,
+  sendLatestWinsToWebContents,
   checkRateLimit,
   waitForRateLimitSlot,
   waitForBurstRateLimitSlot,
@@ -87,6 +89,7 @@ import {
   _resetRateLimitQueuesForTest,
 } from "../utils.js";
 import { markProjectlessView } from "../../window/projectlessViews.js";
+import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../ipcGuard.js";
 
 describe("ipc utils", () => {
@@ -1198,5 +1201,82 @@ describe("typedHandleWithContext multi-window project resolution", () => {
     // handlers that fail closed on it break these windows.
     const UNBOUND_SENDER = 303;
     await expect(invokeFrom(registered, UNBOUND_SENDER)).resolves.toEqual({ projectId: null });
+  });
+});
+
+describe("latest-wins snapshot delivery (#17038)", () => {
+  function freezableView(id: number) {
+    const send = vi.fn();
+    const wc = {
+      id,
+      isDestroyed: () => false,
+      send,
+      debugger: { isAttached: () => true, attach: vi.fn(), sendCommand: vi.fn(async () => {}) },
+    };
+    return { wc, send, win: { isDestroyed: () => false, webContents: wc } };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    isCachedViewWebContentsMock.mockImplementation(() => false);
+  });
+
+  it("gives a frozen cached view only the newest snapshot, once it thaws, and every other view each one", async () => {
+    const active = freezableView(41);
+    const cached = freezableView(42);
+    browserWindowGetAllWindowsMock.mockReturnValue([active.win, cached.win]);
+    isCachedViewWebContentsMock.mockImplementation((id) => id === 42);
+    await freezeWebContents(cached.wc as never);
+
+    const snapshots = [{ p1: { n: 1 } }, { p1: { n: 2 } }, {}] as never[];
+    for (const snapshot of snapshots) {
+      typedBroadcastLatestWins("project:stats-updated", snapshot);
+    }
+
+    expect(active.send.mock.calls).toEqual(snapshots.map((s) => ["project:stats-updated", s]));
+    expect(cached.send).not.toHaveBeenCalled();
+
+    await unfreezeWebContents(cached.wc as never);
+    // An empty map is a real replacement, so it is the one that lands.
+    expect(cached.send.mock.calls).toEqual([["project:stats-updated", {}]]);
+  });
+
+  it("replaces a held broadcast with a direct replay to the same view, and the reverse", async () => {
+    const cached = freezableView(43);
+    browserWindowGetAllWindowsMock.mockReturnValue([cached.win]);
+    isCachedViewWebContentsMock.mockImplementation(() => true);
+    await freezeWebContents(cached.wc as never);
+
+    typedBroadcastLatestWins("project:stats-updated", { p1: { n: 1 } } as never);
+    sendLatestWinsToWebContents(cached.wc as never, "project:stats-updated", { p1: { n: 2 } });
+    await unfreezeWebContents(cached.wc as never);
+    expect(cached.send.mock.calls).toEqual([["project:stats-updated", { p1: { n: 2 } }]]);
+
+    cached.send.mockClear();
+    await freezeWebContents(cached.wc as never);
+    sendLatestWinsToWebContents(cached.wc as never, "project:stats-updated", { p1: { n: 3 } });
+    typedBroadcastLatestWins("project:stats-updated", { p1: { n: 4 } } as never);
+    await unfreezeWebContents(cached.wc as never);
+    expect(cached.send.mock.calls).toEqual([["project:stats-updated", { p1: { n: 4 } }]]);
+  });
+
+  it("holds nothing for a view the remote-bound filter withholds", async () => {
+    const cached = freezableView(44);
+    browserWindowGetAllWindowsMock.mockReturnValue([cached.win]);
+    isCachedViewWebContentsMock.mockImplementation(() => true);
+    const uninstall = setRemoteBoundViewFilter((id) => id !== 44);
+    try {
+      await freezeWebContents(cached.wc as never);
+      typedBroadcastLatestWins("project:stats-updated", { p1: { n: 1 } } as never);
+      sendLatestWinsToWebContents(cached.wc as never, "project:stats-updated", { p1: { n: 2 } });
+      await unfreezeWebContents(cached.wc as never);
+    } finally {
+      uninstall();
+    }
+
+    expect(cached.send).not.toHaveBeenCalled();
   });
 });

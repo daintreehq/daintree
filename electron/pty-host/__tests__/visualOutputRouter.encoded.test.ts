@@ -52,6 +52,7 @@ function createRouter(
       options.shownProject === undefined ? [] : [[9, options.shownProject] as const]
     ),
     fallbackEligibleProjects: new Set(),
+    frozenViewProjects: new Set(),
     ipcDataMirrorTerminals: new Set(),
     packetFramer: { frame } as never,
     getVisualBuffers: () => [],

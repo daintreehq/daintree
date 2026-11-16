@@ -88,6 +88,7 @@ import {
 } from "./TerminalAgentDetection.js";
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
+import { isTerminalAgentLive } from "./agentLiveness.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
 import { stampPromptInput } from "../../../shared/utils/terminalInputProvenance.js";
 import {
@@ -276,10 +277,7 @@ export class TerminalProcess {
    * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
-    const t = this.terminalInfo;
-    if (t.detectedAgentId !== undefined) return true;
-    if (t.agentState === "exited" || t.isExited) return false;
-    return t.launchAgentId !== undefined;
+    return isTerminalAgentLive(this.terminalInfo);
   }
 
   // Live identity check for OSC 10/11 color-query responder ownership. Matches
