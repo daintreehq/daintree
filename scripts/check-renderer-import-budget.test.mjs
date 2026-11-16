@@ -146,9 +146,14 @@ describe("findEntryKey", () => {
       imports: ["_boot.js"],
       dynamicImports: ["src/App.tsx"],
     };
+    // By name alone: a file name the pattern doesn't know still can't win.
     expect(
       findEntryKey({
-        "src/projectWindow/projectShell.tsx": { ...shell, name: "project-shell" },
+        "src/projectWindow/projectShell.tsx": {
+          ...shell,
+          file: "assets/shell-entry.js",
+          name: "project-shell",
+        },
         ...makeManifest(),
       })
     ).toBe("src/main.tsx");

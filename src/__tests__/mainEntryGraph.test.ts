@@ -34,6 +34,9 @@ const PROJECT_ONLY = [
 ];
 
 function resolveSpecifier(fromFile: string, specifier: string): string | false | null {
+  // The one package alias vite.config.ts points into the app source; the
+  // others resolve into `packages/`, which never imports the app.
+  if (specifier === "@daintreehq/plugin-ui") return resolveRelative(join(SRC, "_"), "./pluginUi");
   if (specifier.startsWith("@/")) return resolveRelative(join(SRC, "_"), `./${specifier.slice(2)}`);
   if (specifier.startsWith("@shared/")) {
     return resolveRelative(join(SHARED, "_"), `./${specifier.slice("@shared/".length)}`);
@@ -78,6 +81,12 @@ describe("window roles evaluate only their own bootstrap", () => {
     const { files, problems } = eagerClosure(entry);
     expect(problems).toEqual([]);
     expect(PROJECT_ONLY.filter((file) => files.has(file))).toEqual([]);
+  });
+
+  it("follows the package alias that points into the app source", () => {
+    expect(posix(relative(REPO, String(resolveSpecifier(SRC, "@daintreehq/plugin-ui"))))).toBe(
+      "src/pluginUi/index.ts"
+    );
   });
 
   it("the project shell reaches every project-only module", () => {

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement, ReactNode } from "react";
+import { StrictMode, isValidElement, type ReactNode } from "react";
 
 const mocks = vi.hoisted(() => {
   const calls: string[] = [];
@@ -15,11 +15,13 @@ const mocks = vi.hoisted(() => {
   return {
     calls,
     record,
-    render: vi.fn(),
-    reportBootstrapFailure: vi.fn(),
+    /** `calls` as the first microtask after `initBuiltInPanelKinds` saw it. */
+    callsAtFirstMicrotask: null as string[] | null,
+    render: vi.fn<(node: ReactNode) => void>(),
+    reportBootstrapFailure: vi.fn<(error: unknown) => void>(),
     preloadRestoredPanesFromBoot: vi.fn(),
     bootPayload: { restoredPaneKinds: ["terminal"] },
-    initStoreOrchestrator: vi.fn(),
+    initStoreOrchestrator: vi.fn<() => () => void>(),
   };
 });
 
@@ -30,7 +32,15 @@ vi.mock("@/lib/bootPromise", () => ({
   },
 }));
 vi.mock("@/panels/registry", () => ({
-  initBuiltInPanelKinds: mocks.record("initBuiltInPanelKinds"),
+  initBuiltInPanelKinds: () => {
+    mocks.calls.push("initBuiltInPanelKinds");
+    // Runs once the synchronous run that called this has ended, before any
+    // continuation queued after it: anything the shell awaited before a call
+    // below would push that call past this snapshot.
+    queueMicrotask(() => {
+      mocks.callsAtFirstMicrotask = [...mocks.calls];
+    });
+  },
   preloadRestoredPanesFromBoot: mocks.preloadRestoredPanesFromBoot,
 }));
 vi.mock("react-dom/client", () => ({
@@ -110,10 +120,21 @@ async function evaluateShell(): Promise<void> {
   await import("../projectShell");
 }
 
+function childOf(node: ReactNode): ReactNode {
+  if (!isValidElement<{ children?: ReactNode }>(node)) throw new Error("not a React element");
+  return node.props.children;
+}
+
+function typeOf(node: ReactNode): unknown {
+  if (!isValidElement(node)) return undefined;
+  return typeof node.type === "function" ? node.type.name : node.type;
+}
+
 describe("project shell", () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.calls.length = 0;
+    mocks.callsAtFirstMicrotask = null;
     mocks.render.mockReset();
     mocks.reportBootstrapFailure.mockReset();
     mocks.preloadRestoredPanesFromBoot.mockReset();
@@ -128,8 +149,10 @@ describe("project shell", () => {
     await evaluateShell();
     await vi.waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
 
-    // `App evaluated` marks the first await: everything before it ran in the
-    // shell's own synchronous evaluation, where `app:boot` goes out too.
+    // Everything from the panel kinds to the agent settings ran in one
+    // synchronous run, with no await in between: an await anywhere before the
+    // App import would leave a call out of the first-microtask snapshot.
+    expect(mocks.callsAtFirstMicrotask).toEqual(SYNCHRONOUS_BOOTSTRAP);
     expect(mocks.calls).toEqual([...SYNCHRONOUS_BOOTSTRAP, "App evaluated", "createRoot"]);
     expect(mocks.preloadRestoredPanesFromBoot).toHaveBeenCalledWith(mocks.bootPayload);
     expect(mocks.reportBootstrapFailure).not.toHaveBeenCalled();
@@ -139,10 +162,11 @@ describe("project shell", () => {
     await evaluateShell();
     await vi.waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
 
-    const strictMode = mocks.render.mock.calls[0]![0] as ReactElement<{ children: ReactElement }>;
-    const provider = strictMode.props.children as ReactElement<{ children: ReactElement }>;
-    expect((provider.type as { name: string }).name).toBe("WorktreeStoreProvider");
-    expect((provider.props.children.type as { name: string }).name).toBe("App");
+    const root = mocks.render.mock.calls[0]![0];
+    expect(typeOf(root)).toBe(StrictMode);
+    const provider = childOf(root);
+    expect(typeOf(provider)).toBe("WorktreeStoreProvider");
+    expect(typeOf(childOf(provider))).toBe("App");
   });
 
   it("reports a failed App import as a bootstrap failure instead of mounting", async () => {
@@ -157,6 +181,11 @@ describe("project shell", () => {
       vi.doMock("@/App", () => ({ default: function App() {} }));
     }
 
+    // Vitest wraps a throwing mock factory, keeping the module's own error as the cause.
+    expect(mocks.reportBootstrapFailure.mock.calls[0]![0]).toHaveProperty(
+      "cause.message",
+      "App chunk failed"
+    );
     expect(mocks.render).not.toHaveBeenCalled();
   });
 

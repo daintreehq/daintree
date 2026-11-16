@@ -28,8 +28,15 @@ interface FakeChunk {
   code: string;
 }
 
-/** Drives the plugin's hooks the way a build would, with one shell emitted. */
-function runBuild(rendered: Array<{ fileName: string; code: string }>, shell?: Partial<FakeChunk>) {
+/**
+ * Drives the plugin's hooks the way a build would. `shell` overrides the
+ * emitted shell chunk (`null` leaves it out); `added` are chunks that reach the
+ * bundle without passing through renderChunk, as a later transform's would.
+ */
+function runBuild(
+  rendered: Array<{ fileName: string; code: string }>,
+  { shell, added = [] }: { shell?: Partial<FakeChunk> | null; added?: FakeChunk[] } = {}
+) {
   const plugin = projectShellChunkPlugin();
   const emitted: unknown[] = [];
   hook(plugin, "configResolved").call(undefined, { root: REPO });
@@ -53,14 +60,17 @@ function runBuild(rendered: Array<{ fileName: string; code: string }>, shell?: P
       code: result?.code ?? chunk.code,
     };
   }
-  bundle[SHELL_FILE] = {
-    type: "chunk",
-    fileName: SHELL_FILE,
-    name: PROJECT_SHELL_CHUNK_NAME,
-    isEntry: true,
-    code: "",
-    ...shell,
-  };
+  if (shell !== null) {
+    bundle[SHELL_FILE] = {
+      type: "chunk",
+      fileName: SHELL_FILE,
+      name: PROJECT_SHELL_CHUNK_NAME,
+      isEntry: true,
+      code: "",
+      ...shell,
+    };
+  }
+  for (const chunk of added) bundle[chunk.fileName] = chunk;
   const errors: string[] = [];
   hook(plugin, "generateBundle").call(
     {
@@ -127,10 +137,45 @@ describe("projectShellChunkPlugin", () => {
     );
   });
 
+  it("fails a build where two chunks carried the placeholder", () => {
+    // Two copies mean the URL module was split or duplicated; at most one of
+    // them is the binding main.tsx reads, so the build can't vouch for it.
+    expect(() =>
+      runBuild([
+        { fileName: "assets/boot-1.js", code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"` },
+        { fileName: "assets/boot-2.js", code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"` },
+      ])
+    ).toThrow(/expected one chunk to carry the project shell URL.*found 2/);
+  });
+
+  it("fails a build where a placeholder reaches the bundle after rendering", () => {
+    expect(() =>
+      runBuild([{ fileName: "assets/boot-1.js", code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"` }], {
+        added: [
+          {
+            type: "chunk",
+            fileName: "assets/late-1.js",
+            name: "late",
+            isEntry: false,
+            code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"`,
+          },
+        ],
+      })
+    ).toThrow(/placeholder survived in assets\/late-1\.js/);
+  });
+
   it("fails a build where the shell chunk is not an entry", () => {
     expect(() =>
       runBuild([{ fileName: "assets/boot-1.js", code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"` }], {
-        isEntry: false,
+        shell: { isEntry: false },
+      })
+    ).toThrow(/no entry chunk named "project-shell"/);
+  });
+
+  it("fails a build with no shell chunk at all", () => {
+    expect(() =>
+      runBuild([{ fileName: "assets/boot-1.js", code: `"${PROJECT_SHELL_FILE_PLACEHOLDER}"` }], {
+        shell: null,
       })
     ).toThrow(/no entry chunk named "project-shell"/);
   });

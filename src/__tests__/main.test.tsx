@@ -2,14 +2,14 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
+import { isValidElement, type ReactNode } from "react";
 
 const mocks = vi.hoisted(() => ({
-  render: vi.fn(),
+  render: vi.fn<(node: ReactNode) => void>(),
   createRoot: vi.fn(),
   getSafeBootPromise: vi.fn(),
   initHostedViews: vi.fn(),
-  reportBootstrapFailure: vi.fn(),
+  reportBootstrapFailure: vi.fn<(error: unknown) => void>(),
   calls: [] as string[],
 }));
 
@@ -52,9 +52,13 @@ function shellScripts(): HTMLScriptElement[] {
   );
 }
 
-function renderedRoot(): ReactElement {
-  const strictMode = mocks.render.mock.calls[0]![0] as ReactElement<{ children: ReactElement }>;
-  return strictMode.props.children;
+/** The role root inside the `StrictMode` wrapper that was rendered. */
+function renderedRoot(): { name: unknown; props: unknown } {
+  const strictMode = mocks.render.mock.calls[0]![0];
+  if (!isValidElement<{ children?: ReactNode }>(strictMode)) throw new Error("rendered no element");
+  const root = strictMode.props.children;
+  if (!isValidElement(root)) throw new Error("StrictMode wraps no element");
+  return { name: typeof root.type === "function" ? root.type.name : root.type, props: root.props };
 }
 
 async function bootMain(): Promise<void> {
@@ -93,7 +97,7 @@ describe("src/main.tsx role routing", () => {
     await bootMain();
     await vi.waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
 
-    expect(renderedRoot().props).toEqual({ surfaceId: "surface-1" });
+    expect(renderedRoot()).toEqual({ name: "SurfaceHostRoot", props: { surfaceId: "surface-1" } });
     expect(shellScripts()).toEqual([]);
     expect(mocks.calls).toEqual(["app:boot", "createRoot"]);
     expect(document.getElementById("startup-skeleton")).toBeNull();
@@ -107,7 +111,7 @@ describe("src/main.tsx role routing", () => {
     await bootMain();
     await vi.waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
 
-    expect(renderedRoot().props).toEqual({ surfaceId: "surface-2" });
+    expect(renderedRoot()).toEqual({ name: "SurfaceHostRoot", props: { surfaceId: "surface-2" } });
     expect(mocks.calls).not.toContain("canopy-root-evaluated");
     expect(mocks.initHostedViews).not.toHaveBeenCalled();
   });
@@ -118,7 +122,7 @@ describe("src/main.tsx role routing", () => {
     await bootMain();
     await vi.waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
 
-    expect((renderedRoot().type as { name: string }).name).toBe("CanopyWindowRoot");
+    expect(renderedRoot().name).toBe("CanopyWindowRoot");
     expect(shellScripts()).toEqual([]);
     expect(mocks.calls).toEqual([
       "app:boot",
@@ -152,6 +156,9 @@ describe("src/main.tsx role routing", () => {
     expect(mocks.reportBootstrapFailure).toHaveBeenCalledTimes(1);
     const [error] = mocks.reportBootstrapFailure.mock.calls[0]!;
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("/src/projectWindow/projectShell.tsx");
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("/src/projectWindow/projectShell.tsx")
+    );
   });
 });
