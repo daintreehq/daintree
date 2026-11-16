@@ -7,6 +7,10 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
+import type {
+  CancelDecisionQuestionPayload,
+  DecisionQuestionCancelResult,
+} from "../../../shared/types/decisionsQuestion.js";
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
@@ -540,6 +544,26 @@ export class DecisionsService {
 
   getPaneState(terminalId: string): PaneDecisionState | null {
     return this.state === "off" ? null : this.panes.get(terminalId);
+  }
+
+  /**
+   * A person withdrawing one of a pane's questions from the view of the
+   * project it belongs to (#17099), on the route agents ask on; not running
+   * while no route serves questions.
+   */
+  cancelQuestion(
+    projectId: string | null,
+    payload: CancelDecisionQuestionPayload
+  ): Promise<DecisionQuestionCancelResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    return questions.cancelForPerson(payload.questionId, {
+      hostId: this.settings?.hostId ?? null,
+      projectId,
+      terminalId: payload.terminalId,
+    });
   }
 
   /**

@@ -5,9 +5,11 @@ import {
   type PaneAuthenticator,
 } from "@daintreehq/decisions-client";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import type { DecisionQuestionCancelResult } from "../../../shared/types/decisionsQuestion.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
+import type { QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
 
 export const DECISIONS_MCP_PATH = "/mcp/decisions";
@@ -117,6 +119,14 @@ export interface DecisionsMcpRouteSources extends PaneAccessSources {
 export interface DecisionsQuestions {
   /** The listener port the route is served on; null while it has none (#16012). */
   listenerPort(): Promise<number | null>;
+  /**
+   * A person withdrawing one of a pane's questions from its view (#17099),
+   * through the bridge agents ask on, so it takes its turn with their posts.
+   */
+  cancelForPerson(
+    questionId: string,
+    scope: QuestionReadScope
+  ): Promise<DecisionQuestionCancelResult>;
   close(): Promise<void>;
 }
 
@@ -137,5 +147,9 @@ export function openDecisionsMcpRoute(
       `[Decisions] /mcp/decisions couldn't hold the MCP listener: ${formatErrorMessage(error, "unknown error")}`
     );
   });
-  return route;
+  return {
+    listenerPort: () => route.listenerPort(),
+    cancelForPerson: (questionId, scope) => bridge.cancelForPerson(questionId, scope),
+    close: () => route.close(),
+  };
 }

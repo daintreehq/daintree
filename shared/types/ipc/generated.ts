@@ -806,6 +806,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsModel.js").CancelDecisionsModelEvaluationPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
   };
+  "decisions:cancel-question": {
+    args: [payload: import("../decisionsQuestion.js").CancelDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionCancelResult;
+  };
   "decisions:cancel-relay-deploy": {
     args: [deployId: string];
     result: void;

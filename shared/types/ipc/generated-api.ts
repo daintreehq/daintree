@@ -448,6 +448,9 @@ export interface GeneratedElectronAPI {
     cancelModelEvaluation(
       ...args: IpcInvokeMap["decisions:cancel-model-evaluation"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-model-evaluation"]["result"]>;
+    cancelQuestion(
+      ...args: IpcInvokeMap["decisions:cancel-question"]["args"]
+    ): Promise<IpcInvokeMap["decisions:cancel-question"]["result"]>;
     cancelRelayDeploy(
       ...args: IpcInvokeMap["decisions:cancel-relay-deploy"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-relay-deploy"]["result"]>;

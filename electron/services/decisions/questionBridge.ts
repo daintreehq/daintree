@@ -6,8 +6,14 @@ import {
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
+  type QuestionRow,
   type RegisterResult,
 } from "@daintreehq/decisions-client";
+import type {
+  DecisionQuestionCancelRefusal,
+  DecisionQuestionCancelResult,
+} from "../../../shared/types/decisionsQuestion.js";
+import { inScope, type QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
 import { holdingTerminalSink } from "./relayTransport.js";
 
@@ -16,6 +22,27 @@ function questionIdOf(input: unknown): string | null {
   if (typeof input !== "object" || input === null) return null;
   const id = (input as { question_id?: unknown }).question_id;
   return typeof id === "string" ? id : null;
+}
+
+/**
+ * Why a person can't withdraw a question in this state; null while it still
+ * waits (queued or open), or is already withdrawn.
+ */
+function cancelRefusal(status: QuestionRow["local_status"]): DecisionQuestionCancelRefusal | null {
+  switch (status) {
+    case "queued":
+    case "open":
+    case "cancelled":
+      return null;
+    // The relay would take a cancel of the model's answer, but that answer is already the agent's to read.
+    case "human-answered":
+    case "proxy-answered":
+      return "answered";
+    case "expired":
+      return "expired";
+    case "publish-failed":
+      return "publish-failed";
+  }
 }
 
 export interface QuestionBridgeOptions {
@@ -95,12 +122,59 @@ export class QuestionBridge extends DecisionsBridge {
   }
 
   /**
+   * A person withdrawing a question from Daintree's own view of its pane
+   * (#17099), never reachable from an agent. The view's scope stands in for
+   * the asker: the question must be one that pane asked on this machine, in
+   * the view's project, and still waiting. Unlike an agent's cancel, the run
+   * that asked needn't be current, since a person may withdraw a question
+   * after its agent exited or was relaunched. It goes the way an agent's
+   * cancel does from there, in turn with posts, so a follow-up committed for
+   * the question never interleaves with it.
+   */
+  cancelForPerson(
+    questionId: string,
+    scope: QuestionReadScope
+  ): Promise<DecisionQuestionCancelResult> {
+    const cancel = async (): Promise<DecisionQuestionCancelResult> => {
+      const store = this.question.source.store;
+      const row = await store.getQuestion(questionId);
+      if (row === null || row.history_only || !inScope(row, scope)) {
+        return { result: "refused", reason: "not-found" };
+      }
+      if (row.local_status === "cancelled") return { result: "cancelled" };
+      const refusal = cancelRefusal(row.local_status);
+      if (refusal !== null) return { result: "refused", reason: refusal };
+      const live = this.connected();
+      if (live === null) {
+        await super.cancelQuestion(questionId);
+      } else {
+        await this.keepCreate(questionId);
+        await live.cancelQuestion(questionId);
+      }
+      // What the store records once the request is in: dropped here, or a
+      // relay's confirmation that already landed, reads as cancelled.
+      const status = (await store.getQuestion(questionId))?.local_status ?? null;
+      await this.ctx.audit.log({
+        event: "question.cancel-requested",
+        question_id: questionId,
+        requirement: row.requirement,
+        result: "person",
+        detail: { status },
+      });
+      return { result: status === "cancelled" ? "cancelled" : "cancelling" };
+    };
+    const run = this.posts.then(cancel);
+    this.posts = run.catch(() => {});
+    return run;
+  }
+
+  /**
    * An agent's follow-up (#16232) goes the way an ask does: to the live
    * attempt, or committed here between attempts, sealed and signed, for the
    * next one to publish after its question. Posts run one at a time: each
    * bridge reserves a question's message count and order under its own lock,
    * and a post committed here could otherwise race one on an attempt that has
-   * just gone live.
+   * just gone live. A person's cancel takes its turn with them.
    */
   override postMessage(input: unknown, pane: PaneIdentity): Promise<PostMessageResult> {
     const post = async (): Promise<PostMessageResult> => {
@@ -166,6 +240,14 @@ export class QuestionBridge extends DecisionsBridge {
     if (!this.question.isCurrent(pane)) {
       throw new BridgeError("forbidden", "this terminal's Decisions access has ended");
     }
+    return this.connected();
+  }
+
+  /**
+   * The live attempt's bridge to run a call on, or null to run it here, on
+   * the current identity. Throws once the connection has ended.
+   */
+  private connected(): DecisionsBridge | null {
     const identity = this.question.source.identity();
     if (identity === null) {
       throw new BridgeError("forbidden", "Decisions isn't connected to its relay");

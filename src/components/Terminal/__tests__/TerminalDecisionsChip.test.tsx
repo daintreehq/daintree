@@ -45,7 +45,10 @@ vi.mock("@/components/ui/popover", async () => {
 
 import { TerminalDecisionsChip } from "../TerminalDecisionsChip";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
-import type { DecisionQuestionSummariesResult } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionSummariesResult,
+} from "@shared/types/decisionsQuestion";
 
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
@@ -57,6 +60,10 @@ const getQuestionSummaries =
       terminalId: string;
       questionIds: string[];
     }) => Promise<DecisionQuestionSummariesResult>
+  >();
+const cancelQuestion =
+  vi.fn<
+    (payload: { terminalId: string; questionId: string }) => Promise<DecisionQuestionCancelResult>
   >();
 const onDecisionState = vi.fn((callback: (state: PaneDecisionState) => void) => {
   paneListeners.push(callback);
@@ -101,6 +108,7 @@ beforeEach(() => {
       line: `Opening line of ${questionId}`,
     })),
   }));
+  cancelQuestion.mockReset().mockResolvedValue({ result: "cancelling" });
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
   onDecisionState.mockClear();
   Reflect.set(window, "electron", {
@@ -113,7 +121,7 @@ beforeEach(() => {
         };
       },
     },
-    decisions: { getStatus, getPaneState, getQuestionSummaries },
+    decisions: { getStatus, getPaneState, getQuestionSummaries, cancelQuestion },
     terminal: { onDecisionState },
   });
 });
@@ -335,6 +343,260 @@ describe("TerminalDecisionsChip", () => {
         request: { terminalId: "t1", questionIds: ["q42", "q43"], index: 1 },
       });
       expect(screen.queryByTestId("popover-content")).toBeNull();
+    });
+  });
+
+  describe("cancelling a question", () => {
+    const openAndAnswered = paneState({
+      waitingAnswers: [
+        { questionId: "q41", alias: 41, kind: "answer", deliveryStatus: "desktop-received" },
+      ],
+    });
+
+    async function askToCancel(): Promise<void> {
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      await waitFor(() =>
+        expect(screen.getAllByTestId("terminal-decisions-row-line").length).toBeGreaterThan(0)
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel question q-42…" }));
+    }
+
+    function dialogButton(name: string): HTMLElement {
+      return screen.getByRole("button", { name });
+    }
+
+    it("offers Cancel only on a waiting question, and says why an answered one has none", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(openAndAnswered);
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      await screen.findAllByTestId("terminal-decisions-row");
+
+      const cancels = screen.getAllByTestId("terminal-decisions-cancel");
+      expect(cancels.map((button) => button.getAttribute("aria-label"))).toEqual([
+        "Cancel question q-42…",
+      ]);
+      expect(screen.getByTestId("popover-content").textContent).toContain(
+        "Answered questions can't be cancelled"
+      );
+    });
+
+    it("asks first, naming the question by alias and opening line, and Keep question asks main for nothing", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("Cancel question q-42?");
+      expect(dialog.textContent).toContain("Opening line of q42");
+      expect(dialog.textContent).toContain("Nothing is typed into this terminal");
+
+      fireEvent.click(dialogButton("Keep question"));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    });
+
+    it("withdraws it on confirm, showing it cancelling until the pane's state drops it", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      expect(cancelQuestion).toHaveBeenCalledExactlyOnceWith({
+        terminalId: "t1",
+        questionId: "q42",
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+      const chip = screen.getByTestId("terminal-decisions-chip");
+      expect(chip.textContent).toContain("q-42 cancelling");
+      fireEvent.click(chip);
+      await screen.findAllByTestId("terminal-decisions-row");
+      expect(screen.queryByTestId("terminal-decisions-cancel")).toBeNull();
+      expect(screen.getByTestId("popover-content").textContent).toContain(
+        "Cancelling, waiting for the relay to confirm"
+      );
+
+      // The relay's confirmation reaches the pane's state, and the question goes.
+      act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+      expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+    });
+
+    it("keeps a refusal in the dialog, naming the question, with only a way out", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      cancelQuestion.mockResolvedValue({ result: "refused", reason: "answered" });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("q-42 has been answered, so it can't be cancelled.");
+      expect(dialogButton("Cancel question").getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(dialogButton("Close"));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    });
+
+    it("lets a failed call be tried again", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      cancelQuestion
+        .mockRejectedValueOnce(new Error("The link to the host dropped"))
+        .mockResolvedValueOnce({ result: "cancelled" });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      expect(screen.getByRole("alertdialog").textContent).toContain("The link to the host dropped");
+      expect(dialogButton("Cancel question").hasAttribute("aria-disabled")).toBe(false);
+      expect(dialogButton("Keep question")).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      expect(cancelQuestion).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    });
+
+    it("gives a failed call's retry way to an answer that arrived meanwhile, leaving only Close", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      cancelQuestion.mockRejectedValueOnce(new Error("The link to the host dropped"));
+      const another = {
+        questionId: "q43",
+        alias: 43,
+        status: "open" as const,
+        askedAt: "2026-11-02T10:05:00.000Z",
+        expiresAt: null,
+      };
+      getPaneState.mockResolvedValue(
+        paneState({ openQuestions: [...paneState().openQuestions, another] })
+      );
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      expect(screen.getByRole("alertdialog").textContent).toContain("The link to the host dropped");
+
+      // Answered on a phone while the dialog stayed open; the other question keeps the chip.
+      act(() =>
+        paneListeners[0]!(
+          paneState({
+            openQuestions: [another],
+            waitingAnswers: [
+              { questionId: "q42", alias: 42, kind: "answer", deliveryStatus: "desktop-received" },
+            ],
+            revision: 2,
+          })
+        )
+      );
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("q-42 isn't waiting for an answer any more");
+      expect(dialog.textContent).not.toContain("The link to the host dropped");
+      expect(dialogButton("Cancel question").getAttribute("aria-disabled")).toBe("true");
+      expect(dialogButton("Close")).toBeTruthy();
+    });
+
+    it("stays open and locked while main answers, even when the last question goes meanwhile", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      let resolve!: (result: DecisionQuestionCancelResult) => void;
+      cancelQuestion.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          })
+      );
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      act(() => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      act(() => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      // The relay's confirmation can reach the pane before main's answer reaches the dialog.
+      act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+      expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+      expect(dialogButton("Keep question").getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByRole("alertdialog").textContent).not.toContain("isn't waiting");
+      fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+      await act(async () => {
+        resolve({ result: "cancelled" });
+      });
+      expect(cancelQuestion).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    });
+
+    it("keeps main's reason for a refusal over the question having stopped waiting", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      let resolve!: (result: DecisionQuestionCancelResult) => void;
+      cancelQuestion.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          })
+      );
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      act(() => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      // Answered on a phone: the pane drops it before main's refusal arrives.
+      act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+      await act(async () => {
+        resolve({ result: "refused", reason: "answered" });
+      });
+
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("q-42 has been answered, so it can't be cancelled.");
+      expect(dialog.textContent).not.toContain("isn't waiting");
+      expect(dialogButton("Close")).toBeTruthy();
+    });
+
+    it("reads the opening line itself when the row hadn't yet, confirming only once it has", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      let answerRow!: (result: DecisionQuestionSummariesResult) => void;
+      getQuestionSummaries.mockImplementationOnce(() => new Promise(() => {}));
+      getQuestionSummaries.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            answerRow = done;
+          })
+      );
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      fireEvent.click(await screen.findByRole("button", { name: "Cancel question q-42…" }));
+      await screen.findByRole("alertdialog");
+
+      expect(getQuestionSummaries).toHaveBeenLastCalledWith({
+        terminalId: "t1",
+        questionIds: ["q42"],
+      });
+      expect(dialogButton("Cancel question").getAttribute("aria-disabled")).toBe("true");
+      await act(async () => {
+        answerRow({
+          result: "read",
+          summaries: [{ questionId: "q42", result: "read", line: "Merge the release branch?" }],
+        });
+      });
+      expect(screen.getByRole("alertdialog").textContent).toContain("Merge the release branch?");
+      expect(dialogButton("Cancel question").hasAttribute("aria-disabled")).toBe(false);
     });
   });
 });

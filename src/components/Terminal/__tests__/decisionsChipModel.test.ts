@@ -6,10 +6,13 @@ import type {
   PaneDecisionWaiting,
 } from "@shared/types/decisions";
 import {
+  cancelNote,
   chipLabel,
   chipSummary,
   decisionItems,
   deliveryNotes,
+  isCancellable,
+  itemSentence,
   paneWaitOf,
   needsAttention,
 } from "../decisionsChipModel";
@@ -193,5 +196,74 @@ describe("deliveryNotes", () => {
     );
     expect(new Set(notes).size).toBe(3);
     for (const note of notes) expect(note).not.toMatch(/idle/);
+  });
+});
+
+describe("a person's cancel", () => {
+  it("offers a cancel only on questions still waiting for an answer", () => {
+    const items = decisionItems(
+      pane({
+        open: [open(1), open(2, "queued")],
+        waiting: [waiting(3), waiting(4, "expired")],
+        attention: [stopped(5), stopped(6, "delivery-uncertain")],
+      })
+    );
+    expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-1", "q-2"]);
+  });
+
+  it("shows a withdrawal the relay hasn't confirmed as cancelling, last, with no cancel and no answer coming", () => {
+    const state = pane({ open: [open(1), open(2, "queued"), open(3)] });
+    const items = decisionItems(state, "composer", new Set(["q1", "q2"]));
+
+    expect(items.map((item) => [item.label, item.kind])).toEqual([
+      ["q-3", "open"],
+      ["q-1", "cancelling"],
+      ["q-2", "cancelling"],
+    ]);
+    expect(items.filter(isCancellable).map((item) => item.label)).toEqual(["q-3"]);
+    expect(chipSummary(items)).toBe(
+      "3 Decisions questions: 1\u00a0waiting for an answer; 2\u00a0cancelling"
+    );
+
+    const withdrawn = decisionItems(pane({ open: [open(1)] }), "composer", new Set(["q1"]));
+    expect(chipLabel(withdrawn)).toEqual({ text: "q-1 cancelling", detail: null });
+    expect(itemSentence(withdrawn[0]!)).toMatch(/^Question q-1 is being cancelled/);
+    // Nothing will be typed in for it, so the pane makes no promise.
+    expect(deliveryNotes(withdrawn)).toEqual([]);
+    expect(deliveryNotes(decisionItems(pane({ open: [open(1)] })))).toHaveLength(1);
+  });
+
+  it("marks only questions the pane still lists as waiting", () => {
+    // An answer that arrived for a withdrawn question is shown as the answer it is.
+    const items = decisionItems(pane({ waiting: [waiting(1)] }), "composer", new Set(["q1"]));
+    expect(items.map((item) => item.kind)).toEqual(["answer"]);
+  });
+
+  it("says why answered and expired rows offer no cancel, and nothing when every row is waiting", () => {
+    const note = (state: PaneDecisionState) => cancelNote(decisionItems(state));
+    expect(note(pane({ open: [open(1), open(2, "queued")] }))).toBeNull();
+    expect(note(pane({ open: [open(1)], waiting: [waiting(2)] }))).toBe(
+      "Answered questions can't be cancelled"
+    );
+    expect(note(pane({ attention: [stopped(2, "delivery-uncertain")] }))).toBe(
+      "Answered questions can't be cancelled"
+    );
+    expect(note(pane({ waiting: [waiting(2, "expired")] }))).toBe(
+      "Expired questions can't be cancelled"
+    );
+    expect(note(pane({ waiting: [waiting(2, "expired")], attention: [stopped(3)] }))).toBe(
+      "Answered and expired questions can't be cancelled"
+    );
+    // A follow-up held on a question still waiting lists it under attention too, but it isn't answered.
+    expect(note(pane({ open: [open(1)], attention: [stopped(1)] }))).toBeNull();
+    expect(note(pane({ open: [open(1)], attention: [stopped(1), stopped(2)] }))).toBe(
+      "Answered questions can't be cancelled"
+    );
+    const withdrawn = decisionItems(
+      pane({ open: [open(1)], attention: [stopped(1)] }),
+      "composer",
+      new Set(["q1"])
+    );
+    expect(cancelNote(withdrawn)).toBeNull();
   });
 });

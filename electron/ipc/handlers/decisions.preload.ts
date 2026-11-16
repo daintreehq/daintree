@@ -5,6 +5,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   getPaneState: "decisions:get-pane-state",
   getQuestionContent: "decisions:get-question-content",
   getQuestionSummaries: "decisions:get-question-summaries",
+  cancelQuestion: "decisions:cancel-question",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",

@@ -257,6 +257,8 @@ export const CHANNEL_LOCALITY = {
   "crash-recovery:set-config": "shell",
   "decisions:approve-pairing": "shell",
   "decisions:cancel-model-evaluation": "shell",
+  // Withdrawn by the Decisions device that asked it: a Remote Host's own key for its panes (#17099).
+  "decisions:cancel-question": "host",
   "decisions:cancel-relay-deploy": "shell",
   "decisions:cancel-setup-check": "shell",
   "decisions:check-relay": "shell",
