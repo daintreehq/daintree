@@ -14,15 +14,18 @@ const STARTUP_ENTRIES = ["electron/bootstrap.ts", "electron/main.ts"];
 /**
  * What boot imports dynamically before the first window is interactive: host
  * services wire PluginService and the port broker, and Remote Hosts, on in
- * every build, starts once the launch settles. PluginService and Remote Hosts'
- * plugin parity still reach the manifest schema, which plugin hydration reads
- * at startup; neither may reach the rest.
+ * every build, starts once the launch settles, with its throwaway runs and,
+ * where the build can be a Host, the host role, Host mode on or off.
+ * PluginService and Remote Hosts' plugin parity still reach the manifest
+ * schema, which plugin hydration reads at startup; neither may reach the rest.
  */
 const EARLY_DYNAMIC_ROOTS = [
   "electron/services/PluginService.ts",
   "electron/services/WorktreePortBroker.ts",
   "electron/remote/boot.ts",
+  "electron/services/throwaway/index.ts",
 ];
+const HOST_ROLE_ROOT = "electron/remote/hostBoot.ts";
 const NOT_EARLY = MAIN_ON_DEMAND_PATTERNS.filter(({ label }) => label !== "Plugin manifest schema");
 
 /**
@@ -38,10 +41,16 @@ const NOT_EARLY = MAIN_ON_DEMAND_PATTERNS.filter(({ label }) => label !== "Plugi
 describe("main's on-demand feature boundary", () => {
   let metafile: Metafile;
   let eager: Set<string>;
+  let earlyRoots: string[];
 
   beforeAll(async () => {
+    const config = mainEsmConfig({ production: true });
+    earlyRoots =
+      config.define?.__DAINTREE_REMOTE_HOST_ROLE__ === "true"
+        ? [...EARLY_DYNAMIC_ROOTS, HOST_ROLE_ROOT]
+        : EARLY_DYNAMIC_ROOTS;
     const result = await build({
-      ...mainEsmConfig({ production: true }),
+      ...config,
       write: false,
       metafile: true,
       logLevel: "silent",
@@ -82,7 +91,7 @@ describe("main's on-demand feature boundary", () => {
   it("reaches neither the session service nor voice cleanup from what boot imports early", () => {
     const inputs = new Set(Object.keys(metafile.inputs));
     const early = new Set(eager);
-    for (const root of EARLY_DYNAMIC_ROOTS) {
+    for (const root of earlyRoots) {
       expect(inputs.has(root), root).toBe(true);
       for (const file of walkEagerGraph(metafile, root)) early.add(file);
     }
