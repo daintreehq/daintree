@@ -32,6 +32,18 @@ vi.mock("../../../services/getSoundService.js", () => ({
   getSoundService: vi.fn().mockResolvedValue({ play: vi.fn() }),
 }));
 
+// A git dir read that never settles, as on a stalled network mount.
+const stallGitDirRead = vi.hoisted(() => ({ on: false }));
+
+vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/gitUtils.js")>();
+  return {
+    ...actual,
+    resolveGitDirFromFs: (cwd: string) =>
+      stallGitDirRead.on ? new Promise<never>(() => {}) : actual.resolveGitDirFromFs(cwd),
+  };
+});
+
 // Real git: what these handlers cost is the processes they start, which only a
 // real repository and the real spawn can show. simple-git binds `spawn` by name.
 const spawned: string[][] = [];
@@ -156,6 +168,60 @@ describe("git-write staging handlers (real git)", () => {
       expect(git(cwd, "diff", "--cached", "--name-only")).toBe("");
       expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
     }
+  });
+
+  it("unstages several files, and everything, without asking git whether HEAD exists", async () => {
+    commitFiles({ "a.txt": "one\n", "b.txt": "one\n" });
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), "two\n");
+    git(repo, "add", ".");
+
+    let mark = spawned.length;
+    await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b.txt"] });
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
+
+    git(repo, "add", ".");
+    mark = spawned.length;
+    await handler(CHANNELS.GIT_UNSTAGE_ALL)(null, repo);
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(spawnedSince(mark).map(subcommand)).toEqual(["reset"]);
+  });
+
+  it("asks git once reading HEAD from the git dir stalls", async () => {
+    commitFiles({ "a.txt": "one\n" });
+    fs.writeFileSync(path.join(repo, "a.txt"), "two\n");
+    git(repo, "add", "a.txt");
+
+    stallGitDirRead.on = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const mark = spawned.length;
+      const run = unstage("a.txt");
+      await vi.advanceTimersByTimeAsync(5_000);
+      vi.useRealTimers();
+      await run;
+      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "reset"]);
+    } finally {
+      vi.useRealTimers();
+      stallGitDirRead.on = false;
+    }
+  });
+
+  it("unstages several files, and everything, on an unborn branch", async () => {
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), `${name}\n`);
+    git(repo, "add", ".");
+    await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt"] });
+    expect(git(repo, "ls-files")).toBe("b.txt\n");
+
+    await handler(CHANNELS.GIT_UNSTAGE_ALL)(null, repo);
+    expect(git(repo, "ls-files")).toBe("");
+    expect(
+      fs
+        .readdirSync(repo)
+        .filter((name) => name !== ".git")
+        .sort()
+    ).toEqual(["a.txt", "b.txt"]);
   });
 
   it("unstages the first file of an unborn branch and leaves it on disk", async () => {

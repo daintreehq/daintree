@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -48,6 +49,13 @@ let diffSpawns = 0;
 let probeSpawns = 0;
 const originalSpawn = childProcess.spawn;
 
+/**
+ * Runs once when the next git process whose argv includes `command` exits,
+ * before the service sees its output: a change landing between two of the
+ * service's own steps.
+ */
+let afterNext: { command: string; run: () => void } | null = null;
+
 // Git 2.42+ names the config files it reads in `git var -l`, which is what
 // lets a continuation reuse its probe instead of spawning one per window.
 const gitListsConfigFiles = /^GIT_CONFIG_GLOBAL=/m.test(git(os.tmpdir(), "var", "-l"));
@@ -73,11 +81,18 @@ describe("getFileDiff paging over a real repo", () => {
     process.env.XDG_CONFIG_HOME = path.join(home, ".config");
     process.env.GIT_CONFIG_NOSYSTEM = "1";
     (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
-      if (Array.isArray(args[1]) && args[1].includes("diff")) diffSpawns++;
-      if (Array.isArray(args[1]) && (args[1].includes("rev-parse") || args[1].includes("var"))) {
-        probeSpawns++;
+      const argv = Array.isArray(args[1]) ? (args[1] as string[]) : [];
+      if (argv.includes("diff")) diffSpawns++;
+      if (argv.includes("rev-parse") || argv.includes("var")) probeSpawns++;
+      const child = (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(
+        ...args
+      );
+      const hook = afterNext;
+      if (hook && argv.includes(hook.command)) {
+        afterNext = null;
+        child.once("exit", hook.run);
       }
-      return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
+      return child;
     }) as typeof originalSpawn;
     syncBuiltinESMExports();
     const { WorkspaceService } = await import("../WorkspaceService.js");
@@ -98,6 +113,7 @@ describe("getFileDiff paging over a real repo", () => {
   });
 
   beforeEach(() => {
+    afterNext = null;
     rmSync(path.join(home, ".gitconfig"), { force: true });
     tmp = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-cache-")));
     repo = path.join(tmp, "repo");
@@ -132,18 +148,26 @@ describe("getFileDiff paging over a real repo", () => {
     return last as DiffResult;
   }
 
-  function expectedDiff(file: string, cwd = repo, ignoreWhitespace = false): string {
-    return git(
-      cwd,
-      "diff",
-      "HEAD",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--no-color",
-      "--submodule=short",
-      ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-      "--",
-      file
+  function expectedDiff(
+    file: string,
+    cwd = repo,
+    ignoreWhitespace = false,
+    env: NodeJS.ProcessEnv = GIT_ENV
+  ): string {
+    return execFileSync(
+      "git",
+      [
+        "diff",
+        "HEAD",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--submodule=short",
+        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+        "--",
+        file,
+      ],
+      { cwd, env, encoding: "utf-8" }
     );
   }
 
@@ -244,8 +268,39 @@ describe("getFileDiff paging over a real repo", () => {
       pages++;
     }
     expect(pages).toBeGreaterThan(10);
-    // One `rev-parse` and one `var -l`, from the first window's cache fill.
+    // From the first window's cache fill: `rev-parse` and `var -l`, then
+    // `var -l` again to confirm the config stood still while it was statted.
+    expect(probeSpawns - before).toBe(3);
+  });
+
+  it("never reuses a probe whose config moved between its two reads", async () => {
+    const extra = path.join(tmp, "extra.gitconfig");
+    afterNext = { command: "var", run: () => git(repo, "config", "include.path", extra) };
+    const first = await page("a.txt", 0);
+    expect(git(repo, "config", "include.path").trim()).toBe(extra);
+
+    // The include arrived after `var -l` answered: no window may lean on that
+    // answer, so each probes again, and an edit to the included file shows.
+    const before = probeSpawns;
+    const second = await page("a.txt", first.nextOffset!);
     expect(probeSpawns - before).toBe(2);
+    writeFileSync(extra, "[diff]\n\tnoprefix = true\n");
+    await expectRestMatches("a.txt", second.nextOffset!, expectedDiff("a.txt"));
+  });
+
+  it("sends what the cache-filling pass found when the file changes between passes", async () => {
+    afterNext = {
+      command: "diff",
+      run: () => writeFileSync(path.join(repo, "a.txt"), content("old")),
+    };
+    const set = vi.spyOn(FileDiffCache.prototype, "set");
+    try {
+      const result = await page("a.txt", 0);
+      expect(result).toMatchObject({ diff: "NO_CHANGES", totalBytes: 0 });
+      expect(set).not.toHaveBeenCalled();
+    } finally {
+      set.mockRestore();
+    }
   });
 
   it("probes every window again once an include could pull in any file", async () => {
@@ -287,10 +342,44 @@ describe("getFileDiff paging over a real repo", () => {
   });
 
   it("recomputes after a global config change", async () => {
-    await continuationAfter("a.txt", () =>
-      writeFileSync(path.join(home, ".gitconfig"), "[diff]\n\tnoprefix = true\n")
+    const globalConfig = path.join(home, ".gitconfig");
+    const { offset } = await continuationAfter("a.txt", () =>
+      writeFileSync(globalConfig, "[diff]\n\tnoprefix = true\n")
     );
+    const full = expectedDiff("a.txt", repo, false, {
+      ...GIT_ENV,
+      GIT_CONFIG_GLOBAL: globalConfig,
+    });
+    expect(full).not.toBe(expectedDiff("a.txt"));
+    await expectRestMatches("a.txt", offset, full);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "recomputes when the git dir a gitfile names is a symlink that is retargeted",
+    async () => {
+      const one = path.join(tmp, "one");
+      const two = path.join(tmp, "two");
+      git(repo, "worktree", "add", "-q", "-b", "one", one);
+      writeFileSync(path.join(repo, "a.txt"), content("moved"));
+      git(repo, "commit", "-q", "-am", "moved");
+      git(repo, "worktree", "add", "-q", "-b", "two", two);
+      const admin = (dir: string) => readFileSync(path.join(dir, ".git"), "utf-8").slice(8).trim();
+      const link = path.join(tmp, "current");
+      symlinkSync(admin(one), link);
+      writeFileSync(path.join(one, ".git"), `gitdir: ${link}\n`);
+      writeFileSync(path.join(one, "a.txt"), content("new"));
+      const adminTwo = admin(two);
+
+      await continuationAfter(
+        "a.txt",
+        () => {
+          rmSync(link);
+          symlinkSync(adminTwo, link);
+        },
+        { cwd: one }
+      );
+    }
+  );
 
   it("recomputes after HEAD moves in a linked worktree", async () => {
     const linked = path.join(tmp, "linked");

@@ -1402,7 +1402,11 @@ describe("git-write commit and working diff", () => {
         diff: stagedDiff([...paths.map((path) => ({ path, content: big }))]),
       });
       await expect(scan(git)).resolves.toBeUndefined();
-      expect(vi.mocked(readBlobs).mock.calls.length).toBe(2);
+      const batches = vi
+        .mocked(readBlobs)
+        .mock.calls.map(([, sizes]) => [...sizes.values()].reduce((sum, size) => sum + size, 0));
+      expect(batches.length).toBe(2);
+      for (const bytes of batches) expect(bytes).toBeLessThanOrEqual(16_000_000);
       expect(readOids()).toEqual(paths.map(oidFor));
     });
 

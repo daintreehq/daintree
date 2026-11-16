@@ -1,9 +1,10 @@
 import { createHash } from "crypto";
-import { lstat, readlink, stat } from "fs/promises";
+import { lstat, readlink, realpath, stat } from "fs/promises";
 import { homedir } from "os";
 import { join, posix, resolve } from "path";
 import type { SimpleGit } from "simple-git";
 import { resolveHeadOidFromGitDir } from "../utils/git.js";
+import { resolveGitDirFromFs } from "../utils/gitUtils.js";
 
 /**
  * Holds the encoded full diff behind `getFileDiff`'s byte windows, so paging
@@ -20,10 +21,11 @@ import { resolveHeadOidFromGitDir } from "../utils/git.js";
  * count, total bytes and an idle timeout, since only a diff still being paged
  * is worth holding.
  *
- * The two git spawns behind a key are kept with the entry they keyed, and the
- * next window reuses them while the filesystem shows that nothing they read
- * has moved: HEAD resolves to the same commit and every config file git named
- * has the same stat. Back-to-back windows then cost stats, not processes.
+ * The git spawns behind a key are kept with the entry they keyed, and the next
+ * window reuses them while the filesystem shows that nothing they read has
+ * moved: `.git` still leads to the same git dir, HEAD resolves to the same
+ * commit, and every config file git named has the same stat. Back-to-back
+ * windows then cost stats, not processes.
  */
 
 const MAX_ENTRIES = 4;
@@ -46,9 +48,9 @@ export interface GitDiffProbe {
   head: string;
   vars: string;
   /**
-   * Stats of `.git` and every config file git reads, taken after the spawns
-   * and before any diff they key. Null when that list can't be proven, and the
-   * probe is then never reused.
+   * Where `.git` leads and the stats of every config file git reads, taken
+   * between two reads of `git var -l` that agree. Null when that can't be
+   * established, and the probe is then never reused.
    */
   validator: string | null;
 }
@@ -94,12 +96,22 @@ function configFiles(vars: string, gitDir: string, commonDir: string): string[] 
   return listsGlobal ? files : null;
 }
 
+/** `git var -l` without the ident lines, which carry the current time. */
+function configOf(vars: string): string {
+  return vars
+    .split("\n")
+    .filter((line) => !/^GIT_(?:AUTHOR|COMMITTER)_IDENT=/.test(line))
+    .join("\n");
+}
+
 /**
  * Fingerprint of what a probe's spawns read beyond HEAD, from the filesystem
  * alone. Only for a cwd at the repository root, where `.git` is the one entry
- * repository discovery consults: a directory is identified by its inode (its
- * mtime moves with every ref or index write, which other parts of the key
- * already see), a gitfile by its full stat, since retargeting rewrites it.
+ * repository discovery consults. A `.git` directory is identified by its inode
+ * (its mtime moves with every ref or index write, which other parts of the key
+ * already see), a gitfile by its full stat, and either by the real path of the
+ * git dir it leads to and of that dir's common dir, so a symlink or `commondir`
+ * retargeted underneath an unchanged `.git` is a different repository too.
  */
 async function probeValidator(
   cwd: string,
@@ -111,18 +123,30 @@ async function probeValidator(
   if (prefix !== "") return null;
   const files = configFiles(vars, gitDir, commonDir);
   if (files === null) return null;
-  let dotGit: string;
+  let discovery: string;
   try {
-    const s = await lstat(join(cwd, ".git"), { bigint: true });
-    dotGit = s.isDirectory()
+    const [s, found] = await Promise.all([
+      lstat(join(cwd, ".git"), { bigint: true }),
+      resolveGitDirFromFs(cwd),
+    ]);
+    if (found === null) return null;
+    const [foundReal, gitDirReal, commonDirReal] = await Promise.all([
+      realpath(found),
+      realpath(gitDir),
+      realpath(commonDir),
+    ]);
+    if (foundReal !== gitDirReal) return null;
+    const entry = s.isDirectory()
       ? `d:${s.dev}:${s.ino}`
       : `f:${s.mode}:${s.ino}:${s.size}:${s.mtimeNs}`;
+    discovery = [entry, gitDirReal, commonDirReal].join(">");
   } catch {
     return null;
   }
-  const stats = await Promise.all(files.map((path) => statKey(path)));
+  const watched = [...files, join(gitDir, "commondir")];
+  const stats = await Promise.all(watched.map((path) => statKey(path)));
   if (stats.includes(null)) return null;
-  return [dotGit, ...files.map((path, i) => `${path}=${stats[i]}`)].join("|");
+  return [discovery, ...watched.map((path, i) => `${path}=${stats[i]}`)].join("|");
 }
 
 /** The previous probe, when the filesystem shows nothing it read has changed. */
@@ -156,9 +180,16 @@ async function runProbe(git: SimpleGit, cwd: string): Promise<GitDiffProbe | nul
     if (lines.length !== 6 || lines[5] !== "" || typeof vars !== "string") return null;
     const [gitDir, commonDirRaw, toplevel, prefix, head] = lines;
     const commonDir = resolve(cwd, commonDirRaw);
-    // Taken after the spawns, so a config write that lands between the two
-    // shows up here and keys the diff computed after it.
-    const validator = await probeValidator(cwd, gitDir, commonDir, prefix, vars);
+    let validator = await probeValidator(cwd, gitDir, commonDir, prefix, vars);
+    // A config write between `git var -l` and those stats would pair the old
+    // answer with the new files, an include among them. Asking again after the
+    // stats closes that: the same answer means the files the stats describe are
+    // the ones git read, or have moved since, which the stats then no longer
+    // match, so nothing reuses them.
+    if (validator !== null) {
+      const again = await git.raw(["var", "-l"]);
+      if (typeof again !== "string" || configOf(again) !== configOf(vars)) validator = null;
+    }
     return { gitDir, commonDir, toplevel, prefix, head, vars, validator };
   } catch {
     return null;
@@ -245,17 +276,8 @@ export class FileDiffCache {
       )
     );
     if (stats.includes(null)) return null;
-    // The ident lines carry the current time, not configuration.
-    const config = vars
-      .split("\n")
-      .filter((line) => !/^GIT_(?:AUTHOR|COMMITTER)_IDENT=/.test(line))
-      .join("\n");
-    const configHash = createHash("sha256").update(config).digest("hex");
-    return {
-      key: [head, entryKey, configHash, probe.validator ?? "", ...stats].join("|"),
-      head,
-      probe,
-    };
+    const configHash = createHash("sha256").update(configOf(vars)).digest("hex");
+    return { key: [head, entryKey, configHash, ...stats].join("|"), head, probe };
   }
 
   /** The probe behind a live entry, for its next freshness check to start from. */
