@@ -1,8 +1,10 @@
 import { createStore } from "zustand/vanilla";
+import {
+  SHORTCUT_HINT_EXHAUSTED_COUNT,
+  SHORTCUT_HINT_MILESTONES,
+} from "@shared/config/shortcutHints";
 
-/** Invocation counts at which a shortcut hint is shown. Encodes the lifetime cap (set size). */
-export const HINT_MILESTONES = new Set([1, 2, 4, 8, 16, 32]);
-const LAST_HINT_MILESTONE = Math.max(...HINT_MILESTONES);
+export const HINT_MILESTONES = SHORTCUT_HINT_MILESTONES;
 const POINTER_STALE_MS = 2000;
 
 function hoverOneShotKey(actionId: string, count: number): string {
@@ -120,11 +122,9 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
   incrementCount(actionId: string) {
     const { counts, hintedHover } = get();
     const count = counts[actionId] ?? 0;
-    // Past the last milestone neither a dispatch nor a hover hint can fire
-    // again, and every increment Main persists is a full config.json rewrite.
-    // The step onto LAST + 1 is still recorded so the final milestone's hover
-    // gate is spent for good rather than re-offered next session.
-    if (count > LAST_HINT_MILESTONE) return;
+    // The step onto the exhausted count is still recorded, so the final
+    // milestone's hover hint is spent for good rather than re-offered next session.
+    if (count >= SHORTCUT_HINT_EXHAUSTED_COUNT) return;
     const updated = { ...counts, [actionId]: count + 1 };
     // Clear hover one-shot entries for this action — the new count level
     // re-enables hover hints for the next milestone.

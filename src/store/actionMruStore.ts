@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { createActionMruSlice, type ActionMruSlice } from "./slices/actionMruSlice";
 import type { ActionUsageEntry } from "@shared/types/actions";
 
-let lastPersisted: string | null = null;
+let lastPersisted = JSON.stringify([]);
 let inFlight = false;
 // Latest snapshot observed while a write is in flight. Coalesced (only the most
 // recent is kept) and flushed once the current write settles, so rapid usage
@@ -16,6 +16,10 @@ function toUsageList(state: ActionMruSlice): ActionUsageEntry[] {
   return Array.from(state.actionUsageEntries.entries()).map(([id, { uses }]) => ({ id, uses }));
 }
 
+function hasUsesArray(raw: unknown): boolean {
+  return typeof raw === "object" && raw !== null && Array.isArray((raw as { uses?: unknown }).uses);
+}
+
 export const useActionMruStore = create<ActionMruSlice>()((set, get, store) => {
   const slice = createActionMruSlice(set, get, store);
   return {
@@ -27,10 +31,16 @@ export const useActionMruStore = create<ActionMruSlice>()((set, get, store) => {
       } finally {
         hydrating = false;
       }
-      // The hydrated (pruned, migrated) list is the baseline rather than the raw
-      // input: uses age out of the window daily, and writing that pruning back
-      // would bring the per-mount rewrite straight back.
-      lastPersisted = JSON.stringify(toUsageList(get()));
+      const hydrated = toUsageList(get());
+      // A current-shape list hydrates to itself minus aged-out uses; writing that
+      // pruning back would bring the per-mount rewrite straight back, so it
+      // becomes the baseline. Legacy entries get synthetic timestamps rebuilt on
+      // every load and never decay until written once in the current shape.
+      if (list.every(hasUsesArray)) {
+        lastPersisted = JSON.stringify(hydrated);
+      } else {
+        persist(hydrated);
+      }
     },
   };
 });
@@ -53,10 +63,7 @@ function flush(list: ActionUsageEntry[]): void {
     });
 }
 
-useActionMruStore.subscribe((state) => {
-  if (hydrating) return;
-  const list = toUsageList(state);
-
+function persist(list: ActionUsageEntry[]): void {
   if (JSON.stringify(list) === lastPersisted) return;
 
   if (inFlight) {
@@ -65,4 +72,9 @@ useActionMruStore.subscribe((state) => {
   }
 
   flush(list);
+}
+
+useActionMruStore.subscribe((state) => {
+  if (hydrating) return;
+  persist(toUsageList(state));
 });

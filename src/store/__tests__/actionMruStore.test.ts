@@ -164,23 +164,39 @@ describe("actionMruStore persistence (#17026)", () => {
     vi.useRealTimers();
   });
 
-  it("does not write the hydrated list back, and the next real change writes once", async () => {
+  async function freshStore() {
     // Fresh module state, so earlier tests' baselines and in-flight writes can't leak in.
     const { appClient } = await import("@/clients/appClient");
     const { useActionMruStore: store } = await import("../actionMruStore");
     const setState = vi.mocked(appClient.setState);
     setState.mockClear();
+    return { store, setState };
+  }
 
-    // A legacy string list and an aged-out use are both rewritten by hydration.
+  it("does not write a hydrated list back, and the next real change writes once", async () => {
+    const { store, setState } = await freshStore();
+
+    // An empty list, then one whose aged-out use hydration prunes.
     const stale = NOW - USAGE_WINDOW_MS - DAY;
+    store.getState().hydrateActionMru([]);
     store.getState().hydrateActionMru([{ id: "kept", uses: [stale, NOW - DAY] }]);
-    store.getState().hydrateActionMru(["legacy.action"]);
-    store.getState().recordActionMru("legacy.action");
+    store.getState().recordActionMru("kept");
 
     await vi.waitFor(() => expect(setState).toHaveBeenCalled());
     expect(setState).toHaveBeenCalledTimes(1);
     expect(setState).toHaveBeenCalledWith({
-      actionMruList: [{ id: "legacy.action", uses: [NOW, NOW] }],
+      actionMruList: [{ id: "kept", uses: [NOW - DAY, NOW] }],
+    });
+  });
+
+  it("writes a legacy list back once in the current shape so it can decay", async () => {
+    const { store, setState } = await freshStore();
+
+    store.getState().hydrateActionMru(["legacy.action"]);
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledExactlyOnceWith({
+      actionMruList: [{ id: "legacy.action", uses: [NOW] }],
     });
   });
 });

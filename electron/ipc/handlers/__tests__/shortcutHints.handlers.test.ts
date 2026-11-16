@@ -54,6 +54,33 @@ describe("registerShortcutHintsHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("shortcutHintCounts", { "nav.quickSwitcher": 3 });
   });
 
+  it("incrementCount stops writing once an action's hints are spent (#17026)", () => {
+    registerShortcutHintsHandlers();
+    const incrementHandler = ipcMainMock.handle.mock.calls.find(
+      (c: unknown[]) => c[0] === "shortcut-hints:increment-count"
+    )![1] as (_e: unknown, actionId: unknown) => void;
+
+    storeMock._data["shortcutHintCounts"] = { "nav.quickSwitcher": 32, "terminal.new": 500 };
+    incrementHandler(null, "nav.quickSwitcher");
+    expect(storeMock.set).toHaveBeenCalledTimes(1);
+    expect(storeMock.set).toHaveBeenLastCalledWith("shortcutHintCounts", {
+      "nav.quickSwitcher": 33,
+      "terminal.new": 500,
+    });
+
+    storeMock.set.mockClear();
+    incrementHandler(null, "nav.quickSwitcher");
+    incrementHandler(null, "terminal.new");
+    expect(storeMock.set).not.toHaveBeenCalled();
+
+    incrementHandler(null, "nav.commandPalette");
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("shortcutHintCounts", {
+      "nav.quickSwitcher": 33,
+      "terminal.new": 500,
+      "nav.commandPalette": 1,
+    });
+  });
+
   it("incrementCount ignores non-string actionId", () => {
     registerShortcutHintsHandlers();
     const incrementHandler = ipcMainMock.handle.mock.calls.find(
