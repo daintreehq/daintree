@@ -275,4 +275,40 @@ describe("PulseHeatmap — one shared tooltip", () => {
     });
     expect(document.body.textContent).not.toContain("5 commits");
   });
+
+  it("follows keyboard focus even while the pointer rests on another cell", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.pointerOver(cellByDate("2026-09-21"), { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("2 commits");
+
+    const focused = cellByDate("2026-09-22");
+    act(() => {
+      focused.focus();
+      fireEvent.focus(focused);
+    });
+    expect(document.body.textContent).toContain("5 commits");
+  });
+
+  it("does not open from the focus a click causes, and a press closes it", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    const cell = cellByDate("2026-09-22");
+    fireEvent.pointerOver(cell, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+
+    fireEvent.pointerDown(cell, { pointerType: "mouse" });
+    act(() => {
+      cell.focus();
+      fireEvent.focus(cell);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).not.toContain("5 commits");
+  });
 });

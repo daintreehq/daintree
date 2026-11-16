@@ -227,42 +227,65 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
 
   // One tooltip for the whole grid, anchored to the hovered or focused cell
   // by position, instead of a Radix tree per cell (up to 180 per card). The
-  // last shown date is kept so the card keeps its text through the exit fade.
-  const [hoverDate, setHoverDate] = useState<string | null>(null);
-  const [focusDate, setFocusDate] = useState<string | null>(null);
-  const [lastTipDate, setLastTipDate] = useState<string | null>(null);
-  const openDate = hoverDate ?? focusDate;
-  const tipDate = openDate ?? lastTipDate;
-  const tipPosition = tipDate ? positions.get(tipDate) : undefined;
+  // date stays set after a close so the card keeps its text through the exit
+  // fade. Hover and focus share it: whichever moved last owns the readout.
+  const [tip, setTip] = useState<{ date: string | null; open: boolean }>({
+    date: null,
+    open: false,
+  });
+  const pointerDownRef = useRef(false);
+  const tipPosition = tip.date ? positions.get(tip.date) : undefined;
   const tipCell = tipPosition ? weeks[tipPosition.col]?.[tipPosition.row] : undefined;
 
-  const cellDateOf = (target: EventTarget): string | null =>
-    (target as Element).closest?.("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+  const cellDateOf = (grid: HTMLElement, target: EventTarget): string | null => {
+    // The card is portaled but still a React child of the grid, so its pointer
+    // events bubble here; only a node actually inside the grid is a cell.
+    if (!(target instanceof Element) || !grid.contains(target)) return null;
+    return target.closest("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+  };
+
+  const showTip = (date: string | null) => {
+    setTip((prev) =>
+      date
+        ? prev.date === date && prev.open
+          ? prev
+          : { date, open: true }
+        : prev.open
+          ? { ...prev, open: false }
+          : prev
+    );
+  };
 
   const handlePointerOver = (event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") return;
     notifyTooltipPointerActivity();
-    const date = cellDateOf(event.target);
-    if (date === hoverDate) return;
-    setHoverDate(date);
-    if (date) setLastTipDate(date);
+    showTip(cellDateOf(event.currentTarget, event.target));
   };
 
-  const handlePointerLeave = () => setHoverDate(null);
+  const handlePointerLeave = () => showTip(null);
+
+  // A press hands the screen to whatever the cell does, and the focus it
+  // causes is not a request for a tooltip: mirrors the shared trigger.
+  const handlePointerDown = () => {
+    pointerDownRef.current = true;
+    showTip(null);
+  };
+
+  const handlePointerUp = () => {
+    setTimeout(() => {
+      pointerDownRef.current = false;
+    }, 0);
+  };
 
   const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
-    if (isTooltipFocusOpenSuppressed()) return;
-    const date = cellDateOf(event.target);
-    setFocusDate(date);
-    if (date) setLastTipDate(date);
+    if (pointerDownRef.current || isTooltipFocusOpenSuppressed()) return;
+    showTip(cellDateOf(event.currentTarget, event.target));
   };
 
-  const handleBlur = () => setFocusDate(null);
+  const handleBlur = () => showTip(null);
 
   const handleTipOpenChange = (next: boolean) => {
-    if (next) return;
-    setHoverDate(null);
-    setFocusDate(null);
+    if (!next) showTip(null);
   };
 
   const handleKeyDown = useCallback(
@@ -344,6 +367,8 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
         onKeyDown={handleKeyDown}
         onPointerOver={handlePointerOver}
         onPointerLeave={handlePointerLeave}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
         onFocus={handleFocus}
         onBlur={handleBlur}
       >
@@ -352,7 +377,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
             date and count are shown, so it stays while the cell is hovered or
             focused rather than vanishing mid-read after the app-wide hint
             window. */}
-        <Tooltip open={openDate !== null} onOpenChange={handleTipOpenChange} autoDismiss={false}>
+        <Tooltip open={tip.open} onOpenChange={handleTipOpenChange} autoDismiss={false}>
           <TooltipTrigger asChild>
             <span
               aria-hidden="true"

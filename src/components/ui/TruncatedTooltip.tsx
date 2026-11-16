@@ -76,19 +76,20 @@ export function TruncatedTooltip({
     extraProps[TRUNCATION_DISCLOSURE_ATTR] = "";
   }
 
-  const trigger = React.cloneElement(children, extraProps);
-  // Most labels fit. Skip the Radix tree (root, trigger, content, their
-  // effects) until the text is actually cut.
-  if (!showTooltip) return trigger;
-
   return (
+    // The Radix root and trigger stay mounted even while the text fits: a
+    // conditional wrapper would replace the child's DOM node every time
+    // truncation flips, dropping focus and orphaning anything that measured
+    // the old node. Only the content (portal, popper, presence) is lazy.
     // The tooltip IS the content here (the untruncated text), so it stays as
     // long as the user is reading it — no auto-dismiss.
-    <Tooltip open={open} onOpenChange={onOpenChange} autoDismiss={false}>
-      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-      <TooltipContent side={side} align={align} className={contentClassName}>
-        {content}
-      </TooltipContent>
+    <Tooltip open={showTooltip ? open : false} onOpenChange={onOpenChange} autoDismiss={false}>
+      <TooltipTrigger asChild>{React.cloneElement(children, extraProps)}</TooltipTrigger>
+      {showTooltip && (
+        <TooltipContent side={side} align={align} className={contentClassName}>
+          {content}
+        </TooltipContent>
+      )}
     </Tooltip>
   );
 }

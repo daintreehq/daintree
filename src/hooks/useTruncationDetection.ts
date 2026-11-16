@@ -76,9 +76,9 @@ export function useTruncationDetection() {
     if (s.observer) {
       s.observer.observe(el);
     }
-    // No synchronous measure here: a newly observed element gets an initial
-    // observation, which checkEntries answers without a forced reflow in the
-    // commit phase.
+    // Initial check, so the first paint is right without waiting on the
+    // observer's first delivery.
+    stableSetter.current(el.scrollWidth > el.clientWidth + TOLERANCE);
   }, []);
 
   // Measure on mount if ResizeObserver isn't available (jsdom / SSR)
