@@ -65,17 +65,8 @@ export interface BootstrapSourceParams {
  * why the host validates every envelope as untrusted.
  */
 export function buildBootstrapSource(params: BootstrapSourceParams): string {
-  const {
-    sessionId,
-    installId,
-    documentEpoch,
-    bindingName,
-    channel,
-    mode,
-    paused,
-    origins,
-    body,
-  } = params;
+  const { sessionId, installId, documentEpoch, bindingName, channel, mode, paused, origins, body } =
+    params;
   return `(() => {
   // The host checked the policy before creating the world, but a navigation
   // can commit between that check and this evaluate.

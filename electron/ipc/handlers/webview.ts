@@ -1181,10 +1181,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // Re-check ownership after the await. If the row lost it while the
       // request was in flight, these descendants belong to nobody — release
       // them rather than letting a late result resurrect released ownership.
-      const rowIds = sessions
-        .get(webContentsId)
-        ?.rowObjectIdsByPane.get(paneId)
-        ?.rows.get(rowId);
+      const rowIds = sessions.get(webContentsId)?.rowObjectIdsByPane.get(paneId)?.rows.get(rowId);
       if (rowIds) {
         for (const id of descendantIds) rowIds.add(id);
       } else if (descendantIds.length > 0) {

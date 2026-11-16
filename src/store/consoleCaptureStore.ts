@@ -87,9 +87,8 @@ function withoutHandles(msg: ConsoleMessage): ConsoleMessage {
   if (!hasHandles(msg)) return msg;
   return {
     ...msg,
-    args: msg.args.map(
-      (arg): CdpRemoteArg =>
-        arg.type === "object" || arg.type === "function" ? { ...arg, objectId: "" } : arg
+    args: msg.args.map((arg): CdpRemoteArg =>
+      arg.type === "object" || arg.type === "function" ? { ...arg, objectId: "" } : arg
     ),
   };
 }

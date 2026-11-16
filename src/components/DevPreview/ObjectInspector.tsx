@@ -262,7 +262,9 @@ export function ObjectInspector({
             <span className="sr-only"> (no longer inspectable)</span>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">Only recent messages keep their values to inspect</TooltipContent>
+        <TooltipContent side="top">
+          Only recent messages keep their values to inspect
+        </TooltipContent>
       </Tooltip>
     );
   }
