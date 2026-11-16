@@ -365,24 +365,67 @@ describe("WorkspaceService PR polling under the power policy (#17060)", () => {
     expect(mockPullRequestService.start).not.toHaveBeenCalled();
   });
 
-  it("a forge-settings change while nothing is on screen is owed as a full refresh when a window returns", () => {
-    service.setWorkspacePowerPolicy(DEEP);
-    vi.clearAllMocks();
+  function holdRestartCheck(): () => void {
+    let finish: () => void = () => {};
+    mockPullRequestService.start.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+    );
+    return () => finish();
+  }
 
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function changeForgeRemote(): void {
     service.updateForgeSettings({
       forgeProviderOverride: null,
       forgeDefaultProviderId: null,
       forgeRemote: "upstream",
     });
+  }
+
+  it("a forge-settings change while nothing is on screen is owed as a full refresh after the restart's own check", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    changeForgeRemote();
     expect(mockPullRequestService.setForgeSettings).toHaveBeenCalled();
     expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
 
+    const finishCheck = holdRestartCheck();
     service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    finishCheck();
+    await flush();
     expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
 
     // Owed once, not on every return.
     service.setWorkspacePowerPolicy(DEEP);
+    mockPullRequestService.start.mockResolvedValueOnce(undefined);
     service.setWorkspacePowerPolicy(ACTIVE);
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("an owed settings refresh stays owed when the screen locks before the restart's check finishes", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.setWorkspacePowerPolicy(DEEP);
+    finishCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    mockPullRequestService.start.mockResolvedValueOnce(undefined);
+    service.setWorkspacePowerPolicy(ACTIVE);
+    await flush();
     expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
   });
 

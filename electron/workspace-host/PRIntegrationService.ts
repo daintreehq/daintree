@@ -251,17 +251,18 @@ export class PRIntegrationService {
     this.prService.stop();
   }
 
-  resume(): void {
+  /** Resolves once the restarted poller's first check has run. */
+  resume(): Promise<void> {
     this.paused = false;
     // Nothing to resume before `initialize()`: a non-git workspace never
     // initializes, and a foreground can land while a load is still
     // enumerating. Starting anyway only logs "not initialized" (#12519) —
     // `initialize()` starts polling itself once it runs.
-    if (this.initializedForPath === null) return;
+    if (this.initializedForPath === null) return Promise.resolve();
     // Focus-restore, not a crash-recovery path — skip the startup jitter so
     // the user sees fresh PR state promptly. The 5s checkForPRs() floor still
     // prevents a double-check if a poll just ran.
-    void this.startPolling(0);
+    return this.startPolling(0);
   }
 
   updateForgeCredentials(

@@ -5529,11 +5529,20 @@ export class WorkspaceService {
     for (const [providerId, credentials] of deferred) {
       this.updateForgeCredentials(providerId, credentials);
     }
-    if (this.settingsRefreshOwed) {
-      this.settingsRefreshOwed = false;
-      void pullRequestService.refresh();
-    }
-    this.prService.resume();
+    const refreshOwed = this.settingsRefreshOwed;
+    this.settingsRefreshOwed = false;
+    const restarted = this.prService.resume();
+    if (!refreshOwed) return;
+    // After the restart's own check, which would otherwise re-resolve worktrees
+    // from the caches the refresh is clearing and leave it nothing to detect.
+    const projectId = this.projectId;
+    void restarted
+      .catch(() => {})
+      .then(() => {
+        if (this.projectId !== projectId) return;
+        if (this.appliedPermissions.status) void pullRequestService.refresh();
+        else this.settingsRefreshOwed = true;
+      });
   }
 
   getPRStatus(requestId: string): void {

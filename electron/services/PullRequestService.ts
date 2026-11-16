@@ -1024,8 +1024,6 @@ class PullRequestService {
     this.updatePollInterval(targetInterval);
     const focusChanged = focused !== this.focused;
     this.focused = focused;
-    // Also mid-pass: blur's enrichment sweep just armed a focused-cadence tick
-    // that would otherwise fire alongside a slow pass. The pass re-arms anyway.
     if (focusChanged && this.isPolling) {
       this.scheduleRevalidation();
     }
@@ -1248,7 +1246,8 @@ class PullRequestService {
    * `delayMs` asks for the next tick sooner than the cadence would. The
    * request is a deadline every later reschedule honours until a tick runs, so
    * a cadence change in between can't push it back out. A pass already under
-   * way reschedules when it settles, so it isn't raced by a second one.
+   * way re-arms when it settles, so nothing scheduled meanwhile can race it
+   * with a second one.
    */
   private scheduleRevalidation(delayMs?: number): void {
     if (!this.isPolling) {
@@ -1258,7 +1257,6 @@ class PullRequestService {
     if (delayMs !== undefined) {
       const at = Date.now() + delayMs;
       this.earlyRevalidationAt = Math.min(this.earlyRevalidationAt ?? at, at);
-      if (this.revalidationsRunning > 0) return;
       // Blurred, the deadline waits for focus regain, and the armed tick keeps
       // its time rather than being pushed back by every push.
       if (!this.focused && this.revalidationTimer) return;
@@ -1266,7 +1264,9 @@ class PullRequestService {
 
     if (this.revalidationTimer) {
       clearTimeout(this.revalidationTimer);
+      this.revalidationTimer = null;
     }
+    if (this.revalidationsRunning > 0) return;
 
     if (!this.isEnabled) {
       const delay = this.nextRetryAt - Date.now();
@@ -1290,7 +1290,7 @@ class PullRequestService {
         ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
     const intervalMs =
-      this.focused && this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
+      this.focused && this.earlyRevalidationAt !== undefined
         ? Math.min(Math.max(0, this.earlyRevalidationAt - Date.now()), cadenceMs)
         : cadenceMs;
 

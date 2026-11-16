@@ -2948,9 +2948,7 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("a blur during a slow pass leaves no focused-cadence tick to run alongside it", async () => {
-      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
-        await pollingService();
+    function holdNextPass(revalidate: { mockImplementationOnce: (fn: () => Promise<void>) => void }) {
       let release: () => void = () => {};
       revalidate.mockImplementationOnce(
         () =>
@@ -2958,16 +2956,42 @@ describe("PullRequestService", () => {
             release = resolve;
           })
       );
+      return () => release();
+    }
+
+    it("a blur during a slow pass starts no second pass alongside it", async () => {
+      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
+        await pollingService();
+      const release = holdNextPass(revalidate);
       svc.scheduleRevalidation();
-      const focusedMs = await msUntilNextTick();
+      await msUntilNextTick();
 
       // The order main sends them in: the enrichment sweep reschedules first.
       pullRequestService.setCIEnrichmentEnabled(false);
       pullRequestService.setFocusCadence(false);
+      expect(await ticksOver(WINDOW_MS)).toBe(0);
 
-      expect(await ticksOver(2 * focusedMs)).toBe(0);
+      // The pass re-arms once it settles.
+      release();
+      expect(await ticksOver(WINDOW_MS)).toBeGreaterThan(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("focus regained during a slow blurred pass starts no second pass alongside it", async () => {
+      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
+        await pollingService();
+      pullRequestService.setFocusCadence(false);
+      const release = holdNextPass(revalidate);
+      svc.scheduleRevalidation();
+      await msUntilNextTick();
+
+      pullRequestService.setFocusCadence(true);
+      expect(await ticksOver(WINDOW_MS)).toBe(0);
 
       release();
+      expect(await ticksOver(WINDOW_MS)).toBeGreaterThan(0);
+
       pullRequestService.destroy();
     });
 
