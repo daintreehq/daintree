@@ -1598,6 +1598,7 @@ export const CHANNELS = {
   DECISIONS_GET_QUESTION_SUMMARIES: "decisions:get-question-summaries",
   // A person withdrawing a pane's question from its view (#17099), on the machine that owns the pane.
   DECISIONS_CANCEL_QUESTION: "decisions:cancel-question",
+  DECISIONS_GET_QUESTION_IMAGE: "decisions:get-question-image",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",

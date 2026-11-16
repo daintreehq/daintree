@@ -278,6 +278,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-pane-state": "host",
   "decisions:get-question-content": "host",
   "decisions:get-question-summaries": "host",
+  "decisions:get-question-image": "host",
   "decisions:get-policy": "shell",
   "decisions:report-composer-drafts": "host",
   "decisions:get-setup-check": "shell",

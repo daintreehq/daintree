@@ -469,6 +469,7 @@ import {
   prepareRelayDeploy,
   exportRecoveryKit,
   getDecisionQuestionContent,
+  getDecisionQuestionImage,
   getDecisionQuestionSummaries,
   getDecisionsPaneState,
   getDecisionsPolicy,
@@ -503,6 +504,7 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
+import type { DecisionQuestionImagePartResult } from "../../../../shared/types/decisionsQuestion.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 
 const RELAY = {
@@ -992,6 +994,74 @@ describe("Decisions entry", () => {
         { projectId: "project-1", terminalId: "pane-1" },
         PAYLOAD.questionId
       );
+    });
+
+    it("reads a question's image through the running delivery, for the asking view's project (#17100)", async () => {
+      const read = { result: "unavailable", reason: "fetch-failed" } as const;
+      const questionImage = vi.fn(async () => read);
+      await running({ questionImage });
+
+      await expect(
+        getDecisionQuestionImage("project-1", {
+          ...PAYLOAD,
+          attachmentId: "attach_0001",
+          offset: 0,
+        })
+      ).resolves.toBe(read);
+
+      expect(questionImage).toHaveBeenCalledExactlyOnceWith(
+        { projectId: "project-1", terminalId: "pane-1" },
+        PAYLOAD.questionId,
+        "attach_0001",
+        0
+      );
+    });
+
+    it("reads no image while not running, or when the delivery stops under the read", async () => {
+      const image = { ...PAYLOAD, attachmentId: "attach_0001", offset: 0 };
+      await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
+        result: "not-running",
+      });
+      expect(peekDecisionsService()).toBeNull();
+
+      const current = await running(null);
+      current.delivery = {
+        questionImage: async () => {
+          throw new RetiredAttemptError();
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
+        result: "not-running",
+      });
+    });
+
+    it("is not running when the delivery stops while a part is read, though the read succeeds", async () => {
+      const current = await running(null);
+      let finish: (read: DecisionQuestionImagePartResult) => void = () => {};
+      current.delivery = {
+        questionImage: () =>
+          new Promise<DecisionQuestionImagePartResult>((resolve) => (finish = resolve)),
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+
+      const read = getDecisionQuestionImage("project-1", {
+        ...PAYLOAD,
+        attachmentId: "attach_0001",
+        offset: 0,
+      });
+      current.delivery = null;
+      finish({
+        result: "read",
+        part: {
+          attachmentId: "attach_0001",
+          mime: "image/png",
+          sha256: "a".repeat(64),
+          size: 1,
+          offset: 0,
+          bytes: new Uint8Array([1]),
+        },
+      });
+
+      await expect(read).resolves.toEqual({ result: "not-running" });
     });
 
     it("is not running with no delivery, and makes no service before Decisions runs", async () => {

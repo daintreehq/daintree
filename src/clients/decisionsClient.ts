@@ -7,8 +7,83 @@ import type {
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionImagePart,
+  DecisionQuestionImageResult,
   DecisionQuestionSummariesResult,
 } from "@shared/types/decisionsQuestion";
+
+/** The protocol's largest image: a part claiming more is refused before anything is allocated. */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** Thrown when an image's parts don't add up to one image; never carries its bytes. */
+export class DecisionImagePartsError extends Error {
+  constructor() {
+    super("The image's parts didn't add up to one image");
+    this.name = "DecisionImagePartsError";
+  }
+}
+
+/**
+ * One of a question's images, read part by part, each part from a read that
+ * checked the whole image against its digest. Stops between parts once
+ * `signal` aborts, rejecting with its reason.
+ */
+async function readQuestionImage(
+  terminalId: string,
+  questionId: string,
+  attachmentId: string,
+  signal?: AbortSignal
+): Promise<DecisionQuestionImageResult> {
+  let whole: { first: DecisionQuestionImagePart; bytes: Uint8Array<ArrayBuffer> } | null = null;
+  let offset = 0;
+  for (;;) {
+    signal?.throwIfAborted();
+    const read = await window.electron.decisions.getQuestionImage({
+      terminalId,
+      questionId,
+      attachmentId,
+      offset,
+    });
+    if (read.result !== "read") return read;
+    const { part } = read;
+    // A Remote Host's link carries whatever its peer sent: nothing is taken on trust.
+    if (!(part.bytes instanceof Uint8Array) || !Number.isSafeInteger(part.size) || part.size < 1) {
+      throw new DecisionImagePartsError();
+    }
+    const length = part.bytes.length;
+    const first: DecisionQuestionImagePart = whole?.first ?? part;
+    if (
+      part.attachmentId !== attachmentId ||
+      part.offset !== offset ||
+      length === 0 ||
+      part.size > MAX_IMAGE_BYTES ||
+      offset + length > part.size ||
+      part.size !== first.size ||
+      part.sha256 !== first.sha256 ||
+      part.mime !== first.mime
+    ) {
+      throw new DecisionImagePartsError();
+    }
+    if (whole === null) {
+      // One part that is the whole image needs no copy.
+      if (length === part.size) {
+        return {
+          result: "read",
+          image: { attachmentId, mime: part.mime, sha256: part.sha256, bytes: part.bytes },
+        };
+      }
+      whole = { first: part, bytes: new Uint8Array(part.size) };
+    }
+    whole.bytes.set(part.bytes, offset);
+    offset += length;
+    if (offset === part.size) {
+      return {
+        result: "read",
+        image: { attachmentId, mime: first.mime, sha256: first.sha256, bytes: whole.bytes },
+      };
+    }
+  }
+}
 
 /** Daintree Decisions, as main observes it. Pane state comes from the machine that owns the pane. */
 export const decisionsClient = {
@@ -79,6 +154,21 @@ export const decisionsClient = {
     questionId: string
   ): Promise<DecisionQuestionContentResult> =>
     window.electron.decisions.getQuestionContent({ terminalId, questionId }),
+
+  /**
+   * One of a question's images, fetched and checked against its digest on the
+   * machine that owns the pane, in parts a Remote Host's link can carry. The
+   * bytes are held in memory only: never write them anywhere, log them, or
+   * keep them in a persisted store. Rejects with `DecisionImagePartsError`
+   * when the parts don't add up, and with `signal`'s reason once it aborts.
+   */
+  getQuestionImage: (
+    terminalId: string,
+    questionId: string,
+    attachmentId: string,
+    signal?: AbortSignal
+  ): Promise<DecisionQuestionImageResult> =>
+    readQuestionImage(terminalId, questionId, attachmentId, signal),
 
   /** The opening line of each of a pane's questions, for a list to name them by. */
   getQuestionSummaries: (

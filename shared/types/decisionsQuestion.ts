@@ -6,6 +6,18 @@ export interface GetDecisionQuestionPayload {
   questionId: string;
 }
 
+/**
+ * Part of one image of a pane's question, asked by its attachment id and
+ * where the part starts (#17100). An image comes in parts small enough to
+ * cross a Remote Host's link, which carries at most 16 MiB in one message.
+ */
+export interface GetDecisionQuestionImagePayload {
+  terminalId: string;
+  questionId: string;
+  attachmentId: string;
+  offset: number;
+}
+
 /** The questions of a pane whose opening lines a list needs (#17097). */
 export interface GetDecisionQuestionSummariesPayload {
   terminalId: string;
@@ -53,6 +65,8 @@ export interface DecisionQuestionAttachment {
   mime: "image/png" | "image/jpeg" | "image/webp";
   /** Bytes of the image itself. */
   size: number;
+  /** SHA-256 (hex) of the image itself: what it is checked against, and what an approval names it by. */
+  sha256: string;
 }
 
 /** An image a person attached to an answer or a follow-up from their phone. */
@@ -162,3 +176,68 @@ export type DecisionQuestionSummariesResult =
   | { result: "read"; summaries: DecisionQuestionSummary[] }
   | { result: "off" }
   | { result: "not-running" };
+
+/**
+ * Why one of a question's images can't be shown, as checked in order:
+ * `key-unavailable`, the key it was sealed under isn't held here;
+ * `fetch-failed`, the relay didn't serve it (gone, past retention, unreachable);
+ * `size-mismatch`, it isn't the size the question declares;
+ * `decrypt-failed`, it doesn't open under the question's binding;
+ * `digest-mismatch`, what opened doesn't hash to the question's digest;
+ * `type-mismatch`, it isn't the PNG, JPEG or WebP image the question declares;
+ * `timed-out`, fetching and checking it took too long.
+ */
+export type DecisionQuestionImageUnavailable =
+  | "key-unavailable"
+  | "fetch-failed"
+  | "size-mismatch"
+  | "decrypt-failed"
+  | "digest-mismatch"
+  | "type-mismatch"
+  | "timed-out";
+
+/** One of a question's images, opened and checked against its digest, in memory. Never stored. */
+export interface DecisionQuestionImage {
+  attachmentId: string;
+  mime: DecisionQuestionAttachment["mime"];
+  /** The digest the image was checked against. */
+  sha256: string;
+  /** Backed by a plain ArrayBuffer, as structured clone and the Remote Host link both deliver bytes. */
+  bytes: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Part of one of a question's images: the whole image was opened and checked
+ * against its digest for this read, and `bytes` are the part of it that
+ * starts at `offset`, empty past its end.
+ */
+export interface DecisionQuestionImagePart extends DecisionQuestionImage {
+  /** Bytes of the whole image. */
+  size: number;
+  offset: number;
+}
+
+/**
+ * Reading one of a question's images. `not-found`: the store holds no such
+ * question for this pane, or the question names no such image.
+ * `unreadable`: the question's content can't be opened here.
+ */
+type DecisionQuestionImageRead<Read> =
+  | Read
+  | { result: "unavailable"; reason: DecisionQuestionImageUnavailable }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "not-found" }
+  | { result: "unreadable" };
+
+/** One part of an image, as one read over IPC answers. */
+export type DecisionQuestionImagePartResult = DecisionQuestionImageRead<{
+  result: "read";
+  part: DecisionQuestionImagePart;
+}>;
+
+/** A whole image, as the renderer's client assembles it from its parts. */
+export type DecisionQuestionImageResult = DecisionQuestionImageRead<{
+  result: "read";
+  image: DecisionQuestionImage;
+}>;

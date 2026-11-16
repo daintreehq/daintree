@@ -2111,6 +2111,66 @@ describe("AnswerDelivery question reads (#17097)", () => {
     }
   });
 
+  it("opens a question's image for its own pane in memory, and nothing for another (#17100)", async () => {
+    const h = setup();
+    const png = Buffer.from(
+      "89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+        "1f15c4890000000d4944415478da63f8cfc0f01f0005000201a1b0b4" +
+        "e60000000049454e44ae426082",
+      "hex"
+    );
+    const attachmentId = "0190f0aa11112222333344445555a772";
+    const sealed = await encryptAttachment(
+      identity.epochs.get(1)!,
+      { installationId: identity.config.installationId, questionId: Q1, attachmentId, keyEpoch: 1 },
+      png
+    );
+    h.attachments.set(attachmentId, new Uint8Array(sealed.ciphertext));
+    await answered(h.store, Q1, 1, "approve");
+    await h.store.updateQuestion(Q1, {
+      content_sealed: await sealQuestionContent({ identity }, Q1, {
+        question: "Ship the new header?",
+        attachments: [
+          {
+            attachment_id: attachmentId,
+            role: "after",
+            mime: "image/png",
+            size: png.length,
+            sha256: sealed.sha256Plaintext,
+            nonce: sealed.nonce,
+            key_epoch: 1,
+          },
+        ],
+      }),
+    });
+
+    for (const scope of [
+      { ...OWN, terminalId: "pane-2" },
+      { ...OWN, projectId: "project-2" },
+      { ...OWN, projectId: null },
+    ]) {
+      await expect(h.delivery.questionImage(scope, Q1, attachmentId, 0)).resolves.toEqual({
+        result: "not-found",
+      });
+    }
+    // Scope is checked before anything is fetched.
+    expect(h.reports.filter((r) => r.path.includes("/attachments/"))).toEqual([]);
+
+    const read = await h.delivery.questionImage(OWN, Q1, attachmentId, 0);
+
+    expect(read).toEqual({
+      result: "read",
+      part: {
+        attachmentId,
+        mime: "image/png",
+        sha256: sealed.sha256Plaintext,
+        size: png.length,
+        offset: 0,
+        bytes: new Uint8Array(png),
+      },
+    });
+  });
+
   it("names each question asked for once, in order, and only the pane's own", async () => {
     const h = setup();
     await answered(h.store, Q1, 1, "approve");

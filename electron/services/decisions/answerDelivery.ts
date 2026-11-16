@@ -39,6 +39,7 @@ import type {
 } from "../../../shared/types/decisionsAttention.js";
 import type {
   DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummary,
 } from "../../../shared/types/decisionsQuestion.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
@@ -62,6 +63,7 @@ import { sanitizeAnswerText } from "./answerNotice.js";
 import {
   inScope,
   readQuestionContent,
+  readQuestionImage,
   readQuestionSummary,
   type QuestionReadScope,
 } from "./questionContent.js";
@@ -410,6 +412,22 @@ export class AnswerDelivery {
     const row = await this.store.getQuestion(questionId);
     if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
     return readQuestionContent(this.owner.ctx, row);
+  }
+
+  /**
+   * Part of one of the question's images (#17100), fetched, opened and
+   * checked in memory for the view of the pane that asked it; nothing is
+   * written, and nothing is kept between parts.
+   */
+  async questionImage(
+    scope: Omit<QuestionReadScope, "hostId">,
+    questionId: string,
+    attachmentId: string,
+    offset: number
+  ): Promise<DecisionQuestionImagePartResult> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
+    return readQuestionImage(this.owner.ctx, row, attachmentId, offset);
   }
 
   /** Each question's opening line, in the order asked for, each id once (#17097). */

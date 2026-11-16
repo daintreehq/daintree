@@ -92,7 +92,9 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummariesResult,
+  GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -812,6 +814,23 @@ export function getDecisionQuestionContent(
   return whileReading<DecisionQuestionContentResult>(
     (delivery) =>
       delivery.questionContent({ projectId, terminalId: payload.terminalId }, payload.questionId),
+    { result: "not-running" }
+  );
+}
+
+/** Part of one image of a pane's question, checked against its digest (#17100). Never makes or starts the service. */
+export function getDecisionQuestionImage(
+  projectId: string | null,
+  payload: GetDecisionQuestionImagePayload
+): Promise<DecisionQuestionImagePartResult> {
+  return whileReading<DecisionQuestionImagePartResult>(
+    (delivery) =>
+      delivery.questionImage(
+        { projectId, terminalId: payload.terminalId },
+        payload.questionId,
+        payload.attachmentId,
+        payload.offset
+      ),
     { result: "not-running" }
   );
 }

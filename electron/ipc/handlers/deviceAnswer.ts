@@ -81,7 +81,9 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummariesResult,
+  GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../shared/types/decisionsQuestion.js";
@@ -287,6 +289,20 @@ const cancelQuestionSchema = z
   .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
   .strict();
 
+// An attachment id as the protocol shapes it, and where in the image (at most 20 MiB) a part starts.
+const getQuestionImageSchema = z
+  .object({
+    terminalId: questionTerminalIdSchema,
+    questionId: questionIdSchema,
+    attachmentId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(20 * 1024 * 1024),
+  })
+  .strict();
+
 // A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
 const getQuestionSummariesSchema = z
   .object({
@@ -374,6 +390,25 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionQuestionContent(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    // One of a question's images, fetched and checked on the machine that
+    // owns the pane (#17100); scoped like the content, and only ever returned
+    // to the view that asked.
+    getQuestionImage: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_IMAGE,
+      getQuestionImageSchema,
+      async (
+        ctx,
+        payload: GetDecisionQuestionImagePayload
+      ): Promise<DecisionQuestionImagePartResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionImage(ctx.projectId, payload);
       },
       { withContext: true }
     ),

@@ -6,6 +6,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   getQuestionContent: "decisions:get-question-content",
   getQuestionSummaries: "decisions:get-question-summaries",
   cancelQuestion: "decisions:cancel-question",
+  getQuestionImage: "decisions:get-question-image",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",
