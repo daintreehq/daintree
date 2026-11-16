@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Asserts the project's Node version stays aligned across the three
-// machine-readable sources that declare it:
-//   `.nvmrc`, `.node-version`, and `package.json`'s `engines.node`.
+// Asserts the project's Node version stays aligned across the machine-readable
+// sources that declare it: `.nvmrc`, `.node-version`, `package.json`'s
+// `engines.node`, and the Node image `.spotexec/Dockerfile` builds remote runs on.
 //
 // These are separate files read by separate tools (nvm/fnm read `.nvmrc`,
 // nodenv/asdf read `.node-version`, npm reads `engines.node`), so they can
@@ -26,6 +26,7 @@ const root = path.resolve(here, "../..");
 const NVMRC = path.join(root, ".nvmrc");
 const NODE_VERSION = path.join(root, ".node-version");
 const PACKAGE_JSON = path.join(root, "package.json");
+const SPOTEXEC_DOCKERFILE = path.join(root, ".spotexec", "Dockerfile");
 
 /**
  * Parse an exact Node version pin from a `.nvmrc` / `.node-version` file.
@@ -104,6 +105,21 @@ export function parseNodeEngineRange(packageJsonText) {
 }
 
 /**
+ * Parse the Node version out of the spotexec Dockerfile's
+ * `ARG NODE_IMAGE=node:<x.y.z>-<variant>` line, which every stage builds FROM.
+ * Throws when the line is missing or its tag isn't an exact `x.y.z`.
+ */
+export function parseDockerfileNodeImage(dockerfileText) {
+  const match = /^ARG NODE_IMAGE=node:([^\s-]+)-\S+\s*$/m.exec(dockerfileText);
+  if (!match) {
+    throw new Error(
+      `.spotexec/Dockerfile: expected an "ARG NODE_IMAGE=node:<x.y.z>-<variant>" line`
+    );
+  }
+  return parseExactPin(match[1], ".spotexec/Dockerfile NODE_IMAGE");
+}
+
+/**
  * Pure comparison of the parsed sources. Each exact pin must equal the engine
  * range's minimum; pin-vs-pin equality then follows transitively. Returns
  * `{ ok, failures }` where each failure names the offending file and reason.
@@ -113,6 +129,7 @@ export function findNodeVersionDrift({
   nodeVersionFile,
   engineRange,
   engineMinimum,
+  containerVersion,
 }) {
   const failures = [];
   const rangeDesc = `package.json engines.node ${JSON.stringify(engineRange)} (minimum ${engineMinimum})`;
@@ -126,6 +143,12 @@ export function findNodeVersionDrift({
     failures.push({
       file: NODE_VERSION,
       message: `.node-version pins ${nodeVersionFile}, but ${rangeDesc} — they must declare the same version.`,
+    });
+  }
+  if (containerVersion !== undefined && containerVersion !== engineMinimum) {
+    failures.push({
+      file: SPOTEXEC_DOCKERFILE,
+      message: `.spotexec/Dockerfile builds on node ${containerVersion}, but ${rangeDesc} — they must declare the same version.`,
     });
   }
   return { ok: failures.length === 0, failures };
@@ -150,10 +173,12 @@ function main() {
   const nvmrcRead = readSource(NVMRC, ".nvmrc");
   const nodeVersionRead = readSource(NODE_VERSION, ".node-version");
   const pkgRead = readSource(PACKAGE_JSON, "package.json");
+  const dockerfileRead = readSource(SPOTEXEC_DOCKERFILE, ".spotexec/Dockerfile");
 
   let nvmrcVersion;
   let nodeVersionFile;
   let engine;
+  let containerVersion;
 
   if (!nvmrcRead.ok) {
     emit(NVMRC, nvmrcRead.error);
@@ -185,14 +210,25 @@ function main() {
     }
   }
 
+  if (!dockerfileRead.ok) {
+    emit(SPOTEXEC_DOCKERFILE, dockerfileRead.error);
+  } else {
+    try {
+      containerVersion = parseDockerfileNodeImage(dockerfileRead.text);
+    } catch (error) {
+      emit(SPOTEXEC_DOCKERFILE, error.message);
+    }
+  }
+
   // Only compare once every source parsed — otherwise a parse failure would
   // cascade into misleading "drift" errors against `undefined`.
-  if (nvmrcVersion && nodeVersionFile && engine) {
+  if (nvmrcVersion && nodeVersionFile && engine && containerVersion) {
     const { failures: drift } = findNodeVersionDrift({
       nvmrcVersion,
       nodeVersionFile,
       engineRange: engine.range,
       engineMinimum: engine.minimum,
+      containerVersion,
     });
     for (const f of drift) {
       emit(f.file, f.message);
@@ -202,13 +238,13 @@ function main() {
   if (failures > 0) {
     console.error(
       `\nNode version pins disagree: ${failures} issue(s). ` +
-        `Align .nvmrc, .node-version, and package.json engines.node on the same version.`
+        `Align .nvmrc, .node-version, package.json engines.node and .spotexec/Dockerfile on the same version.`
     );
     process.exit(1);
   }
 
   console.log(
-    `[check-node-version] OK — .nvmrc, .node-version, and engines.node all agree (${nvmrcVersion})`
+    `[check-node-version] OK — .nvmrc, .node-version, engines.node and the spotexec image all agree (${nvmrcVersion})`
   );
 }
 
