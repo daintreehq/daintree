@@ -4,7 +4,11 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { buildMarkdownEditorExtensions, linkTargetAt } from "../markdownEditorExtensions";
+import {
+  buildMarkdownEditorExtensions,
+  docUtf8Bytes,
+  linkTargetAt,
+} from "../markdownEditorExtensions";
 
 const language = markdown({ base: markdownLanguage });
 
@@ -142,5 +146,30 @@ describe("markdownEditorExtensions (#12323)", () => {
     mounted = mount("x");
     expect(mounted.view.state.readOnly).toBe(false);
     expect(mounted.view.contentDOM.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it("keeps the buffer's UTF-8 size from its changes, surrogate pairs split and joined included (#17071)", () => {
+    const encoded = (state: EditorState) => new TextEncoder().encode(state.doc.toString()).length;
+    let state = EditorState.create({ doc: "# Plan\n😀 é\r\nend", extensions: [docUtf8Bytes] });
+    expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    const pieces = ["a", "é", "€", "😀", "\n", "\ud83d", "\ude00", "", "xy\nz"];
+    let seed = 17071;
+    const random = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    for (let step = 0; step < 400; step++) {
+      const length = state.doc.length;
+      const from = random(length + 1);
+      const to = Math.min(length, from + random(4));
+      const second = Math.min(length, to + 1 + random(3));
+      const changes = [{ from, to, insert: pieces[random(pieces.length)]! }];
+      // Two changes in one transaction, a single unchanged unit apart at times.
+      if (second < length && random(2) === 0) {
+        changes.push({ from: second, to: second + random(2), insert: pieces[random(pieces.length)]! });
+      }
+      state = state.update({ changes }).state;
+      expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    }
   });
 });

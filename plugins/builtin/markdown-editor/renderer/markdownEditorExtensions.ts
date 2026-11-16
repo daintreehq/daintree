@@ -8,7 +8,14 @@ import {
   crosshairCursor,
   dropCursor,
 } from "@codemirror/view";
-import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  Prec,
+  StateField,
+  type Extension,
+  type Text,
+} from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches, gotoLine } from "@codemirror/search";
 import {
@@ -21,6 +28,7 @@ import {
 } from "@codemirror/language";
 import { markdownKeymap } from "@codemirror/lang-markdown";
 import type { SyntaxNode } from "@lezer/common";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import {
   editorSearchHighlightTheme,
   editorSearchPanelTheme,
@@ -51,6 +59,38 @@ export interface MarkdownEditorCallbacks {
 
 export const wrapCompartment = new Compartment();
 export const themeCompartment = new Compartment();
+
+function rangeUtf8Bytes(doc: Text, from: number, to: number): number {
+  let bytes = 0;
+  // Chunks break only at line breaks, which never split a surrogate pair.
+  for (const iter = doc.iterRange(from, to); !iter.next().done; ) {
+    bytes += utf8ByteLength(iter.value);
+  }
+  return bytes;
+}
+
+/**
+ * UTF-8 bytes in the buffer's `\n`-joined text, carried from change to change
+ * so the status line never re-encodes the document per keystroke (#17071).
+ * Each change is measured with one code unit of unchanged context either side:
+ * a pair split or joined at a change's edge then counts as what it became.
+ */
+export const docUtf8Bytes = StateField.define<number>({
+  create: (state) => rangeUtf8Bytes(state.doc, 0, state.doc.length),
+  update: (bytes, tr) => {
+    if (!tr.docChanged) return bytes;
+    const before = tr.startState.doc;
+    let next = bytes;
+    tr.changes.iterChanges((fromA, toA, fromB, toB) => {
+      const lead = fromA > 0 ? 1 : 0;
+      const trail = toA < before.length ? 1 : 0;
+      next +=
+        rangeUtf8Bytes(tr.newDoc, fromB - lead, toB + trail) -
+        rangeUtf8Bytes(before, fromA - lead, toA + trail);
+    });
+    return next;
+  },
+});
 
 /** Walk up from the click position to the nearest link node and read its target. */
 export function linkTargetAt(view: EditorView, pos: number): string | null {
@@ -111,6 +151,7 @@ export function buildMarkdownEditorExtensions(options: {
         },
       })
     ),
+    docUtf8Bytes,
     lineNumbers(),
     highlightSpecialChars(),
     history(),
