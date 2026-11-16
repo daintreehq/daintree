@@ -2627,6 +2627,69 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    it("reads a marker-rich cursor-addressed repaint by its ends instead of stripping it", async () => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+      // Nothing but prompt recognition can veto: the shell is in the
+      // foreground and the mirror shows no failure, so reading the abbreviated
+      // repaint as a prompt would demote.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 599: 42% of $0.12 > next"];
+      state.cursorLine = "│ step 599: 42% of $0.12 > next";
+      state.ptyDescendantCount = 0;
+      // Ink/Ratatui style: every cell placed by CUP, `%`, `$` and `>` in the
+      // text, and no line break for the trailing-line window to cut at.
+      let frame = "\x1b[?2026h";
+      for (let cell = 0; cell < 600; cell++) {
+        frame += `\x1b[${(cell % 40) + 1};3H\x1b[2K\x1b[38;5;245m│\x1b[0m step ${cell}: 42% of $0.12 > next`;
+      }
+      frame += "\x1b[?2026l";
+
+      vi.mocked(stripAnsi).mockClear();
+      watcher.observeOutput(frame);
+      const longestStrip = Math.max(
+        0,
+        ...vi.mocked(stripAnsi).mock.calls.map(([text]) => text.length)
+      );
+      expect(longestStrip).toBeLessThan(200);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("demotes on a prompt that follows a cursor-addressed repaint in the same chunk", async () => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+      let frame = "";
+      for (let cell = 0; cell < 600; cell++) {
+        frame += `\x1b[${(cell % 40) + 1};3H\x1b[38;5;245m│\x1b[0m step ${cell}: 42% > next`;
+      }
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 599: 42% > next", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      state.ptyDescendantCount = 0;
+      watcher.observeOutput(`${frame}\r\n${COLORED_PROMPT}`);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it.each([
+      ["user@host", "user@host:~/repo$ "],
+      ["decorated", "➜  repo git:(main) ✗ "],
+    ])("demotes on a %s prompt whose line runs long with styling", async (_label, prompt) => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 299: 42% of context used", prompt];
+      state.cursorLine = prompt;
+      state.ptyDescendantCount = 0;
+
+      // Past the long-line threshold, so only its edges decide whether it is
+      // stripped whole.
+      watcher.observeOutput(`\x1b[0m`.repeat(300) + prompt);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
     it("demotes on a styled prompt that ends a large agent repaint", async () => {
       const { state, clear, watcher } = await makeCommittedClaude();
 

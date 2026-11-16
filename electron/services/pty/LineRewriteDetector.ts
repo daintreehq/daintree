@@ -27,7 +27,8 @@ export function countLineRewrites(data: string): number {
   return count;
 }
 
-export function isStatusLineRewrite(data: string): boolean {
+/** `withoutParticles`, when given, must be `stripCosmeticParticles(data)`. */
+export function isStatusLineRewrite(data: string, withoutParticles?: string): boolean {
   let hasRewrite = false;
   for (let i = 0; i < data.length; i++) {
     if (data[i] === "\r") {
@@ -55,7 +56,7 @@ export function isStatusLineRewrite(data: string): boolean {
   // suppress pattern detection on the data path (a status-line rewrite is not
   // scanned for working/completion patterns). Drop them first; a frame that
   // also carries a genuine status line still matches on its own text.
-  const stripped = stripAnsi(stripCosmeticParticles(data));
+  const stripped = stripAnsi(withoutParticles ?? stripCosmeticParticles(data));
   return STATUS_LINE_PATTERNS.some((pattern) => pattern.test(stripped));
 }
 

@@ -5,14 +5,27 @@ import { logError, logLocalOnly } from "../../utils/logger.js";
 const FORENSIC_BUFFER_SIZE = 4000;
 
 export class TerminalForensicsBuffer {
-  private recentOutputBuffer = "";
+  // Every chunk is captured but the tail is read only at exit and detection,
+  // so chunks are kept as they arrive and trimmed once they hold twice the
+  // window, rather than re-copying the whole window on every chunk. The tail
+  // of a concatenation depends only on the tail of its parts, so the result
+  // is the same string per-chunk trimming would hold.
+  private chunks: string[] = [];
+  private bufferedLength = 0;
   private textDecoder = new TextDecoder();
 
   capture(data: string | Uint8Array): void {
     const text = typeof data === "string" ? data : this.textDecoder.decode(data);
-    this.recentOutputBuffer += text;
-    if (this.recentOutputBuffer.length > FORENSIC_BUFFER_SIZE) {
-      this.recentOutputBuffer = this.recentOutputBuffer.slice(-FORENSIC_BUFFER_SIZE);
+    if (text.length === 0) return;
+    if (text.length >= FORENSIC_BUFFER_SIZE) {
+      this.chunks = [text.slice(-FORENSIC_BUFFER_SIZE)];
+      this.bufferedLength = FORENSIC_BUFFER_SIZE;
+      return;
+    }
+    this.chunks.push(text);
+    this.bufferedLength += text.length;
+    if (this.bufferedLength > 2 * FORENSIC_BUFFER_SIZE) {
+      this.compact();
     }
   }
 
@@ -21,7 +34,18 @@ export class TerminalForensicsBuffer {
    * the fallback classifier to inspect exit-time output before teardown runs.
    */
   getRecentOutput(): string {
-    return this.recentOutputBuffer;
+    if (this.chunks.length > 1 || this.bufferedLength > FORENSIC_BUFFER_SIZE) {
+      this.compact();
+    }
+    return this.chunks[0] ?? "";
+  }
+
+  private compact(): void {
+    const joined = this.chunks.join("");
+    const tail =
+      joined.length > FORENSIC_BUFFER_SIZE ? joined.slice(-FORENSIC_BUFFER_SIZE) : joined;
+    this.chunks = [tail];
+    this.bufferedLength = tail.length;
   }
 
   logForensics(
@@ -37,7 +61,7 @@ export class TerminalForensicsBuffer {
       exitCode,
       signal,
       wasKilled: terminal.wasKilled,
-      recentOutput: this.recentOutputBuffer,
+      recentOutput: this.getRecentOutput(),
     });
 
     if (!decision.shouldLog || decision.strippedOutput.trim().length === 0) {

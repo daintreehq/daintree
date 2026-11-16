@@ -155,7 +155,7 @@ export class PtyManager extends EventEmitter {
   private retiredStreamHighWater = 0;
   private constructionOutput: {
     id: string;
-    chunks: Array<{ data: string; streamEnd: number }>;
+    chunks: Array<{ data: string; streamEnd: number; encoded?: Uint8Array }>;
   } | null = null;
   // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
   // options so both processes key each incarnation identically; guards the
@@ -413,9 +413,9 @@ export class PtyManager extends EventEmitter {
    * Emit terminal data with project-based filtering.
    * Accepts both string and Uint8Array data for binary optimization.
    */
-  private emitData(id: string, data: string, streamEnd: number): void {
+  private emitData(id: string, data: string, streamEnd: number, encoded?: Uint8Array): void {
     if (this.constructionOutput?.id === id) {
-      this.constructionOutput.chunks.push({ data, streamEnd });
+      this.constructionOutput.chunks.push({ data, streamEnd, encoded });
       return;
     }
 
@@ -430,12 +430,12 @@ export class PtyManager extends EventEmitter {
     if (recorded === undefined || streamEnd > recorded) this.streamOffsets.set(id, streamEnd);
 
     if (!this.activeProjectId) {
-      this.emit("data", id, data, undefined, streamEnd);
+      this.emit("data", id, data, undefined, streamEnd, encoded);
       return;
     }
 
     if (this.registry.terminalBelongsToProject(terminalProcess, this.activeProjectId)) {
-      this.emit("data", id, data, undefined, streamEnd);
+      this.emit("data", id, data, undefined, streamEnd, encoded);
     }
   }
 
@@ -587,7 +587,7 @@ export class PtyManager extends EventEmitter {
     let terminalProcess: TerminalProcess;
     const constructionOutput = {
       id,
-      chunks: [] as Array<{ data: string; streamEnd: number }>,
+      chunks: [] as Array<{ data: string; streamEnd: number; encoded?: Uint8Array }>,
     };
     this.constructionOutput = constructionOutput;
     try {
@@ -595,7 +595,8 @@ export class PtyManager extends EventEmitter {
         id,
         options,
         {
-          emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
+          emitData: (termId, data, streamEnd, encoded) =>
+            this.emitData(termId, data, streamEnd, encoded),
           streamOffsetBase:
             this.streamOffsets.get(id) ??
             Math.max(this.streamOffsetOrigin, this.retiredStreamHighWater),
@@ -701,7 +702,7 @@ export class PtyManager extends EventEmitter {
     this.registry.add(id, terminalProcess);
     this.syncTreeKillHelperWarmth();
     for (const chunk of constructionOutput.chunks) {
-      this.emitData(id, chunk.data, chunk.streamEnd);
+      this.emitData(id, chunk.data, chunk.streamEnd, chunk.encoded);
     }
 
     if (consumedPendingResize) {

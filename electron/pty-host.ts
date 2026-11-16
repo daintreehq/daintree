@@ -934,9 +934,12 @@ const resourceGovernor = new ResourceGovernor({
 });
 
 // Wire up PtyManager events
-ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEnd) => {
-  visualOutputRouter.routeOutput(id, data, streamEnd);
-});
+ptyManager.on(
+  "data",
+  (id: string, data: string | Uint8Array, _routing, streamEnd, encoded?: Uint8Array) => {
+    visualOutputRouter.routeOutput(id, data, streamEnd, encoded);
+  }
+);
 
 ptyManager.on(
   "exit",

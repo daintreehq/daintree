@@ -1029,8 +1029,32 @@ describe("TerminalProcess background output streaming", () => {
     ptyOnDataCallback!("beta");
 
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "alpha", 5);
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9);
+    expect(emitData).toHaveBeenNthCalledWith(
+      1,
+      "t1",
+      "alpha",
+      5,
+      new TextEncoder().encode("alpha")
+    );
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9, new TextEncoder().encode("beta"));
+
+    terminal.dispose();
+  });
+
+  it("offsets the stream by each chunk's UTF-8 bytes and hands those bytes on", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(undefined, { emitData });
+    const chunks = ["héllo │ ", "😀", "lone \ud83d half", "\ufeffbom"];
+
+    let offset = 0;
+    for (const chunk of chunks) ptyOnDataCallback!(chunk);
+
+    chunks.forEach((chunk, index) => {
+      offset += Buffer.byteLength(chunk, "utf8");
+      const [id, data, streamEnd, encoded] = emitData.mock.calls[index];
+      expect([id, data, streamEnd]).toEqual(["t1", chunk, offset]);
+      expect(Buffer.from(encoded as Uint8Array).equals(Buffer.from(chunk, "utf8"))).toBe(true);
+    });
 
     terminal.dispose();
   });
@@ -1048,8 +1072,20 @@ describe("TerminalProcess background output streaming", () => {
     // No deferral: each background chunk reaches the renderer fan-out immediately,
     // exactly like a foreground chunk. The OSC 9;4 heartbeat also stays per-chunk.
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "chunk-a", 7);
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "chunk-b", 14);
+    expect(emitData).toHaveBeenNthCalledWith(
+      1,
+      "t1",
+      "chunk-a",
+      7,
+      new TextEncoder().encode("chunk-a")
+    );
+    expect(emitData).toHaveBeenNthCalledWith(
+      2,
+      "t1",
+      "chunk-b",
+      14,
+      new TextEncoder().encode("chunk-b")
+    );
     expect(feed).toHaveBeenCalledTimes(2);
 
     // Advancing timers must NOT fan out any additional (coalesced) batch — there
