@@ -4523,6 +4523,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; mode: "browse" | "select" }];
     result: import("./sitePreview.js").SitePreviewBindingState;
   };
+  "site-preview:set-paused": {
+    args: [payload: { sessionId: string; paused: boolean }];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];

@@ -240,6 +240,7 @@ export function createFakeHost() {
         mode: SitePreviewMode;
       }): Promise<SitePreviewBindingState> => binding("preview-1", request.mode)
     ),
+    setPaused: vi.fn(async (_request: { sessionId: string; paused: boolean }) => undefined),
     clearSelection: vi.fn(async (_request: { sessionId: string }) => undefined),
     clearHover: vi.fn(async (_request: { sessionId: string }) => undefined),
   };

@@ -65,6 +65,9 @@ export interface BootstrapHostApi {
   mode: PickerMode;
   post(event: ElementPickerEvent): void;
   setMode(mode: PickerMode): void;
+  /** Whether the preview is out of sight, baked in by the host at install. */
+  paused: boolean;
+  setPaused(paused: boolean): void;
   clearSelection(): void;
   clearHover(): void;
   /** The host's account of this document's readers, replacing the last one. */

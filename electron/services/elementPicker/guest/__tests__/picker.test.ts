@@ -432,6 +432,94 @@ describe("createPicker", () => {
     expect(handle.getOverlayRoot()).toBeNull();
   });
 
+  it("does nothing while paused, and resumes in the mode it was left in (#17067)", async () => {
+    const handle = start();
+    document.getElementById("first")!.click();
+    runFrames();
+    pointAt(document.getElementById("second")!);
+    expect(frames.size).toBe(1);
+
+    handle.setPaused(true);
+    expect(frames.size).toBe(0);
+    expect(handle.getOverlayRoot()).toBeNull();
+    const selections = ofType("selectionChanged").length;
+    let pageClicks = 0;
+    const second = document.getElementById("second")!;
+    second.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    second.click();
+    pointAt(second);
+    // A page that keeps re-rendering behind a hidden preview.
+    document.getElementById("first")!.className = "re-rendered";
+    await Promise.resolve();
+    expect(pageClicks).toBe(1);
+    expect(ofType("selectionChanged")).toHaveLength(selections);
+    expect(frames.size).toBe(0);
+
+    handle.setPaused(false);
+    expect(frames.size).toBe(1);
+    runFrames();
+    expect(handle.getOverlayRoot()?.host.isConnected).toBe(true);
+    second.click();
+    expect(pageClicks).toBe(1);
+    expect(selectedLabel()).toBe("a#second");
+  });
+
+  it("lets no host request restart its work while paused", () => {
+    const handle = start();
+    document.getElementById("first")!.click();
+    pointAt(document.getElementById("second")!);
+    runFrames();
+    expect(ofType("hoverChanged").at(-1)?.observation).not.toBeNull();
+
+    handle.setPaused(true);
+    // The hover goes with the pointer that cannot be over a hidden page.
+    expect(ofType("hoverChanged").at(-1)?.observation).toBeNull();
+    handle.setAvailability(SETTLED);
+    handle.setMode("browse");
+    handle.setMode("select");
+    handle.clearHover();
+    expect(
+      handle.reselect({ elementId: ofType("selectionChanged")[0]!.observations[0]!.elementId })
+    ).toBe(true);
+
+    expect(frames.size).toBe(0);
+    expect(handle.getOverlayRoot()).toBeNull();
+    let pageClicks = 0;
+    const second = document.getElementById("second")!;
+    second.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    second.click();
+    expect(pageClicks).toBe(1);
+  });
+
+  it("starts paused when installed for a preview out of sight", () => {
+    picker = createPicker({
+      channel: CHANNEL,
+      mode: "select",
+      paused: true,
+      post: (event) => events.push(event),
+    });
+    let pageClicks = 0;
+    const link = document.getElementById("first")!;
+    link.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    link.click();
+    pointAt(link);
+
+    expect(pageClicks).toBe(1);
+    expect(frames.size).toBe(0);
+    expect(ofType("selectionChanged")).toHaveLength(0);
+
+    picker.setPaused(false);
+    link.click();
+    expect(pageClicks).toBe(1);
+    expect(ofType("selectionChanged")).toHaveLength(1);
+  });
+
   it("reports a framework the selection's markup names, once per document", () => {
     document.body.innerHTML =
       '<app-root ng-version="22.0.0"><button id="a">A</button><button id="b">B</button></app-root>';

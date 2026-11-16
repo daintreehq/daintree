@@ -191,6 +191,84 @@ describe("useDevPreviewConsoleCapture", () => {
     await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
   });
 
+  it("keeps the rows but stops offering their values once capture stops (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    const webview = makeWebviewElement();
+    const { rerender } = renderHook(
+      ({ evicted }: { evicted: boolean }) =>
+        useDevPreviewConsoleCapture(PANE_ID, webview, true, evicted),
+      { initialProps: { evicted: false } }
+    );
+    addRowViaCb(
+      row({
+        paneId: PANE_ID,
+        args: [{ type: "object", objectId: "obj-1", preview: "{}" }],
+      })
+    );
+
+    rerender({ evicted: true });
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
+
+    const [kept] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(kept?.args[0]).toMatchObject({ type: "object", objectId: "", preview: "{}" });
+  });
+
+  it("leaves a remount's rows inspectable when an earlier mount's stop lands late (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    let resolveFirstStart: () => void = () => {};
+    startConsoleCapture.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstStart = resolve;
+        })
+    );
+    const objectRow = (id: number, objectId: string) =>
+      row({ id, paneId: PANE_ID, args: [{ type: "object", objectId, preview: "{}" }] });
+    const firstWebview = makeWebviewElement();
+    const first = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, firstWebview, true, false));
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(1));
+    addRowViaCb(objectRow(1, "first-guest-obj"));
+    first.unmount();
+
+    const secondWebview = makeWebviewElement();
+    renderHook(() => useDevPreviewConsoleCapture(PANE_ID, secondWebview, true, false));
+    addRowViaCb(objectRow(2, "second-guest-obj"));
+    resolveFirstStart();
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledTimes(1));
+
+    const [stopped, live] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(stopped?.args[0]).toMatchObject({ objectId: "" });
+    expect(live?.args[0]).toMatchObject({ objectId: "second-guest-obj" });
+  });
+
+  it("stops offering rows an earlier run of the same capture received (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    const webview = makeWebviewElement();
+    const { rerender } = renderHook(
+      ({ ready, evicted }: { ready: boolean; evicted: boolean }) =>
+        useDevPreviewConsoleCapture(PANE_ID, webview, ready, evicted),
+      { initialProps: { ready: false, evicted: false } }
+    );
+    addRowViaCb(
+      row({ id: 1, paneId: PANE_ID, args: [{ type: "object", objectId: "obj-1", preview: "{}" }] })
+    );
+    // A re-run keeps capturing the same guest; nothing arrives after it.
+    rerender({ ready: true, evicted: false });
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(2));
+
+    rerender({ ready: true, evicted: true });
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledTimes(1));
+
+    const [kept] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(kept?.args[0]).toMatchObject({ objectId: "" });
+  });
+
   it("stops capture when the panel becomes evicted", async () => {
     const webview = makeWebviewElement();
     const { rerender } = renderHook(
@@ -283,6 +361,23 @@ describe("useDevPreviewConsoleCapture", () => {
 
     unmount();
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
+  });
+
+  it("drops buffered rows when the panel unmounts because it was trashed (#17067)", () => {
+    usePanelStore.setState({
+      panelsById: {
+        [PANE_ID]: { id: PANE_ID, location: "trash" } as unknown as PtyPanelData,
+      },
+    });
+    const webview = makeWebviewElement();
+    const { unmount } = renderHook(() =>
+      useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
+    );
+    addRowViaCb(row({ paneId: PANE_ID }));
+    expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
+
+    unmount();
+    expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(0);
   });
 });
 

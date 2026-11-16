@@ -422,6 +422,42 @@ describe("rendererStoreOrchestrator", () => {
     expect(useConsoleCaptureStore.getState().messages.has(panelId)).toBe(false);
   });
 
+  it("drops a dev preview's console rows when it is trashed with no pane mounted (#17067)", () => {
+    const row = (id: number, paneId: string) => ({
+      id,
+      paneId,
+      level: "log" as const,
+      cdpType: "log" as const,
+      args: [],
+      summaryText: "test",
+      groupDepth: 0,
+      timestamp: Date.now(),
+      navigationGeneration: 0,
+    });
+    const preview = (id: string) =>
+      ({
+        id,
+        kind: "dev-preview",
+        title: "Dev preview",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      }) as PanelInstance;
+    usePanelStore.setState({
+      panelsById: { trashed: preview("trashed"), kept: preview("kept") },
+      panelIds: ["trashed", "kept"],
+    });
+    useConsoleCaptureStore.getState().addStructuredMessage(row(1, "trashed"));
+    useConsoleCaptureStore.getState().addStructuredMessage(row(2, "kept"));
+
+    usePanelStore.getState().trashPanel("trashed");
+
+    expect(usePanelStore.getState().panelIds).toContain("trashed");
+    expect(useConsoleCaptureStore.getState().messages.has("trashed")).toBe(false);
+    expect(useConsoleCaptureStore.getState().messages.get("kept")).toHaveLength(1);
+  });
+
   it("prunes plugin panel badges when a terminal is removed", () => {
     const panelId = "term-badge";
 

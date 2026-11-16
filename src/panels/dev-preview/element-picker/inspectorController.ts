@@ -42,6 +42,11 @@ import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy
 import { usePanelStore } from "@/store/panelStore";
 import { redactUrl } from "./pageText.js";
 import {
+  isProjectViewObservable,
+  subscribeProjectViewCachedFlush,
+  subscribeProjectViewObservability,
+} from "@/lib/viewCacheState";
+import {
   citedRevisions,
   displayLine,
   elementClaim,
@@ -91,9 +96,25 @@ export interface ElementPickerApi {
 export interface PreviewSessionApi {
   detach(request: { sessionId: string }): Promise<void>;
   setMode(request: { sessionId: string; mode: SitePreviewMode }): Promise<SitePreviewBindingState>;
+  /** Stop or resume everything the picker does in the page while nobody can see it. */
+  setPaused(request: { sessionId: string; paused: boolean }): Promise<void>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
   clearHover(request: { sessionId: string }): Promise<void>;
+}
+
+/**
+ * Whether anyone can see this project's view at all. A cached project view
+ * keeps its preview's page running, so the picker has to be told to stop.
+ */
+export interface ViewLifecycleApi {
+  isObservable(): boolean;
+  subscribe(listener: () => void): () => void;
+  /**
+   * Run `flush` as main caches the view, ahead of any freeze: a frozen view
+   * could not tell the page anything until it thawed.
+   */
+  subscribeCachedFlush(flush: () => Promise<unknown>): () => void;
 }
 
 export interface ElementCaptureApi {
@@ -119,6 +140,8 @@ export interface InspectorDeps {
   capture?: ElementCaptureApi;
   /** The window is attached to another machine, where a local picture's path means nothing. */
   remoteWindow?: () => boolean;
+  /** Absent where there is no project view to be cached: the preview counts as observable. */
+  viewLifecycle?: ViewLifecycleApi;
 }
 
 export interface InspectorContext {
@@ -471,6 +494,11 @@ export function defaultInspectorDeps(): InspectorDeps {
     now: () => Date.now(),
     capture: window.electron.webview,
     remoteWindow: isRemoteWindow,
+    viewLifecycle: {
+      isObservable: isProjectViewObservable,
+      subscribe: (listener) => subscribeProjectViewObservability(listener),
+      subscribeCachedFlush: subscribeProjectViewCachedFlush,
+    },
   };
 }
 
@@ -536,6 +564,12 @@ export class InspectorController implements DevPreviewToolSession {
   private workspaceRequest = 0;
   private projectRequest = 0;
   private bindRequest = 0;
+  /** Whether any of the picker's surfaces are mounted, which is whether the preview's pane is. */
+  private surfacesVisible = false;
+  /** What the page was last told about pausing, and which binding it was told on. */
+  private pauseSent: { sessionId: string; paused: boolean } | null = null;
+  /** The bind on its way, which a cached view's freeze has to wait for. */
+  private bindInFlight: Promise<unknown> | null = null;
   /** The host's last word on whether the preview is showing a page, and which. */
   private pageReady = false;
   private pageUrl = "";
@@ -582,6 +616,11 @@ export class InspectorController implements DevPreviewToolSession {
       this.handleSourceChanged(payload)
     );
     this.unsubscribers.push(subscribeComposerMemory(() => this.holdSources()));
+    const lifecycle = deps.viewLifecycle;
+    if (lifecycle) {
+      this.unsubscribers.push(lifecycle.subscribe(() => this.syncPause()));
+      this.unsubscribers.push(lifecycle.subscribeCachedFlush(() => this.pauseBeforeFreeze()));
+    }
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -598,6 +637,57 @@ export class InspectorController implements DevPreviewToolSession {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
     if (patch.selection !== undefined || patch.workspace !== undefined) this.holdSources();
+    if (patch.binding !== undefined) this.syncPause();
+  }
+
+  /**
+   * Out of sight — no surface mounted (its tab is inactive, say), or the
+   * project view cached or its window hidden — the page's picker stops its
+   * pointer listeners, observers and frames. The mode and the selection stay
+   * as the user left them, and come back with the preview.
+   */
+  private wantsPause(): boolean {
+    return !this.surfacesVisible || this.deps.viewLifecycle?.isObservable() === false;
+  }
+
+  /**
+   * Tell the page when that changes what it was last told. A new binding's
+   * page starts running, so it only ever needs telling to stop.
+   */
+  private syncPause(paused: boolean = this.wantsPause()): void {
+    if (this.disposed) return;
+    const binding = this.state.binding;
+    if (binding.status !== "bound") return;
+    const sessionId = binding.sessionId;
+    const before = this.pauseSent?.sessionId === sessionId ? this.pauseSent.paused : false;
+    if (before === paused) return;
+    const sent = { sessionId, paused };
+    this.pauseSent = sent;
+    void this.deps.preview.setPaused(sent).catch(() => {
+      // Not applied, so the page is as it was: the next change sends it again.
+      if (this.pauseSent === sent) this.pauseSent = { sessionId, paused: before };
+    });
+  }
+
+  /**
+   * Main holds a cached view's freeze until this settles. It waits for any bind
+   * on its way, a replacement included — a frozen view could not hear the
+   * reply — then sends the pause. Sending is enough: main applies it to the
+   * page whether or not this view is frozen by then, and a page that is frozen
+   * itself (parked in the dock) must not hold up the view's freeze.
+   *
+   * The flush runs before the view reads as cached, so with nothing to wait
+   * for the pause is forced. After a wait the view's state has caught up, and
+   * may say the user is already back.
+   */
+  private async pauseBeforeFreeze(): Promise<void> {
+    let waited = false;
+    for (let pending = this.bindInFlight; pending !== null; pending = this.bindInFlight) {
+      waited = true;
+      await pending.catch(() => undefined);
+      if (this.disposed || this.bindInFlight === pending) break;
+    }
+    this.syncPause(waited ? this.wantsPause() : true);
   }
 
   /**
@@ -644,6 +734,7 @@ export class InspectorController implements DevPreviewToolSession {
    */
   update(context: DevPreviewToolSessionContext): void {
     this.closeTool = context.close;
+    this.surfacesVisible = context.visible;
     const pageReady = context.isWebviewReady && context.url.length > 0;
     if (context.url.length > 0) this.pageUrl = context.url;
     this.updateContext({
@@ -663,6 +754,7 @@ export class InspectorController implements DevPreviewToolSession {
       // a cold dev server — up to a minute of "waiting" beside a loaded page.
       void this.retryConnect();
     }
+    this.syncPause();
   }
 
   updateContext(context: InspectorContext): void {
@@ -936,8 +1028,14 @@ export class InspectorController implements DevPreviewToolSession {
     // snapshot can't be replayed, and a session on the panel isn't proof it
     // was this controller's.
     let state: SitePreviewBindingState;
+    const pending = this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+    this.bindInFlight = pending;
+    const settled = () => {
+      if (this.bindInFlight === pending) this.bindInFlight = null;
+    };
+    pending.then(settled, settled);
     try {
-      state = await this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+      state = await pending;
     } catch (error) {
       if (request !== this.bindRequest) return;
       this.bufferedEvents = [];

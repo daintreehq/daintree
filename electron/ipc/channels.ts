@@ -636,6 +636,7 @@ export const CHANNELS = {
   // channel; see handlers/sitePreview.ts.
   SITE_PREVIEW_DETACH: "site-preview:detach",
   SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
+  SITE_PREVIEW_SET_PAUSED: "site-preview:set-paused",
   SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
   SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
 

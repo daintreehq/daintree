@@ -632,6 +632,10 @@ export function initStoreOrchestrator(): () => void {
               // The view's menu goes with it; the backend's list is the
               // backend's, and comes back with a restored panel.
               usePluginPanelMenuStore.getState().setViewItems(id, []);
+              // A dev preview's captured console rows. Its pane may already be
+              // unmounted (an inactive tab), so its own unmount cleanup cannot
+              // be relied on to notice the trash.
+              useConsoleCaptureStore.getState().removePane(id);
               // An open request the view never saw was meant for the panel
               // the user just closed; a restored one comes back as they left it.
               usePluginPanelOpenRequestStore.getState().clearPanel(id);

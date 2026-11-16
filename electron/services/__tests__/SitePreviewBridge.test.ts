@@ -875,6 +875,44 @@ describe("SitePreviewBridge", () => {
     expect(harness.bridge.getState(PROJECT_ID, "session-1")?.mode).toBe("browse");
   });
 
+  it("pauses the page's picker and starts the next document paused (#17067)", async () => {
+    await harness.bind();
+
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    const last = evaluations(harness).at(-1);
+    expect(String(last?.params?.expression)).toContain("api.setPaused(true)");
+    expect(last?.params?.contextId).toBe(ISOLATED_CONTEXT_ID);
+
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(bootstraps(harness)).toHaveLength(2);
+    });
+    expect(bootstraps(harness)[0]).toContain("paused: false");
+    expect(bootstraps(harness).at(-1)).toContain("paused: true");
+
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", false);
+    expect(String(evaluations(harness).at(-1)?.params?.expression)).toContain(
+      "api.setPaused(false)"
+    );
+  });
+
+  it("re-applies a pause made while the bootstrap was still installing", async () => {
+    const releaseWorld = gate(harness.wc.debugger, "Page.createIsolatedWorld");
+
+    const bound = harness.bind({ mode: "select" });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Page.createIsolatedWorld");
+    });
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    releaseWorld();
+    await bound;
+
+    expect(bootstraps(harness)[0]).toContain("paused: false");
+    expect(String(evaluations(harness).at(-1)?.params?.expression)).toContain(
+      "api.setPaused(true)"
+    );
+  });
+
   it("detaches when the guest webContents goes away", async () => {
     await harness.bind();
 
@@ -924,6 +962,7 @@ describe("SitePreviewBridge out-of-band ops", () => {
     });
     await harness.bridge.clearSelection(PROJECT_ID, "session-1");
     await harness.bridge.clearHover(PROJECT_ID, "session-1");
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
 
     // The mode is still recorded — the next install bakes it in — but nothing
     // was driven in the third-party document, and no source path reached it.
@@ -933,6 +972,20 @@ describe("SitePreviewBridge out-of-band ops", () => {
     const sources = evaluations(harness).map((c) => String(c.params?.expression));
     expect(sources.some((e) => e.includes("+page.svelte"))).toBe(false);
     expect(sources.some((e) => e.includes("Card.svelte"))).toBe(false);
+  });
+
+  it("carries a pause asked for while suspended into the resumed install", async () => {
+    const harness = await suspendedHarness();
+    const before = evaluations(harness).length;
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    expect(evaluations(harness)).toHaveLength(before);
+
+    harness.wc.url = "http://localhost:5173/";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(bootstraps(harness)).toHaveLength(2);
+    });
+    expect(bootstraps(harness).at(-1)).toContain("paused: true");
   });
 
   it("carries the mode set while suspended into the resumed install", async () => {

@@ -69,6 +69,11 @@ export function useDevPreviewConsoleCapture(
   const currentGenerationRef = useRef(0);
   const activeCaptureTokenRef = useRef<symbol | null>(null);
   const capturedWebContentsIdRef = useRef<number | null>(null);
+  // The newest row this mount has received. Row ids only grow, and a mount
+  // stops hearing rows before any later mount of the pane starts, so a stop
+  // releases exactly the rows up to here. Kept across effect re-runs: a re-run
+  // that keeps capturing the same guest hands its rows on to the next stop.
+  const lastRowIdRef = useRef(-1);
   const [capturedWebContentsId, setCapturedWebContentsId] = useState<number | null>(null);
   const [guestRevision, setGuestRevision] = useState(0);
 
@@ -129,6 +134,7 @@ export function useDevPreviewConsoleCapture(
 
     const offMessage = window.electron.webview.onConsoleMessage((row) => {
       if (row.paneId !== paneId) return;
+      lastRowIdRef.current = row.id;
       if (
         isViteHmrFailureMessage(row.summaryText) &&
         row.navigationGeneration >= currentGenerationRef.current
@@ -164,21 +170,30 @@ export function useDevPreviewConsoleCapture(
         .then(() => {
           if (activeCaptureTokenRef.current !== captureToken) return;
           activeCaptureTokenRef.current = null;
+          // Stopping releases every handle main holds for this pane on this
+          // guest; the rows stay on screen as previews. A remount may already
+          // be capturing, so only the rows this capture delivered are touched.
+          const throughRowId = lastRowIdRef.current;
+          if (throughRowId >= 0) {
+            useConsoleCaptureStore.getState().releaseHandles(paneId, throughRowId);
+          }
           return window.electron.webview.stopConsoleCapture(webContentsId, paneId);
         });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });
     };
   }, [paneId, webviewElement, isWebviewReady, isEvicted, guestRevision]);
 
-  // Drop this pane's buffered rows + counts only when the panel is gone for
-  // good. Unmount alone is not deletion: a DevPreview panel in a grid tab
+  // Drop this pane's buffered rows + counts only when the panel is gone or
+  // trashed. Unmount alone is not deletion: a DevPreview panel in a grid tab
   // group fully unmounts when another tab is activated, and we must keep its
   // captured rows so they survive a tab switch. By cleanup time a deleted
-  // panel is already absent from the panel registry, so its absence is the
-  // signal that this is a real teardown rather than a deactivation.
+  // panel is already absent from the panel registry and a trashed one already
+  // reads `location: "trash"`. Rows a guest logged between the trash and this
+  // unmount would otherwise outlive the orchestrator's trash sweep.
   useEffect(() => {
     return () => {
-      if (!usePanelStore.getState().panelsById?.[paneId]) {
+      const panel = usePanelStore.getState().panelsById?.[paneId];
+      if (!panel || panel.location === "trash") {
         useConsoleCaptureStore.getState().removePane(paneId);
       }
     };

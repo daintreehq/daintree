@@ -2114,6 +2114,9 @@ export interface GeneratedElectronAPI {
     setMode(
       ...args: IpcInvokeMap["site-preview:set-mode"]["args"]
     ): Promise<IpcInvokeMap["site-preview:set-mode"]["result"]>;
+    setPaused(
+      ...args: IpcInvokeMap["site-preview:set-paused"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:set-paused"]["result"]>;
   };
   slashCommands: {
     list(
