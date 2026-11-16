@@ -858,6 +858,21 @@ describe("onRestored — dock popover preservation (#8368)", () => {
     }
   });
 
+  it("leaves focus where an undone close put it, once per restore it settled", async () => {
+    const { settleRestoreFocus } = await import("@/services/terminal/settledRestores");
+    setupPanel({ location: "grid" });
+    usePanelStore.setState({ focusedId: "other" });
+    settleRestoreFocus("term-1");
+    const handler = getRestoredHandler();
+
+    handler({ id: "term-1" });
+    expect(usePanelStore.getState().focusedId).toBe("other");
+
+    // A later restore of the same pane is news again.
+    handler({ id: "term-1" });
+    expect(usePanelStore.getState().focusedId).toBe("term-1");
+  });
+
   it("does not clear an unrelated open dock popover when a background terminal restores", () => {
     setupPanel();
     usePanelStore.setState({ activeDockTerminalId: "dock-1", focusedId: "dock-1" });

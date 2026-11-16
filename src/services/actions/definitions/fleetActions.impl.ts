@@ -1,7 +1,7 @@
 // The fleet actions' run bodies, loaded on first dispatch by `runFleetAction` in
 // fleetActions.ts, which keeps the metadata every view registers at boot (#14272).
 // Nothing here may import fleetActions.ts at runtime.
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
 import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import {
@@ -92,11 +92,16 @@ function countSessionLoss(targets: PtyPanelData[]): number {
   ).length;
 }
 
-function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData[]): void {
+function requestConfirmation(
+  kind: FleetPendingActionKind,
+  targets: PtyPanelData[],
+  dispatchSource?: ActionSource
+): void {
   useFleetPendingActionStore.getState().request({
     kind,
     targetCount: targets.length,
     sessionLossCount: countSessionLoss(targets),
+    ...(dispatchSource !== undefined && { dispatchSource }),
   });
 }
 
@@ -207,14 +212,18 @@ export const fleetActionRuns = {
     if (targets.length === 0) return;
     const confirmed = parseConfirmed(args);
     if (!confirmed && targets.length >= 5) {
-      requestConfirmation("trash", targets);
+      requestConfirmation("trash", targets, ctx.dispatchSource);
       return;
     }
+    // A confirmed close is still whoever asked for it first.
+    const pending = useFleetPendingActionStore.getState().pending;
+    const source =
+      confirmed && pending?.kind === "trash"
+        ? (pending.dispatchSource ?? ctx.dispatchSource)
+        : ctx.dispatchSource;
     clearPendingIf("trash");
     const ids = new Set(targets.map((t) => t.id));
-    userCloseCommit(ctx.dispatchSource, [...ids], () =>
-      usePanelStore.getState().bulkTrashSet(ids)
-    )();
+    userCloseCommit(source, [...ids], () => usePanelStore.getState().bulkTrashSet(ids))();
     useFleetArmingStore.getState().clear();
   },
   "fleet.scope.enter": async (_args: unknown, _ctx: ActionContext) => {

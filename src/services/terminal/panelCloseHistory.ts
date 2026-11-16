@@ -85,12 +85,16 @@ function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSna
     if (!Object.hasOwn(state.panelsById, id)) continue;
     const panel = state.panelsById[id];
     if (!panel) continue;
+    // A backgrounded panel goes to the trash, and comes back, where it was
+    // before it was backgrounded.
     const location =
       panel.location === "dock"
         ? "dock"
         : panel.location === "grid" || panel.location === undefined
           ? "grid"
-          : null;
+          : panel.location === "background"
+            ? (state.backgroundedTerminals.get(id)?.originalLocation ?? "grid")
+            : null;
     if (location === null) continue;
     const index = state.panelIds.indexOf(id);
     panels.push({
@@ -253,6 +257,17 @@ export function takeUndoCloseStep(): CloseStep | null {
   const step = peekUndoCloseStep();
   if (step !== null) setSteps(steps.filter((entry) => entry !== step));
   return step;
+}
+
+/**
+ * Puts back a step taken for restoring that didn't come back after all (its
+ * view went out of sight mid-restore), unless the history moved past it.
+ */
+export function returnUndoCloseStep(step: CloseStep): void {
+  if (steps.includes(step)) return;
+  setSteps([...steps, step].sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSE_STEPS));
+  // Out of the history meanwhile, it missed what changed in the store.
+  if (panelStore !== null) reconcile(panelStore.getState());
 }
 
 /** Test seam. */

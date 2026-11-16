@@ -12,7 +12,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { redo, undo } from "@codemirror/commands";
+import { isolateHistory, redo, undo } from "@codemirror/commands";
 import { clearComposerHistory, createComposerHistory } from "../inputEditorExtensions";
 import { editorHasEditsSinceClose } from "../inputEditorExtensions/closeUndoOrdering";
 import {
@@ -107,12 +107,32 @@ describe("closeUndoOrdering", () => {
     expect(editorHasEditsSinceClose(view.state, close)).toBe(true);
   });
 
-  it("hands over once the draft stops being the same draft", () => {
+  it("hands over once the draft stops being the same draft, and orders the next one afresh", () => {
     const view = mount();
+    // History already holds a step from before the close.
+    type(view, "earlier");
     const close = nextCloseSeq();
-    type(view, "sent prompt");
+    type(view, " sent prompt");
     clearComposerHistory(view);
+    expect(editorHasEditsSinceClose(view.state, close)).toBe(false);
 
+    type(view, " next draft");
+    expect(editorHasEditsSinceClose(view.state, close)).toBe(true);
+    undo(view);
+    expect(editorHasEditsSinceClose(view.state, close)).toBe(false);
+  });
+
+  it("keeps its answer when the history trims its oldest steps", () => {
+    const view = mount();
+    for (let i = 0; i < 130; i++) {
+      type(view, `${i} `);
+      view.dispatch({ annotations: isolateHistory.of("after") });
+    }
+    const close = nextCloseSeq();
+    type(view, "after the close");
+
+    expect(editorHasEditsSinceClose(view.state, close)).toBe(true);
+    undo(view);
     expect(editorHasEditsSinceClose(view.state, close)).toBe(false);
   });
 
@@ -141,17 +161,32 @@ describe("closeUndoOrdering", () => {
 });
 
 describe("native text fields", () => {
-  function editField(field: HTMLTextAreaElement, value: string): void {
-    field.dispatchEvent(
-      new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: value })
-    );
-    field.value = value;
+  function fire(field: HTMLTextAreaElement, type: "beforeinput" | "input", inputType: string) {
+    field.dispatchEvent(new InputEvent(type, { bubbles: true, inputType }));
   }
 
-  it("orders a field's edits against the close by its value before them", () => {
+  // What a keystroke does: beforeinput, the change, then input.
+  function editField(field: HTMLTextAreaElement, value: string): void {
+    fire(field, "beforeinput", "insertText");
+    field.value = value;
+    fire(field, "input", "insertText");
+  }
+
+  function undoField(field: HTMLTextAreaElement, value: string): void {
+    fire(field, "beforeinput", "historyUndo");
+    field.value = value;
+    fire(field, "input", "historyUndo");
+  }
+
+  function mountField(): HTMLTextAreaElement {
     trackNativeFieldEdits();
     const field = document.createElement("textarea");
     document.body.appendChild(field);
+    return field;
+  }
+
+  it("orders a field's edits against the close by its value before them", () => {
+    const field = mountField();
     editField(field, "older");
     const close = nextCloseSeq();
     expect(hasEditsSinceClose(field, close)).toBe(false);
@@ -160,8 +195,23 @@ describe("native text fields", () => {
     expect(hasEditsSinceClose(field, close)).toBe(true);
 
     // The field's own undo brings it back to how the close left it.
-    field.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "historyUndo" }));
-    field.value = "older";
+    undoField(field, "older");
+    expect(hasEditsSinceClose(field, close)).toBe(false);
+    field.remove();
+  });
+
+  it("hands over once the app resets the field, and orders typing after that afresh", () => {
+    const field = mountField();
+    editField(field, "query");
+    const close = nextCloseSeq();
+    editField(field, "query refined");
+    // A clear button sets the value without an input event.
+    field.value = "";
+    expect(hasEditsSinceClose(field, close)).toBe(false);
+
+    editField(field, "new");
+    expect(hasEditsSinceClose(field, close)).toBe(true);
+    undoField(field, "");
     expect(hasEditsSinceClose(field, close)).toBe(false);
     field.remove();
   });

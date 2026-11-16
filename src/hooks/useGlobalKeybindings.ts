@@ -25,7 +25,11 @@ import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 import { isVoiceStartAction, noteVoiceShortcutKeydown } from "@/services/voiceRecordingRuntime";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { UNDO_CLOSE_ACTION_ID, undoCloseTakesKey } from "@/services/terminal/undoCloseKey";
+import {
+  UNDO_CLOSE_ACTION_ID,
+  isTextUndoKey,
+  undoCloseTakesKey,
+} from "@/services/terminal/undoCloseKey";
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
 // through: stopping it, and stopping it with a send.
@@ -425,7 +429,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // otherwise it goes on untouched to the field or the Edit menu.
       if (
         result.match?.actionId === UNDO_CLOSE_ACTION_ID &&
-        !undoCloseTakesKey(target, isInTerminal)
+        !undoCloseTakesKey(target, isInTerminal, isTextUndoKey(e))
       ) {
         return;
       }

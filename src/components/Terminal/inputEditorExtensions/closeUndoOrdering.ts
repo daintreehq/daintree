@@ -1,18 +1,13 @@
-import { EditorState, StateField, Transaction, type Extension } from "@codemirror/state";
-import { ViewPlugin } from "@codemirror/view";
-import { isolateHistory, undoDepth } from "@codemirror/commands";
 import {
-  MAX_CLOSE_CHECKPOINTS,
-  latestCloseSeq,
-  registerEditorUndoCheck,
-} from "@/services/terminal/closeUndoOrder";
-
-interface CloseCheckpoint {
-  /** The newest close before this editor's first edit after it. */
-  closeSeq: number;
-  /** How many steps undo held just before that edit. */
-  depthBefore: number;
-}
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+  type Extension,
+} from "@codemirror/state";
+import { ViewPlugin } from "@codemirror/view";
+import { invertedEffects, isolateHistory, undoDepth } from "@codemirror/commands";
+import { latestCloseSeq, registerEditorUndoCheck } from "@/services/terminal/closeUndoOrder";
 
 // An edit of the person's own. Undo and redo walk the history rather than add
 // to it, and a write kept out of history (a draft loading) can't be undone.
@@ -25,23 +20,28 @@ function isHistoryEdit(tr: Transaction): boolean {
   );
 }
 
-function needsCheckpoint(checkpoints: readonly CloseCheckpoint[]): boolean {
-  const latest = latestCloseSeq();
-  if (latest === 0) return false;
-  const last = checkpoints[checkpoints.length - 1];
-  return last === undefined || last.closeSeq < latest;
-}
+const setEditCloseSeq = StateEffect.define<number>();
 
-const closeCheckpoints = StateField.define<readonly CloseCheckpoint[]>({
-  create: () => [],
-  update(checkpoints, tr) {
-    if (!isHistoryEdit(tr) || !needsCheckpoint(checkpoints)) return checkpoints;
-    const next = [
-      ...checkpoints,
-      { closeSeq: latestCloseSeq(), depthBefore: undoDepth(tr.startState) },
-    ];
-    return next.slice(-MAX_CLOSE_CHECKPOINTS);
+/**
+ * The newest close before the edit undo would take back next. Undo and redo
+ * carry it back and forth with the history (the inverted effect below), so it
+ * names the top of the undo stack however deep the history is, after a reset
+ * as after a trim.
+ */
+const editCloseSeq = StateField.define<number>({
+  create: () => 0,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setEditCloseSeq)) value = effect.value;
+    }
+    return isHistoryEdit(tr) ? latestCloseSeq() : value;
   },
+});
+
+const carryWithHistory = invertedEffects.of((tr) => {
+  const before = tr.startState.field(editCloseSeq, false);
+  const after = tr.state.field(editCloseSeq, false);
+  return before === undefined || before === after ? [] : [setEditCloseSeq.of(before)];
 });
 
 // The first edit after a close starts an undo step of its own: typing just
@@ -49,15 +49,15 @@ const closeCheckpoints = StateField.define<readonly CloseCheckpoint[]>({
 // would take back the older text with the newer.
 const isolateFirstEditAfterClose = EditorState.transactionExtender.of((tr) => {
   if (!isHistoryEdit(tr)) return null;
-  const checkpoints = tr.startState.field(closeCheckpoints, false);
-  if (checkpoints === undefined || !needsCheckpoint(checkpoints)) return null;
+  const previous = tr.startState.field(editCloseSeq, false);
+  if (previous === undefined || previous >= latestCloseSeq()) return null;
   return { annotations: isolateHistory.of("before") };
 });
 
 /** Whether undo in `state` would take back an edit made after close `seq`. */
 export function editorHasEditsSinceClose(state: EditorState, seq: number): boolean {
-  const checkpoint = state.field(closeCheckpoints, false)?.find((entry) => entry.closeSeq >= seq);
-  return checkpoint !== undefined && undoDepth(state) > checkpoint.depthBefore;
+  const edit = state.field(editCloseSeq, false);
+  return edit !== undefined && edit >= seq && undoDepth(state) > 0;
 }
 
 const registration = ViewPlugin.define((view) => {
@@ -73,5 +73,5 @@ const registration = ViewPlugin.define((view) => {
  * the editor's `history()`: without it there is nothing to undo here.
  */
 export function closeUndoOrdering(): Extension {
-  return [closeCheckpoints, isolateFirstEditAfterClose, registration];
+  return [editCloseSeq, carryWithHistory, isolateFirstEditAfterClose, registration];
 }

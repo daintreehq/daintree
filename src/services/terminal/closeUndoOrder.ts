@@ -50,7 +50,13 @@ interface FieldCheckpoint {
   valueBefore: string;
 }
 
-const fieldCheckpoints = new WeakMap<TextField, FieldCheckpoint[]>();
+interface FieldHistory {
+  checkpoints: FieldCheckpoint[];
+  /** The value the person's own last edit or undo left. */
+  observed: string;
+}
+
+const fieldHistories = new WeakMap<TextField, FieldHistory>();
 
 function isTextField(target: EventTarget | null): target is TextField {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
@@ -59,18 +65,32 @@ function isTextField(target: EventTarget | null): target is TextField {
 // A native field's undo stack can't be read, so it keeps the value it had
 // before its first edit after each close. Undo and redo walk the stack rather
 // than edit it, so they leave the checkpoints alone.
-function onBeforeInput(event: Event): void {
+function onBeforeInput(event: InputEvent): void {
   const target = event.target;
   if (!isTextField(target)) return;
-  const inputType = (event as InputEvent).inputType;
-  if (inputType === "historyUndo" || inputType === "historyRedo") return;
+  if (event.inputType === "historyUndo" || event.inputType === "historyRedo") return;
   const latest = latestCloseSeq();
   if (latest === 0) return;
-  const checkpoints = fieldCheckpoints.get(target) ?? [];
+  const history = fieldHistories.get(target);
+  // A value the app set rather than the person typed (a clear button, a
+  // loaded draft) starts the field's undo over, and its checkpoints with it.
+  const checkpoints =
+    history === undefined || history.observed !== target.value ? [] : history.checkpoints;
   const last = checkpoints[checkpoints.length - 1];
   if (last !== undefined && last.closeSeq >= latest) return;
-  const next = [...checkpoints, { closeSeq: latest, valueBefore: target.value }];
-  fieldCheckpoints.set(target, next.slice(-MAX_CLOSE_CHECKPOINTS));
+  fieldHistories.set(target, {
+    checkpoints: [...checkpoints, { closeSeq: latest, valueBefore: target.value }].slice(
+      -MAX_CLOSE_CHECKPOINTS
+    ),
+    observed: target.value,
+  });
+}
+
+function onInput(event: Event): void {
+  const target = event.target;
+  if (!isTextField(target)) return;
+  const history = fieldHistories.get(target);
+  if (history !== undefined) history.observed = target.value;
 }
 
 let fieldTrackingInstalled = false;
@@ -83,10 +103,14 @@ export function trackNativeFieldEdits(): void {
   if (fieldTrackingInstalled || typeof document === "undefined") return;
   fieldTrackingInstalled = true;
   document.addEventListener("beforeinput", onBeforeInput, { capture: true });
+  document.addEventListener("input", onInput, { capture: true });
 }
 
 function fieldHasEditsSince(field: TextField, seq: number): boolean {
-  const checkpoint = fieldCheckpoints.get(field)?.find((entry) => entry.closeSeq >= seq);
+  const history = fieldHistories.get(field);
+  // Changed by the app since the person's last edit: nothing of theirs to undo.
+  if (history === undefined || history.observed !== field.value) return false;
+  const checkpoint = history.checkpoints.find((entry) => entry.closeSeq >= seq);
   return checkpoint !== undefined && field.value !== checkpoint.valueBefore;
 }
 
@@ -106,6 +130,7 @@ export function resetCloseUndoOrderForTests(): void {
   closeSeq = 0;
   if (fieldTrackingInstalled && typeof document !== "undefined") {
     document.removeEventListener("beforeinput", onBeforeInput, { capture: true });
+    document.removeEventListener("input", onInput, { capture: true });
   }
   fieldTrackingInstalled = false;
 }

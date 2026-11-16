@@ -402,8 +402,15 @@ export function registerPanelCoreActions(
       if (!isForegroundDispatch(ctx.dispatchSource)) return;
       // A close still waiting to commit isn't in the history yet.
       flushOptimisticCloses();
-      const { undoLastClose } = await import("@/services/terminal/panelCloseUndo");
-      await undoLastClose();
+      const [{ undoLastClose }, { fieldOutranksClose }] = await Promise.all([
+        import("@/services/terminal/panelCloseUndo"),
+        import("@/services/terminal/undoCloseKey"),
+      ]);
+      // A close with nothing left falls through to an older one only while
+      // nothing newer than that one waits in the focused field.
+      await undoLastClose({
+        yieldsTo: (step) => fieldOutranksClose(document.activeElement, step.seq),
+      });
     },
   }));
 

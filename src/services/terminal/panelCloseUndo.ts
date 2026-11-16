@@ -1,5 +1,7 @@
 import { buildResumeCommand } from "@shared/types/agentSettings";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useResumedSessionPanelStore } from "@/store/resumedSessionPanelStore";
@@ -7,11 +9,14 @@ import { getWorktreeIdSet, getWorktreePathIndex } from "@/store/storeAccessors";
 import { resumeSessionForPerson } from "@/services/agentResumeForPerson";
 import { logError } from "@/utils/logger";
 import {
+  peekUndoCloseStep,
+  returnUndoCloseStep,
   takeUndoCloseStep,
   type ClosedGroup,
   type ClosedPanel,
   type CloseStep,
 } from "./panelCloseHistory";
+import { settleRestoreFocus } from "./settledRestores";
 
 /**
  * How long after the trash let an agent's panel go a press waits for its
@@ -22,6 +27,15 @@ export const CAPTURE_WAIT_MS = 10_000;
 
 type PanelState = ReturnType<typeof usePanelStore.getState>;
 
+export interface UndoCloseOptions {
+  /**
+   * Asked before falling through to an older close once a newer one had
+   * nothing left: whether something newer than that older close (typing in
+   * the focused field) should have the key instead.
+   */
+  yieldsTo?: (step: CloseStep) => boolean;
+}
+
 let queue: Promise<unknown> = Promise.resolve();
 
 /**
@@ -31,25 +45,35 @@ let queue: Promise<unknown> = Promise.resolve();
  * close and the last one pressed ends with focus. Resolves whether anything
  * came back.
  */
-export function undoLastClose(): Promise<boolean> {
-  const run = queue.then(restoreNewestClose, restoreNewestClose);
+export function undoLastClose(options: UndoCloseOptions = {}): Promise<boolean> {
+  const run = queue.then(
+    () => restoreNewestClose(options),
+    () => restoreNewestClose(options)
+  );
   queue = run.catch(() => undefined);
   return run;
 }
 
-async function restoreNewestClose(): Promise<boolean> {
-  for (;;) {
+async function restoreNewestClose({ yieldsTo }: UndoCloseOptions): Promise<boolean> {
+  for (let first = true; ; first = false) {
+    const next = peekUndoCloseStep();
+    if (next === null || (!first && yieldsTo?.(next) === true)) return false;
     const step = takeUndoCloseStep();
     if (step === null) return false;
     try {
-      if (await restoreStep(step)) return true;
+      const outcome = await restoreStep(step);
+      if (outcome === "restored") return true;
+      if (outcome === "deferred") {
+        returnUndoCloseStep(step);
+        return false;
+      }
     } catch (error) {
       logError("Failed to reopen a closed panel", error);
     }
   }
 }
 
-async function restoreStep(step: CloseStep): Promise<boolean> {
+async function restoreStep(step: CloseStep): Promise<"restored" | "nothing" | "deferred"> {
   // Closed id → the id it is open under now: the same for a panel the trash
   // still held, a new one for a resumed conversation.
   const restored = new Map<string, string>();
@@ -57,12 +81,19 @@ async function restoreStep(step: CloseStep): Promise<boolean> {
   for (const closed of step.panels) {
     if (closed.status !== "expired") continue;
     const id = await resumeExpired(step, closed);
+    // Waiting on a capture can outlast the view being on screen. Spawning
+    // into a project the person has left would change what they can't see,
+    // so a close with nothing back yet waits in the history for their return.
+    if (id === "hidden") {
+      if (restored.size === 0) return "deferred";
+      break;
+    }
     if (id !== null) restored.set(closed.id, id);
   }
-  if (restored.size === 0) return false;
+  if (restored.size === 0) return "nothing";
   for (const group of step.groups) rejoinGroup(group, restored);
   focusRestored(step, restored);
-  return true;
+  return "restored";
 }
 
 function isInTrash(state: PanelState, id: string): boolean {
@@ -103,6 +134,9 @@ function restoreFromTrash(step: CloseStep, restored: Map<string, string>): void 
 
   const ids = [...targets.keys()];
   const focusId = step.focusId !== null && targets.has(step.focusId) ? step.focusId : ids[0]!;
+  for (const id of ids) {
+    if (panelKindHasPty(state.panelsById[id]?.kind ?? "terminal")) settleRestoreFocus(id);
+  }
   revealWorktree(targets.get(focusId) ?? state.panelsById[focusId]?.worktreeId ?? null);
 
   // A group closed whole comes back through the trash's group restore, which
@@ -143,12 +177,19 @@ function restoreFromTrash(step: CloseStep, restored: Map<string, string>): void 
  * newest journal record, and never "resume latest": a close with no captured
  * session has nothing to bring back.
  */
-async function resumeExpired(step: CloseStep, closed: ClosedPanel): Promise<string | null> {
+async function resumeExpired(
+  step: CloseStep,
+  closed: ClosedPanel
+): Promise<string | "hidden" | null> {
   if (closed.agentId === null) return null;
   const record = await findCapturedSession(step, closed);
+  if (typeof document !== "undefined" && document.hidden) return "hidden";
   if (record === null || buildResumeCommand(record.agentId, record.sessionId) === undefined) {
     return null;
   }
+  // Already brought back another way (Canopy's Trash, Resume Sessions): this
+  // close is done, and the press goes on to an older one.
+  if (isSessionOpen(record.sessionId)) return null;
   let outcome;
   try {
     outcome = await resumeSessionForPerson(record, getWorktreePathIndex());
@@ -157,10 +198,28 @@ async function resumeExpired(step: CloseStep, closed: ClosedPanel): Promise<stri
     return null;
   }
   if (outcome.outcome === "created") {
-    useResumedSessionPanelStore.getState().markResumed(outcome.terminalId);
+    useResumedSessionPanelStore
+      .getState()
+      .markResumed(outcome.terminalId, (id) =>
+        Object.hasOwn(usePanelStore.getState().panelsById, id)
+      );
     placeResumed(closed, outcome.terminalId);
   }
   return outcome.terminalId;
+}
+
+function isSessionOpen(sessionId: string): boolean {
+  const { panelIds, panelsById } = usePanelStore.getState();
+  return panelIds.some((id) => {
+    const panel = panelsById[id];
+    return (
+      panel !== undefined &&
+      isPtyPanel(panel) &&
+      panel.location !== "trash" &&
+      panel.location !== "dialog" &&
+      panel.agentSessionId === sessionId
+    );
+  });
 }
 
 function pickCapture(
@@ -222,48 +281,54 @@ function placeResumed(closed: ClosedPanel, id: string): void {
   usePanelStore.getState().restoreTerminalOrder(order);
 }
 
-function isOpenIn(state: PanelState, id: string, group: ClosedGroup): boolean {
+function isOpenAt(
+  state: PanelState,
+  id: string,
+  location: "grid" | "dock",
+  worktreeId: string | undefined
+): boolean {
   if (!Object.hasOwn(state.panelsById, id)) return false;
   const panel = state.panelsById[id];
   if (!panel) return false;
-  const location =
+  const at =
     panel.location === "dock"
       ? "dock"
       : panel.location === "grid" || panel.location === undefined
         ? "grid"
         : null;
-  return location === group.location && (panel.worktreeId ?? undefined) === group.worktreeId;
+  return at === location && (panel.worktreeId ?? undefined) === worktreeId;
 }
 
 /**
  * Puts restored panels back into the tab group they left: a closed tab rejoins
  * its group at its old place, and a group the close dissolved is rebuilt from
- * whichever of its members are open where it was. Members that have since
- * joined other groups are left there.
+ * whichever of its members are open where the restored ones landed (an orphan
+ * re-homed to the active worktree takes its group along). A member that has
+ * joined another group since stays there, and a group the trash's own group
+ * restore rebuilt is left as it is.
  */
 function rejoinGroup(group: ClosedGroup, restored: ReadonlyMap<string, string>): void {
   const state = usePanelStore.getState();
-  const members = group.panelIds
-    .map((id) => restored.get(id) ?? id)
-    .filter((id) => isOpenIn(state, id, group));
-  if (members.length < 2 || !members.some((id) => [...restored.values()].includes(id))) return;
-
-  const groupIds = new Set<string>();
-  for (const id of members) {
+  const restoredIds = new Set(restored.values());
+  const mapped = group.panelIds.map((id) => restored.get(id) ?? id);
+  const anchor = mapped.find((id) => restoredIds.has(id));
+  if (anchor === undefined) return;
+  const worktreeId = state.panelsById[anchor]?.worktreeId ?? undefined;
+  const members = mapped.filter((id) => {
+    if (!isOpenAt(state, id, group.location, worktreeId)) return false;
     const current = state.getPanelGroup(id);
-    if (current !== undefined) groupIds.add(current.id);
-  }
-  if (groupIds.size > 1) return;
+    return current === undefined || current.id === group.id;
+  });
+  if (members.length < 2) return;
 
-  const [groupId] = groupIds;
-  if (groupId === undefined) {
+  if (!state.tabGroups.has(group.id)) {
     const active =
       group.activeTabId === null
         ? undefined
         : (restored.get(group.activeTabId) ?? group.activeTabId);
     state.createTabGroup(
       group.location,
-      group.worktreeId,
+      worktreeId,
       members,
       active !== undefined && members.includes(active) ? active : undefined
     );
@@ -272,15 +337,15 @@ function rejoinGroup(group: ClosedGroup, restored: ReadonlyMap<string, string>):
 
   for (const id of members) {
     const latest = usePanelStore.getState();
-    if (latest.getPanelGroup(id)?.id === groupId) continue;
+    if (latest.getPanelGroup(id)?.id === group.id) continue;
     const rank = members.indexOf(id);
-    const current = latest.tabGroups.get(groupId)?.panelIds ?? [];
+    const current = latest.tabGroups.get(group.id)?.panelIds ?? [];
     let index = 0;
     current.forEach((member, position) => {
       const memberRank = members.indexOf(member);
       if (memberRank !== -1 && memberRank < rank) index = position + 1;
     });
-    latest.addPanelToGroup(groupId, id, index);
+    latest.addPanelToGroup(group.id, id, index);
   }
 }
 

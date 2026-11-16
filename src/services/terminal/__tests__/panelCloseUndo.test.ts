@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 vi.mock("@/clients", () => ({
@@ -42,13 +42,15 @@ vi.mock("@/services/agentResumeForPerson", () => ({
 }));
 
 const { usePanelStore } = await import("@/store/panelStore");
-const { useProjectStore } = await import("@/store/projectStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+const { setCurrentProjectIdAccessor, setWorktreeIdSetAccessor } =
+  await import("@/store/storeAccessors");
 const { useResumedSessionPanelStore } = await import("@/store/resumedSessionPanelStore");
 const history = await import("../panelCloseHistory");
 const { undoLastClose, CAPTURE_WAIT_MS } = await import("../panelCloseUndo");
-const { undoCloseTakesKey } = await import("../undoCloseKey");
+const { undoCloseTakesKey, isTextUndoKey } = await import("../undoCloseKey");
 const { trackNativeFieldEdits } = await import("../closeUndoOrder");
+const { takeSettledRestoreFocus } = await import("../settledRestores");
 const { PLUGIN_STYLE_OWNER_ATTRIBUTE } = await import("@/services/plugin/pluginStyleOwner");
 
 const listSessions =
@@ -58,20 +60,22 @@ function seed(
   id: string,
   options: { worktreeId?: string; location?: "grid" | "dock"; agent?: boolean } = {}
 ) {
-  const panel = {
+  const panel: PtyPanelData = {
     id,
     title: id,
-    kind: "terminal" as const,
-    type: "terminal" as const,
+    kind: "terminal",
     location: options.location ?? "grid",
     worktreeId: options.worktreeId ?? "wt-1",
     isVisible: true,
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
     ...(options.agent && {
       launchAgentId: "claude",
       detectedAgentId: "claude",
       agentState: "idle",
     }),
-  } as unknown as PtyPanelData;
+  };
   usePanelStore.setState((state) => ({
     panelsById: { ...state.panelsById, [id]: panel },
     panelIds: state.panelIds.includes(id) ? state.panelIds : [...state.panelIds, id],
@@ -88,10 +92,21 @@ function locationOf(id: string) {
   return usePanelStore.getState().panelsById[id]?.location;
 }
 
+let projectId = "proj-1";
+
+function record(overrides: Partial<AgentSessionRecord>): AgentSessionRecord {
+  return {
+    sessionId: "s",
+    agentId: "claude",
+    worktreeId: "wt-1",
+    title: null,
+    projectId: "proj-1",
+    savedAt: Date.now() + 1_000,
+    ...overrides,
+  };
+}
 function setProject(id: string) {
-  useProjectStore.setState({
-    currentProject: { id, name: id, path: `/p/${id}` },
-  } as unknown as Parameters<typeof useProjectStore.setState>[0]);
+  projectId = id;
 }
 
 beforeEach(async () => {
@@ -100,12 +115,12 @@ beforeEach(async () => {
   // The store orchestrator connects it in the app.
   history.connectPanelCloseHistory(usePanelStore);
   setProject("proj-1");
+  setCurrentProjectIdAccessor(() => projectId);
+  setWorktreeIdSetAccessor(() => null);
   useWorktreeSelectionStore.setState({
     activeWorktreeId: "wt-1",
-    selectWorktree: vi.fn((id: string) =>
-      useWorktreeSelectionStore.setState({ activeWorktreeId: id })
-    ),
-  } as unknown as Parameters<typeof useWorktreeSelectionStore.setState>[0]);
+    selectWorktree: (id: string) => useWorktreeSelectionStore.setState({ activeWorktreeId: id }),
+  });
   useResumedSessionPanelStore.setState({ panelIds: new Set() });
   resumeSessionForPerson.mockReset();
   listSessions.mockReset().mockResolvedValue([]);
@@ -136,17 +151,37 @@ describe("panel close history", () => {
     await expect(undoLastClose()).resolves.toBe(false);
   });
 
-  it("serializes presses made before the first restore finishes", async () => {
-    for (const id of ["a", "b"]) seed(id);
-    userClose(["a"]);
-    userClose(["b"]);
+  it("holds a second press until the first one's resume has finished", async () => {
+    seed("older");
+    seed("agent", { agent: true });
+    userClose(["older"]);
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+    listSessions.mockResolvedValue([
+      record({ sessionId: "own", terminal: { id: "agent", spawnedAt: 1 } }),
+    ]);
+    let finishResume: () => void = () => undefined;
+    resumeSessionForPerson.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishResume = () => {
+            seed("resumed");
+            resolve({ terminalId: "resumed", outcome: "created", worktreeId: "wt-1" });
+          };
+        })
+    );
 
-    const results = await Promise.all([undoLastClose(), undoLastClose()]);
+    const first = undoLastClose();
+    const second = undoLastClose();
+    await vi.waitFor(() => expect(resumeSessionForPerson).toHaveBeenCalled());
+    // The older close waits its turn behind the resume.
+    expect(locationOf("older")).toBe("trash");
 
-    expect(results).toEqual([true, true]);
-    expect(locationOf("a")).toBe("grid");
-    expect(locationOf("b")).toBe("grid");
-    expect(usePanelStore.getState().focusedId).toBe("a");
+    finishResume();
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(locationOf("older")).toBe("grid");
+    expect(usePanelStore.getState().focusedId).toBe("older");
   });
 
   it("records only closes a person asked for", () => {
@@ -292,6 +327,76 @@ describe("panel close history", () => {
     expect(locationOf("a")).toBe("grid");
   });
 
+  it("brings back a backgrounded panel a batch close took, where it was before", async () => {
+    seed("a");
+    seed("b");
+    usePanelStore.getState().backgroundTerminal("b");
+    expect(locationOf("b")).toBe("background");
+    userClose(["a", "b"]);
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(locationOf("a")).toBe("grid");
+    expect(locationOf("b")).toBe("grid");
+  });
+
+  it("rebuilds a group re-homed with its orphaned members into the active worktree", async () => {
+    for (const id of ["a", "b"]) seed(id, { worktreeId: "wt-gone" });
+    usePanelStore.getState().createTabGroup("grid", "wt-gone", ["a", "b"], "a");
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-gone" });
+    userClose(["a", "b"]);
+    // The worktree is deleted while they sit in the trash.
+    setWorktreeIdSetAccessor(() => new Set(["wt-1"]));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    const group = usePanelStore.getState().getPanelGroup("a");
+    expect(group?.worktreeId).toBe("wt-1");
+    expect(group?.panelIds).toEqual(["a", "b"]);
+  });
+
+  it("never pulls a reopened tab into a group its old sibling joined since", async () => {
+    for (const id of ["a", "b", "x"]) seed(id);
+    usePanelStore.getState().createTabGroup("grid", "wt-1", ["a", "b"], "a");
+    userClose(["a"]);
+    const since = usePanelStore.getState().createTabGroup("grid", "wt-1", ["b", "x"], "b");
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(usePanelStore.getState().tabGroups.get(since)?.panelIds).toEqual(["b", "x"]);
+    expect(usePanelStore.getState().getPanelGroup("a")).toBeUndefined();
+  });
+
+  it("leaves focus to the undo when the host answers each restore", async () => {
+    for (const id of ["a", "b", "c"]) seed(id);
+    usePanelStore.getState().setFocused("b");
+    userClose(["a", "b", "c"]);
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(usePanelStore.getState().focusedId).toBe("b");
+    // Each restored terminal's host echo is told not to move focus again.
+    for (const id of ["a", "b", "c"]) expect(takeSettledRestoreFocus(id)).toBe(true);
+  });
+
+  it("stops rather than skip past typing newer than the older close", async () => {
+    seed("older");
+    seed("agent", { agent: true });
+    userClose(["older"]);
+    userClose(["agent"]);
+    // The agent's conversation was never captured: a dead step.
+    usePanelStore.getState().removePanel("agent");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + CAPTURE_WAIT_MS + 1);
+    const olderSeq = history.peekUndoCloseStep()!.seq - 1;
+
+    await expect(undoLastClose({ yieldsTo: (step) => step.seq === olderSeq })).resolves.toBe(false);
+
+    expect(locationOf("older")).toBe("trash");
+    expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("older");
+  });
+
   it("skips a shell the trash has let go and reopens the next older close", async () => {
     seed("older");
     seed("shell");
@@ -306,18 +411,6 @@ describe("panel close history", () => {
 });
 
 describe("after the trash lets an agent go", () => {
-  function record(overrides: Partial<AgentSessionRecord>): AgentSessionRecord {
-    return {
-      sessionId: "s",
-      agentId: "claude",
-      worktreeId: "wt-1",
-      title: null,
-      projectId: "proj-1",
-      savedAt: Date.now() + 1_000,
-      ...overrides,
-    };
-  }
-
   it("resumes that agent's own conversation in its old place, never the newest one", async () => {
     seed("agent", { agent: true });
     seed("after");
@@ -357,6 +450,115 @@ describe("after the trash lets an agent go", () => {
     expect(locationOf("older")).toBe("grid");
   });
 
+  function expireAgentAfterOlderClose() {
+    seed("older");
+    seed("agent", { agent: true });
+    userClose(["older"]);
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+  }
+
+  function pastCaptureWindow() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + CAPTURE_WAIT_MS + 1);
+  }
+
+  it("ignores a capture of the same terminal from before the close", async () => {
+    expireAgentAfterOlderClose();
+    listSessions.mockResolvedValue([
+      record({ sessionId: "stale", savedAt: 1, terminal: { id: "agent", spawnedAt: 1 } }),
+    ]);
+    pastCaptureWindow();
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(locationOf("older")).toBe("grid");
+  });
+
+  it("skips a capture its agent can't resume by session id", async () => {
+    expireAgentAfterOlderClose();
+    listSessions.mockResolvedValue([
+      record({ agentId: "not-an-agent", terminal: { id: "agent", spawnedAt: 1 } }),
+    ]);
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(locationOf("older")).toBe("grid");
+  });
+
+  it("moves on when the conversation is already open again", async () => {
+    expireAgentAfterOlderClose();
+    listSessions.mockResolvedValue([
+      record({ sessionId: "own", terminal: { id: "agent", spawnedAt: 1 } }),
+    ]);
+    // Resumed meanwhile from Canopy's Trash or Resume Sessions.
+    seed("elsewhere");
+    usePanelStore.setState((state) => {
+      const panel = state.panelsById.elsewhere;
+      if (panel === undefined || !isPtyPanel(panel)) return state;
+      return {
+        panelsById: { ...state.panelsById, elsewhere: { ...panel, agentSessionId: "own" } },
+      };
+    });
+
+    await expect(undoLastClose()).resolves.toBe(true);
+
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(locationOf("older")).toBe("grid");
+  });
+
+  it("gives up on a capture that never comes, and reopens the older close", async () => {
+    vi.useFakeTimers();
+    const on = vi.fn((_channel: string, _callback: () => void) => unsubscribe);
+    const unsubscribe = vi.fn();
+    Reflect.set(window, "electron", {
+      agentSessionHistory: { list: listSessions },
+      events: { on },
+    });
+    expireAgentAfterOlderClose();
+
+    const pending = undoLastClose();
+    await vi.waitFor(() => expect(on).toHaveBeenCalled());
+    expect(on.mock.calls[0]![0]).toBe("agent-session:recorded");
+    await vi.advanceTimersByTimeAsync(CAPTURE_WAIT_MS + 1);
+
+    await expect(pending).resolves.toBe(true);
+    expect(unsubscribe).toHaveBeenCalled();
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(locationOf("older")).toBe("grid");
+  });
+
+  it("keeps the close for later when its view goes out of sight mid-wait", async () => {
+    let recorded: (() => void) | undefined;
+    Reflect.set(window, "electron", {
+      agentSessionHistory: { list: listSessions },
+      events: {
+        on: vi.fn((_channel: string, callback: () => void) => {
+          recorded = callback;
+          return () => undefined;
+        }),
+      },
+    });
+    seed("agent", { agent: true });
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+
+    const pending = undoLastClose();
+    await vi.waitFor(() => expect(recorded).toBeDefined());
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    listSessions.mockResolvedValue([
+      record({ sessionId: "own", terminal: { id: "agent", spawnedAt: 1 } }),
+    ]);
+    recorded!();
+
+    await expect(pending).resolves.toBe(false);
+    hidden.mockRestore();
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("agent");
+  });
+
   it("waits for a capture still on its way", async () => {
     let recorded: (() => void) | undefined;
     Reflect.set(window, "electron", {
@@ -394,18 +596,42 @@ describe("undoCloseTakesKey", () => {
       new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: value })
     );
     field.value = value;
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   }
 
   it("leaves the key alone with nothing to reopen", () => {
-    expect(undoCloseTakesKey(document.body, false)).toBe(false);
-    expect(undoCloseTakesKey(document.body, true)).toBe(false);
+    expect(undoCloseTakesKey(document.body, false, true)).toBe(false);
+    expect(undoCloseTakesKey(document.body, true, true)).toBe(false);
   });
 
   it("takes it in a terminal and anywhere without text of its own", () => {
     seed("a");
     userClose(["a"]);
-    expect(undoCloseTakesKey(document.body, true)).toBe(true);
-    expect(undoCloseTakesKey(document.body, false)).toBe(true);
+    expect(undoCloseTakesKey(document.body, true, true)).toBe(true);
+    expect(undoCloseTakesKey(document.body, false, true)).toBe(true);
+  });
+
+  it("always reopens on a binding that isn't also text undo", () => {
+    trackNativeFieldEdits();
+    seed("a");
+    userClose(["a"]);
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    typeInto(field, "newer than the close");
+
+    expect(undoCloseTakesKey(field, false, true)).toBe(false);
+    expect(undoCloseTakesKey(field, false, false)).toBe(true);
+    field.remove();
+  });
+
+  it("tells the text-undo key from other bindings", () => {
+    const key = (init: KeyboardEventInit) => new KeyboardEvent("keydown", { key: "z", ...init });
+    const mac = /Mac/.test(navigator.platform);
+    const primary = mac ? { metaKey: true } : { ctrlKey: true };
+    expect(isTextUndoKey(key(primary))).toBe(true);
+    expect(isTextUndoKey(key({ ...primary, shiftKey: true }))).toBe(false);
+    expect(isTextUndoKey(key({ ...primary, altKey: true }))).toBe(false);
+    expect(isTextUndoKey(key({ ...primary, key: "u" }))).toBe(false);
   });
 
   it("leaves a plugin's view its own key", () => {
@@ -415,7 +641,7 @@ describe("undoCloseTakesKey", () => {
     view.setAttribute(PLUGIN_STYLE_OWNER_ATTRIBUTE, "plugin-1");
     const inner = document.createElement("button");
     view.appendChild(inner);
-    expect(undoCloseTakesKey(inner, false)).toBe(false);
+    expect(undoCloseTakesKey(inner, false, true)).toBe(false);
   });
 
   it("lets a field undo typing newer than the close first, then reopens", () => {
@@ -426,13 +652,15 @@ describe("undoCloseTakesKey", () => {
     seed("a");
     userClose(["a"]);
     // Cmd+W landed in a field holding an older draft: the close comes first.
-    expect(undoCloseTakesKey(field, false)).toBe(true);
+    expect(undoCloseTakesKey(field, false, true)).toBe(true);
 
     typeInto(field, "older draft, newer words");
-    expect(undoCloseTakesKey(field, false)).toBe(false);
+    expect(undoCloseTakesKey(field, false, true)).toBe(false);
 
+    // The field's own undo takes the newer words back.
     field.value = "older draft";
-    expect(undoCloseTakesKey(field, false)).toBe(true);
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "historyUndo" }));
+    expect(undoCloseTakesKey(field, false, true)).toBe(true);
     field.remove();
   });
 });

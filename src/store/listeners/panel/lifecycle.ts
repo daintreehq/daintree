@@ -20,6 +20,7 @@ import {
   isHydrationBatchActive,
 } from "@/store/slices/panelRegistry/hydrationBatch";
 import { useUIStore } from "@/store/uiStore";
+import { takeSettledRestoreFocus } from "@/services/terminal/settledRestores";
 
 /**
  * Panes this view brought back for Canopy before the host said so: the host's
@@ -476,9 +477,11 @@ export function setupLifecycleListeners(): DisposableStore {
         // silently dismiss an unrelated dock session the user is typing into
         // (#8368).
         const clearsActiveDock = activeDockTerminalId === id && panelsById[id]?.location !== "dock";
+        // An undone close already put focus where it belongs (#17107).
+        const focusSettled = takeSettledRestoreFocus(id);
         // A restore made from inside an overlay (Canopy's Undo) leaves focus
         // where it is: focusing the pane would send the keys behind the overlay.
-        if (overlayHoldsKeyboard()) {
+        if (focusSettled || overlayHoldsKeyboard()) {
           if (clearsActiveDock) usePanelStore.setState({ activeDockTerminalId: null });
           return;
         }
