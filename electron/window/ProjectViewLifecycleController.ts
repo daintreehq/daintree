@@ -19,7 +19,6 @@ import { detachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
-  unthrottleCpuWebContents,
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
@@ -364,21 +363,6 @@ export function activateView(
     unregisterCachedViewWebContents(entry.view.webContents.id);
   }
 
-  // Clear CPU emulation BEFORE the thaw below. The reset only acts on a
-  // renderer that already has a debugger session, and the thaw attaches one
-  // synchronously — run it first and every activation would pay a CDP round
-  // trip for a view nothing ever throttled. Nothing raises the rate any more
-  // (#12456); this is defensive cleanup for a session left at another rate.
-  // Guests too: separate renderer processes with their own CDP targets. CPU
-  // rate only — a guest the dock-hide path froze stays frozen (separate
-  // mechanism, released by useWebviewThrottle when its tab is shown).
-  if (!entry.view.webContents.isDestroyed()) {
-    void unthrottleCpuWebContents(entry.view.webContents);
-    forEachGuest(entry.view.webContents, (guest) => {
-      void unthrottleCpuWebContents(guest);
-    });
-  }
-
   // Defensive unfreeze: efficiency transitions and view activations are
   // async, so an activating view may still be frozen even if we've left
   // efficiency in the meantime. Chromium does not auto-resume on focus or
@@ -421,7 +405,7 @@ export function activateView(
  * Invoke `fn` for every live <webview> guest embedded in `hostWc`. There is
  * no main-side attach tracking, so guests are resolved by scanning
  * webContents.getAllWebContents() for hostWebContents identity —
- * O(total webContents), called only on view activation/deactivation.
+ * O(total webContents), so it stays off the switch path (#17039).
  */
 function forEachGuest(
   hostWc: Electron.WebContents,

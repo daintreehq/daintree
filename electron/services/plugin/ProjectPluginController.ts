@@ -267,10 +267,11 @@ export class ProjectPluginController {
   }
 
   /**
-   * Called on every switch into a project, cold or warm. Idempotent: a
+   * Called on a project's first open and whenever `PluginService` decides the
+   * last open no longer holds (a close, a trust change, a manual reload); a
+   * warm switch back into an open project skips it (#17039). Idempotent: a
    * re-entry re-scans the folder and reconciles what is loaded against what is
-   * on disk, which is also how a manual reload and the hot-reload phase will
-   * drive it.
+   * on disk.
    *
    * The scan is deliberately *not* tied to view creation. An LRU eviction
    * destroys a project's renderer while the project stays open, and a plugin
