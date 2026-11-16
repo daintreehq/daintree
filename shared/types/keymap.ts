@@ -90,6 +90,7 @@ export type BuiltInKeyAction =
   | "terminal.toggleDockAll"
   | "terminal.new"
   | "terminal.reopenLast"
+  | "panel.undoClose"
   | "terminal.resumeSessions"
   | "terminal.maximize"
   | "terminal.inject"
@@ -313,6 +314,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.toggleDockAll",
   "terminal.new",
   "terminal.reopenLast",
+  "panel.undoClose",
   "terminal.resumeSessions",
   "terminal.maximize",
   "terminal.inject",

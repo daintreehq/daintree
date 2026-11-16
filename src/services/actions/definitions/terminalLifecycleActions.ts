@@ -4,6 +4,7 @@ import { z } from "zod";
 import { PanelCloseResultSchema } from "@shared/types/panelClose";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import { usePanelStore } from "@/store/panelStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
@@ -192,7 +193,9 @@ export function registerTerminalLifecycleActions(
       // stream keeps closing fresh panels instead of re-targeting this one.
       requestPanelClose({
         hideIds: [targetId],
-        commit: () => usePanelStore.getState().trashPanel(targetId),
+        commit: userCloseCommit(ctx?.dispatchSource, [targetId], () =>
+          usePanelStore.getState().trashPanel(targetId)
+        ),
       });
       return settleCloseForDispatch([targetId], ctx);
     },
@@ -788,10 +791,10 @@ export function registerTerminalLifecycleActions(
       if (idsToClose.length === 0) return { closedIds: [] };
       requestPanelClose({
         hideIds: idsToClose,
-        commit: () => {
+        commit: userCloseCommit(ctx?.dispatchSource, idsToClose, () => {
           const latest = usePanelStore.getState();
           idsToClose.forEach((id) => latest.trashPanel(id));
-        },
+        }),
       });
       return settleCloseForDispatch(idsToClose, ctx);
     },

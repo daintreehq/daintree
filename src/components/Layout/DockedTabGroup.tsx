@@ -123,6 +123,7 @@ import {
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
@@ -397,6 +398,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleTabClose = useCallback(
     (tabId: string) => {
       const close = () => {
+        // Before the neighbour takes over: the close is recorded with the
+        // group as it was.
+        const recordClose = prepareUserClose([tabId]);
         if (tabId === activeTabId) {
           const currentIndex = panels.findIndex((p) => p.id === tabId);
           const nextPanel = panels[currentIndex + 1] ?? panels[currentIndex - 1];
@@ -405,7 +409,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             setFocused(nextPanel.id);
           }
         }
-        trashPanel(tabId);
+        recordClose(() => trashPanel(tabId));
       };
       // A dirty file panel asks Save / Discard / Cancel first (#12323); every
       // other tab closes on the synchronous path it always took. A second

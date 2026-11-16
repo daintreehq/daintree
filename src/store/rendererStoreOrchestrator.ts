@@ -1,5 +1,6 @@
 import { shallow } from "zustand/shallow";
 import { usePanelStore } from "./panelStore";
+import { connectPanelCloseHistory } from "@/services/terminal/panelCloseHistory";
 import {
   useWorktreeSelectionStore,
   isMruRecordingSuppressed,
@@ -115,6 +116,7 @@ export function initStoreOrchestrator(): () => void {
     const s = usePanelStore.getState();
     return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
   });
+  connectPanelCloseHistory(usePanelStore);
   setPanelStoreClearForSwitchAccessor((options) => {
     const state = usePanelStore.getState();
     if (options?.destroyInstances) {

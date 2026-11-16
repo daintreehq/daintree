@@ -25,6 +25,12 @@ import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 import { isVoiceStartAction, noteVoiceShortcutKeydown } from "@/services/voiceRecordingRuntime";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import {
+  UNDO_CLOSE_ACTION_ID,
+  isTextUndoKey,
+  noteUndoCloseKeyPress,
+  undoCloseTakesKey,
+} from "@/services/terminal/undoCloseKey";
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
 // through: stopping it, and stopping it with a send.
@@ -81,9 +87,21 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       matchesTriggerCombo(e, "nav.focusRegion.next") ||
       matchesTriggerCombo(e, "nav.focusRegion.prev");
 
+    // The physical key whose press reopened a panel, while it is held.
+    let heldUndoCloseCode: string | null = null;
+
     const handler = (e: KeyboardEvent) => {
-      // Skip repeat events
-      if (e.repeat) return;
+      // Skip repeat events. Held down, the undo-close key reopens once: its
+      // repeats are swallowed too, or each would reach the field or the Edit
+      // menu's Undo behind the panel it reopened.
+      if (e.repeat) {
+        if (heldUndoCloseCode !== null && e.code === heldUndoCloseCode) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      heldUndoCloseCode = null;
 
       // A shortcut recorder owns every key, including the one it is recording.
       if (keybindingService.isCapturingShortcut()) return;
@@ -408,9 +426,22 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // Cmd+Z reopens a closed panel only where it isn't text undo (#17107);
+      // otherwise it goes on untouched to the field or the Edit menu.
+      if (
+        result.match?.actionId === UNDO_CLOSE_ACTION_ID &&
+        !undoCloseTakesKey(target, isInTerminal, isTextUndoKey(e))
+      ) {
+        return;
+      }
+
       if (result.shouldConsume) {
         e.preventDefault();
         e.stopPropagation();
+        if (result.match?.actionId === UNDO_CLOSE_ACTION_ID) {
+          heldUndoCloseCode = e.code;
+          noteUndoCloseKeyPress(isTextUndoKey(e));
+        }
 
         if (result.match) {
           // Cmd+W resolves to terminal.close, but where it actually lands
@@ -486,7 +517,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
     };
 
-    const handleBlur = () => keybindingService.clearPendingChord();
+    const handleBlur = () => {
+      heldUndoCloseCode = null;
+      keybindingService.clearPendingChord();
+    };
     const handleVisibilityChange = () => {
       if (document.hidden) keybindingService.clearPendingChord();
     };

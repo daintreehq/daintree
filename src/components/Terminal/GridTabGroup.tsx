@@ -13,6 +13,7 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { useGridGroupAmbientState, useGridGroupHiddenFailure } from "./useGridGroupAmbientState";
 import {
@@ -242,11 +243,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
   const handleTabClose = useCallback(
     (tabId: string) => {
+      const recordClose = prepareUserClose([tabId]);
       requestPanelClose({
         hideIds: [tabId],
-        commit: () => {
-          trashPanel(tabId);
-        },
+        commit: () => recordClose(() => trashPanel(tabId)),
         // Switching tabs unmounts the closing view, so it waits for a guarded
         // close to be approved: a cancelled close must leave the view, and any
         // unsaved work in it, where it was.

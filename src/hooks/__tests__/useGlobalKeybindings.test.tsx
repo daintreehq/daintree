@@ -27,6 +27,9 @@ function parseComboLite(combo: string) {
 const mocks = vi.hoisted(() => ({
   noteVoiceShortcutKeydown: vi.fn(),
   panelState: { focusedId: null as string | null },
+  undoCloseTakesKey: vi.fn<(target: Element, inTerminal: boolean, textUndoKey: boolean) => boolean>(
+    () => true
+  ),
   keybindingService: {
     resolveKeybinding: vi.fn(),
     getPendingChord: vi.fn<() => string | null>(() => null),
@@ -114,6 +117,11 @@ vi.mock("../../store", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
+}));
+
+vi.mock("@/services/terminal/undoCloseKey", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/terminal/undoCloseKey")>()),
+  undoCloseTakesKey: mocks.undoCloseTakesKey,
 }));
 
 // The when-context builder reads real Zustand stores; the hook only needs the
@@ -2707,4 +2715,147 @@ describe("useGlobalKeybindings — a voice key's press for the voice service (#1
       expect(mocks.noteVoiceShortcutKeydown).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("useGlobalKeybindings — Cmd+Z between text undo and reopening a panel", () => {
+  // The platform's text-undo key: Cmd+Z on the Mac, Ctrl+Z elsewhere.
+  const mac = /Mac/.test(navigator.platform);
+
+  function pressCmdZ(target: HTMLElement = document.body, repeat = false): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      code: "KeyZ",
+      metaKey: mac,
+      ctrlKey: !mac,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    mocks.undoCloseTakesKey.mockReturnValue(true);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "panel.undoClose" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it("reopens the last close when nothing newer holds the key", () => {
+    render(<Host />);
+    const event = pressCmdZ();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("panel.undoClose", undefined, {
+      source: "keybinding",
+    });
+  });
+
+  it("leaves the key untouched for the field's own undo or the Edit menu", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+
+    const event = pressCmdZ(field);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(field, false, true);
+    field.remove();
+  });
+
+  function mountTerminal(): { xterm: HTMLElement; helper: HTMLTextAreaElement } {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    return { xterm, helper };
+  }
+
+  it("asks with the terminal flag from inside a terminal on the Mac", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "z",
+          code: "KeyZ",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(helper, true, true);
+    xterm.remove();
+    platform.mockRestore();
+  });
+
+  it("leaves Ctrl+Z in a terminal to the shell off the Mac", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      code: "KeyZ",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.undoCloseTakesKey).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    xterm.remove();
+    platform.mockRestore();
+  });
+
+  it("reopens once while the key is held, swallowing its repeats", () => {
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a binding moved off Cmd+Z that it isn't text undo", () => {
+    render(<Host />);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "u",
+          code: "KeyU",
+          metaKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(document.body, false, false);
+  });
+
+  it("leaves repeats alone when the press went to text undo", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
 });

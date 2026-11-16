@@ -142,6 +142,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | Open panel palette | `⌘+N` | `Ctrl+N` |
+| Undo closing a panel | `⌘+Z` | `Ctrl+Z` |
 | Open diagnostics dock to Logs tab | `⌃+⇧+L` | `Ctrl+Shift+L` |
 | Open diagnostics dock to Problems tab | `⌃+⇧+M` | `Ctrl+Shift+M` |
 | Toggle diagnostics dock | `⌃+⇧+J` | `Ctrl+Shift+J` |

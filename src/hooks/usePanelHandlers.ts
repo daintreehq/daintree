@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import {
   consultPanelCloseGuards,
   hasPanelCloseGuard,
@@ -90,15 +91,17 @@ export function usePanelHandlers({
       const group = getPanelGroup(terminalId);
       const hideIds = group ? [...group.panelIds] : [terminalId];
       const guarded = hideIds.some(hasPanelCloseGuard);
+      const recordClose = prepareUserClose(hideIds);
       requestPanelClose({
         hideIds,
-        commit: () => {
-          try {
-            trashPanelGroup(terminalId);
-          } catch (error) {
-            logError("Failed to trash terminal", error);
-          }
-        },
+        commit: () =>
+          recordClose(() => {
+            try {
+              trashPanelGroup(terminalId);
+            } catch (error) {
+              logError("Failed to trash terminal", error);
+            }
+          }),
         // A guarded close reports its verdict later: a cancel re-arms the
         // latch so the next X press asks again, and `onAfterClose` waits for
         // an accepted close. Unguarded closes keep the synchronous shape.

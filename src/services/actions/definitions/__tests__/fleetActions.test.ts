@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
@@ -129,12 +129,56 @@ async function buildRegistry(): Promise<ActionRegistry> {
   return registry;
 }
 
-async function run(registry: ActionRegistry, id: string, args?: unknown): Promise<void> {
+async function run(
+  registry: ActionRegistry,
+  id: string,
+  args?: unknown,
+  ctx: { dispatchSource?: string } = {}
+): Promise<void> {
   const factory = registry.get(id);
   if (!factory) throw new Error(`action ${id} not registered`);
   const def = factory();
-  await def.run(args as never, {} as never);
+  await def.run(args as never, ctx as never);
 }
+
+describe("fleet.trash — close undo keeps whoever asked first (#17107)", () => {
+  beforeEach(async () => {
+    resetStores();
+    vi.clearAllMocks();
+    const history = await import("@/services/terminal/panelCloseHistory");
+    history.resetPanelCloseHistoryForTests();
+    history.connectPanelCloseHistory(usePanelStore);
+  });
+
+  afterEach(async () => {
+    const history = await import("@/services/terminal/panelCloseHistory");
+    history.connectPanelCloseHistory(null);
+  });
+
+  async function stageAndConfirm(stagedBy: string) {
+    const agents = Array.from({ length: 5 }, (_, i) => makeAgent(`a${i}`));
+    seedPanels(agents);
+    useFleetArmingStore.getState().armIds(agents.map((a) => a.id));
+    const registry = await buildRegistry();
+    await run(registry, "fleet.trash", undefined, { dispatchSource: stagedBy });
+    // The fleet bar clears its confirmation before re-dispatching as the person.
+    useFleetPendingActionStore.getState().clear();
+    await run(registry, "fleet.trash", { confirmed: true }, { dispatchSource: "user" });
+    expect(usePanelStore.getState().panelsById["a0"]?.location).toBe("trash");
+  }
+
+  it("keeps an agent's trash the person confirmed out of undo", async () => {
+    await stageAndConfirm("agent");
+    const { peekUndoCloseStep } = await import("@/services/terminal/panelCloseHistory");
+    expect(peekUndoCloseStep()).toBeNull();
+  });
+
+  it("records the person's own confirmed trash for undo", async () => {
+    await stageAndConfirm("keybinding");
+    const { peekUndoCloseStep } = await import("@/services/terminal/panelCloseHistory");
+    expect(peekUndoCloseStep()?.panels).toHaveLength(5);
+  });
+});
 
 describe("fleet actions — threshold confirmation", () => {
   beforeEach(() => {

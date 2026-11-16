@@ -5,6 +5,7 @@ import {
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
 import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 
 function groupMemberIds(panelId: string): string[] {
   const group = usePanelStore.getState().getPanelGroup(panelId);
@@ -24,7 +25,7 @@ export function trashDroppedPanel(panelId: string): void {
   if (memberIds.some(isPanelClosePending)) return;
 
   if (!memberIds.some(hasPanelCloseGuard)) {
-    usePanelStore.getState().trashPanelGroup(panelId);
+    prepareUserClose(memberIds)(() => usePanelStore.getState().trashPanelGroup(panelId));
     return;
   }
 
@@ -45,6 +46,6 @@ export function trashDroppedPanel(panelId: string): void {
     ) {
       return;
     }
-    usePanelStore.getState().trashPanelGroup(panelId);
+    prepareUserClose(currentIds)(() => usePanelStore.getState().trashPanelGroup(panelId));
   });
 }

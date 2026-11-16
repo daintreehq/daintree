@@ -21,6 +21,7 @@ import {
   undoDepth,
 } from "@codemirror/commands";
 import { advanceComposerDraft } from "./composerDraftGeneration";
+import { closeUndoOrdering } from "./closeUndoOrdering";
 import { correctionLandingEffects, outsideWrite, type CorrectionReview } from "./correctionReview";
 import { lockedHistoryCommand } from "./pendingLock";
 
@@ -66,7 +67,12 @@ const lockedNativeHistory = Prec.highest(
 );
 
 export function createComposerHistory(): Extension {
-  return [historyCompartment.of(history()), composerHistoryKeymap, lockedNativeHistory];
+  return [
+    historyCompartment.of(history()),
+    composerHistoryKeymap,
+    lockedNativeHistory,
+    closeUndoOrdering(composerUndo),
+  ];
 }
 
 /**

@@ -81,6 +81,7 @@ import {
   useMemoryPressureWaitStore,
 } from "@/store/memoryPressureWaitStore";
 import { useDriveLeaseWaitStore } from "@/store/driveLeaseWaitStore";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -1240,7 +1241,7 @@ function TerminalPaneComponent({
   };
 
   const handleTrash = () => {
-    trashPanel(id);
+    prepareUserClose([id])(() => trashPanel(id));
   };
 
   const handleDismissReconnectError = () => {

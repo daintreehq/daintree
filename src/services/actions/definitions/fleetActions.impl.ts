@@ -1,8 +1,10 @@
 // The fleet actions' run bodies, loaded on first dispatch by `runFleetAction` in
 // fleetActions.ts, which keeps the metadata every view registers at boot (#14272).
 // Nothing here may import fleetActions.ts at runtime.
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
+import { isForegroundDispatch } from "./dispatchSource";
 import {
   useFleetArmingStore,
   isFleetArmEligible,
@@ -98,6 +100,13 @@ function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData
     sessionLossCount: countSessionLoss(targets),
   });
 }
+
+/**
+ * Who asked for the trash the fleet bar is confirming. The confirmation clears
+ * itself and re-dispatches as the person who confirmed, but a close an agent
+ * asked for stays the agent's: it isn't the person's to undo (#17107).
+ */
+let stagedTrashSource: ActionSource | undefined;
 
 /**
  * Module-level re-entrancy flag for `fleet.retryFailures`. A fast double-
@@ -200,18 +209,25 @@ export const fleetActionRuns = {
     usePanelStore.getState().bulkKillSet(ids);
     useFleetArmingStore.getState().clear();
   },
-  "fleet.trash": async (args: unknown, _ctx: ActionContext) => {
+  "fleet.trash": async (args: unknown, ctx: ActionContext) => {
     const snap = snapshotArmed();
     const targets = snap.terminalTargets;
     if (targets.length === 0) return;
     const confirmed = parseConfirmed(args);
     if (!confirmed && targets.length >= 5) {
+      stagedTrashSource = ctx.dispatchSource;
       requestConfirmation("trash", targets);
       return;
     }
+    // Only the person's own confirmation stands in for the staged request.
+    const source =
+      confirmed && isForegroundDispatch(ctx.dispatchSource) && stagedTrashSource !== undefined
+        ? stagedTrashSource
+        : ctx.dispatchSource;
+    stagedTrashSource = undefined;
     clearPendingIf("trash");
     const ids = new Set(targets.map((t) => t.id));
-    usePanelStore.getState().bulkTrashSet(ids);
+    userCloseCommit(source, [...ids], () => usePanelStore.getState().bulkTrashSet(ids))();
     useFleetArmingStore.getState().clear();
   },
   "fleet.scope.enter": async (_args: unknown, _ctx: ActionContext) => {
