@@ -359,6 +359,7 @@ export function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolea
     attachmentsEqual(a.attachments, b.attachments) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus) &&
+    lifecycleStatusEqual(a.setupRun, b.setupRun) &&
     setupStatusEqual(a.setupStatus, b.setupStatus) &&
     lifecyclePhaseResultsEqual(a.lifecyclePhaseResults, b.lifecyclePhaseResults) &&
     linkedEqual(a.linked ?? null, b.linked ?? null)

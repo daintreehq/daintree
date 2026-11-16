@@ -121,6 +121,10 @@ export class WorktreeSetupCoordinator {
   // Monitors whose approved setup is already being resumed, so a second
   // approval arriving meanwhile does not run it again once the first settles.
   private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
+  // What the setup script last printed, by incarnation. The plugin steps that
+  // follow it take over its slot, and so do auto-provision and a retry that
+  // resumes at the steps, so the steps can't read it back from there.
+  private setupScriptOutput = new WeakMap<WorktreeMonitor, string>();
   // The plugin setup steps main last listed for this project (#13807), so a
   // card's approval flag can count them without a round trip per worktree.
   private pluginSetupSteps: WorktreeSetupStepDescriptor[] = [];
@@ -306,6 +310,13 @@ export class WorktreeSetupCoordinator {
 
     // Read immediately, before auto-provision can overwrite the slot.
     const settled = this.host.getMonitor(worktreeId)?.lifecycleStatus;
+    if (monitorAtStart && this.host.getMonitor(worktreeId) === monitorAtStart) {
+      if (settled?.phase === "setup" && settled.output !== undefined) {
+        this.setupScriptOutput.set(monitorAtStart, settled.output);
+      } else {
+        this.setupScriptOutput.delete(monitorAtStart);
+      }
+    }
     if (settled?.phase === "setup" && settled.state !== "success") {
       if (settled.state === "failed" || settled.state === "timed-out") {
         recordAwaitingApproval(false);
@@ -442,14 +453,9 @@ export class WorktreeSetupCoordinator {
     };
     if (!isLive()) return { outcome: cancelledOutcome };
 
-    // The steps take over the slot the setup script's result is read from, and
-    // they are part of the same setup: its output stays with them. Only a setup
-    // result's, never an unrelated phase's that has since taken the slot.
-    const settledSlot = monitor.lifecycleStatus;
-    const scriptOutput =
-      settledSlot?.phase === "setup" && settledSlot.state !== "running"
-        ? settledSlot.output
-        : undefined;
+    // The steps are part of the same setup as the script, and take over the
+    // slot its result is read from: its output stays with them.
+    const scriptOutput = this.setupScriptOutput.get(monitor);
 
     // Registered before the first await, so a delete that starts while the
     // steps are still being listed cancels them too.

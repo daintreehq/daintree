@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 import { ChevronRight } from "lucide-react";
@@ -116,13 +116,39 @@ export function LifecycleOutputLog({
   );
 }
 
-/** What a running command run is doing: the command, and what it has printed so far. */
-export function LifecycleRunBody({ status }: { status: WorktreeLifecycleStatus }) {
+/**
+ * What a running command run is doing: the command, and what it has printed so
+ * far. It goes the moment the run settles, so a reader focused in it is handed
+ * to `focusFallback`, when there is one, rather than to <body>.
+ */
+export function LifecycleRunBody({
+  status,
+  focusFallback,
+}: {
+  status: WorktreeLifecycleStatus;
+  focusFallback?: RefObject<HTMLElement | null>;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const output = status.output ?? "";
+
+  // Layout cleanup runs before React detaches the node, so the containment
+  // check still sees the focused log.
+  // The fallback holds this body, so it is there from mount to unmount.
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const fallback = focusFallback?.current;
+    if (!root || !fallback) return;
+    return () => {
+      if (root.contains(document.activeElement)) fallback.focus({ preventScroll: true });
+    };
+  }, [focusFallback]);
+
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
+    <div ref={rootRef} className="flex min-w-0 flex-col gap-1.5">
       {status.currentCommand && (
-        <code className="font-mono text-2xs text-text-primary break-all">
+        // An inline script can run to kilobytes; it scrolls rather than
+        // pushing the output out of reach.
+        <code className="max-h-[4lh] overflow-y-auto font-mono text-2xs text-text-primary break-all">
           {status.currentCommand}
         </code>
       )}
@@ -159,6 +185,9 @@ export function LifecycleRunDisclosure({
   const output = status.output ?? "";
   return (
     <details
+      // Reading, selecting or double-clicking in it never selects or folds the
+      // card it sits on.
+      data-card-control=""
       className={cn("group/run-log text-xs", className)}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >

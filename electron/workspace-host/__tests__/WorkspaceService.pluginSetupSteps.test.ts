@@ -332,6 +332,42 @@ describe("WorkspaceService plugin worktree setup steps (#13807)", () => {
     expect(status?.pluginSteps?.map((s) => s.state)).toEqual(["needs-approval", "succeeded"]);
   });
 
+  it("keeps the setup script's output through its plugin steps, and through a retry that resumes at them (#17115)", async () => {
+    bridge.listSteps.mockResolvedValue([ACME_DB]);
+    bridge.runStep.mockResolvedValueOnce({ state: "failed", error: "quota exceeded" });
+    vi.mocked(service["lifecycleService"].runLifecycleSetup).mockImplementation(
+      async (worktreeId: string) => {
+        service["monitors"].get(worktreeId)?.setLifecycleStatus({
+          phase: "setup",
+          state: "success",
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          output: "linked node_modules\n",
+        });
+        return { shouldProvision: false, needsApproval: false };
+      }
+    );
+
+    const worktreeId = await create("script-output");
+    const monitor = service["monitors"].get(worktreeId);
+    expect(monitor?.lifecycleStatus).toMatchObject({
+      phase: "setup",
+      state: "failed",
+      output: "linked node_modules\n",
+    });
+
+    // The retry stamps the slot running before it resumes at the steps.
+    bridge.runStep.mockResolvedValue({ state: "succeeded" });
+    await service.retryLifecycleSetup(worktreeId);
+
+    expect(monitor?.lifecycleStatus).toMatchObject({
+      phase: "setup",
+      state: "success",
+      output: "linked node_modules\n",
+    });
+    expect(monitor?.setupRun).toMatchObject({ state: "success", output: "linked node_modules\n" });
+  });
+
   it("does not run plugin steps when the setup script failed", async () => {
     bridge.listSteps.mockResolvedValue([ACME_DB]);
     vi.mocked(service["lifecycleService"].runLifecycleSetup).mockImplementation(

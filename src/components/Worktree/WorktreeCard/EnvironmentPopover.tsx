@@ -340,7 +340,9 @@ export function EnvironmentPopover({
                     )}
                   </span>
                 </div>
-                {runningCommands && <LifecycleRunBody status={runningCommands} />}
+                {runningCommands && (
+                  <LifecycleRunBody status={runningCommands} focusFallback={contentRef} />
+                )}
               </div>
             )}
 

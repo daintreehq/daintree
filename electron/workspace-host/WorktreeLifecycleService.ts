@@ -18,7 +18,6 @@ import type {
   WorktreeLifecyclePhase,
   WorktreeLifecyclePhaseCategory,
   WorktreeLifecycleState,
-  WorktreeLifecycleStatus,
   WorktreeTeardownPhasePreview,
   WorktreeTeardownPreview,
 } from "../../shared/types/worktree.js";
@@ -40,6 +39,9 @@ const OUTPUT_TAIL_BYTES = 8192;
 // How much recent output a tail is scrubbed from: far more than the tail, so a
 // secret the scrub's own window cuts through sits well before what is shown.
 const TAIL_SCRUB_WINDOW_CHARS = 65_536;
+// How far before that window a key block's BEGIN line is looked for: as far as
+// `scrubSecrets`' key-block pattern itself reaches.
+const KEY_BLOCK_LOOKBACK_CHARS = 100_000;
 const LIVE_OUTPUT_INTERVAL_MS = 500;
 const FAILURE_SUMMARY_SCAN_CHARS = 4096;
 const MAX_FAILURE_SUMMARY_CHARS = 500;
@@ -1237,6 +1239,9 @@ export class WorktreeLifecycleService {
     );
 
     const startedAt = Date.now();
+    // This run's own, so a status poll that takes the slot between commands
+    // can't take what the run has printed with it.
+    let liveOutput: string | undefined;
     monitor.setLifecycleStatus({
       phase: "setup",
       state: "running",
@@ -1261,16 +1266,17 @@ export class WorktreeLifecycleService {
             commandIndex,
             totalCommands,
             currentCommand: command,
-            startedAt: m.lifecycleStatus?.startedAt ?? Date.now(),
+            startedAt,
             commandStartedAt: Date.now(),
-            output: runningOutput(m.lifecycleStatus, "setup"),
+            ...(liveOutput !== undefined ? { output: liveOutput } : {}),
           });
           ctx.emitUpdate(m);
         }
       },
       onOutput: (output) => {
+        liveOutput = output;
         const m = ctx.getMonitor(worktreeId);
-        if (m && publishRunningOutput(m, "setup", output)) ctx.emitUpdate(m);
+        if (m && publishRunningOutput(m, "setup", startedAt, output)) ctx.emitUpdate(m);
       },
     });
 
@@ -1287,7 +1293,7 @@ export class WorktreeLifecycleService {
           result.error !== undefined && result.failureSummary !== undefined
             ? `${result.failureSummary} (${result.error})`
             : result.error,
-        startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
+        startedAt,
         completedAt: Date.now(),
       });
       ctx.emitUpdate(finalMonitor);
@@ -1808,50 +1814,69 @@ function readSetupFailureSummary(chunks: string[]): string | undefined {
 /**
  * The end of a run's output, scrubbed BEFORE it is cut: a cut through a token
  * leaves a remainder no pattern recognises. Only a bounded window of recent
- * output is scrubbed, starting after a line break so a token that window cuts
- * through is dropped rather than shown.
+ * output is scrubbed, and where the window's own start cuts something in two,
+ * the part it would keep is dropped rather than shown: the rest of a line,
+ * whose pattern may need the part before it, or the rest of a key block, whose
+ * body is only recognised beside its BEGIN line.
  */
-function recentOutput(chunks: string[]): { text: string; skippedBytes: number } {
+function recentOutput(chunks: string[]): {
+  text: string;
+  skippedChunks: number;
+  trimmedBytes: number;
+} {
+  const wanted = TAIL_SCRUB_WINDOW_CHARS + KEY_BLOCK_LOOKBACK_CHARS;
   let start = chunks.length;
   let chars = 0;
-  while (start > 0 && chars < TAIL_SCRUB_WINDOW_CHARS) {
+  while (start > 0 && chars < wanted) {
     start--;
     chars += chunks[start].length;
   }
-  let skippedBytes = 0;
-  for (let i = 0; i < start; i++) skippedBytes += Buffer.byteLength(chunks[i], "utf-8");
-  let text = chunks.slice(start).join("");
-  if (start === 0 && text.length <= TAIL_SCRUB_WINDOW_CHARS) return { text, skippedBytes };
+  const joined = chunks.slice(start).join("");
+  if (start === 0 && joined.length <= TAIL_SCRUB_WINDOW_CHARS) {
+    return { text: joined, skippedChunks: 0, trimmedBytes: 0 };
+  }
 
-  if (text.length > TAIL_SCRUB_WINDOW_CHARS) {
-    const cut = text.length - TAIL_SCRUB_WINDOW_CHARS;
-    skippedBytes += Buffer.byteLength(text.slice(0, cut), "utf-8");
-    text = text.slice(cut);
+  const windowStart = joined.length - TAIL_SCRUB_WINDOW_CHARS;
+  const before = joined.slice(0, windowStart);
+  const window = joined.slice(windowStart);
+  let keepFrom: number;
+  if (before.lastIndexOf("-----BEGIN ") > before.lastIndexOf("-----END ")) {
+    const blockEnd = window.indexOf("-----END ");
+    keepFrom = blockEnd === -1 ? window.length : lineEndFrom(window, blockEnd);
+  } else {
+    keepFrom = before.endsWith("\n") || before.endsWith("\r") ? 0 : lineEndFrom(window, 0);
   }
-  const lineBreak = text.search(/[\r\n]/);
-  if (lineBreak !== -1) {
-    skippedBytes += Buffer.byteLength(text.slice(0, lineBreak + 1), "utf-8");
-    text = text.slice(lineBreak + 1);
-  }
-  return { text, skippedBytes };
+  return {
+    text: window.slice(keepFrom),
+    skippedChunks: start,
+    trimmedBytes: Buffer.byteLength(joined.slice(0, windowStart + keepFrom), "utf-8"),
+  };
 }
 
-function scrubbedTail(text: string, skippedBytes: number): { tail: string; omittedBytes: number } {
+/** Just past the line break at or after `from`, or the end when no line breaks there. */
+function lineEndFrom(text: string, from: number): number {
+  const rest = text.slice(from).search(/[\r\n]/);
+  return rest === -1 ? text.length : from + rest + 1;
+}
+
+function scrubbedTail(text: string): { tail: string; overflowBytes: number } {
   const scrubbed = scrubSecrets(text);
   const buf = Buffer.from(scrubbed, "utf-8");
-  if (buf.length <= OUTPUT_TAIL_BYTES) return { tail: scrubbed, omittedBytes: skippedBytes };
+  if (buf.length <= OUTPUT_TAIL_BYTES) return { tail: scrubbed, overflowBytes: 0 };
   // Byte-accurate slice: matches the named cap (`*_BYTES`) for multibyte
   // content. A cut mid-codepoint produces a leading U+FFFD in the tail snippet
   // — acceptable since the persisted log file is the authoritative artifact.
   return {
     tail: buf.subarray(buf.length - OUTPUT_TAIL_BYTES).toString("utf-8"),
-    omittedBytes: skippedBytes + buf.length - OUTPUT_TAIL_BYTES,
+    overflowBytes: buf.length - OUTPUT_TAIL_BYTES,
   };
 }
 
 function tailOutput(chunks: string[], logPath?: string): string {
-  const { text, skippedBytes } = recentOutput(chunks);
-  const { tail, omittedBytes } = scrubbedTail(text, skippedBytes);
+  const { text, skippedChunks, trimmedBytes } = recentOutput(chunks);
+  const { tail, overflowBytes } = scrubbedTail(text);
+  let omittedBytes = trimmedBytes + overflowBytes;
+  for (let i = 0; i < skippedChunks; i++) omittedBytes += Buffer.byteLength(chunks[i], "utf-8");
   if (omittedBytes === 0) return tail;
   const where = logPath ? `full log: ${logPath}` : "full log unavailable";
   return `...(truncated — omitted ${omittedBytes} bytes; ${where})\n${tail}`;
@@ -1871,32 +1896,31 @@ function settledOutputEnd(text: string): number {
   return end;
 }
 
+// Called twice a second on a run that may have printed megabytes, so it never
+// walks the whole history: the marker says output was left out, not how much.
 function liveOutputTail(chunks: string[]): string {
-  const { text, skippedBytes } = recentOutput(chunks);
-  const { tail, omittedBytes } = scrubbedTail(text.slice(0, settledOutputEnd(text)), skippedBytes);
-  return omittedBytes === 0 ? tail : `...(truncated — omitted ${omittedBytes} bytes)\n${tail}`;
-}
-
-/** The output a running phase has published so far, carried to its next command. */
-export function runningOutput(
-  status: WorktreeLifecycleStatus | undefined,
-  phase: WorktreeLifecyclePhase
-): string | undefined {
-  return status?.phase === phase && status.state === "running" ? status.output : undefined;
+  const { text, skippedChunks, trimmedBytes } = recentOutput(chunks);
+  const { tail, overflowBytes } = scrubbedTail(text.slice(0, settledOutputEnd(text)));
+  const omitted = skippedChunks > 0 || trimmedBytes > 0 || overflowBytes > 0;
+  return omitted ? `...(earlier output omitted)\n${tail}` : tail;
 }
 
 /**
- * Put a run's live output on the monitor's lifecycle slot, only while that slot
- * still shows the run's phase running: another phase that has taken the slot
- * keeps it. Returns whether the slot changed.
+ * Put a run's live output on the monitor's lifecycle slot, only while the slot
+ * still holds that run: the same phase, running, from the same start. Another
+ * phase, or another run of the same phase, that has taken the slot keeps it.
+ * Returns whether the slot changed.
  */
 export function publishRunningOutput(
   monitor: WorktreeMonitor,
   phase: WorktreeLifecyclePhase,
+  startedAt: number,
   output: string
 ): boolean {
   const status = monitor.lifecycleStatus;
-  if (status?.phase !== phase || status.state !== "running") return false;
+  if (status?.phase !== phase || status.state !== "running" || status.startedAt !== startedAt) {
+    return false;
+  }
   monitor.setLifecycleStatus({ ...status, output });
   return true;
 }

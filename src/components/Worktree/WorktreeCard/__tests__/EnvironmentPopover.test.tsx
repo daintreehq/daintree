@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { EnvironmentPopover } from "../EnvironmentPopover";
+import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("react-dom", async () => {
@@ -419,6 +420,41 @@ describe("EnvironmentPopover content", () => {
 describe("EnvironmentPopover — what running commands are doing (#17115)", () => {
   const NOW = 2_000_000;
 
+  function runningSetup(overrides: Partial<WorktreeLifecycleStatus> = {}): WorktreeLifecycleStatus {
+    return {
+      phase: "setup",
+      state: "running",
+      commandIndex: 1,
+      totalCommands: 3,
+      currentCommand: "npm ci",
+      startedAt: NOW - 20_000,
+      commandStartedAt: NOW - 7_000,
+      output: "added 1200 packages\n",
+      ...overrides,
+    };
+  }
+
+  function popover(lifecycle: WorktreeLifecycleStatus, overrides: Partial<Props> = {}) {
+    return (
+      <TooltipProvider>
+        <EnvironmentPopover
+          {...BASE}
+          isLifecycleRunning={lifecycle.state === "running"}
+          lifecycle={lifecycle}
+          {...overrides}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  function openPastGate(): HTMLElement {
+    const dialog = openPopover();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    return dialog;
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -429,23 +465,8 @@ describe("EnvironmentPopover — what running commands are doing (#17115)", () =
   });
 
   it("names the command, which of how many, for how long, and what it has printed", () => {
-    renderPopover({
-      isLifecycleRunning: true,
-      lifecycle: {
-        phase: "setup",
-        state: "running",
-        commandIndex: 1,
-        totalCommands: 3,
-        currentCommand: "npm ci",
-        startedAt: NOW - 20_000,
-        commandStartedAt: NOW - 7_000,
-        output: "added 1200 packages\n",
-      },
-    });
-    const dialog = openPopover();
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
+    render(popover(runningSetup()));
+    const dialog = openPastGate();
 
     expect(dialog.textContent).toContain("Running setup…");
     expect(dialog.textContent).toContain("Command 2 of 3");
@@ -456,17 +477,57 @@ describe("EnvironmentPopover — what running commands are doing (#17115)", () =
     );
   });
 
-  it("adds nothing for a status check, whose output is the last check's", () => {
-    renderPopover({
-      isLifecycleRunning: true,
-      lifecycle: { phase: "resource-status", state: "running", startedAt: NOW, output: "probe" },
-    });
-    const dialog = openPopover();
+  it("keeps up with the next command and new output while it stays open", () => {
+    const view = render(popover(runningSetup()));
+    openPastGate();
+
+    view.rerender(
+      popover(
+        runningSetup({
+          commandIndex: 2,
+          currentCommand: "npm run build",
+          commandStartedAt: NOW + 400,
+          output: "added 1200 packages\nbuilt in 3s\n",
+        })
+      )
+    );
+
+    expect(screen.getByRole("dialog").textContent).toContain("Command 3 of 3");
+    expect(screen.getByText("npm run build", { selector: "code" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "added 1200 packages\nbuilt in 3s\n"
+    );
+  });
+
+  it("hands focus to the popover when the run settles under a reader's focus", () => {
+    const view = render(popover(runningSetup()));
+    const dialog = openPastGate();
     act(() => {
-      vi.advanceTimersByTime(400);
+      screen.getByRole("region", { name: "Setup output" }).focus();
     });
 
+    view.rerender(popover({ ...runningSetup(), state: "success", completedAt: NOW }));
+
+    expect(screen.queryByRole("region", { name: "Setup output" })).toBeNull();
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  it("leaves a status check to the last check's output, and adds nothing of its own", () => {
+    render(
+      popover(
+        { phase: "resource-status", state: "running", startedAt: NOW, output: "in-flight probe" },
+        {
+          resourceLastOutput: "probe: 503 Service Unavailable",
+          resourceLastCheckedAt: NOW - 60_000,
+        }
+      )
+    );
+    const dialog = openPastGate();
+
+    expect(screen.getByRole("region", { name: "Last check output" }).textContent).toContain(
+      "probe: 503 Service Unavailable"
+    );
+    expect(dialog.textContent).not.toContain("in-flight probe");
     expect(dialog.textContent).not.toContain("No output yet");
-    expect(screen.queryByRole("region", { name: /command output|setup output/i })).toBeNull();
   });
 });

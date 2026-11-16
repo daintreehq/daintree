@@ -6,6 +6,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
+import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -250,11 +251,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
       : undefined;
   // A setup over before the gate opens never adds a row only to take it away.
   const showRunningLifecycle = useDohertyGate(runningLifecycle !== undefined);
+  // From `setupRun`, which a later phase's status never replaces. Not while
+  // setup runs again: that run's own output is the one to read.
+  const setupRunning =
+    worktree.lifecycleStatus?.phase === "setup" && worktree.lifecycleStatus.state === "running";
   const succeededSetup =
-    worktree.lifecycleStatus?.phase === "setup" &&
-    worktree.lifecycleStatus.state === "success" &&
-    worktree.lifecycleStatus.output?.trim()
-      ? worktree.lifecycleStatus
+    !setupRunning && worktree.setupRun?.state === "success" && worktree.setupRun.output?.trim()
+      ? worktree.setupRun
       : undefined;
   // Two separate observations: the host found unapproved repository commands
   // this worktree would run, and/or its setup was skipped for want of approval.
@@ -667,10 +670,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
         )}
 
         {runningLifecycle && showRunningLifecycle && (
-          <div
-            // Pressing in it never switches worktrees.
-            data-card-control=""
-            data-testid="worktree-lifecycle-run"
+          <LifecycleRunRow
+            status={runningLifecycle}
             className={cn(
               "py-1",
               // Outside the Details disclosure, like the recovery block: what
@@ -683,9 +684,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   ? "mt-1"
                   : "mt-1 pl-1.5 pr-2.5"
             )}
-          >
-            <LifecycleRunDisclosure status={runningLifecycle} label="Output" />
-          </div>
+          />
         )}
 
         {lifecycleFailed && (
@@ -826,6 +825,31 @@ export interface WorktreeDeleteErrorBannerProps {
  * a delete failure regardless of collapse state — otherwise a collapsed card
  * silently absorbs the error.
  */
+/**
+ * A running phase's row under the summary. It goes the moment the run settles,
+ * so a reader focused in its log is handed to the card rather than to <body>.
+ */
+function LifecycleRunRow({
+  status,
+  className,
+}: {
+  status: WorktreeLifecycleStatus;
+  className: string;
+}) {
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
+  return (
+    <div
+      ref={focusHandoffRef}
+      // Pressing in it never switches worktrees.
+      data-card-control=""
+      data-testid="worktree-lifecycle-run"
+      className={className}
+    >
+      <LifecycleRunDisclosure status={status} label="Output" />
+    </div>
+  );
+}
+
 export function WorktreeDeleteErrorBanner({
   message,
   onRetry,

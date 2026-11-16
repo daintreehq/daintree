@@ -9,7 +9,6 @@ import {
   WorktreeLifecycleService,
   ownResource,
   publishRunningOutput,
-  runningOutput,
   type ResolvedResourceEnvironments,
 } from "./WorktreeLifecycleService.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
@@ -395,6 +394,9 @@ export class ResourceActionExecutor {
         : (DEFAULT_TIMEOUT_MS[effectiveAction] ?? 120_000);
 
     const startedAt = Date.now();
+    // This run's own, so a status poll that takes the slot between commands
+    // can't take what the run has printed with it.
+    let liveOutput: string | undefined;
     monitor.setLifecycleStatus({
       phase,
       state: "running",
@@ -420,16 +422,17 @@ export class ResourceActionExecutor {
             commandIndex,
             totalCommands,
             currentCommand: command,
-            startedAt: m.lifecycleStatus?.startedAt ?? startedAt,
+            startedAt,
             commandStartedAt: Date.now(),
-            output: runningOutput(m.lifecycleStatus, phase),
+            ...(liveOutput !== undefined ? { output: liveOutput } : {}),
           });
           this.ctx.emitUpdate(m);
         }
       },
       onOutput: (output) => {
+        liveOutput = output;
         const m = monitorInEnvironment();
-        if (m && publishRunningOutput(m, phase, output)) this.ctx.emitUpdate(m);
+        if (m && publishRunningOutput(m, phase, startedAt, output)) this.ctx.emitUpdate(m);
       },
     });
 

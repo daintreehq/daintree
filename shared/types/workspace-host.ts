@@ -172,6 +172,14 @@ export interface WorktreeSnapshot {
   lifecycleStatus?: WorktreeLifecycleStatus;
 
   /**
+   * The last setup run that finished (succeeded, failed or timed out), with its
+   * output. `lifecycleStatus` is one slot every later phase takes over — an
+   * environment's status check every poll — so this is where a finished
+   * setup's output stays readable. Held in memory by the monitor.
+   */
+  setupRun?: WorktreeLifecycleStatus;
+
+  /**
    * How far post-create initialization has got. Absent for a worktree this host
    * process did not create, which readers must treat as unknown rather than
    * ready. See {@link WorktreeSetupStatus}.
