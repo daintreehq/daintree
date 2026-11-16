@@ -5,6 +5,7 @@ import { gzipSync } from "node:zlib";
 import { isInScanSurface } from "./compiler-scan-surface.mjs";
 import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry.ts";
 import { isHostFacadeChunkName } from "./vite-host-facade.ts";
+import { isProjectShellChunkName } from "./vite-project-shell.ts";
 
 type CompilerLoggerEvent = { kind: string };
 
@@ -111,8 +112,9 @@ export function rendererBundleSizePlugin(): Plugin {
           totalJsGzip += gz;
           // The app entry specifically, not merely the first `isEntry` chunk:
           // hostFacadePlugin emits the import-map facades as additional
-          // entries, and bundle order does not guarantee the app comes first.
-          if (output.isEntry && !isHostFacadeChunkName(name)) {
+          // entries, projectShellChunkPlugin emits the project shell as one,
+          // and bundle order does not guarantee the app comes first.
+          if (output.isEntry && !isHostFacadeChunkName(name) && !isProjectShellChunkName(name)) {
             entryChunkName ??= name;
           }
         } else if (output.type === "asset" && output.fileName.endsWith(".css")) {

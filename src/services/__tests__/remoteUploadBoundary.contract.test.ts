@@ -3,18 +3,21 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { PROJECT_SHELL_SOURCE } from "@shared/config/projectShell";
 
 /**
  * Windows builds leave Remote Hosts out (`__DAINTREE_REMOTE_HOSTS__` is
  * false). The bundler only drops a module when the one dynamic import that
  * reaches it sits directly under `if (__DAINTREE_REMOTE_HOSTS__)`, and only
  * while nothing imports it statically. This walks every module a build ships
- * regardless — static imports from the renderer's entry plus ungated lazy
+ * regardless — static imports from the renderer's entries plus ungated lazy
  * chunks — and holds both halves for the remote-only modules.
  */
 
 const ROOT = path.resolve(__dirname, "../../..");
-const ENTRY = path.join(ROOT, "src/main.tsx");
+// The HTML entry, and the project shell it loads through a script element
+// (scripts/lib/vite-project-shell.ts emits it as an entry of its own).
+const ENTRIES = [path.join(ROOT, "src/main.tsx"), path.join(ROOT, PROJECT_SHELL_SOURCE)];
 const REMOTE_ONLY = [
   "src/services/remoteMaterializer.ts",
   "src/components/Terminal/uploads/uploadConfirm.ts",
@@ -83,7 +86,7 @@ interface Scan {
 function scanGraph(): Scan {
   const statics = new Set<string>();
   const dynamicSites: Scan["dynamicSites"] = [];
-  const queue = [ENTRY];
+  const queue = [...ENTRIES];
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (statics.has(file)) continue;

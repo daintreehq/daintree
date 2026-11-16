@@ -18,7 +18,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useEffectiveCombo } from "@/hooks";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { isTerminalReservedCombo } from "@/services/terminalReservedKeys";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";

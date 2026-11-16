@@ -712,7 +712,7 @@ function AppInner() {
 }
 
 // `AppInner` suspends on the module-scope `app:boot` promise via `use()`. The
-// Suspense boundary lives here rather than in `main.tsx` so the boot read has a
+// Suspense boundary lives here rather than in the project shell so the boot read has a
 // fallback if the IPC hasn't settled by first render. `fallback={null}` keeps
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.

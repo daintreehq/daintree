@@ -8,13 +8,9 @@ import "./lib/trustedTypesPolicy";
 // Must run before xterm rasterizes its first glyph atlas.
 import "./lib/canvasFontWhitespaceShim";
 
-// Fires the `app:boot` IPC at the top of entry-graph evaluation — see the
-// module comment for ordering semantics (#8820).
-import "./lib/bootIpcEager";
-
-import { initBuiltInPanelKinds, preloadRestoredPanesFromBoot } from "./panels/registry";
-initBuiltInPanelKinds();
-
+// The entry every window role shares: a project view, a plugin surface host,
+// and the Canopy window. Only what all three need is imported statically here;
+// the project shell loads for a project view alone (see `bootstrap()`).
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
@@ -26,42 +22,53 @@ import {
   watchScrollbarGutter,
 } from "./lib/scrollbarGutter";
 import { ensureLatin400Preload } from "./lib/fontPreload";
-// Importing this module has the side effect of starting the font load (via
-// the eagerly-initialised `terminalFontReady` singleton). Terminals open
-// immediately against whatever font is resolved; if JetBrains Mono arrives
-// late, `TerminalInstanceService.repairFontGrid()` re-measures the grid
-// out-of-band via `onTerminalFontArrivedLate` (#9809).
-import "./config/terminalFont";
-import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
-import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
 import { initRendererSentry } from "./utils/rendererSentry";
-import { renderBootstrapError } from "./utils/renderBootstrapError";
+import { reportBootstrapFailure } from "./utils/reportBootstrapFailure";
 import {
   onCaughtError,
   onUncaughtError,
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
-import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
-import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
-import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
-import { usePluginContextKeyStore } from "./store/pluginContextKeyStore";
-import { usePluginProjectSurfacesStore } from "./store/pluginProjectSurfacesStore";
 import { usePluginHostedViewsStore } from "./store/pluginHostedViewsStore";
-import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
-import { isRemoteShellSupported } from "./lib/remoteHosts";
-import { answerBufferSamplesUntilLoaded } from "./services/terminal/terminalInstanceServiceAccessor";
+import { PROJECT_SHELL_URL } from "./projectWindow/projectShellUrl";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
-let cleanupOrchestrator: (() => void) | undefined;
-let cleanupPluginKitHost: (() => void) | undefined;
 
 ensureLatin400Preload(latin400Woff2Url);
 
+/**
+ * Loads the project shell through a module script element rather than
+ * `import()`: the element holds the document's load event until the shell's
+ * whole graph has evaluated, which keeps every listener it installs ahead of
+ * main's `did-finish-load` sends, as when it was part of this entry.
+ */
+function loadProjectShell(): void {
+  const script = document.createElement("script");
+  script.type = "module";
+  script.crossOrigin = "";
+  script.src = PROJECT_SHELL_URL;
+  script.addEventListener(
+    "error",
+    () =>
+      reportBootstrapFailure(new Error(`Couldn't load the project shell (${PROJECT_SHELL_URL})`)),
+    { once: true }
+  );
+  document.head.append(script);
+}
+
 async function bootstrap() {
+  const surfaceHostId = window.__DAINTREE_SURFACE_HOST__?.surfaceId ?? null;
+  const isProjectWindow = surfaceHostId === null && window.__DAINTREE_CANOPY_WINDOW__ !== true;
+
+  // The project shell sends `app:boot` itself, in the same evaluation that
+  // installs its listeners. The other roles send it here, first, as the
+  // boot-IPC-eager import did for every role.
+  if (!isProjectWindow) void getSafeBootPromise();
+
   // Fire-and-forget — the SDK module loads via dynamic import off the
   // first-render path, with a pre-init capture queue replaying anything
   // recorded before `Sentry.init` runs. Awaiting here would block the
@@ -87,7 +94,6 @@ async function bootstrap() {
   // role from additionalArguments. A surface view hosts terminals only —
   // mount the minimal surface root and skip the app shell, store
   // orchestrator, and panel registries entirely.
-  const surfaceHostId = window.__DAINTREE_SURFACE_HOST__?.surfaceId ?? null;
   if (surfaceHostId !== null) {
     const { SurfaceHostRoot } = await import("./surfaceHost/SurfaceHostRoot");
     document.getElementById("startup-skeleton")?.remove();
@@ -104,7 +110,7 @@ async function bootstrap() {
   }
 
   // The Canopy window: the inbox over every project, so none of the project
-  // shell below. `app:boot` still answers for it, with no project, and seeds the
+  // shell. `app:boot` still answers for it, with no project, and seeds the
   // theme and terminal settings the inbox reads.
   if (window.__DAINTREE_CANOPY_WINDOW__ === true) {
     // Its app-wide plugins' views, as main narrows them for a window with no
@@ -124,116 +130,14 @@ async function bootstrap() {
     return;
   }
 
-  try {
-    localStorage.removeItem("project-groups-storage");
-  } catch {
-    // localStorage may not be available
-  }
-
-  cleanupOrchestrator = initStoreOrchestrator();
-
-  // The terminal service loads with the first terminal (#14267); until then,
-  // main's buffer samples get this view's empty answer instead of a timeout.
-  answerBufferSamplesUntilLoaded();
-
-  // Synchronous with module evaluation, so it is listening before main's
-  // `did-finish-load` gate lets it send `project:on-switch` to a new view.
-  installProjectSwitchStatusTiming();
-  // Same reason: main replays the running plugin actions at `did-finish-load`,
-  // and its events reach only a listener that already exists.
-  installRunningPluginActions();
-  // Plugin `when`-clause keys replay at the same point, and a keybinding can
-  // fire before any hook that would otherwise subscribe the store has mounted.
-  usePluginContextKeyStore.getState().init();
-  // A project plugin's default editors (#13811) decide where a file opens, and
-  // an agent's `file.openPanel` or a terminal link can ask before any slot
-  // frame or file panel has mounted to start these.
-  usePluginProjectSurfacesStore.getState().init();
-  usePluginHostedViewsStore.getState().init();
-  // Before the first render: a kit view reads its host as it draws.
-  cleanupPluginKitHost = installAppPluginKitHost();
-
-  // Off the entry chunk, and never loaded where remote hosts can't exist.
-  if (isRemoteShellSupported()) {
-    void import("./components/Hosts/installHostProjectsLoader")
-      .then((m) => m.installHostProjectsLoader())
-      .catch((error: unknown) => {
-        console.warn("[Hosts] Couldn't install the host project listing:", error);
-      });
-    void import("./lib/forgetHostLocalState")
-      .then((m) => m.installForgetHostLocalState())
-      .catch((error: unknown) => {
-        console.warn("[Hosts] Couldn't install removed-host cleanup:", error);
-      });
-  }
-
-  // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
-  // all read from a normalized snapshot on cold boot. The install-aware
-  // default-pin path in `normalizeAgentSelection` depends on this running —
-  // without it the store stays null and the orchestrator's availability
-  // subscription never gets a chance to reconcile (see issue #5158).
-  void useAgentSettingsStore.getState().initialize();
-
-  // The restored session's pane chunks are not preloaded from index.html (that
-  // would charge every boot for every pane kind); warm just the kinds this
-  // session restores as soon as the boot payload names them, in parallel with
-  // the App chunk below.
-  void getSafeBootPromise().then(preloadRestoredPanesFromBoot);
-
-  const { default: App } = await import("./App");
-
-  const rootEl = document.getElementById("root")!;
-  createRoot(rootEl, {
-    onCaughtError,
-    onUncaughtError,
-    onRecoverableError,
-  }).render(
-    <StrictMode>
-      <WorktreeStoreProvider>
-        <App />
-      </WorktreeStoreProvider>
-    </StrictMode>
-  );
+  loadProjectShell();
 }
 
-bootstrap().catch((error: unknown) => {
-  // Logger may not be initialized at this stage of bootstrap; console is the
-  // last-resort sink before the bootstrap-error UI takes over.
-  // eslint-disable-next-line no-console
-  console.error("Bootstrap failed:", error);
-
-  void (async () => {
-    try {
-      const { captureException } = await import("@sentry/electron/renderer");
-      captureException(error);
-    } catch {
-      // Sentry may not have initialized yet
-    }
-  })();
-
-  try {
-    const errObj =
-      error instanceof Error
-        ? { name: error.name, message: error.message, stack: error.stack }
-        : { message: String(error) };
-    void window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
-  } catch {
-    // IPC may not be available
-  }
-
-  document.getElementById("startup-skeleton")?.remove();
-
-  const rootEl = document.getElementById("root");
-  if (rootEl) {
-    renderBootstrapError(rootEl, error);
-  }
-});
+bootstrap().catch(reportBootstrapFailure);
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     cleanupGlobalErrorHandlers?.();
     cleanupScrollbarGutterWatch?.();
-    cleanupOrchestrator?.();
-    cleanupPluginKitHost?.();
   });
 }

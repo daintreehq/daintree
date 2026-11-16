@@ -34,7 +34,7 @@ let installed = false;
 let store: WorktreeViewStoreApi | null = null;
 let armed: ArmedSwitch | null = null;
 
-/** Registered from the entry module so it is listening before main's first send. */
+/** Registered from the project shell as it evaluates, so it is listening before main's first send. */
 export function installProjectSwitchStatusTiming(): void {
   if (installed) return;
   installed = true;

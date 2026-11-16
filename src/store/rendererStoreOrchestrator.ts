@@ -812,7 +812,7 @@ export function initStoreOrchestrator(): () => void {
 export function destroyStoreOrchestrator(): void {
   // Kept out of the DisposableStore on purpose: only `destroyStoreOrchestrator`
   // cancels the pending debounce. HMR teardown (`import.meta.hot.dispose` in
-  // `main.tsx`) calls the cleanup fn directly and intentionally does NOT cancel,
+  // `projectShell.tsx`) calls the cleanup fn directly and intentionally does NOT cancel,
   // matching pre-refactor behavior.
   debouncedPersistMruList.cancel();
   cleanupFn?.();
