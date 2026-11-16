@@ -1800,7 +1800,7 @@ Gated on `agent:input`, with the same first-use consent prompt as `sendToActiveA
 ```ts
 const screen = await host.terminals.readScreen(terminalId, { lines: 12 });
 switch (screen.status) {
-  case "ok": // screen.text, screen.lineCount, screen.truncated
+  case "ok": // screen.text, screen.lineCount, screen.truncated, screen.inputLine
   case "exited": // the process exited; the pane may still be open
   case "not-found": // no terminal this plugin may read has that id
   case "unavailable": // could not read it right now; try again later
@@ -1808,6 +1808,8 @@ switch (screen.status) {
 ```
 
 The terminal's current screen as plain text: its last `lines` lines (1–100, default 20; a line soft-wrapped across rows counts once) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes), or, for an installed plugin, from [`agents.listAll`](#agentslistall--every-agent-in-every-open-project).
+
+`inputLine` says what the agent's input box holds: `{ state: "empty", text: "" }`, `{ state: "typed", text }`, `{ state: "suggestion", text }` for the agent CLI's own suggested next prompt (Claude Code draws one in grey after a turn), or `{ state: "unknown", text: "" }` for an agent with no declared rule, a box not found, or a terminal running no agent. `text` shows a suggestion as ordinary characters, so `inputLine` is the only way to tell it from an unsent draft; a guard that keeps panes holding a draft should hold on `typed` and `unknown`. It is read off the whole screen, so it is there even when `lines` stops above the box, and from the screen's styling, so it is an observation, never proof of who wrote the text. Its `text` is capped at 200 characters, with `truncated: true` when cut. The host always sends it; the type marks it optional so `PluginTerminalScreenResult` fixtures written before it still type-check. It is the same reading `terminal.getOutput` gives an MCP caller.
 
 It is answered in main from the terminal host's own copy of the screen, so a terminal in a project whose view is closed still reads. A project plugin reads only its own project's terminals; an installed plugin may read any user terminal by id. An unknown id, one in another project and one that is not a user terminal all answer the same `not-found`. Nothing about the terminal changes: no input, no resize.
 
@@ -2807,7 +2809,7 @@ It validates argument shapes the way the real host does — `registerAction` des
 | `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
 | `focusedPanel` | `{ kind: null, agent: false, worktreeId: null }` | The focus `onDidChangeFocusedPanel` replays on subscribe. For a project plugin it counts as inside its own project, and `"portal"` reads as `kind: null`, as in production. |
 | `projectPresence` | its own project, `"foreground"`, for a project plugin; none for an installed one | The open projects `onDidChangeProjectPresence` replays on subscribe. A project plugin replays its own project only, `"closed"` when it is not listed. |
-| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`. There is no rate limit and no byte cap. |
+| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`; its `inputLine`, when the fixture sets one, comes back unchanged. There is no rate limit and no byte cap. |
 | `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
 | `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
 | `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). A `storage.worktree` seed goes to the initial active worktree, and is dropped when there is none. |

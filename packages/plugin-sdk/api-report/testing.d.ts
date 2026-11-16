@@ -2058,6 +2058,22 @@ interface PluginArtifactApi {
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
 
+/**
+ * What a terminal's input box held when its screen was read (#16189): nothing,
+ * text drawn as typed, or the CLI's own suggested next prompt, which it styles
+ * apart. Read off the screen's styling, so an observation and never a verdict
+ * on who wrote it; `unknown` for an agent with no declared rule, a screen whose
+ * box wasn't found, or a terminal running no agent.
+ */
+type TerminalInputLineState = "empty" | "typed" | "suggestion" | "unknown";
+interface TerminalInputLine {
+    state: TerminalInputLineState;
+    /** The box's text after the prompt glyph; the suggested text for `suggestion`, `""` for `empty` and `unknown`. */
+    text: string;
+    /** `text` was cut to its first 200 characters (`INPUT_LINE_TEXT_MAX_CHARS`); never sent as `false`. */
+    truncated?: true;
+}
+
 /** The descriptor `host.registerContextProvider` binds an impl to. */
 interface ContextProviderDescriptor {
     /** Must match a `contributes.contextProviders` entry's `id`. */
@@ -3930,6 +3946,14 @@ interface PluginTerminalReadScreenOptions {
  *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
  *   missing terminal. `truncated` is `true` when lines above the returned ones,
  *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ *   `inputLine` says what the agent's input box holds: `empty`, `typed`, or
+ *   `suggestion` (the CLI's own suggested next prompt, which `text` shows as
+ *   ordinary characters), or `unknown` for an agent with no declared rule, a
+ *   box not found, or a terminal running no agent. It is read off the whole
+ *   screen, so it is there even when `lines` stops above the box, and from the
+ *   screen's styling, so it is an observation and never a verdict on who wrote
+ *   the text. The host always sends it; it is optional so mock fixtures written
+ *   before it still type-check.
  * - `exited`: the terminal is still listed but its process has exited.
  * - `not-found`: no terminal this plugin may read has that id. One answer for
  *   an unknown id, one in another project, and one that is not a user terminal.
@@ -3941,6 +3965,7 @@ type PluginTerminalScreenResult = {
     readonly text: string;
     readonly lineCount: number;
     readonly truncated: boolean;
+    readonly inputLine?: TerminalInputLine;
 } | {
     readonly status: "exited";
 } | {

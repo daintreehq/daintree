@@ -1091,6 +1091,7 @@ describe("terminal screen reads", () => {
         text: "Waiting for input",
         lineCount: 1,
         truncated: false,
+        inputLine: { state: "unknown", text: "" },
       });
       expect(consentMock.ensureAllowed).toHaveBeenCalledWith(
         PLUGIN_ID,

@@ -338,6 +338,7 @@ export type {
   PluginTerminalReadScreenOptions,
   PluginTerminalScreenResult,
 } from "./plugin.js";
+export type { TerminalInputLine, TerminalInputLineState } from "./terminalStatus.js";
 
 // ── Handing work to agents (host.agents, host.sendToAgent, drag) ────
 // The drag contract is runtime values a view needs at `dragstart`, so the

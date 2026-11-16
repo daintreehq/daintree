@@ -713,7 +713,9 @@ export function buildObservationHostApi(
           getPtyClient(),
           terminalId,
           boundProjectId,
-          lines
+          lines,
+          null,
+          { withInputLine: true }
         );
         return isBound() ? result : { status: "unavailable" };
       },
