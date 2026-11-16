@@ -267,10 +267,11 @@ export class ProjectPluginController {
   }
 
   /**
-   * Called on every switch into a project, cold or warm. Idempotent: a
+   * Called on a project's first open and whenever `PluginService` decides the
+   * last open no longer holds (a close, a trust change, a manual reload); a
+   * warm switch back into an open project skips it (#17039). Idempotent: a
    * re-entry re-scans the folder and reconciles what is loaded against what is
-   * on disk, which is also how a manual reload and the hot-reload phase will
-   * drive it.
+   * on disk.
    *
    * The scan is deliberately *not* tied to view creation. An LRU eviction
    * destroys a project's renderer while the project stays open, and a plugin
@@ -294,6 +295,33 @@ export class ProjectPluginController {
     );
   }
 
+  /** Whether this project has an entry: opened, and not closed (or swept) since. */
+  isTracking(projectId: string): boolean {
+    return this.entries.has(projectId);
+  }
+
+  /**
+   * Safety net for closes this controller has not been told about yet — the
+   * notification is fire-and-forget, and the project store's own status
+   * reconciliation flips a row to "closed" without routing through one at all.
+   * Sweeping on every project switch, warm ones included, bounds how long a
+   * closed project's plugins can outlive it to one user action.
+   */
+  async sweepClosedProjects(exceptProjectId: string): Promise<void> {
+    for (const trackedId of [...this.entries.keys()]) {
+      if (this.isSweepable(trackedId, exceptProjectId)) await this.onProjectClosed(trackedId);
+    }
+  }
+
+  /** Re-read per project, after the previous close's await, so one reopened meanwhile is kept. */
+  private isSweepable(trackedId: string, exceptProjectId: string): boolean {
+    return (
+      trackedId !== exceptProjectId &&
+      this.entries.has(trackedId) &&
+      this.deps.isProjectClosed(trackedId)
+    );
+  }
+
   private async doOpen(
     projectId: string,
     projectRoot: string,
@@ -303,15 +331,8 @@ export class ProjectPluginController {
     if (this.disposed) return;
     if (this.superseded(projectId, requested, requestedGeneration)) return;
 
-    // Safety net for closes this controller has not been told about yet — the
-    // notification is fire-and-forget, and the project store's own status
-    // reconciliation flips a row to "closed" without routing through one at all.
-    // Sweeping on the next project switch bounds how long a closed project's
-    // plugins can outlive it to one user action.
     for (const trackedId of [...this.entries.keys()]) {
-      if (trackedId !== projectId && this.deps.isProjectClosed(trackedId)) {
-        await this.onProjectClosed(trackedId);
-      }
+      if (this.isSweepable(trackedId, projectId)) await this.onProjectClosed(trackedId);
     }
 
     // The sweep awaits, so re-check before reading a generation off the entry:

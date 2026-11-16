@@ -2402,7 +2402,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
-  it("never CPU-throttles <webview> guests when their host is cached, and resets them on reactivation", async () => {
+  it("never touches <webview> guests on cache or reactivation, and never walks webContents to activate (#17039)", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -2436,12 +2436,14 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       expect(vi.mocked(helper)).not.toHaveBeenCalledWith(guest);
     }
 
-    // Reactivate proj-a — its guest's rate is reset along with the host's.
+    // Reactivating proj-a has no CPU rate to reset, so it must not pay an
+    // O(all webContents) walk on the switch path either.
+    mockGetAllWebContents.mockClear();
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();
 
-    expect(vi.mocked(unthrottleCpuWebContents)).toHaveBeenCalledWith(guest);
-    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+    expect(mockGetAllWebContents).not.toHaveBeenCalled();
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalled();
   });
 });
 

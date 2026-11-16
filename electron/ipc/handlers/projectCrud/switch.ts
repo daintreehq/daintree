@@ -117,7 +117,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // sender's view→project binding can be moved by a concurrent switch in the
       // same window. Throwing here simply discards it, and everything with a side
       // effect the sender couldn't undo still lies further down.
-      await assertProjectRepositoryIntact(project);
+      await assertProjectRepositoryIntact(project, isWarmActivation(operation));
       await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
@@ -239,7 +239,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
     try {
-      await assertProjectRepositoryIntact(project);
+      await assertProjectRepositoryIntact(project, isWarmActivation(operation));
       await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
@@ -444,13 +444,29 @@ function trackOutgoingPersist(projectId: string | null, persist: Promise<void>):
  *   classifier's "not a repository" verdict throws. A dead mount, a permissions
  *   blip or a missing git binary answers `"unknown"` or throws its own code, and
  *   activation proceeds exactly as before rather than prompting to give up a
- *   project's git identity on the strength of a transient failure.
+ *   project's git identity on the strength of a transient failure;
+ * - a warm switch to a view this window already holds reuses a marker seen
+ *   within {@link GIT_MARKER_REUSE_MS} and re-probes it in the background
+ *   instead (#17039). A marker that vanished is dropped from the cache by
+ *   that probe, so the next switch in blocks on the full check again: a
+ *   project already loaded on screen is let back in once, never indefinitely.
  */
-async function assertProjectRepositoryIntact(project: Project): Promise<void> {
+async function assertProjectRepositoryIntact(project: Project, warm = false): Promise<void> {
   if (project.gitBacked === false) return;
   // A project still awaiting its clone has no folder yet by design (#16352).
   if (isAwaitingClone(project)) return;
-  if ((await probeGitMarker(project.path)) !== "missing") return;
+  const verifiedAt = presentGitMarkers.get(project.path);
+  if (warm && verifiedAt !== undefined && Date.now() - verifiedAt < GIT_MARKER_REUSE_MS) {
+    revalidateGitMarker(project.path);
+    return;
+  }
+  const probe = await probeGitMarker(project.path);
+  if (probe === "present") {
+    presentGitMarkers.set(project.path, Date.now());
+    return;
+  }
+  presentGitMarkers.delete(project.path);
+  if (probe !== "missing") return;
 
   const classification = await projectStore.classifyGitBacking(project.path);
   if (classification.gitBacked) return;
@@ -460,6 +476,33 @@ async function assertProjectRepositoryIntact(project: Project): Promise<void> {
     message: `Not a git repository: ${project.path}`,
     context: { projectPath: project.path },
   });
+}
+
+const GIT_MARKER_REUSE_MS = 60_000;
+/** When each project root's `.git` was last seen by a blocking probe. */
+const presentGitMarkers = new Map<string, number>();
+
+/**
+ * Only ever forgets: a background probe that resolves after a newer blocking
+ * one must not re-vouch for a marker that probe already found gone.
+ */
+function revalidateGitMarker(projectPath: string): void {
+  probeGitMarker(projectPath).then(
+    (probe) => {
+      if (probe !== "present") presentGitMarkers.delete(projectPath);
+    },
+    () => presentGitMarkers.delete(projectPath)
+  );
+}
+
+/** The sender's window already holds a live, loaded view of the incoming project. */
+function isWarmActivation(operation: SwitchOperation): boolean {
+  return hasReusableProjectView(operation.projectViewManager, operation.incomingProjectId);
+}
+
+/** Test seam: forget every cached `.git` verdict. */
+export function resetGitMarkerCacheForTesting(): void {
+  presentGitMarkers.clear();
 }
 
 async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
