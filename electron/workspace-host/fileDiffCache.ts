@@ -155,9 +155,12 @@ async function probeValidator(
   } catch {
     return null;
   }
-  const stats = await Promise.all(files.map((path) => statKey(path)));
+  // `commondir` is statted as well as followed: a pointer moved away and back
+  // between two windows names the same dir both times, but never stats the same.
+  const watched = [...files, join(gitDir, "commondir")];
+  const stats = await Promise.all(watched.map((path) => statKey(path)));
   if (stats.includes(null)) return null;
-  return [discovery, ...files.map((path, i) => `${path}=${stats[i]}`)].join("|");
+  return [discovery, ...watched.map((path, i) => `${path}=${stats[i]}`)].join("|");
 }
 
 /** The previous probe, when the filesystem shows nothing it read has changed. */

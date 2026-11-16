@@ -274,20 +274,31 @@ describe("getFileDiff paging over a real repo", () => {
     expect(probeSpawns - before).toBe(3);
   });
 
-  it("never reuses a probe whose config moved between its two reads", async () => {
-    const extra = path.join(tmp, "extra.gitconfig");
-    afterNext = { command: "var", run: () => git(repo, "config", "include.path", extra) };
-    const first = await page("a.txt", 0);
-    expect(git(repo, "config", "include.path").trim()).toBe(extra);
+  it.skipIf(!gitListsConfigFiles)(
+    "never reuses a probe whose config moved between its two reads",
+    async () => {
+      const extra = path.join(tmp, "extra.gitconfig");
+      afterNext = { command: "var", run: () => git(repo, "config", "include.path", extra) };
+      const set = vi.spyOn(FileDiffCache.prototype, "set");
+      let first: DiffResult;
+      try {
+        first = await page("a.txt", 0);
+        // The two reads disagreed, so no key came out of that probe to cache under.
+        expect(set).not.toHaveBeenCalled();
+      } finally {
+        set.mockRestore();
+      }
+      expect(git(repo, "config", "include.path").trim()).toBe(extra);
 
-    // The include arrived after `var -l` answered: no window may lean on that
-    // answer, so each probes again, and an edit to the included file shows.
-    const before = probeSpawns;
-    const second = await page("a.txt", first.nextOffset!);
-    expect(probeSpawns - before).toBe(2);
-    writeFileSync(extra, "[diff]\n\tnoprefix = true\n");
-    await expectRestMatches("a.txt", second.nextOffset!, expectedDiff("a.txt"));
-  });
+      // The include arrived after `var -l` answered: no window may lean on that
+      // answer, so each probes again, and an edit to the included file shows.
+      const before = probeSpawns;
+      const second = await page("a.txt", first.nextOffset!);
+      expect(probeSpawns - before).toBe(2);
+      writeFileSync(extra, "[diff]\n\tnoprefix = true\n");
+      await expectRestMatches("a.txt", second.nextOffset!, expectedDiff("a.txt"));
+    }
+  );
 
   it("sends what the cache-filling pass found when the file changes between passes", async () => {
     afterNext = {
@@ -342,15 +353,18 @@ describe("getFileDiff paging over a real repo", () => {
     await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
   });
 
-  it("recomputes after a config file is rewritten and put back", async () => {
-    // Same effective config, so the same hash: only the file's stats can tell
-    // that a diff computed in between may have read something else.
-    const { offset } = await continuationAfter("a.txt", () => {
-      git(repo, "config", "diff.noprefix", "true");
-      git(repo, "config", "--unset", "diff.noprefix");
-    });
-    await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
-  });
+  it.skipIf(!gitListsConfigFiles)(
+    "recomputes after a config file is rewritten and put back",
+    async () => {
+      // Same effective config, so the same hash: only the file's stats can tell
+      // that a diff computed in between may have read something else.
+      const { offset } = await continuationAfter("a.txt", () => {
+        git(repo, "config", "diff.noprefix", "true");
+        git(repo, "config", "--unset", "diff.noprefix");
+      });
+      await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
+    }
+  );
 
   it.skipIf(!gitListsConfigFiles || process.platform === "win32")(
     "reuses its probe through a symlinked cwd whose gitfile is relative",
