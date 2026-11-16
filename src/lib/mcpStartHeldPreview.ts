@@ -10,6 +10,9 @@
  */
 
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
+import { boundStartHeldTitle } from "@/lib/mcpConfirmSubjects";
+
+export { boundStartHeldTitle, MAX_START_HELD_SUBJECT_CHARS } from "@/lib/mcpConfirmSubjects";
 
 export type StartHeldChoice = "resume" | "fresh";
 
@@ -18,22 +21,6 @@ export interface StartHeldPaneSnapshot {
   title: string | undefined;
   reason: string;
   sessionId: string | undefined;
-}
-
-const MAX_TITLE_CHARS = 200;
-/** A dialog subject is one heading line, so it gets a tighter bound than the card. */
-export const MAX_START_HELD_SUBJECT_CHARS = 80;
-
-/**
- * One line, bounded by code point. The title is free text an agent can set, and
- * a line terminator inside it would let the text after it start a line of its
- * own, caution marker included; unbounded, it would push the dialog's buttons
- * out of reach as its subject.
- */
-export function boundStartHeldTitle(title: string, maxChars = MAX_TITLE_CHARS): string {
-  const flat = title.replace(/[\r\n]+/g, " ");
-  const points = Array.from(flat);
-  return points.length > maxChars ? `${points.slice(0, maxChars - 1).join("")}…` : flat;
 }
 
 export function formatStartHeldPreviewLines(

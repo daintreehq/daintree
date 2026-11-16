@@ -14,8 +14,6 @@ import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfir
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
-  buildWorktreeDeletePreview,
-  fetchWorktreeTeardownPreview,
   formatSubmodulePreviewLines,
   formatTeardownPreviewLines,
   formatWorktreeDeletePreviewLines,
@@ -25,19 +23,12 @@ import {
   worktreeDeleteRefusedBy,
   type WorktreeDeletePreviewOutcome,
   type WorktreeSubmoduleDeleteBlock,
-} from "@/components/Worktree/worktreeDeletePreview";
+} from "@shared/utils/worktreeDeletePreview";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
-import {
-  buildGitRemoteOperationPreview,
-  formatGitRemoteOperationPreviewLines,
-} from "@/components/Git/gitRemoteOperationPreview";
-import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
-import {
-  formatForgeCreateIssuePreviewLines,
-  formatForgeIssueCommentPreviewLines,
-  type ForgeCreateIssuePreview,
-  type ForgeIssueCommentPreview,
+import type {
+  ForgeCreateIssuePreview,
+  ForgeIssueCommentPreview,
 } from "@/components/Forge/forgeWritePreview";
 import {
   readDispatchRecipeId,
@@ -45,17 +36,13 @@ import {
   readDispatchTerminalCwd,
   TERMINAL_LAUNCH_ACTION_ID,
 } from "@/services/actions/effectiveDanger";
+import type { TerminalLaunchPreview } from "@/lib/mcpTerminalLaunchPreview";
+import type { StartHeldChoice, StartHeldPaneSnapshot } from "@/lib/mcpStartHeldPreview";
 import {
-  formatTerminalLaunchPreviewLines,
-  type TerminalLaunchPreview,
-} from "@/lib/mcpTerminalLaunchPreview";
-import {
+  agentPresetPreviewSubject,
   boundStartHeldTitle,
-  formatStartHeldPreviewLines,
   MAX_START_HELD_SUBJECT_CHARS,
-  type StartHeldChoice,
-  type StartHeldPaneSnapshot,
-} from "@/lib/mcpStartHeldPreview";
+} from "@/lib/mcpConfirmSubjects";
 import { useRecipeStore } from "@/store/recipeStore";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
@@ -84,22 +71,23 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { MCP_PREVIEW_CAUTION_PREFIX } from "@shared/utils/mcpPreviewLines";
 import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 import {
-  agentPresetMutationFingerprint,
   isAgentPresetMutationAction,
-  planAgentPresetMutation,
-  type AgentPresetMutation,
   type AgentPresetMutationActionId,
-} from "@/services/actions/definitions/agentPresetMutation";
-import { readPresetWriteSources } from "@/services/actions/definitions/agentPresetSources";
+} from "@/services/actions/definitions/agentPresetMutationIds";
+import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import {
-  agentPresetPreviewSubject,
-  formatAgentPresetPreviewLines,
-} from "@/lib/mcpAgentPresetPreview";
+
+/**
+ * What the approver reads when a preview could not be built at all, such as a
+ * preview module that failed to load. Empty lines would read as "nothing to
+ * show"; this says the content is unknown.
+ */
+const PREVIEW_UNAVAILABLE_LINE = `${MCP_PREVIEW_CAUTION_PREFIX}The preview could not be loaded, so what this will change could not be verified.`;
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -361,12 +349,22 @@ const PRESET_CHANGED_RESULT: ActionDispatchResult = {
   },
 };
 
-/** Plan a preset write against this view's stores, for its preview or its refusal. */
-function planPresetWriteHere(
+/**
+ * Plan a preset write against this view's stores, for its preview or its refusal.
+ *
+ * The planner and its zod schemas load on the first preset write, never at
+ * boot. The sources are read after the load, so a plan always reflects the
+ * stores at the moment it is made.
+ */
+async function planPresetWriteHere(
   actionId: AgentPresetMutationActionId,
   args: unknown,
   context: ActionContext | undefined
 ) {
+  const [{ planAgentPresetMutation }, { readPresetWriteSources }] = await Promise.all([
+    import("@/services/actions/definitions/agentPresetMutation"),
+    import("@/services/actions/definitions/agentPresetSources"),
+  ]);
   // Whole-object precedence, as `ActionService` applies a pinned context.
   const projectId = (context ?? actionService.getContext()).projectId;
   return planAgentPresetMutation(
@@ -394,7 +392,7 @@ async function presetWriteRefusal(
     .getState()
     .initialize()
     .catch(() => {});
-  const plan = planPresetWriteHere(actionId, args, context);
+  const plan = await planPresetWriteHere(actionId, args, context);
   return plan.ok
     ? undefined
     : { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } };
@@ -725,8 +723,27 @@ function resolvePreviewWorktreePath(
 }
 
 /**
+ * The preview target for a preset write. Async because planning loads the
+ * planner, which stays off the boot path; every other kind resolves through
+ * {@link resolveMcpConfirmPreviewTarget}, which returns undefined for a preset
+ * write.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export async function resolveMcpPresetConfirmPreviewTarget(
+  actionId: string,
+  args: unknown,
+  context: ActionContext | undefined
+): Promise<McpConfirmPreviewTarget | undefined> {
+  if (!isAgentPresetMutationAction(actionId)) return undefined;
+  const plan = await planPresetWriteHere(actionId, args, context);
+  return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
+}
+
+/**
  * Resolve what this dispatch should preview, or `undefined` when it has no
- * preview. Called ONCE per dispatch: the result drives `previewPending`, the
+ * preview. A preset write is the exception: it resolves through
+ * {@link resolveMcpPresetConfirmPreviewTarget}. Called ONCE per dispatch: the result drives `previewPending`, the
  * fetch, the modal heading, and — for git — the cwd the approved dispatch is
  * pinned to, so all four can never disagree.
  *
@@ -744,10 +761,6 @@ export function resolveMcpConfirmPreviewTarget(
   if (actionId === "terminal.startHeld") {
     const target = startHeldArgs(args);
     return target === undefined ? undefined : { kind: "terminalStartHeld", ...target };
-  }
-  if (isAgentPresetMutationAction(actionId)) {
-    const plan = planPresetWriteHere(actionId, args, context);
-    return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
   }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
@@ -1002,6 +1015,8 @@ export async function buildMcpConfirmPreview(
   // the modal opens. There is nothing to fetch and nothing to patch in later.
   if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return { lines: [] };
   if (target.kind === "recipe") {
+    const { formatRecipePreviewLines } =
+      await import("@/components/TerminalRecipe/recipeConfirmPreview");
     // Renderer state, so no fetch — but re-read here rather than closing over
     // the resolve-time recipe so the lines reflect the store at modal-open.
     const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId) ?? null;
@@ -1026,6 +1041,8 @@ export async function buildMcpConfirmPreview(
     // The teardown read rides alongside: the delete runs the project's
     // teardown before removing the tree, and an agent-initiated delete owes
     // the approver the same disclosure the local dialog makes.
+    const { buildWorktreeDeletePreview, fetchWorktreeTeardownPreview } =
+      await import("@/components/Worktree/worktreeDeletePreview");
     const [outcome, teardown] = await Promise.all([
       settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.worktreeId)),
       fetchWorktreeTeardownPreview(target.worktreeId),
@@ -1068,23 +1085,32 @@ export async function buildMcpConfirmPreview(
   // Synchronous, like `recipe`: the content is already in hand, so there is
   // nothing to fetch and nothing that could fail mid-modal.
   if (target.kind === "forgeCreateIssue") {
+    const { formatForgeCreateIssuePreviewLines } =
+      await import("@/components/Forge/forgeWritePreview");
     return { lines: formatForgeCreateIssuePreviewLines(target) };
   }
   if (target.kind === "forgeAddIssueComment") {
+    const { formatForgeIssueCommentPreviewLines } =
+      await import("@/components/Forge/forgeWritePreview");
     return { lines: formatForgeIssueCommentPreviewLines(target) };
   }
   if (target.kind === "terminalLaunch") {
+    const { formatTerminalLaunchPreviewLines } = await import("@/lib/mcpTerminalLaunchPreview");
     return { lines: formatTerminalLaunchPreviewLines(target) };
   }
   if (target.kind === "terminalStartHeld") {
+    const { formatStartHeldPreviewLines } = await import("@/lib/mcpStartHeldPreview");
     return {
       lines: formatStartHeldPreviewLines(target.start, readStartHeldPane(target.terminalId)),
     };
   }
   if (target.kind === "agentPreset") {
+    const { formatAgentPresetPreviewLines } = await import("@/lib/mcpAgentPresetPreview");
     return { lines: formatAgentPresetPreviewLines(target.mutation) };
   }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
+  const { buildGitRemoteOperationPreview, formatGitRemoteOperationPreviewLines } =
+    await import("@/components/Git/gitRemoteOperationPreview");
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
     return {
@@ -1149,8 +1175,14 @@ export function recheckWorktreeDeleteOutcome(
   // Clear on the winner either way: the loser of a race stays pending, and a
   // live timer holding the renderer awake for the rest of the budget after the
   // fetch already answered is a handle nobody asked for.
+  // The module load is inside the race, so a slow or failed load spends this
+  // budget and settles as an unread status rather than outliving it.
+  const read = import("@/components/Worktree/worktreeDeletePreview").then(
+    ({ buildWorktreeDeletePreview }) =>
+      settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId))
+  );
   return Promise.race([
-    settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId)),
+    read.catch((): WorktreeDeletePreviewOutcome => ({ state: "failed", submodules: null })),
     expired,
   ]).finally(() => clearTimeout(timer));
 }
@@ -1532,6 +1564,17 @@ export function useMcpBridge(): void {
                 return;
               }
             }
+            // Planned before the request is tracked, so a view torn down while
+            // the planner loads leaves nothing behind.
+            let presetTarget: McpConfirmPreviewTarget | undefined;
+            if (
+              definition &&
+              (definition.danger === "confirm" || approvalOnly === true) &&
+              isAgentPresetMutationAction(actionId)
+            ) {
+              presetTarget = await resolveMcpPresetConfirmPreviewTarget(actionId, args, context);
+              if (disposed) return;
+            }
             if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal
@@ -1545,7 +1588,9 @@ export function useMcpBridge(): void {
               const closeApproval = approvalOnly === true && approvalReason === "protected-close";
               previewTarget = closeApproval
                 ? closeApprovalPreviewTarget(args)
-                : resolveMcpConfirmPreviewTarget(actionId, args, context);
+                : isAgentPresetMutationAction(actionId)
+                  ? presetTarget
+                  : resolveMcpConfirmPreviewTarget(actionId, args, context);
               // A call another machine runs itself with no view of its own
               // open (#13501) arrives with that machine's preview, read where
               // the call acts. Shown as given: this view's stores know nothing
@@ -1574,6 +1619,11 @@ export function useMcpBridge(): void {
               // confirmation has settled: the evidence an approval is checked
               // against must be the answer the approver was last shown.
               let previewGeneration = 0;
+              // Whether any fetch landed. A preset write is approved only on a
+              // preview its approver actually read: its argument summary
+              // collapses `env` to `<object>`, so a preview that never loaded
+              // leaves nothing to have consented to.
+              let previewDelivered = false;
               let lastPreview: McpConfirmPreviewPatch | undefined;
               const runPreview = (target: McpConfirmPreviewTarget) => {
                 const generation = ++previewGeneration;
@@ -1587,6 +1637,7 @@ export function useMcpBridge(): void {
                       approvedPush: shown,
                     }) => {
                       if (disposed || generation !== previewGeneration) return;
+                      previewDelivered = true;
                       approvedTypedNameTarget = typedNameTarget;
                       approvedRecipeRun = offered;
                       approvedPush = shown;
@@ -1607,7 +1658,7 @@ export function useMcpBridge(): void {
                     approvedPush = undefined;
                     useMcpConfirmStore
                       .getState()
-                      .setPreview(requestId, lastPreview ?? { lines: [] });
+                      .setPreview(requestId, lastPreview ?? { lines: [PREVIEW_UNAVAILABLE_LINE] });
                   });
               };
               if (hasAsyncPreview && previewTarget !== undefined) runPreview(previewTarget);
@@ -1848,8 +1899,14 @@ export function useMcpBridge(): void {
               // check: with no preview, the approval covers no change.
               if (isAgentPresetMutationAction(actionId)) {
                 const shown =
-                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
-                const now = planPresetWriteHere(actionId, args, context);
+                  previewTarget?.kind === "agentPreset" && (previewDelivered || !hasAsyncPreview)
+                    ? previewTarget.mutation
+                    : undefined;
+                const [{ agentPresetMutationFingerprint }, now] = await Promise.all([
+                  import("@/services/actions/definitions/agentPresetMutation"),
+                  planPresetWriteHere(actionId, args, context),
+                ]);
+                if (disposed) return;
                 const refusal: ActionDispatchResult | undefined = !now.ok
                   ? { ok: false, error: { code: "VALIDATION_ERROR", message: now.message } }
                   : shown === undefined ||

@@ -24,9 +24,6 @@ import { isValidEnvKey } from "@shared/utils/envVars";
  */
 const INDENT = "  ";
 
-/** A dialog subject is one heading line. */
-const MAX_SUBJECT_CHARS = 80;
-
 /**
  * Caller text as a quoted literal: whitespace, quotes and control characters
  * show, an empty string reads as `""` rather than nothing, and a line break
@@ -224,17 +221,4 @@ export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): st
     );
   }
   return lines;
-}
-
-/** The preset a write names, for the dialog title: one line, bounded. */
-export function agentPresetPreviewSubject(mutation: AgentPresetMutation): string | undefined {
-  const name = mutation.operation === "update" ? mutation.before.name : mutation.preset.name;
-  if (typeof name !== "string") return undefined;
-  // eslint-disable-next-line no-control-regex
-  const flat = name.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim();
-  if (flat.length === 0) return undefined;
-  const points = Array.from(flat);
-  return points.length > MAX_SUBJECT_CHARS
-    ? `${points.slice(0, MAX_SUBJECT_CHARS - 1).join("")}…`
-    : flat;
 }

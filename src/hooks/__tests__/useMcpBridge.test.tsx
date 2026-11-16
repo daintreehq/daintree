@@ -162,6 +162,15 @@ const MAIN_PUSH_REVIEW = {
   destination: { remote: "origin", branch: "main" },
 };
 
+// The recipe formatter loads on demand, so its preview lands a few ticks after
+// the dispatch rather than within two microtasks.
+const recipePreviewsSettled = () =>
+  vi.waitFor(() => {
+    const { current, queue } = useMcpConfirmStore.getState();
+    expect(current).not.toBeNull();
+    expect([current, ...queue].every((item) => item?.previewPending !== true)).toBe(true);
+  });
+
 describe("useMcpBridge", () => {
   let manifestHandler: ((requestId: string) => void) | undefined;
   let dispatchHandler:
@@ -3045,8 +3054,7 @@ describe("useMcpBridge", () => {
       args: { recipeId: "shadowed" },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await recipePreviewsSettled();
     const preview = (useMcpConfirmStore.getState().current?.preview ?? []).join("\n");
     expect(preview).toContain("new");
     expect(preview).not.toContain("old");
@@ -3107,8 +3115,7 @@ describe("useMcpBridge", () => {
         actionId: "recipe.run",
         args: { recipeId: "recipe-1" },
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await recipePreviewsSettled();
 
       // What the approver reads and what the approval authorizes are the same
       // number, by construction — both come from the one resolved recipe.
@@ -3148,8 +3155,7 @@ describe("useMcpBridge", () => {
           actionId,
           args: { recipeId: "recipe-1" },
         });
-        await Promise.resolve();
-        await Promise.resolve();
+        await recipePreviewsSettled();
         useMcpConfirmStore.getState().resolveCurrent("approved");
         await dispatched;
 
@@ -3190,8 +3196,7 @@ describe("useMcpBridge", () => {
         actionId: "recipe.run",
         args: { recipeId: "recipe-2" },
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await recipePreviewsSettled();
 
       // The queue promotes one at a time; approve both in turn.
       useMcpConfirmStore.getState().resolveCurrent("approved");

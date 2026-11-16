@@ -11,10 +11,12 @@ import type { MaximizeTarget } from "@/store/slices/terminalFocusSlice";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
-import { requestLayoutApplyConfirmation } from "@/store/layoutApplyConfirmStore";
+import {
+  watchLayoutApplyCancellation,
+  requestLayoutApplyConfirmation,
+} from "@/store/layoutApplyConfirmStore";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
-import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
@@ -359,6 +361,8 @@ async function applyResolved(
   return { status: "applied", panelIds: arranged.flatMap(({ ids }) => ids), failures };
 }
 
+type RecipePreviewModule = typeof import("@/components/TerminalRecipe/recipeConfirmPreview");
+
 /**
  * Apply a plugin layout (#13780): open or reuse each listed panel, browser page
  * and recipe, then place, group and maximize them. Additive — a panel the
@@ -385,13 +389,28 @@ export async function applyPluginLayout(
   const approvedDigests = new Map(
     recipes.map((recipe) => [recipe.id, recipeApprovalDigest(recipe.terminals)])
   );
+  // Loaded only once a recipe needs confirming. `recipes` is the snapshot the
+  // digests above were taken from, so the lines and the approval still agree.
+  // A withdrawal during the load had no request to decline, so it is honoured
+  // here.
+  // Released and read in the continuation that follows the load, with the
+  // request raised in that same one: any gap would let a cancellation land with
+  // neither a watch nor a request to catch it.
+  const watch = watchLayoutApplyCancellation(layout.id);
+  let preview: RecipePreviewModule;
+  try {
+    preview = await import("@/components/TerminalRecipe/recipeConfirmPreview");
+  } finally {
+    watch.release();
+  }
+  if (watch.cancelled) return { status: "cancelled" };
   const approval = requestLayoutApplyConfirmation({
     layoutId: layout.id,
     layoutName: layout.name,
     pluginName: layout.pluginName,
     previewLines: recipes.flatMap((recipe, index) => [
       ...(index > 0 ? [""] : []),
-      ...formatRecipePreviewLines(recipe, { spawns: true }),
+      ...preview.formatRecipePreviewLines(recipe, { spawns: true }),
     ]),
   });
 

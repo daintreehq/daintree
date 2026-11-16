@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { isCautionPreviewLine } from "@/lib/mcpPreviewLines";
-import { agentPresetPreviewSubject, formatAgentPresetPreviewLines } from "../mcpAgentPresetPreview";
+import { formatAgentPresetPreviewLines } from "../mcpAgentPresetPreview";
+import { agentPresetPreviewSubject } from "../mcpConfirmSubjects";
 
 const TOKEN = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
 const MASKED_TOKEN = `••••••••${TOKEN.slice(-4)}`;
