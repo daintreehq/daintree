@@ -1,10 +1,26 @@
 import { z } from "zod";
+import type { ActionContext } from "@shared/types/actions";
 import type { ActionRegistry } from "../actionTypes";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import {
+  getLoadedVoiceRecordingService,
+  loadVoiceRecordingService,
+  takePendingVoiceShortcutPress,
+} from "@/services/voiceRecordingRuntime";
+import { resolveDictationTarget } from "@/services/voiceDictationTarget";
 import { usePanelStore } from "@/store/panelStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
+
+// The service loads on first use; a voice key pressed while it couldn't yet
+// listen is handed to it, so a hold still ends on release.
+async function voiceForKey(ctx: ActionContext | undefined) {
+  const service = await loadVoiceRecordingService();
+  if (ctx?.dispatchSource === "keybinding") {
+    service.adoptShortcutPress(takePendingVoiceShortcutPress());
+  }
+  return service;
+}
 
 const lockTargetArgsSchema = z.object({ panelId: z.string().optional() });
 const recallRecentTargetArgsSchema = z.object({ panelId: z.string() });
@@ -23,8 +39,9 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     scope: "renderer",
     keywords: ["dictate", "mic", "speech"],
     run: async (_args: unknown, ctx) => {
+      const service = await voiceForKey(ctx);
       // Only the key itself takes the person back to a dictation it stops (#14791).
-      await voiceRecordingService.toggleFocusedPanel({
+      await service.toggleFocusedPanel({
         returnToTarget: ctx?.dispatchSource === "keybinding",
       });
     },
@@ -39,8 +56,8 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "speech", "assistant"],
-    run: async () => {
-      await voiceRecordingService.toggleAssistant();
+    run: async (_args: unknown, ctx) => {
+      await (await voiceForKey(ctx)).toggleAssistant();
     },
   }));
 
@@ -56,8 +73,8 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "speech", "rewrite", "rephrase", "edit", "command"],
-    run: async () => {
-      await voiceRecordingService.rewriteSelection();
+    run: async (_args: unknown, ctx) => {
+      await (await voiceForKey(ctx)).rewriteSelection();
     },
   }));
 
@@ -71,7 +88,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     scope: "renderer",
     keywords: ["pause", "resume", "dictate", "mic", "speech"],
     run: async () => {
-      voiceRecordingService.togglePause();
+      (await loadVoiceRecordingService()).togglePause();
     },
   }));
 
@@ -87,7 +104,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     scope: "renderer",
     keywords: ["dictate", "mic", "speech", "submit", "send", "stop"],
     run: async () => {
-      await voiceRecordingService.stopAndSend();
+      await (await loadVoiceRecordingService()).stopAndSend();
     },
   }));
 
@@ -117,7 +134,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
         return;
       }
       // Only a pane whose composer can show the words (#14955).
-      const target = voiceRecordingService.getDictationTarget(requestedId);
+      const target = resolveDictationTarget(requestedId);
       if (!target) {
         const message = "Only an agent terminal's input can take dictation.";
         useVoiceRecordingStore.getState().setLastError({
@@ -175,10 +192,10 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     run: async (args: unknown) => {
       const parsed = recallRecentTargetArgsSchema.safeParse(args);
       if (!parsed.success) return;
-      const target = voiceRecordingService.getDictationTarget(parsed.data.panelId);
+      const target = resolveDictationTarget(parsed.data.panelId);
       if (!target) {
         // Only a start needs the composer: one already running there still stops.
-        const stopping = voiceRecordingService.stopPanelDictation(parsed.data.panelId);
+        const stopping = getLoadedVoiceRecordingService()?.stopPanelDictation(parsed.data.panelId);
         if (stopping) {
           await stopping;
           return;
@@ -190,7 +207,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
         });
         return;
       }
-      await voiceRecordingService.toggle(target);
+      await (await loadVoiceRecordingService()).toggle(target);
     },
   }));
 

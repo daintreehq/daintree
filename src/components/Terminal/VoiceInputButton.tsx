@@ -7,7 +7,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { VOICE_ORBIT_MIN_OPACITY } from "@/utils/terminalTheme";
 import { useVoiceRecordingStore, type CanopyReplyRow } from "@/store/voiceRecordingStore";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { withVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import type { VoiceInputError } from "@shared/types";
 import {
   COMPOSER_CONTROL_FOCUS_CLASS,
@@ -252,11 +252,11 @@ export function VoiceInputButton({
     // rather than a stop. The dictation key stops and keeps the text; Escape
     // (handled by the service) cancels and discards it.
     if (isPaused) {
-      voiceRecordingService.togglePause();
+      withVoiceRecordingService((voice) => voice.togglePause());
       return;
     }
 
-    void voiceRecordingService.toggle({
+    const target = {
       panelId,
       panelTitle,
       projectId,
@@ -267,7 +267,8 @@ export function VoiceInputButton({
       ...(terminalId !== undefined ? { terminalId } : {}),
       ...(otherHostId !== undefined ? { otherHostId } : {}),
       ...(canopyRow !== undefined ? { canopyRow } : {}),
-    });
+    };
+    withVoiceRecordingService((voice) => voice.toggle(target));
   }, [
     disabled,
     blockedWhenDisabled,

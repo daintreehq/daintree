@@ -353,8 +353,8 @@ describe("Toolbar keyboard navigation — issue #2814", () => {
       expect(source).toMatch(/<DockLaunchButton[\s\S]*?data-toolbar-item=""/);
     });
 
-    it("passes data-toolbar-item to VoiceRecordingToolbarButton", () => {
-      expect(source).toMatch(/<VoiceRecordingToolbarButton[\s\S]*?data-toolbar-item=""/);
+    it("passes data-toolbar-item to the voice recording slot", () => {
+      expect(source).toMatch(/<VoiceRecordingToolbarSlot[\s\S]*?data-toolbar-item=""/);
     });
 
     it("project switcher trigger has data-toolbar-item", () => {

@@ -2,13 +2,16 @@ import { useEffect, useState } from "react";
 import { useHostList } from "@/components/Hosts/hostList";
 import { usePanelStore } from "@/store/panelStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { getLoadedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { buildOwnVoiceSessionDetails } from "@/services/ownVoiceSessionDetails";
 import { VoiceSessionPanel } from "./VoiceSessionPanel";
 
 const CLOCK_READ_INTERVAL_MS = 1000;
 
 const readLevel = () => useVoiceRecordingStore.getState().audioLevel;
+// Shown only while this view's session runs, so the service is loaded.
+const readSessionClock = () => getLoadedVoiceRecordingService()?.getSessionClock() ?? null;
+const readCanSend = () => getLoadedVoiceRecordingService()?.canSendActiveSession() ?? false;
 
 /**
  * The session panel for the dictation this view owns, fed from its store and
@@ -45,15 +48,15 @@ export function OwnVoiceSessionPanel({
   );
   const panel = usePanelStore((state) => (target ? state.panelsById[target.panelId] : undefined));
   const { hosts } = useHostList();
-  const [clock, setClock] = useState(() => voiceRecordingService.getSessionClock());
+  const [clock, setClock] = useState(readSessionClock);
   // Whether a composer is mounted to send from, which nothing announces: read
   // with the clock.
-  const [canSend, setCanSend] = useState(() => voiceRecordingService.canSendActiveSession());
+  const [canSend, setCanSend] = useState(readCanSend);
 
   useEffect(() => {
     const read = () => {
-      setClock(voiceRecordingService.getSessionClock());
-      setCanSend(voiceRecordingService.canSendActiveSession());
+      setClock(readSessionClock());
+      setCanSend(readCanSend());
     };
     const interval = setInterval(read, CLOCK_READ_INTERVAL_MS);
     const unsubscribe = useVoiceRecordingStore.subscribe((state, prev) => {

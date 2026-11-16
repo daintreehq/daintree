@@ -122,7 +122,7 @@ import "@/registry/builtinPluginRenderers";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
-import { voiceRecordingService } from "./services/VoiceRecordingService";
+import { startVoiceRecordingRuntime } from "./services/voiceRecordingRuntime";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
 
@@ -457,9 +457,7 @@ function AppInner() {
   // cancelled, and holds typing back until it lands.
   usePendingHostSwitchSync();
 
-  useEffect(() => {
-    voiceRecordingService.initialize();
-  }, []);
+  useEffect(() => startVoiceRecordingRuntime(), []);
 
   useFileDropGuard();
 

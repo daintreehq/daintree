@@ -112,7 +112,7 @@ import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { LazyProjectIdentityEditor, LazyProjectSwitcherPalette } from "@/lazyPanels";
-import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { VoiceRecordingToolbarSlot } from "./VoiceRecordingToolbarSlot";
 import { ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
 import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
@@ -1034,9 +1034,9 @@ export function Toolbar({
       },
       "voice-recording": {
         // Slot is always available so the right-aligned items keep a stable
-        // footprint when a session starts/stops (#8176). The button itself returns
-        // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
-        render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
+        // footprint when a session starts/stops (#8176). The slot returns an
+        // invisible placeholder when inactive (mirrors DevServerPlaceholder).
+        render: () => <VoiceRecordingToolbarSlot key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
       },
       "forge-stats": {
