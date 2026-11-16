@@ -15,6 +15,7 @@ vi.mock("@/clients", () => ({
 
 import {
   cleanupProjectSettingsStore,
+  patchCachedProjectPortalLinks,
   patchCachedProjectSettings,
   prePopulateProjectSettings,
   useProjectSettingsStore,
@@ -333,6 +334,62 @@ describe("projectSettingsStore", () => {
       runCommands: [],
       devServerCommand: "pnpm dev",
       browserAllowedHosts: ["example.com"],
+    });
+  });
+
+  describe("Portal links (#17091)", () => {
+    const staging = { id: "a", title: "Staging", url: "https://staging.example.com/" };
+
+    it("keeps the cached links through settings saved from a copy without them", () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [staging] },
+      });
+
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+      });
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        portalLinks: [],
+        devServerCommand: "pnpm dev",
+      });
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+        portalLinks: [staging],
+      });
+    });
+
+    it("replaces the cached links with the list main saved, even an empty one", () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "dev", portalLinks: [staging] },
+      });
+
+      patchCachedProjectPortalLinks("project-a", []);
+      patchCachedProjectPortalLinks("project-b", [staging]);
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        portalLinks: [],
+      });
+    });
+
+    it("applies links saved during the initial load once that load lands", async () => {
+      const settingsRead = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(settingsRead.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      settingsRead.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
     });
   });
 });

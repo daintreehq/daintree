@@ -121,6 +121,16 @@ describe("toNonRendererOwnedTools", () => {
     }
   });
 
+  it("offers the project link tools to the Assistant at core, and to no worker pane (#17091)", () => {
+    const linkTools = CORE_TIER_TOOLS.filter((id) => id.startsWith("portal.projectLinks."));
+    expect(linkTools.length).toBeGreaterThan(0);
+    for (const tier of HELP_ASSISTANT_TIERS) {
+      const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);
+      expect(projected.filter((id) => id.startsWith("portal.")), tier).toEqual([]);
+    }
+    expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => id.startsWith("portal."))).toEqual([]);
+  });
+
   it("gives other origins only the owned worktree delete at core", () => {
     const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE.core);
     expect(projected).toContain("worktree.deleteOwned");

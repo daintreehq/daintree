@@ -1684,6 +1684,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.moveTerminalsToAccount.codex": {},
       "agent.moveTerminalsToAccount.kimi": {},
       "agent.moveTerminalsToAccount.interpreter": {},
+      "portal.projectLinks.add": { title: "Staging", url: "https://staging.example.com" },
+      "portal.projectLinks.update": { id: "l-placeholder", title: "Staging" },
+      "portal.projectLinks.remove": { id: "l-placeholder" },
     };
 
     // terminal.resendLastMessage gates on `isEnabled`, which runs before the
