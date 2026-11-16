@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Project } from "@shared/types";
 
 const projectClientMock = {
   getAll: vi.fn().mockResolvedValue([]),
@@ -215,5 +216,52 @@ describe("panel persistence workspace id (#11484)", () => {
     });
 
     expect(getter()).toBeUndefined();
+  });
+});
+
+describe("project-storage writes (#17055)", () => {
+  it("leaves storage untouched when only transient fields change, and still strips lastKnownStats", async () => {
+    const backing = new Map<string, string>();
+    const setItem = vi.fn((key: string, value: string) => {
+      backing.set(key, value);
+    });
+    const getItem = vi.fn((key: string) => backing.get(key) ?? null);
+    installLocalStorage(createStorageMock({ getItem, setItem }));
+    const { useProjectStore } = await import("../projectStore");
+    const project: Project = {
+      id: "p1",
+      path: "/repo/p1",
+      name: "P1",
+      emoji: "🌲",
+      lastOpened: 1,
+      lastKnownStats: {
+        commitCount: 3,
+        issueCount: null,
+        prCount: null,
+        providerId: null,
+        lastUpdated: null,
+      },
+    };
+    useProjectStore.setState({ projects: [project] });
+    const persisted = () => JSON.parse(backing.get("project-storage")!).state.projects;
+    expect(persisted()).toEqual([
+      { id: "p1", path: "/repo/p1", name: "P1", emoji: "🌲", lastOpened: 1 },
+    ]);
+
+    setItem.mockClear();
+    getItem.mockClear();
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      useProjectStore.setState({ isLoading: true });
+      useProjectStore.setState({ isLoading: false, error: "Couldn't load projects" });
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(setItem).not.toHaveBeenCalled();
+    expect(getItem).not.toHaveBeenCalled();
+
+    useProjectStore.setState({ projects: [{ ...project, name: "Renamed" }] });
+    expect(persisted()[0].name).toBe("Renamed");
   });
 });

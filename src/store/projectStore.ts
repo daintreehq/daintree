@@ -25,7 +25,7 @@ import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { ASSISTANT_SLOTS, assistantSlotKey } from "../../shared/config/assistantSlots";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createSafeJSONStorage, stableProjection } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
 import { draftInputPersistence } from "./persistence/draftInputPersistence";
@@ -1813,6 +1813,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 });
 
+// Rebuilt only when `projects` changes, so sets of transient fields (`isLoading`,
+// `error`) leave the persisted slice unchanged and skip serialization.
+const persistedProjects = stableProjection((projects: Project[]) =>
+  projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest)
+);
+
 export const useProjectStore = create<ProjectState>()(
   subscribeWithSelector(
     persist(
@@ -1830,7 +1836,7 @@ export const useProjectStore = create<ProjectState>()(
           // since every `WebContentsView` serializes the whole `projects` array
           // from its own copy, so a view holding a stale snapshot would clobber
           // a newer one. Strip it and let main stay authoritative.
-          projects: state.projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest),
+          projects: persistedProjects(state.projects),
         }),
         merge: (persistedState, currentState) => {
           const persisted = persistedState as { projects?: unknown } | undefined;
