@@ -18,7 +18,7 @@
  */
 import { useContext } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import { render, fireEvent, screen, act, within } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import {
@@ -471,6 +471,7 @@ vi.mock("lucide-react", async (importOriginal) => ({
   Sparkle: () => <span data-testid="sparkle-icon" />,
   PanelTop: () => <span data-testid="panel-top-icon" />,
   Plug: () => <span data-testid="plug-icon" />,
+  UserRound: () => <span data-testid="user-round-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):
   // Check marks the active default, Circle is the hover hint on other rows.
   // Queryable spans let the gutter-indicator tests assert which row is armed.
@@ -610,13 +611,14 @@ describe("AgentButton preset UX", () => {
     });
 
     it("marks the agent's default outside a worktree, the slot a pick writes there", () => {
-      const { getByTestId, getByText, getAllByTestId } = renderCodex();
+      const { getByTestId, getAllByTestId } = renderCodex();
       expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("personal");
       // The trigger still names what a plain launch signs in as: the preset's pin.
       const tooltips = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
       expect(tooltips.some((text) => text.includes("Work · Company"))).toBe(true);
 
-      fireEvent.click(getByText("Company"));
+      // The launcher's account row, not the agent menu's row that moves terminals.
+      fireEvent.click(within(getByTestId("dropdown-radio-group")).getByText("Company"));
       expect(updateAgentMock).toHaveBeenCalledWith("codex", { accountId: "company" });
     });
   });
@@ -2696,6 +2698,75 @@ describe("AgentButton context menu — every actionable row leads with an icon",
     const content = screen.getByTestId("context-menu-content");
     expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
     expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+
+  it("with accounts", () => {
+    mockSettings = settingsWith({
+      claude: {
+        accounts: [{ id: "company", name: "Company", configDir: "/Users/me/.claude-company" }],
+      },
+    });
+    mockMergedPresetsFn = () => [];
+    render(<AgentButton type="claude" availability="ready" />);
+    const content = screen.getByTestId("context-menu-content");
+    expect(content.textContent).toContain("Move terminals to account");
+    expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+});
+
+describe("Move terminals to account in the agent's menu (#17089)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateAgentMock.mockClear();
+    updateWorktreeAccountMock.mockClear();
+    mockActiveWorktreeId = "wt-A";
+    mockMergedPresetsFn = () => [];
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [];
+  });
+
+  // The mocked submenu renders inline; its rows are the items that lead with the account glyph.
+  function moveRows(): HTMLElement[] {
+    const content = screen.getByTestId("context-menu-content");
+    return within(content)
+      .getAllByTestId("context-menu-item")
+      .filter((row) => row.firstElementChild?.getAttribute("data-testid") === "user-round-icon");
+  }
+
+  it("lists the default login and every saved account, and opens the move for the one picked", () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY, PERSONAL], worktreeAccounts: { "wt-A": "company" } },
+    });
+    render(<AgentButton type="claude" availability="ready" />);
+
+    const rows = moveRows();
+    expect(rows.map((row) => row.textContent)).toEqual(["Default login", "Company", "Personal"]);
+    fireEvent.click(rows[2]!);
+    fireEvent.click(rows[0]!);
+
+    expect(dispatchMock.mock.calls).toEqual([
+      ["agent.moveTerminalsToAccount.claude", { accountId: "personal" }, { source: "user" }],
+      ["agent.moveTerminalsToAccount.claude", { accountId: null }, { source: "user" }],
+    ]);
+    // Moving terminals leaves the account new launches use where it was.
+    expect(updateWorktreeAccountMock).not.toHaveBeenCalled();
+    expect(updateAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("isn't offered to an agent with no saved account", () => {
+    mockSettings = settingsWith({ claude: {} });
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
+    render(<AgentButton type="claude" availability="ready" />);
+
+    expect(screen.queryByText("Move terminals to account")).toBeNull();
   });
 });
 

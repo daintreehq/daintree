@@ -12,14 +12,23 @@ vi.mock("@/clients/terminalClient", () => ({
   terminalClient: { getInfo: (...args: unknown[]) => getInfoMock(...args) },
 }));
 
+const worktreeNames = vi.hoisted(() => new Map<string, { name: string }>());
+vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/createWorktreeStore")>()),
+  getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: worktreeNames }) }),
+}));
+
 import {
   AccountSwitchDialog,
+  MoveTerminalsToAccountDialog,
   buildAccountSwitchRequest,
   isAccountSwitchCandidate,
   readUsageLimitedPaneIds,
   type AccountSwitchNoticeState,
 } from "../AccountSwitchNotice";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
+import type { AgentSettings } from "@shared/types";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
 type PaneOverrides = Partial<Omit<PtyPanelData, "cols" | "rows">>;
@@ -49,6 +58,7 @@ afterEach(() => {
   cleanup();
   dispatchMock.mockClear();
   getInfoMock.mockReset();
+  worktreeNames.clear();
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 });
 
@@ -387,5 +397,175 @@ describe("AccountSwitchDialog (#16136)", () => {
         { source: "user" }
       )
     );
+  });
+});
+
+describe("MoveTerminalsToAccountDialog (#17089)", () => {
+  const COMPANY = { id: "company", name: "Company" };
+  const PERSONAL = { id: "personal", name: "Personal" };
+  let seeded: PtyPanelData[] = [];
+
+  function reseed(id: string, overrides: PaneOverrides) {
+    seeded = seeded.map((p) => (p.id === id ? { ...p, ...overrides } : p));
+    act(() => seed(seeded));
+  }
+
+  function renderMove(account: { id: string | null; name: string } | undefined, onClose = vi.fn()) {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          claude: {
+            accounts: [
+              { ...COMPANY, configDir: "/Users/me/.claude-company" },
+              { ...PERSONAL, configDir: "/Users/me/.claude-personal" },
+            ],
+          },
+        },
+      } as unknown as AgentSettings,
+    });
+    worktreeNames.set("wt-1", { name: "main" });
+    worktreeNames.set("wt-2", { name: "feat/parser" });
+    seeded = [
+      pane({ id: "a", title: "Parser", worktreeId: "wt-2", agentState: "waiting" }),
+      pane({ id: "b", title: "Docs", worktreeId: "wt-1", agentState: "working" }),
+      pane({ id: "c", title: "Release", worktreeId: "wt-2", agentState: "idle" }),
+      pane({ id: "d", title: "On company", agentAccountId: "company" }),
+      pane({ id: "e", title: "Codex", launchAgentId: "codex" }),
+    ];
+    seed(seeded);
+    render(<MoveTerminalsToAccountDialog agentId="claude" account={account} onClose={onClose} />);
+    return onClose;
+  }
+
+  const checked = (name: string) =>
+    screen.getByRole("checkbox", { name }).getAttribute("aria-checked");
+
+  it("lists every running terminal of the agent by worktree, limited or not, a working one unchecked", () => {
+    renderMove(COMPANY);
+
+    const groups = screen.getAllByRole("group");
+    expect(groups.map((group) => group.textContent)).toEqual([
+      "feat/parserParserRelease",
+      "mainDocs",
+    ]);
+    expect(
+      within(groups[0]!)
+        .getAllByRole("checkbox")
+        .map((box) => box.getAttribute("aria-checked"))
+    ).toEqual(["true", "true"]);
+    expect(checked("Docs")).toBe("false");
+    expect(screen.getByText("Restart 2 terminals on 'Company'?")).toBeTruthy();
+    expect(screen.queryByText(/will be interrupted/)).toBeNull();
+  });
+
+  it("restarts exactly the checked terminals, without asking the host about limits", async () => {
+    const onClose = renderMove(COMPANY);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 2 terminals" }));
+    });
+
+    expect(onClose).toHaveBeenCalled();
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    expect(dispatchMock.mock.calls).toEqual(
+      ["a", "c"].map((terminalId) => [
+        "terminal.restartOnAccount",
+        { terminalId, accountId: "company", confirmed: true },
+        { source: "user" },
+      ])
+    );
+    expect(getInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("calls out a working agent once it is ticked", () => {
+    renderMove(COMPANY);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    expect(screen.getByText(/1 agent is working and will be interrupted/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart 3 terminals" })).toBeTruthy();
+  });
+
+  it("leaves out a terminal trashed before the confirm", async () => {
+    renderMove(COMPANY);
+    reseed("a", { location: "trash" });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 2 terminals" }));
+    });
+
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
+    expect(dispatchMock.mock.calls[0]![1]).toEqual({
+      terminalId: "c",
+      accountId: "company",
+      confirmed: true,
+    });
+  });
+
+  it("asks for the account first when the palette opened it, then lists that account's terminals", () => {
+    renderMove(undefined);
+
+    expect(screen.getByText("Move Claude terminals to which account?")).toBeTruthy();
+    expect(screen.queryByTestId("account-switch-panes")).toBeNull();
+    const confirm = screen.getByRole("button", { name: "Restart 0 terminals" });
+    expect(
+      confirm.hasAttribute("disabled") || confirm.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
+
+    const picker = screen.getByRole("combobox", { name: "Account" });
+    act(() => {
+      fireEvent.keyDown(picker, { key: "ArrowDown" });
+    });
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Default login",
+      "Company",
+      "Personal",
+    ]);
+    act(() => {
+      fireEvent.keyDown(screen.getByRole("option", { name: "Default login" }), { key: "Enter" });
+    });
+
+    // Every pane here is on the default login but the one on Company.
+    expect(screen.getByText("Restart 1 terminal on 'Default login'?")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("account-switch-panes")).getAllByRole("checkbox")
+    ).toHaveLength(1);
+    expect(checked("On company")).toBe("true");
+  });
+
+  it("starts the boxes afresh for another account", () => {
+    renderMove(COMPANY);
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Parser" }));
+    });
+    expect(checked("Parser")).toBe("false");
+
+    act(() => {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Account" }), { key: "ArrowDown" });
+    });
+    act(() => {
+      fireEvent.keyDown(screen.getByRole("option", { name: "Personal" }), { key: "Enter" });
+    });
+
+    expect(checked("Parser")).toBe("true");
+    expect(checked("On company")).toBe("true");
+    expect(screen.getByText("Restart 3 terminals on 'Personal'?")).toBeTruthy();
+  });
+
+  it("says so when no terminal can move to the account", () => {
+    renderMove(COMPANY);
+    cleanup();
+    seed([pane({ id: "d", title: "On company", agentAccountId: "company" })]);
+    render(<MoveTerminalsToAccountDialog agentId="claude" account={COMPANY} onClose={() => {}} />);
+
+    expect(screen.getByText("Move Claude terminals to 'Company'?")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "No running Claude terminal to move to Company"
+    );
+    const confirm = screen.getByRole("button", { name: "Restart 0 terminals" });
+    expect(
+      confirm.hasAttribute("disabled") || confirm.getAttribute("aria-disabled") === "true"
+    ).toBe(true);
   });
 });

@@ -1218,6 +1218,7 @@ export function AgentButton({
                   actionId={`agent.moveTerminalsToAccount.${type}`}
                   args={{ accountId: null }}
                 >
+                  <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   Default login
                 </ContextMenuActionItem>
                 {accounts.map((account) => (
@@ -1226,6 +1227,7 @@ export function AgentButton({
                     actionId={`agent.moveTerminalsToAccount.${type}`}
                     args={{ accountId: account.id }}
                   >
+                    <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     {account.name}
                   </ContextMenuActionItem>
                 ))}
