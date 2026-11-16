@@ -35,7 +35,7 @@ function installCountingStorage() {
 type Notes = { notes: Record<string, { text: string }>; order: string[] };
 
 const mergeNotes: PersistWriteMerge<Notes> = ({ onDisk, incoming }) =>
-  onDisk ? { version: incoming.version, state: { ...onDisk.state, ...incoming.state } } : incoming;
+  onDisk ? { state: { ...onDisk.state, ...incoming.state }, version: incoming.version } : incoming;
 
 beforeEach(() => {
   vi.resetModules();
@@ -153,41 +153,118 @@ describe("debounced safe storage defers serialization to the flush (#17055)", ()
     expect(JSON.parse(backing.get("portal")!).state.width).toBe(359);
   });
 
-  it.each(["pagehide", "beforeunload"])("flushes every pending key on %s", async (type) => {
-    vi.useFakeTimers();
+  async function queueTwoStores() {
     const { backing } = installCountingStorage();
     const { createDebouncedSafeJSONStorage } = await import("../safeStorage");
     const portal = createDebouncedSafeJSONStorage<Width>(300);
     const help = createDebouncedSafeJSONStorage<Width>(300, {
       mergeOnWrite: ({ incoming }) => incoming,
     });
-
     portal.setItem("portal", { state: { width: 420 }, version: 0 });
     help.setItem("help", { state: { width: 380 }, version: 0 });
+    const widths = () => [
+      JSON.parse(backing.get("portal") ?? "null")?.state.width,
+      JSON.parse(backing.get("help") ?? "null")?.state.width,
+    ];
+    return { widths };
+  }
+
+  it.each(["pagehide", "beforeunload"])("flushes every pending key on %s", async (type) => {
+    vi.useFakeTimers();
+    const { widths } = await queueTwoStores();
+
     window.dispatchEvent(new Event(type));
 
-    expect(JSON.parse(backing.get("portal")!).state.width).toBe(420);
-    expect(JSON.parse(backing.get("help")!).state.width).toBe(380);
+    expect(widths()).toEqual([420, 380]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("holds no unload listener while nothing is pending", async () => {
+  it("flushes every pending key when the document hides, not when it shows", async () => {
+    vi.useFakeTimers();
+    const { widths } = await queueTwoStores();
+    const hidden = vi.spyOn(document, "hidden", "get");
+
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(widths()).toEqual([undefined, undefined]);
+
+    hidden.mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(widths()).toEqual([420, 380]);
+  });
+
+  it("flushes every pending key on the project view's cached edge, and unsubscribes once drained", async () => {
+    vi.useFakeTimers();
+    const cachedFlushes = new Set<() => unknown>();
+    const app = {
+      onViewCachedFlush: (flush: () => unknown) => {
+        cachedFlushes.add(flush);
+        return () => cachedFlushes.delete(flush);
+      },
+    };
+    vi.stubGlobal("electron", { app });
+    try {
+      const { widths } = await queueTwoStores();
+      expect(cachedFlushes.size).toBe(1);
+
+      for (const flush of [...cachedFlushes]) flush();
+
+      expect(widths()).toEqual([420, 380]);
+      expect(cachedFlushes.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lands the other pending writes when one cannot be serialized", async () => {
+    vi.useFakeTimers();
+    const { backing } = installCountingStorage();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { createDebouncedSafeJSONStorage } = await import("../safeStorage");
+    const storage = createDebouncedSafeJSONStorage<{ size: bigint | number }>(300);
+
+    storage.setItem("broken", { state: { size: 1n }, version: 0 });
+    storage.setItem("fine", { state: { size: 2 }, version: 0 });
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(backing.has("broken")).toBe(false);
+    expect(JSON.parse(backing.get("fine")!).state.size).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("holds no lifecycle listener while nothing is pending", async () => {
     vi.useFakeTimers();
     installCountingStorage();
-    const add = vi.spyOn(window, "addEventListener");
-    const remove = vi.spyOn(window, "removeEventListener");
+    const lifecycle = new Set(["pagehide", "beforeunload", "visibilitychange"]);
+    const listening = new Set<string>();
+    const track = (target: Window | Document) => {
+      const add = target.addEventListener.bind(target);
+      const remove = target.removeEventListener.bind(target);
+      vi.spyOn(target, "addEventListener").mockImplementation((type, ...rest) => {
+        if (lifecycle.has(type)) listening.add(type);
+        add(type, ...rest);
+      });
+      vi.spyOn(target, "removeEventListener").mockImplementation((type, ...rest) => {
+        listening.delete(type);
+        remove(type, ...rest);
+      });
+    };
+    track(window);
+    track(document);
     const { createDebouncedSafeJSONStorage } = await import("../safeStorage");
-    const storage = createDebouncedSafeJSONStorage<Width>(300);
-    const unloadTypes = (spy: typeof add) =>
-      spy.mock.calls.map(([type]) => type).filter((t) => t === "pagehide" || t === "beforeunload");
+    const portal = createDebouncedSafeJSONStorage<Width>(300);
+    const help = createDebouncedSafeJSONStorage<Width>(300);
+    expect([...listening]).toEqual([]);
 
-    expect(unloadTypes(add)).toEqual([]);
+    portal.setItem("portal", { state: { width: 1 }, version: 0 });
+    help.setItem("help", { state: { width: 1 }, version: 0 });
+    portal.setItem("portal", { state: { width: 2 }, version: 0 });
+    expect([...listening].sort()).toEqual(["beforeunload", "pagehide", "visibilitychange"]);
 
-    storage.setItem("portal", { state: { width: 1 }, version: 0 });
-    storage.setItem("portal", { state: { width: 2 }, version: 0 });
-    expect(unloadTypes(add).sort()).toEqual(["beforeunload", "pagehide"]);
+    portal.flush("portal");
+    expect(listening.size).toBe(3);
 
-    vi.advanceTimersByTime(300);
-    expect(unloadTypes(remove).sort()).toEqual(["beforeunload", "pagehide"]);
+    help.removeItem("help");
+    expect([...listening]).toEqual([]);
   });
 });
