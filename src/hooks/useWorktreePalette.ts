@@ -62,6 +62,8 @@ export function useWorktreePalette({
       filterFn: filterWorktrees,
       maxResults: 20,
       paletteId: "worktree",
+      // Opened from the action registry through the store, not through `open()`.
+      resetOnStoreOpen: true,
     });
 
   const handleSelect = useCallback(

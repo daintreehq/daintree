@@ -104,6 +104,8 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     filterFn: filterItems,
     maxResults: 20,
     paletteId: "quick-create",
+    // Opened from the action registry through the store, not through `open()`.
+    resetOnStoreOpen: true,
   });
 
   // Sync worktreeStore.quickCreate.isOpen → paletteStore

@@ -3,7 +3,7 @@ import type { IFuseOptions } from "fuse.js";
 import { usePanelStore, usePreferencesStore } from "@/store";
 import { isPtyPanel, type PanelKind, type PtyPanelData } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
-import { searchFuseIndex } from "@/lib/fuseIndex";
+import { createFuseSearch } from "@/lib/fuseIndex";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { terminalClient } from "@/clients";
@@ -214,6 +214,8 @@ function clearPending(): void {
 
 const MAX_RESULTS = 20;
 
+const searchTargets = createFuseSearch(FUSE_OPTIONS);
+
 const EMPTY_PANEL_IDS: string[] = [];
 const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
@@ -280,22 +282,25 @@ export function useSendToAgentPalette() {
     return result;
   }, [panelIds, panelsById, isOpen, showAgentTaskTitles, worktrees]);
 
-  const filterFn = useCallback((allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
-    const q = query.trim().toLowerCase();
-    if (!q) return allItems;
-    // Indexed on the first search, not whenever the target list changes:
-    // the list is rebuilt while the palette sits closed too.
-    const ranked = searchFuseIndex(allItems, FUSE_OPTIONS, query).map((r) => r.item);
-    // Fuse scores by position, so the tail of a long worktree name
-    // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
-    // substring hit there is appended below the ranked results rather than
-    // turning location scoring off, which would rerank the titles.
-    const seen = new Set(ranked);
-    const tails = allItems.filter(
-      (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
-    );
-    return tails.length > 0 ? [...ranked, ...tails] : ranked;
-  }, []);
+  const filterFn = useCallback(
+    (allItems: SendToAgentItem[], query: string): SendToAgentItem[] => {
+      const q = query.trim().toLowerCase();
+      // Closed, a query left behind by another palette taking over is not
+      // searched: the target list is rebuilt while the palette sits closed.
+      if (!q || !isOpen) return allItems;
+      const ranked = searchTargets(allItems, query).map((r) => r.item);
+      // Fuse scores by position, so the tail of a long worktree name
+      // ("…-exponential-backoff") never matches — see FUSE_OPTIONS. A plain
+      // substring hit there is appended below the ranked results rather than
+      // turning location scoring off, which would rerank the titles.
+      const seen = new Set(ranked);
+      const tails = allItems.filter(
+        (item) => !seen.has(item) && item.worktreeName?.toLowerCase().includes(q)
+      );
+      return tails.length > 0 ? [...ranked, ...tails] : ranked;
+    },
+    [isOpen]
+  );
 
   const canNavigate = useCallback((item: SendToAgentItem) => !item.isInputLocked, []);
 

@@ -100,6 +100,22 @@ describe("useQuickSwitcher search work", () => {
     expect(fuseCalls).toEqual({ built: 1, searched: 2 });
   });
 
+  it("does no search work behind another palette, and reopens fresh", () => {
+    const { result } = renderHook(() => useQuickSwitcher());
+    act(() => usePaletteStore.getState().openPalette("quick-switcher"));
+    act(() => result.current.setQuery("clau"));
+    expect(fuseCalls).toEqual({ built: 1, searched: 1 });
+
+    act(() => usePaletteStore.getState().openPalette("action"));
+    expect(result.current.isOpen).toBe(false);
+    expect(fuseCalls).toEqual({ built: 1, searched: 1 });
+
+    act(() => usePaletteStore.getState().openPalette("quick-switcher"));
+    expect(result.current.query).toBe("");
+    expect(result.current.results).toHaveLength(3);
+    expect(fuseCalls).toEqual({ built: 1, searched: 1 });
+  });
+
   it("finds rows by a single letter without marking single-letter bands", () => {
     const { result } = renderHook(() => useQuickSwitcher());
     act(() => usePaletteStore.getState().openPalette("quick-switcher"));

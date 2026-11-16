@@ -12,7 +12,7 @@ import {
   type FuseResultMatch,
   type PaletteSearchResult,
 } from "./useSearchablePalette";
-import { searchFuseIndex } from "@/lib/fuseIndex";
+import { createFuseSearch } from "@/lib/fuseIndex";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -100,6 +100,8 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   includeScore: true,
   includeMatches: true,
 };
+
+const searchBuiltinItems = createFuseSearch(FUSE_OPTIONS);
 
 /** Shortest range worth marking: a fuzzy hit shouldn't sprinkle single-letter bands across a row. */
 const MIN_HIGHLIGHT_LENGTH = 2;
@@ -269,7 +271,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       mruList.forEach((id, index) => mruIndexMap.set(id, index));
       const mruSize = mruList.length;
 
-      if (!query.trim()) {
+      // Closed, the list is the browse order whatever query was left behind
+      // when another palette took over: a closed switcher never searches.
+      if (!paletteIsOpen || !query.trim()) {
         // Empty query: return items in MRU order (MRU items first, then others)
         const items = [...builtinItems].sort((a, b) => {
           const aIndex = mruIndexMap.get(a.id) ?? Infinity;
@@ -282,7 +286,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       // Non-empty query: Fuse search with MRU boost (lower score = better match).
       // A plugin reply or MRU change re-runs this for the same query and gets
       // the cached hits back rather than a second search.
-      const fuseResults = searchFuseIndex(builtinItems, FUSE_OPTIONS, query);
+      const fuseResults = searchBuiltinItems(builtinItems, query);
       const matchesById = emptyMatches();
       for (const r of fuseResults) {
         const ranges = highlightRanges(r.matches);
@@ -305,7 +309,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         matchesById,
       };
     },
-    [mruList, builtinItems, pluginItems, pluginState, activeScopeKey]
+    [paletteIsOpen, mruList, builtinItems, pluginItems, pluginState, activeScopeKey]
   );
 
   const {
@@ -327,6 +331,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     searchFn,
     maxResults: MAX_RESULTS + pluginItems.length,
     paletteId: "quick-switcher",
+    // Opened from the action registry through the store, not through `open()`.
+    resetOnStoreOpen: true,
   });
 
   const { request: requestPluginSearch, providers: pluginProviders } = pluginSearch;

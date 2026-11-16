@@ -21,7 +21,7 @@ vi.mock("fuse.js", async (importOriginal) => {
   return { ...actual, default: CountingFuse };
 });
 
-const { searchFuseIndex } = await import("../fuseIndex");
+const { createFuseSearch } = await import("../fuseIndex");
 
 interface Row {
   id: string;
@@ -35,33 +35,42 @@ const rows = (): Row[] => [
   { id: "c", name: "alpine" },
 ];
 
-describe("searchFuseIndex", () => {
+describe("createFuseSearch", () => {
   beforeEach(() => {
     fuseCalls.built = 0;
     fuseCalls.searched = 0;
   });
 
-  it("builds one index per list and answers a repeated query from the last hits", () => {
-    const items = rows();
-    const first = searchFuseIndex(items, OPTIONS, "alp");
-    expect(first.map((r) => r.item.id).sort()).toEqual(["a", "c"]);
+  it("builds nothing until the first search, then one index per list", () => {
+    const search = createFuseSearch(OPTIONS);
+    expect(fuseCalls).toEqual({ built: 0, searched: 0 });
 
-    expect(searchFuseIndex(items, OPTIONS, "alp")).toBe(first);
+    const items = rows();
+    const first = search(items, "alp");
+    expect(first.map((r) => r.item.id).sort()).toEqual(["a", "c"]);
     expect(fuseCalls).toEqual({ built: 1, searched: 1 });
 
-    const next = searchFuseIndex(items, OPTIONS, "bet");
-    expect(next.map((r) => r.item.id)).toEqual(["b"]);
+    expect(search(items, "alp")).toBe(first);
+    expect(fuseCalls).toEqual({ built: 1, searched: 1 });
+
+    expect(search(items, "bet").map((r) => r.item.id)).toEqual(["b"]);
     expect(fuseCalls).toEqual({ built: 1, searched: 2 });
   });
 
-  it("indexes a new list, and rebuilds when the same list is searched with other options", () => {
-    const items = rows();
-    searchFuseIndex(items, OPTIONS, "alp");
-    searchFuseIndex(rows(), OPTIONS, "alp");
-    expect(fuseCalls.built).toBe(2);
+  it("indexes a replacement list afresh rather than reusing the old one", () => {
+    const search = createFuseSearch(OPTIONS);
+    search(rows(), "alp");
+    const replaced = rows().filter((row) => row.id !== "a");
+    expect(search(replaced, "alp").map((r) => r.item.id)).toEqual(["c"]);
+    expect(fuseCalls).toEqual({ built: 2, searched: 2 });
+  });
 
-    const byId: IFuseOptions<Row> = { keys: ["id"], threshold: 0.4 };
-    expect(searchFuseIndex(items, byId, "alp")).toEqual([]);
-    expect(fuseCalls.built).toBe(3);
+  it("keeps each set of options to its own indexes", () => {
+    const items = rows();
+    const byName = createFuseSearch(OPTIONS);
+    const byId = createFuseSearch<Row>({ keys: ["id"], threshold: 0.4 });
+    expect(byName(items, "alp")).toHaveLength(2);
+    expect(byId(items, "alp")).toEqual([]);
+    expect(fuseCalls.built).toBe(2);
   });
 });

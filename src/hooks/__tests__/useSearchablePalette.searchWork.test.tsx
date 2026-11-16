@@ -2,6 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IFuseOptions } from "fuse.js";
+import type { PaletteId } from "@/store/paletteStore";
 
 const fuseCalls = vi.hoisted(() => ({ built: 0, searched: 0 }));
 
@@ -39,13 +40,17 @@ const makeRows = (): Row[] =>
 function renderPanelPalette(initialItems = makeRows()) {
   return renderHook(
     ({ items }: { items: Row[] }) =>
-      useSearchablePalette<Row>({ items, fuseOptions: OPTIONS, paletteId: "panel" }),
+      useSearchablePalette<Row>({
+        items,
+        fuseOptions: OPTIONS,
+        paletteId: "panel",
+        resetOnStoreOpen: true,
+      }),
     { initialProps: { items: initialItems } }
   );
 }
 
-const openFromOutside = (id: "panel" | "action") =>
-  act(() => usePaletteStore.getState().openPalette(id));
+const openFromOutside = (id: PaletteId) => act(() => usePaletteStore.getState().openPalette(id));
 
 describe("useSearchablePalette search work", () => {
   beforeEach(() => {
@@ -92,15 +97,26 @@ describe("useSearchablePalette search work", () => {
   it("gives a store open the same fresh start as open(), including a palette left mid-search", () => {
     const { result } = renderPanelPalette();
     openFromOutside("panel");
-    act(() => result.current.setQuery("alp"));
-    act(() => result.current.selectNext());
-    expect(result.current.selectedIndex).toBe(1);
+    // A hit that sits below the top of the browse list: following it there
+    // instead of starting over would land the reopened palette on row 2.
+    act(() => result.current.setQuery("bet"));
+    expect(result.current.results.map((r) => r.id)).toEqual(["beta"]);
 
     openFromOutside("action");
     openFromOutside("panel");
     expect(result.current.query).toBe("");
-    expect(result.current.selectedIndex).toBe(0);
     expect(result.current.results).toHaveLength(5);
+    expect(result.current.selectedIndex).toBe(0);
+  });
+
+  it("leaves a palette that didn't ask for store resets as its own opener left it", () => {
+    const { result } = renderHook(() =>
+      useSearchablePalette<Row>({ items: makeRows(), fuseOptions: OPTIONS, paletteId: "theme" })
+    );
+    openFromOutside("theme");
+    act(() => result.current.setQuery("bet"));
+    openFromOutside("theme");
+    expect(result.current.query).toBe("bet");
   });
 
   it("starts over when the palette that is already open is asked to open again", () => {
@@ -143,22 +159,25 @@ describe("useSearchablePalette search work", () => {
   });
 
   it("takes rows and match ranges from one searchFn pass", () => {
+    const items = makeRows();
     const matches = new Map<string, readonly FuseResultMatch[]>([
       ["beta", [{ key: "name", value: "beta", indices: [[0, 1]] }]],
     ]);
-    const searchFn = vi.fn((items: Row[], query: string) => ({
-      items: query ? items.filter((item) => item.id === "beta") : items,
+    const searchFn = vi.fn((all: Row[], query: string) => ({
+      items: query ? all.filter((item) => item.id === "beta") : all,
       matchesById: query ? matches : new Map<string, readonly FuseResultMatch[]>(),
     }));
-    const filterFn = vi.fn((items: Row[]) => items);
+    const filterFn = vi.fn((all: Row[]) => all);
     const { result } = renderHook(() =>
-      useSearchablePalette<Row>({ items: makeRows(), searchFn, filterFn, fuseOptions: OPTIONS })
+      useSearchablePalette<Row>({ items, searchFn, filterFn, fuseOptions: OPTIONS })
     );
+    searchFn.mockClear();
 
     act(() => result.current.setQuery("be"));
     expect(result.current.results.map((r) => r.id)).toEqual(["beta"]);
     expect(result.current.matchesById).toBe(matches);
-    expect(searchFn).toHaveBeenLastCalledWith(expect.any(Array), "be");
+    expect(searchFn).toHaveBeenCalledTimes(1);
+    expect(searchFn).toHaveBeenCalledWith(items, "be");
     expect(filterFn).not.toHaveBeenCalled();
     expect(fuseCalls.built).toBe(0);
   });

@@ -473,6 +473,8 @@ export function useActionPalette(): UseActionPaletteReturn {
     filterFn,
     maxResults: resolveMaxResults,
     paletteId: "action",
+    // Opened from the action registry through the store, not through `open()`.
+    resetOnStoreOpen: true,
   });
 
   // `results` is the browse inventory exactly when it is the array the browse

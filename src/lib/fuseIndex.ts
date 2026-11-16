@@ -1,44 +1,35 @@
 import Fuse, { type FuseResult, type IFuseOptions } from "fuse.js";
 
-interface IndexEntry {
-  options: IFuseOptions<unknown>;
-  fuse: Fuse<unknown>;
+interface IndexEntry<T> {
+  fuse: Fuse<T>;
   query: string | null;
-  hits: FuseResult<unknown>[];
+  hits: readonly FuseResult<T>[];
 }
 
-// Keyed by the item array's identity, so an index lives exactly as long as
-// the list it was built over. One entry per list: a caller that changes its
-// options gets a rebuild rather than a second index held beside the first.
-const indexes = new WeakMap<readonly unknown[], IndexEntry>();
+export type FuseSearch<T> = (items: readonly T[], query: string) => readonly FuseResult<T>[];
 
 /**
- * Searches `items` through a Fuse index built on the first search that needs
+ * A search over `options` that indexes a list on the first search that needs
  * it, not when the list is produced: a palette that is closed, or open but
- * only browsed, builds nothing. The last query's hits are kept beside the
- * index, so a re-render that asks the same question again (a plugin reply, a
- * selection move, a second consumer of the same query) does not rerun Bitap.
+ * only browsed, builds nothing. Indexes are keyed by the list's identity, so
+ * each lives exactly as long as the list it was built over, and the last
+ * query's hits are kept beside it, so a re-render that asks the same question
+ * again (a plugin reply, a selection move) does not rerun Bitap.
  *
- * The returned array is shared between those callers and must not be mutated.
+ * Returned arrays are shared between those callers and must not be mutated.
  */
-export function searchFuseIndex<T>(
-  items: readonly T[],
-  options: IFuseOptions<T>,
-  query: string
-): readonly FuseResult<T>[] {
-  let entry = indexes.get(items);
-  if (!entry || entry.options !== options) {
-    entry = {
-      options: options as IFuseOptions<unknown>,
-      fuse: new Fuse(items as unknown[], options as IFuseOptions<unknown>),
-      query: null,
-      hits: [],
-    };
-    indexes.set(items, entry);
-  }
-  if (entry.query !== query) {
-    entry.hits = entry.fuse.search(query);
-    entry.query = query;
-  }
-  return entry.hits as FuseResult<T>[];
+export function createFuseSearch<T>(options: IFuseOptions<T>): FuseSearch<T> {
+  const indexes = new WeakMap<readonly T[], IndexEntry<T>>();
+  return (items, query) => {
+    let entry = indexes.get(items);
+    if (!entry) {
+      entry = { fuse: new Fuse(items, options), query: null, hits: [] };
+      indexes.set(items, entry);
+    }
+    if (entry.query !== query) {
+      entry.hits = entry.fuse.search(query);
+      entry.query = query;
+    }
+    return entry.hits;
+  };
 }
