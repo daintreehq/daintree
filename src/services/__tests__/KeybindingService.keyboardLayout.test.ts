@@ -35,7 +35,9 @@ describe("KeybindingService display text and the keyboard layout", () => {
     expect(service.formatComboForDisplay("Cmd+/")).toBe("Ctrl+/");
 
     const listener = vi.fn();
+    const chordListener = vi.fn();
     const unsubscribe = service.subscribe(listener);
+    const unsubscribeChord = service.subscribeChord(chordListener);
     await flush();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(service.formatComboForDisplay("Cmd+/")).toBe("Ctrl+!");
@@ -46,6 +48,17 @@ describe("KeybindingService display text and the keyboard layout", () => {
     await flush();
     expect(listener).toHaveBeenCalledTimes(2);
     expect(service.formatComboForDisplay("Cmd+/")).toBe("Ctrl+/");
+    // Chord subscribers watch a raw combo, which no layout change touches.
+    expect(chordListener).not.toHaveBeenCalled();
+    unsubscribe();
+    unsubscribeChord();
+  });
+
+  it("never watches the layout for chord subscribers alone", async () => {
+    const service = new KeybindingService();
+    const unsubscribe = service.subscribeChord(() => {});
+    await flush();
+    expect(getLayoutMap).not.toHaveBeenCalled();
     unsubscribe();
   });
 

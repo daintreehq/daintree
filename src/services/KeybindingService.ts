@@ -44,6 +44,17 @@ function sameOverrides(a: Map<string, string[]>, b: Map<string, string[]>): bool
   return true;
 }
 
+function notifyEach(listeners: Set<() => void>): void {
+  // A copy, so a listener that unsubscribes while being notified can't skip the next.
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn("[KeybindingService] listener threw", error);
+    }
+  }
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -53,6 +64,9 @@ class KeybindingService {
   private lastInvalidKey: string | null = null;
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
+  // Chord state changes on Cmd+K, Escape and blur; keeping its subscribers apart
+  // spares every binding-display subscriber a wakeup on each of them.
+  private chordListeners = new Set<() => void>();
   private unsubscribeKeyLabels: (() => void) | null = null;
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
@@ -97,10 +111,7 @@ class KeybindingService {
     const changed = !sameOverrides(this.overrides, next);
     this.overrides = next;
     // A chord started under the old map may finish on a combo it no longer has.
-    if (changed) {
-      this.clearChordTimeout();
-      this.pendingChord = null;
-    }
+    if (changed) this.clearPendingChord();
     this.notifyListeners();
   }
 
@@ -280,6 +291,10 @@ class KeybindingService {
     return conflicts;
   }
 
+  /**
+   * Changes to the bindings and how they display: overrides, registrations,
+   * the keyboard layout. Chord progress has its own `subscribeChord`.
+   */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     // Display strings carry the keyboard layout's labels, so a layout change
@@ -294,15 +309,20 @@ class KeybindingService {
     };
   }
 
+  /** Changes to the pending chord and the invalid key it last refused. */
+  subscribeChord(listener: () => void): () => void {
+    this.chordListeners.add(listener);
+    return () => {
+      this.chordListeners.delete(listener);
+    };
+  }
+
   private notifyListeners(): void {
-    const snapshot = Array.from(this.listeners);
-    for (const listener of snapshot) {
-      try {
-        listener();
-      } catch (error) {
-        console.warn("[KeybindingService] listener threw", error);
-      }
-    }
+    notifyEach(this.listeners);
+  }
+
+  private notifyChordListeners(): void {
+    notifyEach(this.chordListeners);
   }
 
   setScope(scope: KeyScope): void {
@@ -314,10 +334,13 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.currentScope = scope;
       this.clearPendingChord();
+      // An action bound in several scopes displays the active scope's combo.
+      this.notifyListeners();
     }
   }
 
   restoreScope(scope: KeyScope): void {
+    const previous = this.currentScope;
     const idx = this.scopeStack.lastIndexOf(scope);
     if (idx > 0) {
       this.scopeStack.splice(idx, 1);
@@ -326,6 +349,7 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.clearPendingChord();
     }
+    if (this.currentScope !== previous) this.notifyListeners();
   }
 
   setWhenContext(ctx: WhenClauseContext): void {
@@ -447,7 +471,7 @@ class KeybindingService {
     // harmless no-op so any residual timeout from an earlier code path clears.
     this.clearChordTimeout();
     this.pendingChord = combo;
-    this.notifyListeners();
+    this.notifyChordListeners();
   }
 
   getPendingChord(): string | null {
@@ -459,7 +483,7 @@ class KeybindingService {
     this.clearChordTimeout();
     this.pendingChord = null;
     if (hadChord) {
-      this.notifyListeners();
+      this.notifyChordListeners();
     }
   }
 
@@ -496,7 +520,7 @@ class KeybindingService {
   clearLastInvalidKey(): void {
     if (this.lastInvalidKey === null) return;
     this.lastInvalidKey = null;
-    this.notifyListeners();
+    this.notifyChordListeners();
   }
 
   normalizeKeyForBinding(event: KeyboardEvent): string {
@@ -631,7 +655,7 @@ class KeybindingService {
     // Clear pending chord if we found a match or no chord prefix
     if (bestMatch || !foundChordPrefix) {
       // lastInvalidKey must be set before clearPendingChord() — the
-      // synchronous notifyListeners() call inside that method is when
+      // synchronous notifyChordListeners() call inside that method is when
       // subscribers read the snapshot.
       if (invalidChordKey) {
         this.lastInvalidKey = currentCombo;

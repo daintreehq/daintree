@@ -1912,6 +1912,31 @@ describe("useGlobalKeybindings — row-menu stand-down", () => {
     const host = mount(`<div role="menu"><div id="item" role="menuitem"></div></div>`);
     expect(pressMenuKey(host.querySelector<HTMLElement>("#item")!).defaultPrevented).toBe(false);
   });
+
+  it("skips the menu ancestor walks for keys that are not menu keys", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    const host = mount(`<div data-row-menu=""><div id="row"></div></div>`);
+    const row = host.querySelector<HTMLElement>("#row")!;
+    const closest = vi.spyOn(row, "closest");
+    try {
+      act(() => {
+        row.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+      });
+      const selectors = closest.mock.calls.map(([selector]) => selector);
+      expect(selectors).not.toContain("[data-row-menu]");
+      expect(selectors).not.toContain('[role="menu"]');
+
+      closest.mockClear();
+      pressMenuKey(row);
+      expect(closest.mock.calls.map(([selector]) => selector)).toContain("[data-row-menu]");
+    } finally {
+      closest.mockRestore();
+    }
+  });
 });
 
 describe("useGlobalKeybindings — panel menu keys follow the action's bindings", () => {

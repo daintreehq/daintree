@@ -809,7 +809,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBe("Cmd+b");
     });
 
-    it("notifies listeners synchronously when lastInvalidKey is set via resolveKeybinding", () => {
+    it("notifies chord listeners synchronously when lastInvalidKey is set via resolveKeybinding", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       startCmdKChord(service);
@@ -818,7 +818,7 @@ describe("KeybindingService", () => {
       // pattern reads getLastInvalidKey() inside the subscriber, so the field
       // MUST already be populated before clearPendingChord() fires the notify.
       let observedAtNotify: string | null | undefined;
-      service.subscribe(() => {
+      service.subscribeChord(() => {
         observedAtNotify = service.getLastInvalidKey();
       });
 
@@ -893,7 +893,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBeNull();
     });
 
-    it("clearLastInvalidKey resets to null and notifies listeners", () => {
+    it("clearLastInvalidKey resets to null and notifies chord listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       startCmdKChord(service);
@@ -902,7 +902,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBe("y");
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.clearLastInvalidKey();
       expect(service.getLastInvalidKey()).toBeNull();
@@ -912,7 +912,7 @@ describe("KeybindingService", () => {
     it("clearLastInvalidKey is a no-op (no notify) when already null", () => {
       const service = new KeybindingService();
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.clearLastInvalidKey();
       expect(listener).not.toHaveBeenCalled();
@@ -937,7 +937,7 @@ describe("KeybindingService", () => {
   });
 
   describe("popPendingChord", () => {
-    it("clears the pending chord and notifies listeners", () => {
+    it("clears the pending chord and notifies chord listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       const cmdK = createKeyboardEvent({
@@ -949,7 +949,7 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.popPendingChord();
 
@@ -968,7 +968,7 @@ describe("KeybindingService", () => {
       service.resolveKeybinding(cmdK);
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.popPendingChord();
       service.popPendingChord();
@@ -978,17 +978,32 @@ describe("KeybindingService", () => {
     });
   });
 
-  describe("listener hygiene", () => {
-    function triggerNotify(service: KeybindingService): void {
-      const cmdK = createKeyboardEvent({
-        key: "k",
-        code: "KeyK",
-        metaKey: true,
-      });
-      service.resolveKeybinding(cmdK);
-      service.popPendingChord();
-    }
-
+  // Both channels share one notifier; each is driven by the changes it owns,
+  // two notifications per trigger.
+  describe.each([
+    {
+      channel: "chord",
+      listen: (service: KeybindingService, listener: () => void) =>
+        service.subscribeChord(listener),
+      triggerNotify: (service: KeybindingService) => {
+        service.resolveKeybinding(createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true }));
+        service.popPendingChord();
+      },
+    },
+    {
+      channel: "bindings",
+      listen: (service: KeybindingService, listener: () => void) => service.subscribe(listener),
+      triggerNotify: (service: KeybindingService) => {
+        service.registerBinding({
+          actionId: "test.hygiene",
+          combo: "Cmd+Alt+Shift+F11",
+          scope: "global",
+          priority: 1,
+        });
+        service.removeBinding("test.hygiene");
+      },
+    },
+  ])("listener hygiene ($channel)", ({ listen, triggerNotify }) => {
     it("isolates errors so a throwing listener does not stop subsequent listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -999,9 +1014,9 @@ describe("KeybindingService", () => {
       });
       const after = vi.fn();
 
-      service.subscribe(before);
-      service.subscribe(thrower);
-      service.subscribe(after);
+      listen(service, before);
+      listen(service, thrower);
+      listen(service, after);
 
       triggerNotify(service);
 
@@ -1019,13 +1034,12 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       const listener = vi.fn();
 
-      service.subscribe(listener);
-      service.subscribe(listener);
+      listen(service, listener);
+      listen(service, listener);
 
       triggerNotify(service);
 
       // Set dedup: the listener fires once per notification, not twice.
-      // triggerNotify produces 2 notifications (set + pop), so listener: 2 calls.
       expect(listener).toHaveBeenCalledTimes(2);
     });
 
@@ -1039,23 +1053,36 @@ describe("KeybindingService", () => {
         unsubscribeSelf?.();
       });
 
-      unsubscribeSelf = service.subscribe(selfRemover);
-      service.subscribe(after);
+      unsubscribeSelf = listen(service, selfRemover);
+      listen(service, after);
 
       triggerNotify(service);
 
       expect(selfRemover).toHaveBeenCalledTimes(1);
-      // `after` runs on both the set-pending and pop-pending notifications;
-      // mutating the underlying Set during notification must not break the
+      // Mutating the underlying Set during notification must not break the
       // current iteration's snapshot.
       expect(after).toHaveBeenCalledTimes(2);
+    });
+
+    it("still runs a listener another one unsubscribes mid-notification, then stops", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      let unsubscribeLater: (() => void) | null = null;
+      listen(service, () => unsubscribeLater?.());
+      const later = vi.fn();
+      unsubscribeLater = listen(service, later);
+
+      triggerNotify(service);
+
+      // The first notification was already under way when `later` left.
+      expect(later).toHaveBeenCalledTimes(1);
     });
 
     it("returns an unsubscribe that detaches the listener", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       const listener = vi.fn();
-      const unsubscribe = service.subscribe(listener);
+      const unsubscribe = listen(service, listener);
 
       triggerNotify(service);
       const initialCalls = listener.mock.calls.length;
@@ -1065,6 +1092,104 @@ describe("KeybindingService", () => {
       triggerNotify(service);
 
       expect(listener).toHaveBeenCalledTimes(initialCalls);
+    });
+  });
+
+  describe("chord state and bindings notify separately (#17059)", () => {
+    const cmdK = () => createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
+
+    it("never wakes binding subscribers for a chord starting, failing, or being cancelled", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const bindings = vi.fn();
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.resolveKeybinding(cmdK());
+      service.resolveKeybinding(createKeyboardEvent({ key: "y", code: "KeyY" }));
+      expect(service.getLastInvalidKey()).toBe("y");
+      service.clearLastInvalidKey();
+      service.resolveKeybinding(cmdK());
+      service.clearPendingChord();
+
+      // Start, refuse "y", clear the echo, start again, cancel.
+      expect(chord).toHaveBeenCalledTimes(5);
+      expect(bindings).not.toHaveBeenCalled();
+    });
+
+    it("leaves chord subscribers alone for a binding change that keeps the chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(cmdK());
+      const bindings = vi.fn();
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.registerBinding({
+        actionId: "test.separate",
+        combo: "Cmd+Alt+Shift+F11",
+        scope: "global",
+        priority: 1,
+      });
+
+      expect(bindings).toHaveBeenCalledTimes(1);
+      expect(chord).not.toHaveBeenCalled();
+      expect(service.getPendingChord()).not.toBeNull();
+    });
+
+    it("keeps the chord, and chord subscribers asleep, when the overrides are unchanged", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+      service.resolveKeybinding(cmdK());
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+
+      expect(service.getPendingChord()).not.toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("tells binding subscribers when a scope change moves an action's combo", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const bindings = vi.fn(() => service.getEffectiveCombo("fleet.armFocused"));
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.setScope("worktreeGrid");
+      service.setScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      expect(bindings).toHaveLastReturnedWith("X");
+
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(2);
+      expect(bindings).toHaveLastReturnedWith("Cmd+J");
+      // No chord was pending, so there was nothing to tell its subscribers.
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("tells chord subscribers when new overrides drop the pending chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(cmdK());
+      const bindings = vi.fn();
+      const chord = vi.fn(() => service.getPendingChord());
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+
+      expect(service.getPendingChord()).toBeNull();
+      expect(chord).toHaveBeenCalledTimes(1);
+      expect(chord).toHaveReturnedWith(null);
+      expect(bindings).toHaveBeenCalledTimes(1);
     });
   });
 
