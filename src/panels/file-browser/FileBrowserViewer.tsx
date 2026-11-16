@@ -401,8 +401,7 @@ export function FileBrowserViewer({
   const setWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
   // The read's own byte count, not a re-encoding of the whole text: see FilePane.
   const contentBytes = useMemo(
-    () =>
-      state.status === "text" ? (state.byteLength ?? utf8ByteLength(state.content)) : null,
+    () => (state.status === "text" ? (state.byteLength ?? utf8ByteLength(state.content)) : null),
     [state]
   );
   const editable =

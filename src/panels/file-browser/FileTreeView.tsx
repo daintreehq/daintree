@@ -256,11 +256,7 @@ export function FileTreeView({
       DECORATION_CHUNK_ROWS;
     return rows.slice(first, last).map((row) => row.path);
   }, [decorationsEnabled, rows, renderedRange]);
-  const decorations = useFileTreeDecorations(
-    decorationScope,
-    decorationPaths,
-    decorationsEnabled
-  );
+  const decorations = useFileTreeDecorations(decorationScope, decorationPaths, decorationsEnabled);
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
