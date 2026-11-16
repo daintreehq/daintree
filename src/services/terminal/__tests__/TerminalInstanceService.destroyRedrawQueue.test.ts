@@ -98,10 +98,13 @@ describe("TerminalInstanceService - destroy", () => {
       terminalInstanceService as unknown as { projectSwitchRedrawQueue: Map<string, unknown> }
     ).projectSwitchRedrawQueue;
     queue.set("test-destroy-queue", managed);
+    queue.set("other-queued", managed);
     expect(queue.has("test-destroy-queue")).toBe(true);
 
     terminalInstanceService.destroy("test-destroy-queue");
 
     expect(queue.has("test-destroy-queue")).toBe(false);
+    expect(queue.has("other-queued")).toBe(true);
+    queue.clear();
   });
 });

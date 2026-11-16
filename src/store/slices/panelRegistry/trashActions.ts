@@ -516,7 +516,14 @@ export const createTrashActions = (
 
       scheduleTrashExpiry(id, expiresAt);
 
-      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+      // The updater ignores an acknowledgement for a panel that is no longer in
+      // the trash (a restore won the race); demoting then would background a
+      // visible pane.
+      if (
+        get().panelsById[id]?.location === "trash" &&
+        terminal &&
+        panelKindHasPty(terminal.kind ?? "terminal")
+      ) {
         demoteForTrash(id);
       }
     },

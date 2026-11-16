@@ -120,10 +120,16 @@ describe("refresh tier on trash, restore and move", () => {
     expect(tiersFor("t2")).toEqual([TerminalRefreshTier.BACKGROUND]);
   });
 
-  it("demotes a terminal marked trashed from outside", () => {
-    seed([term("t1", "wt-a")]);
+  it("demotes a terminal the host reports as trashed", () => {
+    seed([term("t1", "wt-a", "trash")]);
     usePanelStore.getState().markAsTrashed("t1", Date.now() + 60_000, "grid");
     expect(tiersFor("t1")).toEqual([TerminalRefreshTier.BACKGROUND]);
+  });
+
+  it("ignores a stale trash acknowledgement for a terminal that is back on the grid", () => {
+    seed([term("t1", "wt-a", "grid")]);
+    usePanelStore.getState().markAsTrashed("t1", Date.now() + 60_000, "grid");
+    expect(tiersFor("t1")).toEqual([]);
   });
 
   it("promotes a restored terminal in the active worktree", () => {
@@ -145,6 +151,105 @@ describe("refresh tier on trash, restore and move", () => {
       ]),
     });
     usePanelStore.getState().restoreTerminal("t1");
+    expect(tiersFor("t1")).toEqual([TerminalRefreshTier.BACKGROUND]);
+  });
+
+  it("reads the restore destination, not the trashed worktree, when restoring into the active one", () => {
+    seed([term("t1", "wt-b", "trash")]);
+    usePanelStore.setState({
+      trashedTerminals: new Map([
+        ["t1", { id: "t1", expiresAt: Date.now() + 60_000, originalLocation: "grid" as const }],
+      ]),
+    });
+    usePanelStore.getState().restoreTerminal("t1", "wt-a");
+    expect(tiersFor("t1")).toEqual([TerminalRefreshTier.VISIBLE]);
+  });
+
+  it("promotes only the active tab of a restored trashed group", () => {
+    const meta = {
+      panelIds: ["t1", "t2"],
+      activeTabId: "t2",
+      location: "grid" as const,
+      worktreeId: "wt-a",
+    };
+    seed([term("t1", "wt-a", "trash"), term("t2", "wt-a", "trash")]);
+    usePanelStore.setState({
+      trashedTerminals: new Map(
+        ["t1", "t2"].map((id) => [
+          id,
+          {
+            id,
+            expiresAt: Date.now() + 60_000,
+            originalLocation: "grid" as const,
+            groupRestoreId: "gr1",
+            groupMetadata: meta,
+          },
+        ])
+      ),
+    });
+    usePanelStore.getState().restoreTrashedGroup("gr1");
+    expect(tiersFor("t2")).toEqual([TerminalRefreshTier.VISIBLE]);
+    expect(tiersFor("t1")).toEqual([TerminalRefreshTier.BACKGROUND]);
+  });
+
+  it("keeps a restored trashed group in BACKGROUND when its worktree is inactive", () => {
+    const meta = {
+      panelIds: ["t1", "t2"],
+      activeTabId: "t1",
+      location: "grid" as const,
+      worktreeId: "wt-b",
+    };
+    seed([term("t1", "wt-b", "trash"), term("t2", "wt-b", "trash")]);
+    usePanelStore.setState({
+      trashedTerminals: new Map(
+        ["t1", "t2"].map((id) => [
+          id,
+          {
+            id,
+            expiresAt: Date.now() + 60_000,
+            originalLocation: "grid" as const,
+            groupRestoreId: "gr1",
+            groupMetadata: meta,
+          },
+        ])
+      ),
+    });
+    usePanelStore.getState().restoreTrashedGroup("gr1");
+    expect(tiersFor("t1")).toEqual([TerminalRefreshTier.BACKGROUND]);
+    expect(tiersFor("t2")).toEqual([TerminalRefreshTier.BACKGROUND]);
+  });
+
+  it("promotes a terminal the host reports as restored into the active worktree only", () => {
+    seed([term("t1", "wt-a", "trash"), term("t2", "wt-b", "trash")]);
+    usePanelStore.setState({
+      trashedTerminals: new Map(
+        ["t1", "t2"].map((id) => [
+          id,
+          { id, expiresAt: Date.now() + 60_000, originalLocation: "grid" as const },
+        ])
+      ),
+    });
+    usePanelStore.getState().markAsRestored("t1");
+    usePanelStore.getState().markAsRestored("t2");
+    expect(tiersFor("t1")).toEqual([TerminalRefreshTier.VISIBLE]);
+    expect(tiersFor("t2")).toEqual([TerminalRefreshTier.BACKGROUND]);
+  });
+
+  it("promotes only the active tab when a docked group moves to the grid", () => {
+    seed(
+      [term("t1", "wt-a", "dock"), term("t2", "wt-a", "dock")],
+      [
+        {
+          id: "g1",
+          location: "dock",
+          worktreeId: "wt-a",
+          activeTabId: "t2",
+          panelIds: ["t1", "t2"],
+        },
+      ]
+    );
+    usePanelStore.getState().moveTabGroupToLocation("g1", "grid");
+    expect(tiersFor("t2")).toEqual([TerminalRefreshTier.VISIBLE]);
     expect(tiersFor("t1")).toEqual([TerminalRefreshTier.BACKGROUND]);
   });
 
