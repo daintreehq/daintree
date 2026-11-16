@@ -114,7 +114,10 @@ export interface BulkWorktreeRunCommand {
  */
 export type BulkWorktreeRunCommandResult =
   | { accepted: true }
-  | { accepted: false; reason: "not-found" | "uncontrollable" | "not-live" | "busy" | "nothing-to-retry" };
+  | {
+      accepted: false;
+      reason: "not-found" | "uncontrollable" | "not-live" | "busy" | "nothing-to-retry";
+    };
 
 /** Main's push whenever any run changes: every run it holds, oldest first. */
 export interface BulkWorktreeRunsChanged {

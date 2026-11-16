@@ -69,8 +69,7 @@ const watchedOwners = new Set<number>();
 
 function getRegistry(): BulkWorktreeRunRegistry {
   registry ??= new BulkWorktreeRunRegistry({
-    broadcast: (runs) =>
-      typedBroadcastToLocalViews(CHANNELS.BULK_WORKTREE_RUNS_CHANGED, { runs }),
+    broadcast: (runs) => typedBroadcastToLocalViews(CHANNELS.BULK_WORKTREE_RUNS_CHANGED, { runs }),
     sendCommand: (ownerId, command) => {
       const wc = electronWebContents.fromId(ownerId);
       if (!wc || wc.isDestroyed()) return false;
@@ -130,9 +129,14 @@ function handlePublish(ctx: IpcContext, snapshot: BulkWorktreeRunSnapshot): void
 export const bulkWorktreeRunsNamespace = defineIpcNamespace({
   name: "bulkWorktreeRuns",
   ops: {
-    publish: opValidated(BULK_WORKTREE_RUNS_METHOD_CHANNELS.publish, SnapshotSchema, handlePublish, {
-      withContext: true,
-    }),
+    publish: opValidated(
+      BULK_WORKTREE_RUNS_METHOD_CHANNELS.publish,
+      SnapshotSchema,
+      handlePublish,
+      {
+        withContext: true,
+      }
+    ),
     list: op(
       BULK_WORKTREE_RUNS_METHOD_CHANNELS.list,
       (): BulkWorktreeRunSnapshot[] => registry?.list() ?? []
