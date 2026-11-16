@@ -105,15 +105,20 @@ describe("worktree filter popover, cold (#17034)", () => {
     await flush();
     expect(popover()?.textContent).toContain("Couldn't load filters");
 
-    // Retry issues the import again, in the same content.
+    // Retry issues the import again, in the same content. Activated from the
+    // keyboard, so focus starts on the button that is about to unmount.
     const content = popover();
     const third = h.next();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      fireEvent.click(retry);
     });
     expect(h.imported).toHaveBeenCalledTimes(3);
     expect(popover()).toBe(content);
     expect(content?.querySelector('[aria-busy="true"]')).not.toBeNull();
+    // Parked on the content rather than dropped to the document.
+    expect(document.activeElement).toBe(content);
 
     await act(async () => {
       third.resolve();
