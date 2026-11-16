@@ -12,6 +12,8 @@ import { HighOutputDetector } from "./pty/HighOutputDetector.js";
 import { WorkingSignalDebouncer } from "./pty/WorkingSignalDebouncer.js";
 import { LineRewriteDetector, isStatusLineRewrite } from "./pty/LineRewriteDetector.js";
 import { stripIdleTerminalSequences } from "./pty/IdleSequenceFilter.js";
+import { stripCosmeticParticles } from "./pty/CosmeticParticleFilter.js";
+import { filteredOutputBytesUpTo } from "./pty/filteredOutputBytes.js";
 import {
   SynchronizedFrameAnalyzer,
   type FrameSnapshot,
@@ -682,9 +684,15 @@ export class ActivityMonitor {
           this.fireBootComplete(now);
         }
       }
+      const volumeDetector = this.simpleOutputVolumeDetector?.enabled
+        ? this.simpleOutputVolumeDetector
+        : undefined;
+      // The status-line check and the volume floor both measure the chunk with
+      // particles removed; one pass serves both.
+      const withoutParticles = volumeDetector ? stripCosmeticParticles(data) : undefined;
       // Semantic status-line rewrites (spinner, retry countdown, elapsed-time
       // counter) are strong liveness evidence even at 1Hz cadence (#9874).
-      const isIndicatorRewrite = isStatusLineRewrite(data);
+      const isIndicatorRewrite = isStatusLineRewrite(data, withoutParticles);
       if (isIndicatorRewrite) {
         this.lastStatusRewriteAt = now;
       }
@@ -712,16 +720,18 @@ export class ActivityMonitor {
       // the non-simple first-output-byte path uses (#6388 strip-then-count,
       // #8867 focus gate), treat that as activity: refresh the activity clock
       // so heavy streaming keeps the agent working, and recover idle→busy.
-      if (this.simpleOutputVolumeDetector) {
+      if (volumeDetector && withoutParticles !== undefined) {
         // Cursor placement and SGR resets carry bytes without new text. Grok
         // emits these after a turn, so counting them can hold busy forever.
-        const filteredLength = Buffer.byteLength(
-          stripAnsi(stripIdleTerminalSequences(data)),
-          "utf8"
+        // The bucket credits at most one frame's cap, so counting stops there.
+        const filteredLength = filteredOutputBytesUpTo(
+          data,
+          withoutParticles,
+          volumeDetector.maxContributionBytes
         );
         if (
           filteredLength > 0 &&
-          this.simpleOutputVolumeDetector.update(filteredLength, now) &&
+          volumeDetector.update(filteredLength, now) &&
           !this.isResizeSuppressed(now) &&
           !this.isFocusSuppressed(now) &&
           !this.inputTracker.isRecentUserInput(now) &&
@@ -742,7 +752,8 @@ export class ActivityMonitor {
     }
 
     const isLikelyUserEcho = data ? this.inputTracker.isLikelyUserEcho(data, now) : false;
-    const isCosmeticRedraw = data ? isStatusLineRewrite(data) : false;
+    const withoutParticles = data ? stripCosmeticParticles(data) : undefined;
+    const isCosmeticRedraw = data ? isStatusLineRewrite(data, withoutParticles) : false;
 
     this.lastDataTimestamp = now;
 
@@ -768,7 +779,10 @@ export class ActivityMonitor {
     // spuriously escalate idle→busy at low minBytes thresholds. Computed up
     // front because the debounce-reset path also gates on it: pure protocol
     // noise must not keep a busy monitor alive forever.
-    const filteredLength = Buffer.byteLength(stripIdleTerminalSequences(data), "utf8");
+    const filteredLength = Buffer.byteLength(
+      stripIdleTerminalSequences(data, withoutParticles),
+      "utf8"
+    );
     const hasOutputActivity = isCosmeticRedraw || filteredLength > 0;
 
     if (hasOutputActivity) {
