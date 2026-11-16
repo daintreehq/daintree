@@ -119,16 +119,13 @@ interface CachedMergeRequest {
 const mergeRequestCache = new BoundedCache<CachedMergeRequest>({
   maxEntries: 500,
   // Resident past its freshness so its `seq` still turns away an older read
-  // that answers late: every read settles within its own timeout of being sent.
-  retainMs: 2 * GITLAB_API_TIMEOUT_MS,
+  // that answers late. A read caches when its own requests settle — a GraphQL
+  // query and, at worst, a REST fallback after it, each bounded by the timeout.
+  retainMs: 4 * GITLAB_API_TIMEOUT_MS,
 });
 let mergeRequestReadSeq = 0;
-interface MergeRequestChunkAnswer {
-  seq: number;
-  answers: Map<number, MergeRequestLookup | null>;
-}
 /** Pending number→MR chunks, so overlapping batch reads share one query. */
-const mergeRequestFlights = new Map<string, Promise<MergeRequestChunkAnswer>>();
+const mergeRequestFlights = new Map<string, Promise<Map<number, MergeRequestLookup | null>>>();
 /**
  * Hosts whose GraphQL schema can't serve the number query, so their batches go
  * straight to REST instead of failing the query first on every poll. Cleared
@@ -647,7 +644,7 @@ async function lookupMergeRequests(
     else result.set(iid, cached.lookup);
   }
 
-  const flights: Array<Promise<MergeRequestChunkAnswer>> = [];
+  const flights: Array<Promise<Map<number, MergeRequestLookup | null>>> = [];
   for (let start = 0; start < missing.length; start += GRAPHQL_IID_CHUNK_SIZE) {
     const chunk = missing.slice(start, start + GRAPHQL_IID_CHUNK_SIZE);
     const flightKey = `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${chunk.join(",")}`;
@@ -657,19 +654,24 @@ async function lookupMergeRequests(
       continue;
     }
     const seq = ++mergeRequestReadSeq;
-    const started: Promise<MergeRequestChunkAnswer> = fetchMergeRequestChunk(repo, chunk)
-      .then((answers) => ({ seq, answers }))
+    // Cached once, by the flight itself: a caller that joined it may finish much
+    // later, waiting on a slower chunk of its own.
+    const started: Promise<Map<number, MergeRequestLookup | null>> = fetchMergeRequestChunk(
+      repo,
+      chunk
+    )
+      .then((answers) => {
+        for (const [iid, lookup] of answers) cacheMergeRequest(repo, iid, lookup, seq, epoch);
+        return answers;
+      })
       .finally(() => {
         if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
       });
     mergeRequestFlights.set(flightKey, started);
     flights.push(started);
   }
-  for (const { seq, answers } of await Promise.all(flights)) {
-    for (const [iid, lookup] of answers) {
-      result.set(iid, lookup);
-      cacheMergeRequest(repo, iid, lookup, seq, epoch);
-    }
+  for (const answers of await Promise.all(flights)) {
+    for (const [iid, lookup] of answers) result.set(iid, lookup);
   }
   return result;
 }

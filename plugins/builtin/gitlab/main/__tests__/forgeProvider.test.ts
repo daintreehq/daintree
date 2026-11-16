@@ -1078,6 +1078,40 @@ describe("batchLookups", () => {
     }
   });
 
+  it("doesn't replay a joined chunk's answer into the cache when a slower chunk finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const twenty = Array.from({ length: 20 }, (_, i) => i + 1);
+      const olderChunk = deferredFetch();
+      fetchMock().mockReturnValueOnce(olderChunk.promise);
+      const older = batch.findPRsByNumbers!(REPO, twenty);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      fetchMock().mockImplementationOnce(async () =>
+        graphqlMRs([{ ...mrNode(1), state: "merged" }])
+      );
+      await batch.findPRsByNumbers!(REPO, [1], { fresh: true });
+
+      // Past the fresh view's freshness, a wider batch joins the older chunk
+      // and adds a slow chunk of its own.
+      await vi.advanceTimersByTimeAsync(6_000);
+      const slowChunk = deferredFetch();
+      fetchMock().mockReturnValueOnce(slowChunk.promise);
+      const wider = batch.findPRsByNumbers!(REPO, [...twenty, 21]);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(3));
+      olderChunk.resolve(graphqlMRs(twenty.map((n) => mrNode(n))));
+      await older;
+      await vi.advanceTimersByTimeAsync(61_000);
+      slowChunk.resolve(graphqlMRs([mrNode(21)]));
+      await wider;
+
+      fetchMock().mockImplementation(async () => graphqlMRs([{ ...mrNode(1), state: "merged" }]));
+      expect((await batch.findPRsByNumbers!(REPO, [1])).get(1)?.state).toBe("merged");
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
   it("doesn't let a REST-answered batch join an older single read", async () => {
     fetchMock().mockImplementation(async () =>
       jsonResponse({
