@@ -85,18 +85,12 @@ export interface DecisionThreadMessage {
   expectsReply: boolean;
   sentAt: string;
   deliveryStatus:
-    | "received"
-    | "terminal-delivered"
-    | "needs-attention"
-    | "delivery-uncertain"
-    | null;
+    "received" | "terminal-delivered" | "needs-attention" | "delivery-uncertain" | null;
   unreadable: boolean;
 }
 
 export type DecisionThreadEntry =
-  | DecisionThreadAnswer
-  | DecisionThreadExpiry
-  | DecisionThreadMessage;
+  DecisionThreadAnswer | DecisionThreadExpiry | DecisionThreadMessage;
 
 /** A question with its content opened, in memory, for the desktop to show. Never stored. */
 export interface DecisionQuestionContent {

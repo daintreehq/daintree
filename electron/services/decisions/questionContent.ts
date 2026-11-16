@@ -7,7 +7,7 @@ import {
   type QuestionRow,
   type SealContext,
 } from "@daintreehq/decisions-client";
-import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { DecisionContentV1, type PhoneImageReference } from "@daintreehq/decisions-protocol";
 import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
@@ -50,12 +50,7 @@ export async function readQuestionContent(
   ctx: SealContext,
   row: QuestionRow
 ): Promise<DecisionQuestionContentResult> {
-  let content;
-  try {
-    content = await openQuestionContent(ctx, row);
-  } catch {
-    return { result: "unreadable" };
-  }
+  const content = await openedQuestion(ctx, row);
   if (content === null) return { result: "unreadable" };
   const question: DecisionQuestionContent = {
     questionId: row.question_id,
@@ -63,21 +58,21 @@ export async function readQuestionContent(
     terminalId: row.origin.pane_id,
     question: content.question,
     context: content.context ?? null,
-    kind: content.kind ?? "choice",
-    options: (content.options ?? []).map((option) => ({
+    kind: content.kind,
+    options: content.options.map((option) => ({
       id: option.id,
       label: option.label,
       description: option.description ?? null,
     })),
-    allowText: content.allow_text ?? false,
+    allowText: content.allow_text,
     requirement: row.requirement,
     askedAt: row.origin_created_at,
     expiresAt: row.expires_at,
     status: row.local_status,
     deliveryStatus: row.delivery_status,
-    attachments: (content.attachments ?? []).map((attachment) => ({
+    attachments: content.attachments.map((attachment) => ({
       attachmentId: attachment.attachment_id,
-      role: attachment.role ?? "other",
+      role: attachment.role,
       alt: attachment.alt ?? null,
       mime: attachment.mime,
       size: attachment.size,
@@ -92,13 +87,28 @@ export async function readQuestionSummary(
   ctx: SealContext,
   row: QuestionRow
 ): Promise<DecisionQuestionSummary> {
+  const content = await openedQuestion(ctx, row);
+  if (content === null) return { questionId: row.question_id, result: "unreadable" };
+  return { questionId: row.question_id, result: "read", line: questionLine(content.question) };
+}
+
+/**
+ * The question's content, opened and checked against the protocol's shape;
+ * null when the row has none, or it can't be opened or doesn't parse.
+ */
+async function openedQuestion(
+  ctx: SealContext,
+  row: QuestionRow
+): Promise<DecisionContentV1 | null> {
+  let raw: unknown;
   try {
-    const content = await openQuestionContent(ctx, row);
-    if (content === null) return { questionId: row.question_id, result: "unreadable" };
-    return { questionId: row.question_id, result: "read", line: questionLine(content.question) };
+    raw = await openQuestionContent(ctx, row);
   } catch {
-    return { questionId: row.question_id, result: "unreadable" };
+    return null;
   }
+  if (raw === null) return null;
+  const parsed = DecisionContentV1.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -111,7 +121,10 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
   for (const entry of parseAnswers(row.answers_json)) {
     const seq = entry.event_seq ?? 0;
     if (entry.kind === "expired") {
-      placed.push({ seq, entry: { type: "expired", entryId: entry.entry_id, sentAt: entry.created_at } });
+      placed.push({
+        seq,
+        entry: { type: "expired", entryId: entry.entry_id, sentAt: entry.created_at },
+      });
       continue;
     }
     let opened;
@@ -158,7 +171,8 @@ async function readThread(ctx: SealContext, row: QuestionRow): Promise<DecisionT
         images: (opened?.images ?? []).map(threadImage),
         expectsReply: message.expects_reply,
         sentAt: message.created_at,
-        deliveryStatus: (message.delivery?.status ?? null) as DecisionThreadMessage["deliveryStatus"],
+        deliveryStatus: (message.delivery?.status ??
+          null) as DecisionThreadMessage["deliveryStatus"],
         unreadable: opened === null,
       },
     });

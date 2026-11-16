@@ -1,0 +1,425 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  MemoryKeyStore,
+  loadIdentity,
+  sealAnswerContent,
+  sealQuestionContent,
+  serializeAnswers,
+  serializeMessages,
+  type AnswerContent,
+  type AnswerEntry,
+  type Identity,
+  type QuestionRow,
+  type StoredMessage,
+} from "@daintreehq/decisions-client";
+import {
+  encryptEnvelope,
+  generateDeviceKeys,
+  generateEpochKeyBytes,
+  serializeDeviceKeys,
+} from "@daintreehq/decisions-crypto";
+import {
+  MESSAGE_RECORD_TYPE,
+  bytesToBase64Url,
+  type PhoneImageReference,
+} from "@daintreehq/decisions-protocol";
+import { inScope, readQuestionContent, readQuestionSummary } from "../questionContent.js";
+import { row as baseRow } from "./questionRows.js";
+
+const QID = "0190f0aa11112222333344445555aa01";
+const SHA = "a".repeat(64);
+const NONCE = "AAAAAAAAAAAAAAAA";
+
+let identity: Identity;
+
+beforeAll(async () => {
+  const keys = new MemoryKeyStore();
+  await keys.save({
+    v: 1,
+    config: {
+      relayOrigin: "https://decisions.example.workers.dev",
+      installationId: "inst_12345678",
+      deviceId: "dev_12345678",
+      label: "Test desktop",
+    },
+    keys: await serializeDeviceKeys(await generateDeviceKeys(true)),
+    epochs: [{ epoch: 1, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
+    currentEpoch: 1,
+  });
+  identity = await loadIdentity(keys);
+});
+
+function ctx() {
+  return { identity };
+}
+
+const IMAGE: PhoneImageReference = {
+  attachment_id: "phoneimg_0001",
+  mime: "image/jpeg",
+  size: 2048,
+  sha256: SHA,
+  nonce: NONCE,
+  key_epoch: 1,
+  alt: "A sketch of the layout",
+};
+
+async function question(content: unknown, over: Partial<QuestionRow> = {}): Promise<QuestionRow> {
+  return {
+    ...baseRow(1, {
+      origin: { host_id: "host-1", pane_id: "pane-a", project_id: "project-1" },
+    }),
+    question_id: QID,
+    content_sealed: await sealQuestionContent(ctx(), QID, content),
+    ...over,
+  };
+}
+
+async function answer(
+  over: Partial<AnswerEntry>,
+  content: Partial<AnswerContent> = {}
+): Promise<AnswerEntry> {
+  const entryId = over.entry_id ?? "entry-1";
+  const revision = over.revision ?? 1;
+  return {
+    entry_id: entryId,
+    kind: "answer",
+    action: "answer",
+    revision,
+    source: "human",
+    correction: false,
+    created_at: "2026-11-01T10:05:00.000Z",
+    deliver: true,
+    delivered: true,
+    sealed: await sealAnswerContent(ctx(), QID, entryId, revision, {
+      choices: [],
+      text: "",
+      reviewed_attachment_digests: [],
+      ...content,
+    }),
+    ...over,
+  };
+}
+
+async function message(
+  messageId: string,
+  side: "human" | "agent",
+  text: string,
+  eventSeq: number,
+  images: PhoneImageReference[] = []
+): Promise<StoredMessage> {
+  const envelope = await encryptEnvelope({
+    epochKey: identity.epochs.get(1)!,
+    installationId: identity.config.installationId,
+    questionId: QID,
+    recordId: messageId,
+    recordType: MESSAGE_RECORD_TYPE,
+    revision: 0,
+    senderDeviceId: side === "human" ? "phone-1" : "dev_12345678",
+    purpose: "message-content",
+    plaintext:
+      side === "human"
+        ? { content_version: 1, side, text, images }
+        : { content_version: 1, side, text },
+  });
+  return {
+    message_id: messageId,
+    message_seq: eventSeq,
+    event_seq: eventSeq,
+    side,
+    expects_reply: side === "agent",
+    signer_device_id: side === "human" ? "phone-1" : "dev_12345678",
+    attachment_ids: images.map((image) => image.attachment_id),
+    created_at: `2026-11-01T10:${String(eventSeq).padStart(2, "0")}:00.000Z`,
+    committed_at: `2026-11-01T10:${String(eventSeq).padStart(2, "0")}:01.000Z`,
+    envelope_digest: `digest-${messageId}`,
+    sealed: JSON.stringify(envelope),
+    target_host_id: "host-1",
+    delivery:
+      side === "human"
+        ? {
+            status: "terminal-delivered",
+            deliver: true,
+            received_at: "2026-11-01T10:30:00.000Z",
+            terminal_delivered_at: "2026-11-01T10:31:00.000Z",
+            injection_id: "inj-1",
+            error_code: null,
+            reported: null,
+          }
+        : null,
+  };
+}
+
+const CONTENT = {
+  content_version: 1,
+  question: "\n  Which database should the cache use?\nPostgres is already running.",
+  context: "The cache sits behind the API.",
+  kind: "choice",
+  options: [
+    { id: "pg", label: "Postgres", description: "Already deployed" },
+    { id: "redis", label: "Redis" },
+  ],
+  attachments: [
+    {
+      attachment_id: "attach_0001",
+      role: "before",
+      alt: "Current schema",
+      mime: "image/png",
+      size: 4096,
+      sha256: SHA,
+      nonce: NONCE,
+      key_epoch: 1,
+    },
+  ],
+  allow_text: false,
+};
+
+describe("readQuestionContent", () => {
+  it("opens the question, its options and attachments, and the row's own fields", async () => {
+    const row = await question(CONTENT, {
+      requirement: "proxy-ok",
+      expires_at: "2026-11-02T10:00:00.000Z",
+      local_status: "human-answered",
+      delivery_status: "terminal-delivered",
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+
+    expect(read).toEqual({
+      result: "read",
+      question: {
+        questionId: QID,
+        alias: 1,
+        terminalId: "pane-a",
+        question: CONTENT.question,
+        context: "The cache sits behind the API.",
+        kind: "choice",
+        options: [
+          { id: "pg", label: "Postgres", description: "Already deployed" },
+          { id: "redis", label: "Redis", description: null },
+        ],
+        allowText: false,
+        requirement: "proxy-ok",
+        askedAt: row.origin_created_at,
+        expiresAt: "2026-11-02T10:00:00.000Z",
+        status: "human-answered",
+        deliveryStatus: "terminal-delivered",
+        attachments: [
+          {
+            attachmentId: "attach_0001",
+            role: "before",
+            alt: "Current schema",
+            mime: "image/png",
+            size: 4096,
+          },
+        ],
+        thread: [],
+      },
+    });
+  });
+
+  it("fills what the agent left out with the protocol's defaults", async () => {
+    const read = await readQuestionContent(ctx(), await question({ question: "Ship it?" }));
+
+    expect(read).toMatchObject({
+      result: "read",
+      question: { context: null, kind: "mixed", options: [], attachments: [], allowText: true },
+    });
+  });
+
+  it("orders answers, expiry and follow-ups by ledger seq, saying who sent each", async () => {
+    const legacy = await answer(
+      { entry_id: "entry-0", revision: 1, created_at: "2026-11-01T10:01:00.000Z" },
+      { choices: [{ id: "pg", label: "Postgres" }], text: "Postgres for now." }
+    );
+    const proxy = await answer(
+      { entry_id: "entry-p", revision: 2, source: "proxy", action: "proxy-answer", event_seq: 3 },
+      { choices: [{ id: "redis" }], confidence: 0.9, model_id: "model-1" }
+    );
+    const confirmed = await answer(
+      { entry_id: "entry-c", revision: 3, action: "confirm-proxy", event_seq: 5 },
+      { choices: [{ id: "redis", label: "Redis" }] }
+    );
+    const corrected = await answer(
+      { entry_id: "entry-x", revision: 4, action: "override", correction: true, event_seq: 8 },
+      {
+        choices: [{ id: "pg", label: "Postgres" }],
+        text: "Back to Postgres.",
+        reason: "Redis isn't approved yet.",
+        images: [IMAGE],
+      }
+    );
+    const expired: AnswerEntry = {
+      entry_id: "entry-e",
+      kind: "expired",
+      action: "expire",
+      revision: 5,
+      source: "system",
+      correction: false,
+      created_at: "2026-11-01T11:00:00.000Z",
+      event_seq: 12,
+      deliver: true,
+      delivered: true,
+      sealed: null,
+    };
+    const fromAgent = await message("msg_agent_01", "agent", "Is Redis allowed here?", 4);
+    const fromPerson = await message("msg_human_01", "human", "See the sketch.", 10, [IMAGE]);
+    const row = await question(CONTENT, {
+      answers_json: serializeAnswers([legacy, proxy, confirmed, corrected, expired]),
+      messages_json: serializeMessages([fromAgent, fromPerson]),
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    const { thread } = read.question;
+
+    expect(
+      thread.map((entry) => (entry.type === "message" ? entry.messageId : entry.entryId))
+    ).toEqual([
+      "entry-0",
+      "entry-p",
+      "msg_agent_01",
+      "entry-c",
+      "entry-x",
+      "msg_human_01",
+      "entry-e",
+    ]);
+    expect(thread[0]).toMatchObject({
+      type: "answer",
+      from: "person",
+      choices: [{ id: "pg", label: "Postgres" }],
+      text: "Postgres for now.",
+      unreadable: false,
+    });
+    expect(thread[1]).toMatchObject({
+      type: "answer",
+      from: "model",
+      choices: [{ id: "redis", label: null }],
+      text: null,
+      confirmsModel: false,
+    });
+    expect(thread[2]).toEqual({
+      type: "message",
+      messageId: "msg_agent_01",
+      from: "agent",
+      text: "Is Redis allowed here?",
+      images: [],
+      expectsReply: true,
+      sentAt: fromAgent.created_at,
+      deliveryStatus: null,
+      unreadable: false,
+    });
+    expect(thread[3]).toMatchObject({ type: "answer", from: "person", confirmsModel: true });
+    expect(thread[4]).toEqual({
+      type: "answer",
+      entryId: "entry-x",
+      revision: 4,
+      from: "person",
+      correction: true,
+      confirmsModel: false,
+      choices: [{ id: "pg", label: "Postgres" }],
+      text: "Back to Postgres.",
+      reason: "Redis isn't approved yet.",
+      images: [
+        {
+          attachmentId: "phoneimg_0001",
+          alt: "A sketch of the layout",
+          mime: "image/jpeg",
+          size: 2048,
+        },
+      ],
+      sentAt: corrected.created_at,
+      unreadable: false,
+    });
+    expect(thread[5]).toMatchObject({
+      type: "message",
+      from: "person",
+      text: "See the sketch.",
+      deliveryStatus: "terminal-delivered",
+      images: [{ attachmentId: "phoneimg_0001" }],
+    });
+    expect(thread[6]).toEqual({ type: "expired", entryId: "entry-e", sentAt: expired.created_at });
+  });
+
+  it("keeps the rest of the thread when one entry can't be opened", async () => {
+    const good = await answer({ entry_id: "entry-1", event_seq: 2 }, { text: "Yes." });
+    const broken = { ...(await answer({ entry_id: "entry-2", revision: 2, event_seq: 6 })) };
+    broken.sealed = good.sealed;
+    const tampered = { ...(await message("msg_human_02", "human", "Later.", 9)) };
+    tampered.side = "agent";
+    const row = await question(CONTENT, {
+      answers_json: serializeAnswers([good, broken]),
+      messages_json: serializeMessages([tampered]),
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+
+    expect(read.question.thread).toMatchObject([
+      { entryId: "entry-1", text: "Yes.", unreadable: false },
+      { entryId: "entry-2", choices: [], text: null, images: [], unreadable: true },
+      { messageId: "msg_human_02", text: null, unreadable: true },
+    ]);
+  });
+
+  it("is unreadable when the question has no content, can't be opened, or doesn't parse", async () => {
+    const sealedElsewhere = await question(CONTENT);
+    const moved = { ...sealedElsewhere, question_id: "0190f0aa11112222333344445555aa02" };
+
+    for (const row of [
+      await question(CONTENT, { content_sealed: null }),
+      moved,
+      await question({ question: "" }),
+      await question({ ...CONTENT, kind: "poll" }),
+    ]) {
+      await expect(readQuestionContent(ctx(), row)).resolves.toEqual({ result: "unreadable" });
+    }
+  });
+});
+
+describe("readQuestionSummary", () => {
+  it("is the question's first line that has words", async () => {
+    await expect(readQuestionSummary(ctx(), await question(CONTENT))).resolves.toEqual({
+      questionId: QID,
+      result: "read",
+      line: "Which database should the cache use?",
+    });
+  });
+
+  it("strips controls from the line", async () => {
+    const row = await question({ question: "Deploy \u001b[31mnow\u001b[0m?" });
+
+    await expect(readQuestionSummary(ctx(), row)).resolves.toMatchObject({ line: "Deploy now?" });
+  });
+
+  it("is unreadable without saying why when the content can't be opened", async () => {
+    const row = await question(CONTENT, { content_sealed: '{"ciphertext":"x"}' });
+
+    await expect(readQuestionSummary(ctx(), row)).resolves.toEqual({
+      questionId: QID,
+      result: "unreadable",
+    });
+  });
+});
+
+describe("inScope", () => {
+  const scope = { hostId: "host-1", projectId: "project-1", terminalId: "pane-a" };
+
+  it("reads only the pane's own questions, asked on this machine for this project", async () => {
+    const row = await question(CONTENT);
+
+    expect(inScope(row, scope)).toBe(true);
+    expect(inScope(row, { ...scope, terminalId: "pane-b" })).toBe(false);
+    expect(inScope(row, { ...scope, projectId: "project-2" })).toBe(false);
+    expect(inScope(row, { ...scope, hostId: "host-2" })).toBe(false);
+  });
+
+  it("reads nothing for a view with no project or a machine with no host id yet", async () => {
+    const row = await question(CONTENT);
+
+    expect(inScope(row, { ...scope, projectId: null })).toBe(false);
+    expect(inScope(row, { ...scope, hostId: null })).toBe(false);
+    expect(
+      inScope({ ...row, origin: { ...row.origin, project_id: "" } }, { ...scope, projectId: "" })
+    ).toBe(false);
+  });
+});
