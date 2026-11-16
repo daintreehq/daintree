@@ -81,18 +81,21 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
     setLoadError(null);
     if (readFromStore) return;
     const visit = visitRef.current;
-    setLoadError(null);
-    projectClient.getSettings(projectId).then(
-      (settings) => {
-        if (visitRef.current !== visit) return;
-        setLoaded({ projectId, links: settings.portalLinks ?? [] });
-      },
-      (error: unknown) => {
-        if (visitRef.current !== visit) return;
-        logError("Failed to read the project's Portal links", error);
-        setLoadError(formatErrorMessage(error, "The project's links couldn't be read."));
-      }
-    );
+    // Through a promise, so a client that throws as it is called lands on the
+    // page's error rather than escaping the effect.
+    Promise.resolve()
+      .then(() => projectClient.getSettings(projectId))
+      .then(
+        (settings) => {
+          if (visitRef.current !== visit) return;
+          setLoaded({ projectId, links: settings.portalLinks ?? [] });
+        },
+        (error: unknown) => {
+          if (visitRef.current !== visit) return;
+          logError("Failed to read the project's Portal links", error);
+          setLoadError(formatErrorMessage(error, "The project's links couldn't be read."));
+        }
+      );
   }, [projectId, readFromStore, reloadCount]);
 
   const links = storeLinks ?? (loaded?.projectId === projectId ? loaded.links : NO_LINKS);
