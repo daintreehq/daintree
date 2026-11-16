@@ -31,6 +31,7 @@ let readyCallbacks: Array<() => void> = [];
 let answerStates: (states: WorktreeSnapshot[], seq?: number) => void = () => {};
 let answerAssociations: () => void = () => {};
 let stateRequests = 0;
+let associationRequests = 0;
 let eventListeners = new Map<string, (data: unknown) => void>();
 
 function worktree(id: string): WorktreeSnapshot {
@@ -46,6 +47,7 @@ beforeEach(() => {
   portReady = false;
   readyCallbacks = [];
   stateRequests = 0;
+  associationRequests = 0;
   eventListeners = new Map();
   resetWorktreeSnapshotSyncForTesting();
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
@@ -84,6 +86,7 @@ beforeEach(() => {
     worktree: {
       getAllIssueAssociations: () =>
         new Promise((resolve) => {
+          associationRequests += 1;
           answerAssociations = () => resolve({});
         }),
       getPRStatus: () => Promise.resolve(null),
@@ -202,19 +205,28 @@ describe("WorktreeStoreProvider — re-hydrating after a port gap (#17037)", () 
         seq: 10,
       });
     });
+    const waiting = waitForWorktreeSnapshot(WAIT_MS)!;
+    let done = false;
+    void waiting.then(() => {
+      done = true;
+    });
     await act(async () => {
       answerAssociations();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(stateRequests).toBe(3);
+    expect(associationRequests).toBe(2);
+    expect(done).toBe(false);
 
+    // The retry reuses the associations it already has, so it applies as soon
+    // as its states arrive, however busy the host is.
     await act(async () => {
       answerStates([worktree("wt-a")], 10);
-      answerAssociations();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waiting;
     });
     expect(store.getState().worktrees.has("wt-gone")).toBe(false);
     expect(store.getState().worktrees.has("wt-a")).toBe(true);
+    expect(done).toBe(true);
 
     unmount();
   });
