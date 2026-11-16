@@ -148,13 +148,49 @@ describe("what Edit > Undo names", () => {
     expect(undoCloseMenuState()).toEqual({ count: 3, title: null });
   });
 
-  it("keeps the title once the panel is gone from the store", () => {
-    seed("shell", { title: "Build watcher" });
-    userClose(["shell"]);
-    usePanelStore.setState((state) => ({
-      panelsById: { ...state.panelsById, shell: { ...state.panelsById.shell!, title: "renamed" } },
-    }));
-    expect(undoCloseMenuState()).toEqual({ count: 1, title: "Build watcher" });
+  it("keeps an agent's title once the trash has let the panel go", () => {
+    seed("agent", {
+      title: "Codex",
+      launchAgentId: "codex",
+      detectedAgentId: "codex",
+      agentState: "idle",
+    });
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+    expect(usePanelStore.getState().panelsById.agent).toBeUndefined();
+    expect(history.peekUndoCloseStep()?.panels[0]?.status).toBe("expired");
+    expect(undoCloseMenuState()).toEqual({ count: 1, title: "Codex" });
+  });
+
+  it("names a file, a diff and a browser the way their headers do", () => {
+    const named = (panel: Record<string, unknown>) =>
+      history.closedPanelTitle({
+        id: "p",
+        location: "grid",
+        isVisible: true,
+        worktreeId: "wt-1",
+        ...panel,
+      } as never);
+    expect(named({ kind: "file", title: "File", filePath: "/repo/docs/spec.md" })).toBe("spec.md");
+    expect(
+      named({ kind: "file", title: "Notes", titleMode: "user", filePath: "/repo/spec.md" })
+    ).toBe("Notes");
+    expect(named({ kind: "diff", title: "Diff", filePath: "C:\\repo\\src\\a.ts" })).toBe("a.ts");
+    expect(
+      named({ kind: "browser", title: "Browser", browserUrl: "http://localhost:5173/x" })
+    ).toBe("localhost:5173");
+    expect(named({ kind: "browser", title: "Docs", browserUrl: "http://localhost:5173/" })).toBe(
+      "Docs"
+    );
+    expect(named({ kind: "browser", title: "Browser", browserUrl: "not a url" })).toBe("Browser");
+  });
+
+  it("publishes no more of a title than main takes", () => {
+    seed("long", { title: "x".repeat(10_000) });
+    userClose(["long"]);
+    const title = undoCloseMenuState()?.title ?? "";
+    expect(title.length).toBeGreaterThan(40);
+    expect(title.length).toBeLessThanOrEqual(4096);
   });
 
   it("counts only the panels of a batch still in the trash", () => {
@@ -224,12 +260,20 @@ describe("what Edit > Undo names", () => {
   it("asks without touching a pending chord", () => {
     seed("a");
     userClose(["a"]);
+    keybindingService.resolveKeybinding(
+      new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true })
+    );
+    const pending = keybindingService.getPendingChord();
+    expect(pending).not.toBeNull();
     const chord = vi.fn();
     const unsubscribe = keybindingService.subscribeChord(chord);
-    undoCloseMenuState();
+    // A pending chord takes Cmd+Z as its next key, which nothing completes.
+    expect(undoCloseMenuState()).toBeNull();
     unsubscribe();
     expect(chord).not.toHaveBeenCalled();
-    expect(keybindingService.getPendingChord()).toBeNull();
+    expect(keybindingService.getPendingChord()).toBe(pending);
+    expect(keybindingService.getLastInvalidKey()).toBeNull();
+    keybindingService.clearPendingChord();
   });
 });
 
@@ -287,6 +331,33 @@ describe("the publisher", () => {
     keybindingService.applyOverrides({ "panel.undoClose": [] });
     await settle();
     expect(published.at(-1)).toBeNull();
+    stop();
+  });
+
+  it("looks again when the window's focus goes into a frame", async () => {
+    const published: UndoCloseMenuState[] = [];
+    const stop = startUndoCloseMenuPublisher((state) => published.push(state));
+    seed("a");
+    userClose(["a"]);
+    await settle();
+    expect(published.at(-1)).toEqual({ count: 1, title: "a" });
+
+    // Focus entering a frame moves none between this document's elements:
+    // the window blurs, and the frame becomes the active element.
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const active = vi.spyOn(document, "activeElement", "get").mockReturnValue(frame);
+    try {
+      window.dispatchEvent(new Event("blur"));
+      await settle();
+      expect(published.at(-1)).toBeNull();
+    } finally {
+      active.mockRestore();
+    }
+
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(published.at(-1)).toEqual({ count: 1, title: "a" });
     stop();
   });
 });

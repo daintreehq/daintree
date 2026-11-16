@@ -80,13 +80,21 @@ function scheduleRefresh(): void {
   });
 }
 
+// A crash-loop's recovery page replaces the document without mounting the
+// app, so nothing would ever clear the dead document's close.
+function onRenderProcessGone(_event: Electron.Event, wc: WebContents): void {
+  if (states.delete(wc.id)) scheduleRefresh();
+}
+
 // Installed with the first close a view names, so an app where nobody closes
-// a panel listens to nothing.
+// a panel listens to nothing. App-wide, not per view: a project view already
+// carries close to the listener limit on its own events.
 function trackFocus(wc: WebContents): void {
   if (!focusTracking) {
     focusTracking = true;
     app.on("browser-window-focus", scheduleRefresh);
     app.on("browser-window-blur", scheduleRefresh);
+    app.on("render-process-gone", onRenderProcessGone);
   }
   if (watched.has(wc.id)) return;
   const id = wc.id;
@@ -152,6 +160,7 @@ export function resetUndoMenuStateForTests(): void {
   if (focusTracking) {
     app.removeListener("browser-window-focus", scheduleRefresh);
     app.removeListener("browser-window-blur", scheduleRefresh);
+    app.removeListener("render-process-gone", onRenderProcessGone);
   }
   focusTracking = false;
   refreshQueued = false;

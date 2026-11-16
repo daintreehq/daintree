@@ -1,5 +1,5 @@
 import type { ActionSource } from "@shared/types/actions";
-import { isPtyPanel } from "@shared/types/panel";
+import { isBrowserPanel, isDiffPanel, isFilePanel, isPtyPanel } from "@shared/types/panel";
 import { getTerminalDisplayTitle } from "@shared/utils/terminalTitleDisplay";
 import type { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -86,6 +86,36 @@ export function connectPanelCloseHistory(api: PanelStoreApi | null): void {
   setSteps(api === null ? [] : steps);
 }
 
+function urlHost(url: string): string | null {
+  try {
+    return new URL(url).host || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The name a panel's header shows, by that kind's own rule: an agent's task
+ * beside its name, a file's or diff's file name until the person renames it,
+ * and a browser's host until its page has a title.
+ */
+export function closedPanelTitle(panel: Parameters<typeof isPtyPanel>[0]): string {
+  if (isPtyPanel(panel)) {
+    return getTerminalDisplayTitle(panel, "full", {
+      showTask: usePreferencesStore.getState().showAgentTaskTitles,
+    });
+  }
+  if ((isFilePanel(panel) || isDiffPanel(panel)) && panel.titleMode !== "user") {
+    const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
+    if (fileName) return fileName;
+  }
+  if (isBrowserPanel(panel) && (!panel.title || panel.title === "Browser")) {
+    const host = panel.browserUrl ? urlHost(panel.browserUrl) : null;
+    if (host) return host;
+  }
+  return panel.title;
+}
+
 function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSnapshot | null {
   const closing = new Set(panelIds);
   const panels: ClosedPanel[] = [];
@@ -107,9 +137,7 @@ function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSna
     const index = state.panelIds.indexOf(id);
     panels.push({
       id,
-      title: getTerminalDisplayTitle(panel, "full", {
-        showTask: usePreferencesStore.getState().showAgentTaskTitles,
-      }),
+      title: closedPanelTitle(panel),
       worktreeId: panel.worktreeId ?? null,
       location,
       agentId:

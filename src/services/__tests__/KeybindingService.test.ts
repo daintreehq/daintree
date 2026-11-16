@@ -1130,6 +1130,26 @@ describe("KeybindingService", () => {
       expect(chord).not.toHaveBeenCalled();
     });
 
+    it("names the binding a pending chord's next key would complete, and leaves the chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "panel.undoClose": ["Cmd+K Cmd+Z"] });
+      expect(service.peekKeybinding(cmdZ(), null)).toBeUndefined();
+
+      service.resolveKeybinding(cmdK());
+      const pending = service.getPendingChord();
+      expect(pending).not.toBeNull();
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBe(pending);
+      expect(chord).not.toHaveBeenCalled();
+      // The real keystroke completes it.
+      expect(service.resolveKeybinding(cmdZ()).match?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBeNull();
+    });
+
     it("hands the target it asks about to the when context", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();

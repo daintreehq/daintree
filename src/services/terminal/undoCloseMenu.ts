@@ -42,12 +42,19 @@ export function undoCloseMenuStep(): CloseStep | null {
   return undoCloseStepFor(target, target.closest(".xterm") !== null, true);
 }
 
+/** More than the menu ever shows, and within what main accepts. */
+const MAX_PUBLISHED_TITLE = 256;
+
 /** {@link undoCloseMenuStep} as the menu names it. */
 export function undoCloseMenuState(): UndoCloseMenuState {
   const step = undoCloseMenuStep();
   if (step === null) return null;
   const count = step.panels.length;
-  return { count, title: count === 1 ? step.panels[0]!.title : null };
+  const title = count === 1 ? step.panels[0]!.title : null;
+  return {
+    count,
+    title: title === null ? null : Array.from(title).slice(0, MAX_PUBLISHED_TITLE).join(""),
+  };
 }
 
 function sameState(a: UndoCloseMenuState, b: UndoCloseMenuState | undefined): boolean {
@@ -56,8 +63,9 @@ function sameState(a: UndoCloseMenuState, b: UndoCloseMenuState | undefined): bo
 
 /**
  * Hands `publish` this view's Edit > Undo state whenever it changes: a close
- * joining or leaving the history, focus moving, a field's undo history moving,
- * or a key binding changing. Changes in one task are published once, after
+ * joining or leaving the history, focus moving (in the document, into a
+ * frame, or back to the window), a field's undo history moving, or a key
+ * binding changing. Changes in one task are published once, after
  * focus has settled on its new element. Returns the stop.
  */
 export function startUndoCloseMenuPublisher(
@@ -89,6 +97,10 @@ export function startUndoCloseMenuPublisher(
   ];
   document.addEventListener("focusin", schedule, true);
   document.addEventListener("focusout", schedule, true);
+  // Focus going into a frame, or the window coming back, moves no focus
+  // between this document's own elements.
+  window.addEventListener("focus", schedule);
+  window.addEventListener("blur", schedule);
   schedule();
 
   return () => {
@@ -97,5 +109,7 @@ export function startUndoCloseMenuPublisher(
     for (const unsubscribe of unsubscribers) unsubscribe();
     document.removeEventListener("focusin", schedule, true);
     document.removeEventListener("focusout", schedule, true);
+    window.removeEventListener("focus", schedule);
+    window.removeEventListener("blur", schedule);
   };
 }

@@ -186,6 +186,29 @@ describe("undoMenuState", () => {
       expect(undoItem.label).toBe("Undo");
     });
 
+    it("forgets a view's close when its renderer dies", async () => {
+      const view = fakeContents(1);
+      const other = fakeContents(2);
+      focus.current = view;
+      setUndoCloseState(asContents(view), { count: 1, title: "One" });
+      setUndoCloseState(asContents(other), { count: 1, title: "Two" });
+      await settle();
+      expect(undoItem.label).toBe('Undo Close "One"');
+
+      // A crash loop's recovery page keeps the WebContents but never publishes.
+      for (const listener of appListeners.get("render-process-gone") ?? []) {
+        (listener as unknown as (event: unknown, wc: unknown) => void)({}, view);
+      }
+      await settle();
+      expect(undoItem.label).toBe("Undo");
+      handleUndoMenuClick(click);
+      expect(view.send).not.toHaveBeenCalled();
+      expect(view.undo).toHaveBeenCalledTimes(1);
+
+      focus.current = other;
+      expect(currentUndoMenuLabel()).toBe('Undo Close "Two"');
+    });
+
     it("listens for focus only once a view names a close", () => {
       const view = fakeContents(1);
       setUndoCloseState(asContents(view), null);

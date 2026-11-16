@@ -258,6 +258,20 @@ describe("telling Edit > Undo a field's undo moved (#17108)", () => {
     unsubscribe();
   });
 
+  it("tells it when the composer's history is cleared under an unchanged close", () => {
+    const view = mount();
+    nextCloseSeq();
+    type(view, "after the close");
+    const moved = vi.fn();
+    const unsubscribe = subscribeCloseUndoEdits(moved);
+
+    clearComposerHistory(view);
+
+    expect(moved).toHaveBeenCalledTimes(1);
+    expect(editorHasEditsSinceClose(view.state, 1)).toBe(false);
+    unsubscribe();
+  });
+
   it("tells it of typing in a native field once a close is in the history", () => {
     nextCloseSeq();
     trackNativeFieldEdits();
