@@ -37,6 +37,10 @@ import type {
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
 } from "../../../shared/types/decisionsAttention.js";
+import type {
+  DecisionQuestionContentResult,
+  DecisionQuestionSummary,
+} from "../../../shared/types/decisionsQuestion.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
 import {
@@ -55,6 +59,12 @@ import {
   type OpenFollowUp,
 } from "./attentionList.js";
 import { sanitizeAnswerText } from "./answerNotice.js";
+import {
+  inScope,
+  readQuestionContent,
+  readQuestionSummary,
+  type QuestionReadScope,
+} from "./questionContent.js";
 import {
   DaintreeResume,
   RESUMABLE_AGENTS,
@@ -386,6 +396,42 @@ export class AnswerDelivery {
       });
     }
     return items;
+  }
+
+  /**
+   * One question of a pane with its content, answers and follow-ups opened
+   * in memory (#17097), whatever its status: an answered, cancelled or
+   * expired question stays readable for as long as the store holds it.
+   */
+  async questionContent(
+    scope: Omit<QuestionReadScope, "hostId">,
+    questionId: string
+  ): Promise<DecisionQuestionContentResult> {
+    const row = await this.store.getQuestion(questionId);
+    if (row === null || !inScope(row, this.readScope(scope))) return { result: "not-found" };
+    return readQuestionContent(this.owner.ctx, row);
+  }
+
+  /** Each question's opening line, in the order asked for, each id once (#17097). */
+  async questionSummaries(
+    scope: Omit<QuestionReadScope, "hostId">,
+    questionIds: readonly string[]
+  ): Promise<DecisionQuestionSummary[]> {
+    const read = this.readScope(scope);
+    const summaries: DecisionQuestionSummary[] = [];
+    for (const questionId of new Set(questionIds)) {
+      const row = await this.store.getQuestion(questionId);
+      summaries.push(
+        row === null || !inScope(row, read)
+          ? { questionId, result: "not-found" }
+          : await readQuestionSummary(this.owner.ctx, row)
+      );
+    }
+    return summaries;
+  }
+
+  private readScope(scope: Omit<QuestionReadScope, "hostId">): QuestionReadScope {
+    return { ...scope, hostId: this.o.deps.hostId() };
   }
 
   /**

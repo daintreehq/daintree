@@ -83,6 +83,12 @@ import type {
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
+import type {
+  DecisionQuestionContentResult,
+  DecisionQuestionSummariesResult,
+  GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesPayload,
+} from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
@@ -771,6 +777,38 @@ const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-ru
 /** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
 export function getDecisionsPaneState(terminalId: string): PaneDecisionState | null {
   return service?.getPaneState(terminalId) ?? null;
+}
+
+/**
+ * One question of a pane with its content opened (#17097), for the view of
+ * the project that pane belongs to. Never makes or starts the service.
+ */
+export function getDecisionQuestionContent(
+  projectId: string | null,
+  payload: GetDecisionQuestionPayload
+): Promise<DecisionQuestionContentResult> {
+  return whileDelivering<DecisionQuestionContentResult>(
+    (delivery) =>
+      delivery.questionContent({ projectId, terminalId: payload.terminalId }, payload.questionId),
+    { result: "not-running" }
+  );
+}
+
+/** The opening lines of a pane's questions (#17097). Never makes or starts the service. */
+export function getDecisionQuestionSummaries(
+  projectId: string | null,
+  payload: GetDecisionQuestionSummariesPayload
+): Promise<DecisionQuestionSummariesResult> {
+  return whileDelivering<DecisionQuestionSummariesResult>(
+    async (delivery) => ({
+      result: "read",
+      summaries: await delivery.questionSummaries(
+        { projectId, terminalId: payload.terminalId },
+        payload.questionIds
+      ),
+    }),
+    { result: "not-running" }
+  );
 }
 
 /**

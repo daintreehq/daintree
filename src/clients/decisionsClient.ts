@@ -4,6 +4,10 @@ import type {
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
 } from "@shared/types/decisionsAttention";
+import type {
+  DecisionQuestionContentResult,
+  DecisionQuestionSummariesResult,
+} from "@shared/types/decisionsQuestion";
 
 /** Daintree Decisions, as main observes it. Pane state comes from the machine that owns the pane. */
 export const decisionsClient = {
@@ -63,6 +67,24 @@ export const decisionsClient = {
   /** A pane's current state; null while Decisions is off or the pane has nothing outstanding. */
   getPaneState: (terminalId: string): Promise<PaneDecisionState | null> =>
     window.electron.decisions.getPaneState(terminalId),
+
+  /**
+   * One of a pane's questions with its content, answers and follow-ups,
+   * read from the machine that owns the pane, whatever the question's status.
+   * Content is held in memory only: never log it or keep it in a persisted store.
+   */
+  getQuestionContent: (
+    terminalId: string,
+    questionId: string
+  ): Promise<DecisionQuestionContentResult> =>
+    window.electron.decisions.getQuestionContent({ terminalId, questionId }),
+
+  /** The opening line of each of a pane's questions, for a list to name them by. */
+  getQuestionSummaries: (
+    terminalId: string,
+    questionIds: string[]
+  ): Promise<DecisionQuestionSummariesResult> =>
+    window.electron.decisions.getQuestionSummaries({ terminalId, questionIds }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

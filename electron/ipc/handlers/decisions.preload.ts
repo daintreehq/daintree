@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const DECISIONS_METHOD_CHANNELS = {
   getStatus: "decisions:get-status",
   getPaneState: "decisions:get-pane-state",
+  getQuestionContent: "decisions:get-question-content",
+  getQuestionSummaries: "decisions:get-question-summaries",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
   claimRelay: "decisions:claim-relay",
