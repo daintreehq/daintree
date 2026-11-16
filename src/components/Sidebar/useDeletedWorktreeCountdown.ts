@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import type { DeletedWorktree, DeletedWorktreeHoldReason } from "@/store/worktreeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
@@ -49,7 +49,15 @@ export function useDeletedWorktreeCountdown(worktree: DeletedWorktree): DeletedW
     hasCountdown && worktree.holdReason !== null
       ? DELETED_WORKTREE_HOLD_COPY[worktree.holdReason]
       : undefined;
-  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, hasCountdown);
+  // A held readout is frozen from captured state below, so ticking it would only
+  // re-render for nothing. Resync before paint when the hold lifts: the clock
+  // slept through the hold, and the first unheld frame must not read a deadline
+  // the sweep re-pinned against a stale `now`.
+  const isTicking = hasCountdown && hold === undefined;
+  useVisibilityAwareInterval(() => setNowTick(Date.now()), 1000, isTicking);
+  useLayoutEffect(() => {
+    if (isTicking) setNowTick(Date.now());
+  }, [isTicking]);
   // Clamp to the TTL: the sweep arms the deadline off its own clock, so the
   // first tick after arming can otherwise read a whole second past full ("61s").
   const cleanupMs = cleanupSeconds * 1000;

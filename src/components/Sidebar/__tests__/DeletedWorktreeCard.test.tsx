@@ -309,6 +309,37 @@ describe("DeletedWorktreeCard", () => {
     }
   });
 
+  // A held readout is frozen, so a 1Hz tick behind it would only re-render the
+  // row for nothing (#17051).
+  it("runs no countdown interval while the countdown is held", () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      const base = 1_700_000_000_000;
+      vi.setSystemTime(base);
+      const held: DeletedWorktree = {
+        ...worktree,
+        expiresAt: base + 38_000,
+        holdReason: "agent",
+      };
+      const secondTicks = () => setIntervalSpy.mock.calls.filter(([, ms]) => ms === 1000).length;
+
+      const { rerender } = renderCard(held);
+      expect(secondTicks()).toBe(0);
+
+      rerender(
+        <TooltipProvider>
+          <DeletedWorktreeCard worktree={{ ...held, holdReason: null }} />
+        </TooltipProvider>
+      );
+      expect(secondTicks()).toBe(1);
+    } finally {
+      setIntervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("names each hold condition in terms the user can act on", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     const copyFor = (holdReason: DeletedWorktree["holdReason"]) => {
