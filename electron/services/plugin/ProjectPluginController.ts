@@ -308,14 +308,17 @@ export class ProjectPluginController {
    * closed project's plugins can outlive it to one user action.
    */
   async sweepClosedProjects(exceptProjectId: string): Promise<void> {
-    for (const trackedId of this.closedTrackedProjects(exceptProjectId)) {
-      await this.onProjectClosed(trackedId);
+    for (const trackedId of [...this.entries.keys()]) {
+      if (this.isSweepable(trackedId, exceptProjectId)) await this.onProjectClosed(trackedId);
     }
   }
 
-  private closedTrackedProjects(exceptProjectId: string): string[] {
-    return [...this.entries.keys()].filter(
-      (trackedId) => trackedId !== exceptProjectId && this.deps.isProjectClosed(trackedId)
+  /** Re-read per project, after the previous close's await, so one reopened meanwhile is kept. */
+  private isSweepable(trackedId: string, exceptProjectId: string): boolean {
+    return (
+      trackedId !== exceptProjectId &&
+      this.entries.has(trackedId) &&
+      this.deps.isProjectClosed(trackedId)
     );
   }
 
@@ -328,8 +331,8 @@ export class ProjectPluginController {
     if (this.disposed) return;
     if (this.superseded(projectId, requested, requestedGeneration)) return;
 
-    for (const trackedId of this.closedTrackedProjects(projectId)) {
-      await this.onProjectClosed(trackedId);
+    for (const trackedId of [...this.entries.keys()]) {
+      if (this.isSweepable(trackedId, projectId)) await this.onProjectClosed(trackedId);
     }
 
     // The sweep awaits, so re-check before reading a generation off the entry:

@@ -1226,15 +1226,25 @@ describe("warm reopen of an already open project (#17039)", () => {
     return { service, root, rediscover, replay, discoverOriginal };
   }
 
-  it("rediscovers and replays only on the first open at a root", async () => {
+  /**
+   * A first open is never trusted on its own: the watcher arms after its
+   * discovery, so only the second, spanned by an unbroken watch, establishes.
+   */
+  async function establish(service: PluginService, projectId: string, root: string) {
+    await service.onProjectOpened(projectId, root);
+    await service.onProjectOpened(projectId, root);
+  }
+
+  it("rediscovers and replays only until an unbroken watch has spanned an open", async () => {
     const { service, root, rediscover, replay } = await startWithProject();
 
-    await service.onProjectOpened(PROJECT_A, root);
+    await establish(service, PROJECT_A, root);
+    expect(rediscover).toHaveBeenCalledTimes(2);
     await service.onProjectOpened(PROJECT_A, root);
     await service.onProjectOpened(PROJECT_A, root);
 
-    expect(rediscover).toHaveBeenCalledTimes(1);
-    expect(replay).toHaveBeenCalledTimes(1);
+    expect(rediscover).toHaveBeenCalledTimes(2);
+    expect(replay).toHaveBeenCalledTimes(2);
   });
 
   it("joins an open still in flight instead of queueing another", async () => {
@@ -1264,34 +1274,39 @@ describe("warm reopen of an already open project (#17039)", () => {
 
   it("does the full open again once the watcher has lost sight of the folder", async () => {
     const { service, root, rediscover } = await startWithProject();
-    await service.onProjectOpened(PROJECT_A, root);
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
     (
       service as unknown as { projectPluginWatcherRegistry: { stop(id: string): void } }
     ).projectPluginWatcherRegistry.stop(PROJECT_A);
     await service.onProjectOpened(PROJECT_A, root);
 
-    expect(rediscover).toHaveBeenCalledTimes(2);
+    expect(rediscover).toHaveBeenCalledTimes(1);
   });
 
   it("does the full open again after a mute or an instance toggle", async () => {
     const { service, root, rediscover } = await startWithProject();
-    await service.onProjectOpened(PROJECT_A, root);
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
     await service.setProjectPluginMuted(PROJECT_A, "acme.none", true).catch(() => {});
     await service.onProjectOpened(PROJECT_A, root);
-    expect(rediscover).toHaveBeenCalledTimes(2);
+    expect(rediscover).toHaveBeenCalledTimes(1);
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
     await service.setProjectInstanceEnabled(PROJECT_A, root, "acme.none", false).catch(() => {});
     await service.onProjectOpened(PROJECT_A, root);
-    expect(rediscover).toHaveBeenCalledTimes(3);
+    expect(rediscover).toHaveBeenCalledTimes(1);
   });
 
   it("does the full open again after the closed-row sweep dropped the project", async () => {
     const { service, root, rediscover } = await startWithProject();
     const rootB = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
     extraTempRoots.push(rootB);
-    await service.onProjectOpened(PROJECT_A, root);
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
     // A's row closes without a close notification; switching to B sweeps it.
     projectStoreMock.getProjectById.mockImplementation(((id: string) =>
@@ -1300,19 +1315,23 @@ describe("warm reopen of an already open project (#17039)", () => {
     projectStoreMock.getProjectById.mockImplementation(() => null);
 
     await service.onProjectOpened(PROJECT_A, root);
-    expect(rediscover).toHaveBeenCalledTimes(3);
+    expect(rediscover).toHaveBeenCalledTimes(2);
+    expect(rediscover).toHaveBeenLastCalledWith(PROJECT_A, root);
   });
 
   it("does the full open again after a close, a root change, a trust change or a reload", async () => {
     const { service, root, rediscover } = await startWithProject();
     const otherRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-warm-open-"));
     extraTempRoots.push(otherRoot);
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
-    await service.onProjectOpened(PROJECT_A, root);
     await service.onProjectClosed(PROJECT_A);
     await service.onProjectOpened(PROJECT_A, root);
-    expect(rediscover).toHaveBeenCalledTimes(2);
+    expect(rediscover).toHaveBeenCalledTimes(1);
 
+    await establish(service, PROJECT_A, otherRoot);
+    expect(rediscover).toHaveBeenCalledTimes(3);
     await service.onProjectOpened(PROJECT_A, otherRoot);
     expect(rediscover).toHaveBeenCalledTimes(3);
 
@@ -1329,12 +1348,27 @@ describe("warm reopen of an already open project (#17039)", () => {
 
   it("does not treat a close during the open as established", async () => {
     const { service, root, rediscover } = await startWithProject();
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
 
-    const opening = service.onProjectOpened(PROJECT_A, root);
+    projectStoreMock.getProjectById.mockImplementation(() => ({ path: root }));
+    const opening = service.reloadProjectPlugins(PROJECT_A);
     const closing = service.onProjectClosed(PROJECT_A);
     await Promise.all([opening, closing]);
     await service.onProjectOpened(PROJECT_A, root);
 
     expect(rediscover).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts a newly appeared plugins folder with a full open", async () => {
+    const { service, root, rediscover } = await startWithProject();
+    await establish(service, PROJECT_A, root);
+    rediscover.mockClear();
+
+    // The sentinel only vouches for a folder that is still missing.
+    await fs.mkdir(path.join(root, ".daintree", "plugins"), { recursive: true });
+    await service.onProjectOpened(PROJECT_A, root);
+
+    expect(rediscover).toHaveBeenCalledTimes(1);
   });
 });

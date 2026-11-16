@@ -6699,8 +6699,11 @@ export class PluginService {
     if (pending?.root === projectRoot) return pending.promise;
     if (!pending && this.isProjectOpenEstablished(projectId, projectRoot)) {
       this.wakeProjectOpenWaiters(projectId);
-      await this.projectPlugins.sweepClosedProjects(projectId);
-      if (this.disposed) return;
+      // Not awaited: it closes other projects, and holding this switch on it
+      // would let a newer open of this one land before the watcher sync below.
+      void this.projectPlugins.sweepClosedProjects(projectId).catch((err: unknown) => {
+        console.error("[PluginService] Closed-project sweep failed:", err);
+      });
       await this.syncProjectPluginWatcher(projectId, projectRoot);
       return;
     }
@@ -6722,6 +6725,11 @@ export class PluginService {
   private reconcileProjectOpen(projectId: string, projectRoot: string): Promise<void> {
     this.establishedProjectOpens.delete(projectId);
     const isCurrent = (): boolean => this.pendingProjectOpens.get(projectId)?.promise === promise;
+    // Discovery runs before the watcher arms, so a plugin landing in between
+    // is in the watcher's baseline but not loaded. Only an open the same
+    // unbroken observation spanned can be trusted to have seen everything;
+    // a project's first open never is, so its second open is still full.
+    const observedBefore = this.projectPluginWatcherRegistry?.observationToken(projectId) ?? null;
     const promise: Promise<void> = this.runProjectOpen(projectId, projectRoot).then(
       () => {
         // No watcher (disabled trust, a subscribe that failed) means nothing
@@ -6731,6 +6739,7 @@ export class PluginService {
           isCurrent() &&
           !this.disposed &&
           observation !== null &&
+          observation === observedBefore &&
           this.openProjectRoots.get(projectId) === projectRoot &&
           !this.failedDiscoveryRoots.has(projectRoot)
         ) {
