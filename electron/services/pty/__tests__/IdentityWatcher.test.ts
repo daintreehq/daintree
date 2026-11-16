@@ -2777,7 +2777,8 @@ describe("IdentityWatcher", () => {
         );
         polls.mockClear();
       };
-      return { ...fake, polls, watcher, stepPastPoll };
+      const maxPollGap = () => Math.max(...pollTimes.slice(1).map((at, i) => at - pollTimes[i]));
+      return { ...fake, polls, pollTimes, maxPollGap, watcher, stepPastPoll };
     }
 
     async function settle(watcher: IdentityWatcher, command = "codex") {
@@ -2786,18 +2787,19 @@ describe("IdentityWatcher", () => {
     }
 
     it("backs a quiet committed agent off to the idle ceiling", async () => {
-      const { polls, watcher, state } = makeSettledAgent();
+      const { polls, pollTimes, maxPollGap, watcher, state } = makeSettledAgent();
       await settle(watcher);
       expect(watcher.isFallbackCommitted).toBe(true);
       polls.mockClear();
+      pollTimes.length = 0;
 
       await vi.advanceTimersByTimeAsync(60_000);
 
       // A sanity poll still runs, but nowhere near the 300 a 200 ms tick costs.
-      expect(polls).toHaveBeenCalled();
       expect(polls.mock.calls.length).toBeLessThanOrEqual(
         60_000 / SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS
       );
+      expect(maxPollGap()).toBe(SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS);
       expect(state.detectionCalls).toEqual([
         expect.objectContaining({ agentType: "codex", isBusy: true }),
       ]);
@@ -2805,16 +2807,22 @@ describe("IdentityWatcher", () => {
     });
 
     it("backs off a command with no identity once the commit window has passed", async () => {
-      const { polls, watcher } = makeSettledAgent({ visibleLines: ["running"], cursorLine: "" });
+      const { polls, pollTimes, maxPollGap, watcher } = makeSettledAgent({
+        visibleLines: ["running"],
+        cursorLine: "",
+      });
       await settle(watcher, "echo hi");
       expect(watcher.pendingFallbackIdentity).toBeNull();
       polls.mockClear();
+      pollTimes.length = 0;
 
       await vi.advanceTimersByTimeAsync(60_000);
 
+      // Still watching for the prompt that ends it, at the idle ceiling.
       expect(polls.mock.calls.length).toBeLessThanOrEqual(
         60_000 / SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS
       );
+      expect(maxPollGap()).toBe(SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS);
       watcher.dispose();
     });
 
@@ -2886,7 +2894,7 @@ describe("IdentityWatcher", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-    it("does not chain a poll that stopped the watcher and leaves a re-arm alone", async () => {
+    it("leaves one poll chain and one census subscription when a poll stops and re-arms", async () => {
       const { state, watcher, polls, treeListeners, stepPastPoll } = makeSettledAgent();
       await settle(watcher);
       await stepPastPoll();

@@ -521,6 +521,12 @@ describe("AnalysisWorkerRuntime", () => {
           vi.advanceTimersByTime(2000);
           expect(samples()).toBe(5);
 
+          // That activity was spent on one sample; quiet again, it backs off.
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(5);
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 2000);
+          expect(samples()).toBe(6);
+
           timedRuntime.stopMemorySampling();
         } finally {
           resetPtyPowerLevelForTesting();

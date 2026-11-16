@@ -971,11 +971,16 @@ describe("WorkerAnalysisBackend process-state mirror (#17043)", () => {
   const monitor = { agentId: "claude", initialState: "idle", skipInitialStateEmit: false } as const;
 
   it("pushes the first reading, then only readings that changed", () => {
-    const { backend, pushes, refresh, setState } = processStateBackend({
+    const { backend, pushes, refresh, setState, delivered, getProcessState } = processStateBackend({
       hasActiveChildren: true,
       cpuUsage: 0,
     });
     backend.startMonitor(monitor);
+    expect(delivered.find((m) => m.type === "monitor-start")).toMatchObject({
+      hasProcessValidator: true,
+    });
+    // One read answers both the validator flag and the first push.
+    expect(getProcessState).toHaveBeenCalledTimes(1);
     // The worker's own default is {true, 0}; the first push still goes.
     expect(pushes()).toHaveLength(1);
 
