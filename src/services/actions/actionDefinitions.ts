@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 import { registerActionActions } from "./definitions/actionActions";
 import { registerAgentActions } from "./definitions/agentActions";
+import { registerAgentAccountMoveActions } from "./definitions/agentAccountMoveActions";
 import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
 import { registerBrowserActions } from "./definitions/browserActions";
@@ -68,6 +69,7 @@ export function createActionDefinitions(
   registerTerminalWorktreeActions(actions, callbacks);
   registerFleetActions(actions);
   registerAgentActions(actions, callbacks);
+  registerAgentAccountMoveActions(actions);
   registerPanelActions(actions, callbacks);
   registerWorktreeActions(actions, callbacks);
   registerWorktreeSessionActions(actions, callbacks);

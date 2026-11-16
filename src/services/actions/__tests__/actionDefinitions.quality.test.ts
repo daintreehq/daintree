@@ -1674,6 +1674,10 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
+      "agent.moveTerminalsToAccount.claude": {},
+      "agent.moveTerminalsToAccount.codex": {},
+      "agent.moveTerminalsToAccount.kimi": {},
+      "agent.moveTerminalsToAccount.interpreter": {},
     };
 
     // terminal.resendLastMessage gates on `isEnabled`, which runs before the

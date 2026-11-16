@@ -423,6 +423,11 @@ export const BUILT_IN_ACTION_IDS = [
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
   "agent.resumeOwned",
+  // One per agent that signs in through a config folder (#17089).
+  "agent.moveTerminalsToAccount.claude",
+  "agent.moveTerminalsToAccount.codex",
+  "agent.moveTerminalsToAccount.kimi",
+  "agent.moveTerminalsToAccount.interpreter",
   // -- session bookmarks (#11288) --
   "session.bookmarkAndClose",
   "session.bookmark.promote",
@@ -683,6 +688,11 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "agent.resumeOwned",
   // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
   "schedules.runNow",
+  // Offers every one of an agent's terminals for a restart; only a person starts that (#17089).
+  "agent.moveTerminalsToAccount.claude",
+  "agent.moveTerminalsToAccount.codex",
+  "agent.moveTerminalsToAccount.kimi",
+  "agent.moveTerminalsToAccount.interpreter",
   // Arming types the handback instruction into the agent, and close ends it (#16171).
   "terminal.setWhenDone",
   // Reloading a project's plugins unloads and re-runs every one of them,
