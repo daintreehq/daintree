@@ -3,6 +3,7 @@
 #
 #   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
 #   sx test-all                              the whole unit suite in one run
+#   sx test-ssh                              the opt-in real-ssh suites
 #   sx typecheck / sx lint / sx check        typecheck, lint, guards and format
 version = 1
 timeout = "15m"
@@ -39,7 +40,7 @@ exclude = [".env*", "*.pem", "*.key"]
 git_seed = true
 
 # Mirrors .github/actions/install: the same cached paths, keyed on the same
-# inputs.
+# inputs, plus the Electron check that is part of the install command here.
 [deps]
 lockfiles = [
   "package-lock.json",
@@ -48,6 +49,7 @@ lockfiles = [
   "packages/*/package.json",
   "scripts/postinstall.cjs",
   "scripts/patchNodePty*.cjs",
+  "scripts/ci/verify-electron-install.mjs",
   "electron/native/*/binding.gyp",
   "electron/native/*/package.json",
   "electron/native/*/src/**",
@@ -93,6 +95,13 @@ run = "npx vitest run {args}"
 exclusive = true
 timeout = "30m"
 
+# The opt-in real-ssh suites against a private user-mode sshd (see
+# docs/development.md#real-ssh-end-to-end). On Linux the host socket lives
+# under /run/user/<uid>, which the image leaves world-writable for this.
+[tasks.test-ssh]
+run = '''mkdir -p -m 700 "/run/user/$(id -u)" && DAINTREE_SSH_E2E=1 npx vitest run electron/remote/__tests__/ssh.e2e.test.ts electron/remote/__tests__/attachStdio.ssh.e2e.test.ts electron/remote/__tests__/sshMasters.ssh.e2e.test.ts electron/remote/__tests__/hostSetup.ssh.e2e.test.ts {args}'''
+timeout = "20m"
+
 # `npm run typecheck` runs three tsc projects at once, which peaked past 16 GB,
 # so the projects run one at a time here (every one, even after a failure).
 [tasks.typecheck]
@@ -111,9 +120,11 @@ timeout = "30m"
 run = "npm run check:guards"
 timeout = "30m"
 
-# Prettier over the whole repo, three of guards' seven minutes when they ran together.
+# Prettier over the whole repo, three of guards' seven minutes when they ran
+# together. The cache is keyed on content as in CI, and kept in the slot's
+# ignored .tmp/ rather than the shared node_modules.
 [tasks.format]
-run = "npm run format:check"
+run = "npm run format:check -- --cache --cache-strategy content --cache-location .tmp/prettier-cache"
 timeout = "30m"
 
 # `npm run check` in four parts.
