@@ -1125,10 +1125,15 @@ export class ProjectAcrossHostsService {
         userMessage: "That folder isn't a clone of this repository.",
       });
     }
-    // Registering can hand back a project this host already had (one that moved here).
-    const before = new Set(this.deps.listProjects().map((p) => p.id));
-    const project = await this.deps.registerProject(resolved);
-    return { project, registeredNow: !before.has(project.id) };
+    // Registering can hand back a row it didn't make: a project that moved
+    // here, or one another registration of this folder made meanwhile.
+    let registeredNow = false;
+    const project = await this.deps.registerProject(resolved, {
+      onCreated: () => {
+        registeredNow = true;
+      },
+    });
+    return { project, registeredNow };
   }
 
   /**

@@ -51,7 +51,7 @@ const PROJECT_VISIBLE_MESSAGE =
 export async function addProjectByPath(
   projectPath: string,
   options?: ProjectAddOptions,
-  internal?: { fresh?: boolean }
+  internal?: { fresh?: boolean; onCreated?: () => void }
 ): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
@@ -72,6 +72,7 @@ export async function addProjectByPath(
     identity: normalizeCreationIdentity(options?.identity),
     ...(groupId ? { groupId } : {}),
     ...(internal?.fresh ? { fresh: true } : {}),
+    ...(internal?.onCreated ? { onCreated: internal.onCreated } : {}),
   });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;

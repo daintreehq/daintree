@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { Project } from "../../../../shared/types/project.js";
 import type { CreateWorktreeOptions } from "../../../../shared/types/git.js";
 import { OperationRegistry } from "../../operations/OperationRegistry.js";
@@ -17,8 +17,8 @@ export interface TestHost {
   createWorktree: ReturnType<typeof vi.fn>;
   focusWorktree: ReturnType<typeof vi.fn>;
   clone: ReturnType<typeof vi.fn>;
-  registerProject: ReturnType<typeof vi.fn>;
-  updateProjectDisplay: ReturnType<typeof vi.fn>;
+  registerProject: Mock<ProjectAcrossHostsDeps["registerProject"]>;
+  updateProjectDisplay: Mock<ProjectAcrossHostsDeps["updateProjectDisplay"]>;
   addProject(projectPath: string, id?: string, display?: Partial<ProjectDisplay>): Project;
 }
 
@@ -80,22 +80,28 @@ export function createTestHost(root: string, name: string): TestHost {
     return { worktreeId: options.path, branch: options.newBranch };
   });
   const focusWorktree = vi.fn(async () => {});
-  const registerProject = vi.fn(
-    async (projectPath: string, _options?: { fresh?: boolean }) =>
-      projects.find((p) => p.path === projectPath) ??
-      addProject(projectPath, undefined, readInRepoDisplay(projectPath))
-  );
-  const updateProjectDisplay = vi.fn((projectId: string, updates: Partial<ProjectDisplay>) => {
-    const project = projects.find((p) => p.id === projectId);
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    if (updates.name !== undefined) project.name = updates.name;
-    if (updates.emoji !== undefined) project.emoji = updates.emoji;
-    if ("color" in updates) {
-      if (updates.color) project.color = updates.color;
-      else delete project.color;
+  const registerProject = vi.fn<ProjectAcrossHostsDeps["registerProject"]>(
+    async (projectPath, options) => {
+      const known = projects.find((p) => p.path === projectPath);
+      if (known) return known;
+      const project = addProject(projectPath, undefined, readInRepoDisplay(projectPath));
+      options?.onCreated?.();
+      return project;
     }
-    return { ...project };
-  });
+  );
+  const updateProjectDisplay = vi.fn<ProjectAcrossHostsDeps["updateProjectDisplay"]>(
+    (projectId, updates) => {
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (updates.name !== undefined) project.name = updates.name;
+      if (updates.emoji !== undefined) project.emoji = updates.emoji;
+      if ("color" in updates) {
+        if (updates.color) project.color = updates.color;
+        else delete project.color;
+      }
+      return { ...project };
+    }
+  );
   const clone = vi.fn(plainClone);
   const deps: ProjectAcrossHostsDeps = {
     git: testGit,

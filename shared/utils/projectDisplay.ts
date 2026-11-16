@@ -1,7 +1,8 @@
 import type { ProjectDisplayIdentity } from "../types/ipc/projectMatch.js";
 
-// The in-repo `.daintree/project.json` name cap, and the creation dialog's emoji cap.
-export const MAX_DISPLAY_NAME_LENGTH = 100;
+// Stored names have no cap of their own; this is the bound the link already
+// puts on a source's project name. The emoji cap is the creation dialog's.
+export const MAX_DISPLAY_NAME_LENGTH = 1024;
 export const MAX_DISPLAY_EMOJI_LENGTH = 32;
 // A colour is a token or a gradient; anything longer is not one.
 export const MAX_DISPLAY_COLOR_LENGTH = 256;

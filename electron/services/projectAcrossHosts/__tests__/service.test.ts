@@ -1276,6 +1276,19 @@ describe("the source's name, emoji and colour", () => {
     expect(host.updateProjectDisplay).not.toHaveBeenCalled();
   });
 
+  it("treats a row another registration of the folder made meanwhile as the host's own", async () => {
+    const host = createTestHost(root, "display-j");
+    const clone = path.join(root, "display-j-home", "Projects", "daintree");
+    git(root, ["clone", "-q", URL, clone]);
+    // Someone on the host added the folder, named their way, while this open registered it.
+    host.registerProject.mockImplementationOnce(async (projectPath) =>
+      host.addProject(projectPath, undefined, { name: "Theirs", emoji: "🦊" })
+    );
+    const opened = await openWith(host, null, clone, URL);
+    expect(opened.projectName).toBe("Theirs");
+    expect(host.projects[0]).toMatchObject({ name: "Theirs", emoji: "🦊", color: "#ff5500" });
+  });
+
   it("changes nothing about a project a window here holds when an assistant is refused", async () => {
     const host = createTestHost(root, "display-i");
     const clone = path.join(root, "display-i-clone");

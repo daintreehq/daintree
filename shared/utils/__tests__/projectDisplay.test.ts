@@ -19,11 +19,16 @@ describe("normalizeProjectDisplay", () => {
       { name: "App" },
       { name: "  ", emoji: "🎸" },
       { name: "a\nb", emoji: "🎸" },
-      { name: "x".repeat(101), emoji: "🎸" },
+      { name: "x".repeat(1025), emoji: "🎸" },
       { name: "App", emoji: "🎸".repeat(17) },
     ]) {
       expect(normalizeProjectDisplay(bad)).toBeNull();
     }
+  });
+
+  it("keeps a long name a project can have", () => {
+    const name = "x".repeat(1024);
+    expect(normalizeProjectDisplay({ name, emoji: "🎸" })?.name).toBe(name);
   });
 
   it("reads a missing or malformed colour as none, keeping the rest", () => {

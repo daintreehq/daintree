@@ -695,6 +695,8 @@ export class ProjectStore {
        * (kept by id) come with it.
        */
       fresh?: boolean;
+      /** Called when this call inserted the row, rather than finding or relocating one. */
+      onCreated?: () => void;
     }
   ): Promise<Project> {
     // A project still awaiting its clone has no folder to classify. Opening its
@@ -730,7 +732,9 @@ export class ProjectStore {
             return this.touchExistingProject(existing, { gitBacked: false });
           }
         } else if (options?.gitBacked === false) {
-          return this.insertLightweightProject(lightweight, options.groupId);
+          const inserted = this.insertLightweightProject(lightweight, options.groupId);
+          options.onCreated?.();
+          return inserted;
         }
       }
 
@@ -828,6 +832,7 @@ export class ProjectStore {
       })
       .run();
     this.notifyRegistryListeners();
+    options?.onCreated?.();
 
     return project;
   }

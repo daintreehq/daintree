@@ -33,8 +33,9 @@ export function createDefaultProjectAcrossHostsDeps(): ProjectAcrossHostsDeps {
     getProject: (projectId) => projectStore.getProjectById(projectId),
     registerProject: async (projectPath, options) => {
       const { addProjectByPath } = await import("../../ipc/handlers/projectCrud/crud.js");
-      if (!options?.fresh) return addProjectByPath(projectPath);
-      const project = await addProjectByPath(projectPath, undefined, { fresh: true });
+      const onCreated = options?.onCreated ? { onCreated: options.onCreated } : {};
+      if (!options?.fresh) return addProjectByPath(projectPath, undefined, onCreated);
+      const project = await addProjectByPath(projectPath, undefined, { fresh: true, ...onCreated });
       // Lifecycle command approvals are kept by folder: a project that once
       // lived here doesn't lend its approvals to code from another machine.
       await forgetLifecycleApprovals(projectPath);
