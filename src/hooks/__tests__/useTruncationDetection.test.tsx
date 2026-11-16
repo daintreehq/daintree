@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { useTruncationDetection } from "../useTruncationDetection";
 
-type Callback = (entries: ResizeObserverEntry[]) => void;
+type Callback = (entries: Array<{ target: Element }>) => void;
 
 let callback: Callback | null = null;
 const observed = new Set<Element>();
@@ -70,7 +70,7 @@ describe("useTruncationDetection", () => {
     readsB.mockClear();
 
     act(() => {
-      callback!([{ target: elA } as unknown as ResizeObserverEntry]);
+      callback!([{ target: elA }]);
     });
 
     expect(readsA).toHaveBeenCalled();
@@ -85,11 +85,11 @@ describe("useTruncationDetection", () => {
     const el = getByTestId("a");
 
     setWidths(el, 200, 100);
-    act(() => callback!([{ target: el } as unknown as ResizeObserverEntry]));
+    act(() => callback!([{ target: el }]));
     expect(seen).toHaveBeenLastCalledWith(true);
 
     setWidths(el, 100, 100);
-    act(() => callback!([{ target: el } as unknown as ResizeObserverEntry]));
+    act(() => callback!([{ target: el }]));
     expect(seen).toHaveBeenLastCalledWith(false);
   });
 

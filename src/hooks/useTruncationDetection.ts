@@ -25,7 +25,8 @@ function getSingleton() {
 function checkEntries(entries: ResizeObserverEntry[]) {
   const s = getSingleton();
   for (const entry of entries) {
-    const el = entry.target as HTMLElement;
+    const el = entry.target;
+    if (!(el instanceof HTMLElement)) continue;
     const sub = s.subscribers.get(el);
     if (!sub) continue;
     if (!el.isConnected) {
