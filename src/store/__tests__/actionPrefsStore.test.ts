@@ -183,9 +183,13 @@ describe("actionPrefsStore persistence (#17026)", () => {
       for (const settle of pending.splice(0)) settle();
     }
 
-    // The baseline settled on the restored list, so re-pinning the earlier id sends.
-    store.getState().pinAction("early");
-    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(3));
-    expect(setState).toHaveBeenLastCalledWith({ actionPinnedIds: ["a.one", "early"] });
+    // Once both acknowledgements land, the baseline is the restored list: an
+    // unchanged notification sends nothing, where a stale "early" baseline would.
+    const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTask();
+    store.setState({ pinnedActionIds: [...store.getState().pinnedActionIds] });
+    await vi.dynamicImportSettled();
+    await nextTask();
+    expect(setState).toHaveBeenCalledTimes(2);
   });
 });
