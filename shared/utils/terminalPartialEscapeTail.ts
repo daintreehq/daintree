@@ -44,7 +44,13 @@ function isExecutable(c: number): boolean {
   return c <= 0x17 || c === 0x19 || (c >= 0x1c && c <= 0x1f);
 }
 
-const decoder = new TextDecoder();
+// `ignoreBOM` keeps a U+FEFF as a character, the way xterm's own UTF-8 decoder
+// does, and makes decoding window by window match decoding the whole chunk.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
+// First window `feedBytes` decodes; each later one doubles. Most sequences end
+// within a few bytes, so a chunk of plain output after one costs one window.
+const FIRST_WINDOW_BYTES = 256;
 
 function isAnywhere(c: number): boolean {
   return c === 0x1b || c === 0x18 || c === 0x1a || (c >= 0x80 && c <= 0x9f);
@@ -141,8 +147,10 @@ export class PartialEscapeTracker {
 
   /**
    * UTF-8 variant for MessagePort chunks. Only the suffix from the last
-   * state-resetting control is decoded; the C1 controls appear as the two-byte
-   * sequences C2 80..C2 9F.
+   * state-resetting control matters (the C1 controls appear as the two-byte
+   * sequences C2 80..C2 9F), and of that only what precedes the return to
+   * ground, so it is decoded a window at a time and the plain output after a
+   * finished sequence is never decoded.
    */
   feedBytes(data: Uint8Array): void {
     let from = data.length - 1;
@@ -155,22 +163,38 @@ export class PartialEscapeTracker {
       }
     }
     if (from < 0) {
-      if (this.state !== S.Ground) this.run(decoder.decode(data), 0);
-      return;
+      if (this.state === S.Ground) return;
+      from = 0;
     }
-    this.run(decoder.decode(data.subarray(from)), 0);
+    let size = FIRST_WINDOW_BYTES;
+    while (from < data.length) {
+      let end = Math.min(data.length, from + size);
+      // End each window before a lead byte so no character straddles two
+      // decodes. A run of stray continuation bytes decodes one U+FFFD per byte
+      // wherever it is cut.
+      while (end < data.length && end > from && (data[end]! & 0xc0) === 0x80) end--;
+      if (end === from) end = Math.min(data.length, from + size);
+      if (this.run(decoder.decode(data.subarray(from, end)), 0)) return;
+      from = end;
+      size *= 2;
+    }
   }
 
-  private run(data: string, begin: number): void {
+  /**
+   * Steps `data` from `begin`, where the caller guarantees no ESC, CAN, SUB or
+   * C1 control after `begin` itself. Only those leave ground, so the first
+   * return to ground is final and the rest of `data` is never read. Returns
+   * whether it got there.
+   */
+  private run(data: string, begin: number): boolean {
     let start = -1;
     for (let i = begin; i < data.length; i++) {
       const c = data.charCodeAt(i);
       const prev = this.state;
       const op = this.step(c);
       if (this.state === S.Ground) {
-        start = -1;
         if (prev !== S.Ground) this.clear();
-        continue;
+        return true;
       }
       if (op === T.Start) {
         this.clear();
@@ -187,7 +211,8 @@ export class PartialEscapeTracker {
         start = -1;
       }
     }
-    if (start !== -1 && this.state !== S.Ground) this.append(data, start, data.length);
+    if (start !== -1) this.append(data, start, data.length);
+    return false;
   }
 
   private clear(): void {

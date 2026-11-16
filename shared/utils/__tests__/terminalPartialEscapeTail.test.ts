@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import headless, { type Terminal as HeadlessTerminal } from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import { PARSER_GROUND, PartialEscapeTracker } from "../terminalPartialEscapeTail.js";
@@ -236,5 +236,61 @@ describe("PartialEscapeTracker byte input", () => {
     tracker.feedBytes(encoder.encode("\x1b]0;ti"));
     tracker.feedBytes(encoder.encode("tle"));
     expect(tracker.tail).toBe("\x1b]0;title");
+  });
+
+  function decodedBytesWhile(fn: () => void): number {
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    try {
+      fn();
+      return decode.mock.calls.reduce(
+        (sum, [input]) => sum + ((input as Uint8Array | undefined)?.byteLength ?? 0),
+        0
+      );
+    } finally {
+      decode.mockRestore();
+    }
+  }
+
+  it("does not decode the plain output after a sequence that finished", () => {
+    const chunk = encoder.encode("\x1b[0m" + "x".repeat(64 * 1024));
+    const tracker = new PartialEscapeTracker();
+    const decoded = decodedBytesWhile(() => tracker.feedBytes(chunk));
+    expect(tracker.tail).toBe("");
+    expect(decoded).toBeLessThan(chunk.byteLength / 64);
+  });
+
+  it("stops decoding a carried-over sequence once it finishes", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feedBytes(encoder.encode("\x1b]0;ti"));
+    const chunk = encoder.encode("tle\x07" + "y".repeat(64 * 1024));
+    const decoded = decodedBytesWhile(() => tracker.feedBytes(chunk));
+    expect(tracker.tail).toBe("");
+    expect(decoded).toBeLessThan(chunk.byteLength / 64);
+  });
+
+  it("decodes a long pending string window by window as the whole chunk would", () => {
+    const wholeDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+    const bom = [0xef, 0xbb, 0xbf];
+    const stray = new Array<number>(700).fill(0x80);
+    for (let pad = 0; pad < 4; pad++) {
+      for (const [opener, closer] of [
+        ["\x1b]0;", "\x07after"],
+        ["\x1bP1$q", ""],
+        ["\x1b_G", ""],
+      ] as const) {
+        const body = "a".repeat(pad) + "é€😀".repeat(400);
+        const bytes = Uint8Array.from([
+          ...encoder.encode(opener + body),
+          ...bom,
+          ...stray,
+          ...encoder.encode(body + closer),
+        ]);
+        const fromBytes = new PartialEscapeTracker();
+        fromBytes.feedBytes(bytes);
+        const fromString = new PartialEscapeTracker();
+        fromString.feed(wholeDecoder.decode(bytes));
+        expect(fromBytes.tail, `${JSON.stringify(opener)} pad ${pad}`).toBe(fromString.tail);
+      }
+    }
   });
 });
