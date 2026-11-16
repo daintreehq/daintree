@@ -29,6 +29,8 @@ import type {
   EnrollDecisionsHostPayload,
 } from "../../../../shared/types/decisionsHosts.js";
 import type {
+  CancelDecisionQuestionPayload,
+  DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionPayload,
@@ -41,7 +43,7 @@ const ipcMainMock = vi.hoisted(() => ({
   on: vi.fn(),
   removeListener: vi.fn(),
 }));
-const saved = vi.hoisted(() => ({ value: undefined as unknown }));
+const saved = vi.hoisted(() => ({ value: undefined as unknown, host: undefined as unknown }));
 // Counts evaluation of Decisions' entry module and of each library, none of
 // which an off read may load.
 const decisionsEntry = vi.hoisted(() => ({
@@ -60,6 +62,12 @@ const decisionsEntry = vi.hoisted(() => ({
       _projectId: string | null,
       _payload: GetDecisionQuestionSummariesPayload
     ): Promise<DecisionQuestionSummariesResult> => ({ result: "read", summaries: [] })
+  ),
+  cancelDecisionQuestion: vi.fn(
+    async (
+      _projectId: string | null,
+      _payload: CancelDecisionQuestionPayload
+    ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -209,7 +217,9 @@ vi.mock("../voiceInput.js", () => ({ getVoiceSettings }));
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock, BrowserWindow: {} }));
 vi.mock("../../../store.js", () => ({
   store: {
-    get: vi.fn((key: string) => (key === "decisions" ? saved.value : undefined)),
+    get: vi.fn((key: string) =>
+      key === "decisions" ? saved.value : key === "decisionsHost" ? saved.host : undefined
+    ),
     set: vi.fn(),
   },
 }));
@@ -220,6 +230,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
     getDecisionQuestionContent: decisionsEntry.getDecisionQuestionContent,
     getDecisionQuestionSummaries: decisionsEntry.getDecisionQuestionSummaries,
+    cancelDecisionQuestion: decisionsEntry.cancelDecisionQuestion,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -292,6 +303,10 @@ const getQuestionSummaries = decisionsNamespace.ops.getQuestionSummaries.handler
   ctx: { projectId: string | null },
   payload: GetDecisionQuestionSummariesPayload
 ) => Promise<DecisionQuestionSummariesResult>;
+const cancelQuestion = decisionsNamespace.ops.cancelQuestion.handler as unknown as (
+  ctx: { projectId: string | null },
+  payload: CancelDecisionQuestionPayload
+) => Promise<DecisionQuestionCancelResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -402,6 +417,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_PANE_STATE,
   CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES,
+  CHANNELS.DECISIONS_CANCEL_QUESTION,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -436,11 +452,13 @@ const DECISIONS_CHANNELS = [
 describe("decisions IPC", () => {
   beforeEach(() => {
     saved.value = undefined;
+    saved.host = undefined;
     _resetDecisionsModuleForTesting();
     decisionsEntry.getDecisionsStatus.mockClear();
     decisionsEntry.getDecisionsPaneState.mockClear();
     decisionsEntry.getDecisionQuestionContent.mockClear();
     decisionsEntry.getDecisionQuestionSummaries.mockClear();
+    decisionsEntry.cancelDecisionQuestion.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -546,6 +564,37 @@ describe("decisions IPC", () => {
       expect(decisionsEntry.libraries).toBe(0);
     }
   );
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+  ])(
+    "cancels no question with the setting %s, saying it's off, loading none of Decisions",
+    async (_label, value) => {
+      saved.value = value;
+
+      await expect(
+        cancelQuestion(
+          { projectId: "project-1" },
+          { terminalId: "pane-a", questionId: QUESTION_ID }
+        )
+      ).resolves.toEqual({ result: "off" });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("cancels no question once quit has sealed the loader, without loading it", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(
+      cancelQuestion({ projectId: "project-1" }, { terminalId: "pane-a", questionId: QUESTION_ID })
+    ).resolves.toEqual({ result: "not-running" });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
 
   it("reads no question once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
@@ -986,6 +1035,52 @@ describe("decisions IPC", () => {
       null,
       summaries
     );
+  });
+
+  it("cancels a question for the asking view's own project once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const payload = { terminalId: "pane-a", questionId: QUESTION_ID };
+
+    await expect(cancelQuestion({ projectId: "project-1" }, payload)).resolves.toEqual({
+      result: "cancelling",
+    });
+
+    expect(decisionsEntry.cancelDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+      "project-1",
+      payload
+    );
+  });
+
+  it("cancels a question on an enrolled Host whose owner's switch it doesn't read", async () => {
+    saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
+    const payload = { terminalId: "pane-a", questionId: QUESTION_ID };
+
+    await expect(cancelQuestion({ projectId: "project-1" }, payload)).resolves.toEqual({
+      result: "cancelling",
+    });
+    expect(decisionsEntry.cancelDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+      "project-1",
+      payload
+    );
+
+    saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 };
+    await expect(cancelQuestion({ projectId: "project-1" }, payload)).resolves.toEqual({
+      result: "off",
+    });
+  });
+
+  it("takes only a pane and a question id to cancel, never a project", () => {
+    const cancel = decisionsNamespace.ops.cancelQuestion.schema as SafeParse;
+    expect(cancel.safeParse({ terminalId: "pane-a", questionId: QUESTION_ID }).success).toBe(true);
+    for (const bad of [
+      {},
+      { terminalId: "pane-a" },
+      { terminalId: "", questionId: QUESTION_ID },
+      { terminalId: "pane-a", questionId: "../q" },
+      { terminalId: "pane-a", questionId: QUESTION_ID, projectId: "project-2" },
+    ]) {
+      expect(cancel.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it("takes only a pane and bounded question ids, never a project", () => {

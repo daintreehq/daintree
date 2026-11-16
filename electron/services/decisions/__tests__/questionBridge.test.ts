@@ -614,4 +614,181 @@ describe("QuestionBridge", () => {
     identity = null;
     expect(() => bridge()).toThrow();
   });
+
+  describe("a person's cancel", () => {
+    const SCOPE = { hostId: "host_a", projectId: "p1", terminalId: "pane-1" };
+
+    /** As the relay's create receipt leaves it: the create gone, the question open. */
+    async function published(questionId: string): Promise<void> {
+      for (const item of await store.outboxFor(questionId)) await store.deleteOutbox(item.id);
+      await store.updateQuestion(questionId, { local_status: "open" });
+    }
+
+    async function requests(): Promise<Array<{ result?: string; detail?: unknown }>> {
+      return (await store.listAudit(100)).filter(
+        (entry) => entry.event === "question.cancel-requested"
+      );
+    }
+
+    it("withdraws through the live attempt even after the run that asked was relaunched", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      current = false;
+      live = liveBridge();
+
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
+        result: "cancelling",
+      });
+
+      // The view's scope stood in for the asker, so the library is asked without a pane.
+      expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId);
+      const [create] = await store.outboxFor(asked.questionId);
+      expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBe(true);
+      expect(await requests()).toMatchObject([{ result: "person", detail: { outcome: "queued" } }]);
+      // An agent's cancel from that run is still refused.
+      await expect(
+        b.cancelQuestion(asked.questionId, paneIdentityOf(ORIGIN))
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    it("drops a question that was never sent, between attempts, publishing nothing", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
+        result: "cancelled",
+      });
+
+      expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
+      expect(await store.outboxFor(asked.questionId)).toEqual([]);
+      expect(fetches).toBe(0);
+      expect(await requests()).toMatchObject([{ detail: { outcome: "never-published" } }]);
+    });
+
+    it("commits a cancel for the next attempt to send when the question is already on the relay", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      await published(asked.questionId);
+
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
+        result: "cancelling",
+      });
+
+      expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual([
+        "cancel",
+      ]);
+      // Open until the relay's event says otherwise.
+      expect((await store.getQuestion(asked.questionId))?.local_status).toBe("open");
+      expect(fetches).toBe(0);
+    });
+
+    it("refuses another pane's, project's or host's question exactly like an unknown one, touching nothing", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      live = liveBridge();
+
+      for (const scope of [
+        { ...SCOPE, terminalId: "pane-2" },
+        { ...SCOPE, projectId: "p2" },
+        { ...SCOPE, projectId: null },
+        { ...SCOPE, hostId: "host_b" },
+        { ...SCOPE, hostId: null },
+      ]) {
+        await expect(b.cancelForPerson(asked.questionId, scope)).resolves.toEqual({
+          result: "refused",
+          reason: "not-found",
+        });
+      }
+      await expect(b.cancelForPerson("q_unknown_123", SCOPE)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+
+      expect(live.cancelQuestion).not.toHaveBeenCalled();
+      const [create] = await store.outboxFor(asked.questionId);
+      expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+      expect(await requests()).toEqual([]);
+    });
+
+    it("refuses a question that has stopped waiting, saying why, and sends nothing", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      await published(asked.questionId);
+      live = liveBridge();
+
+      for (const [status, reason] of [
+        ["human-answered", "answered"],
+        ["proxy-answered", "answered"],
+        ["expired", "expired"],
+        ["publish-failed", "publish-failed"],
+      ] as const) {
+        await store.updateQuestion(asked.questionId, { local_status: status });
+        await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
+          result: "refused",
+          reason,
+        });
+      }
+
+      expect(live.cancelQuestion).not.toHaveBeenCalled();
+      expect(await store.outboxFor(asked.questionId)).toEqual([]);
+      expect(await requests()).toEqual([]);
+    });
+
+    it("answers a question already withdrawn as cancelled, asking for nothing again", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      await store.updateQuestion(asked.questionId, { local_status: "cancelled" });
+      live = liveBridge();
+
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
+        result: "cancelled",
+      });
+      expect(live.cancelQuestion).not.toHaveBeenCalled();
+      expect(await requests()).toEqual([]);
+    });
+
+    it("refuses once the connection has ended", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      identity = null;
+
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).rejects.toMatchObject({
+        code: "forbidden",
+      });
+      expect((await store.getQuestion(asked.questionId))?.local_status).toBe("queued");
+    });
+
+    it("takes its turn behind a follow-up being posted", async () => {
+      const b = bridge();
+      const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Ship?" } });
+      live = liveBridge();
+      let release!: () => void;
+      live.postMessage.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({
+                questionId: asked.questionId,
+                messageId: "m_first",
+                alias: 1,
+                status: "queued",
+                expectsReply: false,
+              });
+          })
+      );
+      const post = b.postMessage(
+        { question_id: asked.questionId, text: "One more thing", expects_reply: false },
+        paneIdentityOf(ORIGIN)
+      );
+      const cancel = b.cancelForPerson(asked.questionId, SCOPE);
+      await vi.waitFor(() => expect(live!.postMessage).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(live.cancelQuestion).not.toHaveBeenCalled();
+
+      release();
+      await post;
+      await expect(cancel).resolves.toEqual({ result: "cancelling" });
+      expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
+    });
+  });
 });
