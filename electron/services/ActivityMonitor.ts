@@ -897,19 +897,13 @@ export class ActivityMonitor {
   //   * cosmetic-only → low-confidence visible-output signal
   //   * spinner / time-counter → higher-confidence visible-output signal
   //
-  // Frames are dropped when resize-suppressed, before boot-complete, or when
-  // there's no visible-lines accessor (non-agent terminals).
+  // Frames are dropped when resize-suppressed or before boot-complete, and
+  // never consumed at all unless `consumesSynchronizedFrames`.
   onSynchronizedFrame(snapshot: FrameSnapshot): void {
     if (this.isDisposed) return;
-    if (!this.getVisibleLines) return;
+    if (!this.consumesSynchronizedFrames) return;
 
     const now = Date.now();
-    if (this.simpleOutputState) {
-      // Simple output mode uses the full visible-line fingerprint from the
-      // polling cycle. Mixing per-frame bottom-row hashes with full-screen
-      // hashes makes unchanged frames look like changes.
-      return;
-    }
     if (this.isResizeSuppressed(now)) return;
     if (this.isFocusSuppressed(now)) return;
     // Pre-boot frames are part of the agent's startup chrome — let the boot
@@ -918,6 +912,16 @@ export class ActivityMonitor {
 
     const result = this.synchronizedFrameAnalyzer.classify(snapshot);
     this.applyStructuralSignal(result.signal, result.confidence, now);
+  }
+
+  // Fixed for the monitor's lifetime, so the analysis backends install the
+  // per-frame detector only for monitors that will read its snapshots (#17041).
+  // Needs the visible-lines accessor (non-agent terminals lack it), and simple
+  // output mode is excluded because it fingerprints the full visible viewport
+  // in its polling cycle: mixing in per-frame bottom-row hashes would make
+  // unchanged frames look like changes.
+  get consumesSynchronizedFrames(): boolean {
+    return this.getVisibleLines !== undefined && !this.simpleOutputState;
   }
 
   private applyStructuralSignal(signal: StructuralSignal, confidence: number, now: number): void {

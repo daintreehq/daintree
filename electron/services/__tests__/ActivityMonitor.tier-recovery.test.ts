@@ -267,6 +267,22 @@ describe("ActivityMonitor", () => {
       };
     }
 
+    it("consumes frame snapshots only with visible lines and outside simple output (#17041)", () => {
+      const consumes = (options: ConstructorParameters<typeof ActivityMonitor>[3]): boolean => {
+        const monitor = new ActivityMonitor("struct-consumes", 1000, vi.fn(), options);
+        const result = monitor.consumesSynchronizedFrames;
+        monitor.dispose();
+        return result;
+      };
+      const getVisibleLines = () => ["> "];
+
+      expect(consumes({ getVisibleLines })).toBe(true);
+      expect(consumes({ getVisibleLines, agentId: "claude", simpleOutputState: false })).toBe(true);
+      expect(consumes({})).toBe(false);
+      expect(consumes({ getVisibleLines, agentId: "claude" })).toBe(false);
+      expect(consumes({ getVisibleLines, simpleOutputState: true })).toBe(false);
+    });
+
     it("recovers idle→busy on sustained cosmetic-only frames", () => {
       vi.setSystemTime(10000);
       const onStateChange = vi.fn();
