@@ -56,8 +56,13 @@ export function useMovePickerCoordination(
     pendingMovePickerRef.current = terminalId;
   }, [terminalId]);
 
+  // Bumped by every menu opening, so a picker still waiting on its chunk from
+  // an earlier pick never opens over a later one.
+  const deferredOpenRef = useRef(0);
+
   const clearPendingMovePicker = useCallback(() => {
     pendingMovePickerRef.current = null;
+    deferredOpenRef.current += 1;
   }, []);
 
   const captureMovePickerAnchor = useCallback(
@@ -117,13 +122,38 @@ export function useMovePickerCoordination(
       if (pendingPanelId === null || pendingPanelId !== terminalId) return false;
       const anchor = capturedMovePickerAnchorRef.current;
       if (!anchor?.contextElement.isConnected) return false;
-      // The picker takes focus into its search field; handing it back to the
-      // pane first would only flash a ring on the way. Still loading, the pane
-      // holds focus until the picker mounts and takes it.
-      if (LazyMoveToWorktreePicker.isLoaded()) event.preventDefault();
-      setMovePickerAnchor(anchor);
-      setHasOpenedMovePicker(true);
-      setMovePickerPanelId(terminalId);
+      const open = () => {
+        setMovePickerAnchor(anchor);
+        setHasOpenedMovePicker(true);
+        setMovePickerPanelId(terminalId);
+      };
+      if (LazyMoveToWorktreePicker.isLoaded()) {
+        // The picker takes focus into its search field; handing it back to the
+        // pane first would only flash a ring on the way.
+        event.preventDefault();
+        open();
+        return true;
+      }
+      // Still loading: the menu hands focus back to the pane, and the picker
+      // opens once its chunk lands, unless focus has left the pane by then.
+      const token = ++deferredOpenRef.current;
+      LazyMoveToWorktreePicker.preload().then(
+        () => {
+          if (deferredOpenRef.current !== token || !anchor.contextElement.isConnected) return;
+          const active = document.activeElement;
+          const returnTarget = movePickerReturnFocusRef.current;
+          if (
+            active !== null &&
+            active !== document.body &&
+            active !== returnTarget &&
+            !anchor.contextElement.contains(active)
+          ) {
+            return;
+          }
+          open();
+        },
+        () => {}
+      );
       return true;
     },
     [terminalId]

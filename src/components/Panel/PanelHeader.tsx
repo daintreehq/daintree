@@ -696,6 +696,8 @@ function PanelHeaderComponent({
   const handleMoveToWorktreeSelect = useCallback(() => {
     pendingMovePickerRef.current = id;
   }, [id]);
+  // Bumped by every menu opening, which cancels an overlay still loading.
+  const deferredOpenRef = useRef(0);
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
@@ -709,6 +711,33 @@ function PanelHeaderComponent({
     pendingMovePickerRef.current = null;
     pendingEmojiDialogRef.current = null;
     pendingMenuDispatchRef.current = null;
+    deferredOpenRef.current += 1;
+  };
+  // Opens a picked overlay whose chunk is still loading once it lands. The
+  // menu hands focus back to the button meanwhile; a later menu opening, or
+  // focus gone elsewhere by then, means the moment has passed.
+  const openWhenLoaded = (
+    component: { isLoaded: () => boolean; preload: () => Promise<unknown> },
+    event: Event,
+    open: () => void
+  ) => {
+    if (component.isLoaded()) {
+      event.preventDefault();
+      open();
+      return;
+    }
+    const token = ++deferredOpenRef.current;
+    component.preload().then(
+      () => {
+        if (deferredOpenRef.current !== token) return;
+        const active = document.activeElement;
+        if (active !== null && active !== document.body && active !== overflowButtonRef.current) {
+          return;
+        }
+        open();
+      },
+      () => {}
+    );
   };
   const handleOverflowMenuCloseAutoFocus = (event: Event) => {
     const pendingDispatch = pendingMenuDispatchRef.current;
@@ -728,21 +757,22 @@ function PanelHeaderComponent({
     if (pendingEmojiPanelId !== null) {
       if (pendingEmojiPanelId !== id) return;
       // The dialog focuses its own search field and hands focus back to the
-      // button when it closes. Still loading, the button holds focus meanwhile.
-      if (PanelEmojiDialog.isLoaded()) event.preventDefault();
-      setHasOpenedEmojiDialog(true);
-      setEmojiDialogPanelId(id);
+      // button when it closes.
+      openWhenLoaded(PanelEmojiDialog, event, () => {
+        setHasOpenedEmojiDialog(true);
+        setEmojiDialogPanelId(id);
+      });
       return;
     }
     const pendingPanelId = pendingMovePickerRef.current;
     pendingMovePickerRef.current = null;
     if (pendingPanelId === null || pendingPanelId !== id) return;
     // The picker takes focus into its search field; returning it to the
-    // button first would only flash a ring on the way. Still loading, the
-    // button holds focus until the picker mounts and takes it.
-    if (MoveToWorktreePicker.isLoaded()) event.preventDefault();
-    setHasOpenedMovePicker(true);
-    setMovePickerPanelId(id);
+    // button first would only flash a ring on the way.
+    openWhenLoaded(MoveToWorktreePicker, event, () => {
+      setHasOpenedMovePicker(true);
+      setMovePickerPanelId(id);
+    });
   };
 
   // The same list the right-click menu renders for these kinds (#12606), so

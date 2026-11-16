@@ -1067,8 +1067,11 @@ describe("PanelHeader", () => {
       render(<PanelHeader {...makeProps()} />);
 
       // Opening the menu fetches the picker's chunk ahead of the pick.
+      const preload = vi.spyOn(LazyMoveToWorktreePicker, "preload");
+      onTestFinished(() => preload.mockRestore());
       act(() => mockMenuOpenChange?.(true));
-      await LazyMoveToWorktreePicker.preload();
+      expect(preload).toHaveBeenCalled();
+      await preload.mock.results[0]!.value;
 
       fireEvent.click(findMenuButton("Move to worktree…")!);
       // Still inside the menu's teardown: opening now would race its focus return.
@@ -1078,6 +1081,59 @@ describe("PanelHeader", () => {
       expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
       expect(picker()?.getAttribute("data-current-worktree-id")).toBe("w-a");
       expect(mockDispatch).not.toHaveBeenCalled();
+    });
+
+    describe("while the picker's chunk is still loading", () => {
+      let land: () => void;
+      beforeEach(async () => {
+        // The real chunk, so the picker renders once the stand-in load lands.
+        await LazyMoveToWorktreePicker.preload();
+        const loading = new Promise<void>((resolve) => {
+          land = resolve;
+        });
+        const isLoaded = vi.spyOn(LazyMoveToWorktreePicker, "isLoaded").mockReturnValue(false);
+        const preload = vi
+          .spyOn(LazyMoveToWorktreePicker, "preload")
+          .mockImplementation(() => loading.then(() => ({}) as never));
+        onTestFinished(() => {
+          isLoaded.mockRestore();
+          preload.mockRestore();
+        });
+        placePanelIn("w-a");
+        mockWorktreeIds = ["w-a", "w-b"];
+      });
+
+      const pickCold = () => {
+        render(<PanelHeader {...makeProps()} />);
+        fireEvent.click(findMenuButton("Move to worktree…")!);
+        // The menu hands focus back to the button meanwhile.
+        expect(finishMenuClose()).toBe(false);
+        expect(picker()).toBeNull();
+      };
+      const settle = () => act(async () => land());
+
+      it("opens the picker once the chunk lands", async () => {
+        pickCold();
+        await settle();
+        expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
+      });
+
+      it("drops the pick when the menu opens again first", async () => {
+        pickCold();
+        act(() => mockMenuOpenChange?.(true));
+        await settle();
+        expect(picker()).toBeNull();
+      });
+
+      it("drops the pick when focus has gone elsewhere by then", async () => {
+        pickCold();
+        const elsewhere = document.createElement("input");
+        document.body.appendChild(elsewhere);
+        onTestFinished(() => elsewhere.remove());
+        elsewhere.focus();
+        await settle();
+        expect(picker()).toBeNull();
+      });
     });
 
     it("leaves an ordinary menu close alone", () => {
