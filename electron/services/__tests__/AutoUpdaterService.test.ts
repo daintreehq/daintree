@@ -3141,6 +3141,21 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.initialize();
 
       expect(trackEventMock).not.toHaveBeenCalled();
+      // A delete of an absent key still rewrites config.json, so a clean boot
+      // must not issue one for either marker.
+      expect(storeMock.delete).not.toHaveBeenCalled();
+    });
+
+    it("clears only the attempt marker when it is stored without a version", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateInstallStage" ? "attempted" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateInstallStage");
+      expect(storeMock.delete).not.toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
     });
 
     it("clears but does not fire trackEvent on an invalid stored value", () => {
@@ -3177,6 +3192,23 @@ describe("AutoUpdaterService", () => {
       // trackEvent still fires because the delete failure is logged but
       // doesn't abort the comparison path.
       expect(trackEventMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still clears the attempt marker when clearing the version marker throws", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion"
+          ? "2.0.0"
+          : key === "pendingUpdateInstallStage"
+            ? "attempted"
+            : undefined
+      );
+      storeMock.delete.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+
+      expect(() => autoUpdaterService.initialize()).not.toThrow();
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateInstallStage");
     });
 
     it("swallows a thrown trackEvent so initialize never throws", () => {

@@ -366,6 +366,18 @@ describe("CrashLoopGuardService", () => {
       expect(fs.existsSync(tmpPath)).toBe(true);
     });
 
+    it("lists userData once for both the tmp sweep and the sibling prune", () => {
+      const readdirSpy = vi.spyOn(fs, "readdirSync");
+      try {
+        const guard = new CrashLoopGuardService();
+        guard.initialize();
+
+        expect(readdirSpy.mock.calls.filter(([dir]) => dir === tmpDir)).toHaveLength(1);
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    });
+
     it("only sweeps tmp files that match the crash-loop naming pattern", () => {
       const otherTmp = path.join(tmpDir, "settings.json.123-abc.tmp");
       fs.writeFileSync(otherTmp, "not ours", "utf8");

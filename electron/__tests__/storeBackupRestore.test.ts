@@ -70,6 +70,7 @@ describe("Store backup/restore helpers", () => {
       expect(
         result.status === "valid" && result.rawBuffer?.equals(fs.readFileSync(configPath))
       ).toBe(true);
+      expect(result.status === "valid" && result.parsed).toEqual({ foo: "bar", n: 42 });
     });
 
     it("carries byte-identical bytes for non-ASCII (CJK + emoji) content", () => {
@@ -284,6 +285,8 @@ describe("initializeStore", () => {
     expect(instance).toBeDefined();
     // Store has been silently reset to defaults by electron-store
     expect(instance.get("_schemaVersion")).toBe(0);
+    // The proxy must not be seeded from the pre-wipe preflight parse.
+    expect(store.get("_schemaVersion" as never)).toBe(0);
     // Even after the deferred backup task runs, the wipe guard must keep the
     // last-good backup untouched — recovery is still possible.
     runDeferredStoreBackup();
@@ -336,6 +339,106 @@ describe("initializeStore", () => {
     expect(backup.newDefault).toBe("added");
     // No phantom recovery notification on a benign merge
     expect(consumePendingSettingsRecovery()).toBeNull();
+  });
+
+  describe("value cache seeding from preflight", () => {
+    it("reads an unchanged config three times across init and the first get", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5, kept: { a: 1 } }), "utf8");
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      try {
+        initializeStore(testOptions(tempDir));
+        expect(store.get("_schemaVersion" as never)).toBe(5);
+        expect(store.get("kept.a" as never)).toBe(1);
+        const configReads = readSpy.mock.calls.filter(([p]) => p === configPath).length;
+        // Preflight, conf's constructor, and the post-construction wipe check;
+        // the first get is served from preflight's parse.
+        expect(configReads).toBe(3);
+      } finally {
+        readSpy.mockRestore();
+      }
+      // A write over the seeded snapshot keeps every value already on disk.
+      store.set("other" as never, 2 as never);
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
+        _schemaVersion: 5,
+        kept: { a: 1 },
+        other: 2,
+      });
+    });
+
+    it("serves the same values conf reads from disk", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(
+        configPath,
+        '{"_schemaVersion":5,"nested":{"list":[1,{"b":"ç🚀"}],"flag":false},"empty":null,"__proto__":{"polluted":true}}',
+        "utf8"
+      );
+      initializeStore(testOptions(tempDir));
+      const keys = [
+        "_schemaVersion",
+        "nested",
+        "nested.list",
+        "nested.flag",
+        "empty",
+        "__proto__",
+        "polluted",
+      ];
+      const seeded = keys.map((key) => store.get(key as never));
+      invalidateStoreValueCache();
+      const fromDisk = keys.map((key) => store.get(key as never));
+      expect(seeded).toEqual(fromDisk);
+    });
+
+    it("declines to seed a config carrying conf's __internal__ bookkeeping", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ _schemaVersion: 5, __internal__: { migrations: { version: "1.0.0" } } }),
+        "utf8"
+      );
+      initializeStore(testOptions(tempDir));
+      // conf detaches its bookkeeping from the store it hands out; a raw
+      // preflight parse would expose it.
+      expect(store.get("__internal__" as never)).toBeUndefined();
+      expect(store.get("_schemaVersion" as never)).toBe(5);
+    });
+
+    it("drops the seed when a whole-store assignment is what lazily initializes the store", async () => {
+      const previousUserData = process.env.DAINTREE_USER_DATA;
+      process.env.DAINTREE_USER_DATA = tempDir;
+      vi.resetModules();
+      try {
+        // storeOptions reads DAINTREE_USER_DATA at module load, so the lazy
+        // path needs a fresh module instance pointed at the temp dir.
+        const fresh = await import("../store.js");
+        // First boot writes every default, so the next construction leaves the
+        // bytes alone and seeds the cache.
+        fresh.initializeStore();
+        const replacement = { ...fresh._peekStoreInstance()!.store, _schemaVersion: 99 };
+        fresh._resetStoreInstance();
+
+        (fresh.store as unknown as { store: unknown }).store = replacement;
+
+        expect(fresh.store.get("_schemaVersion")).toBe(99);
+        fresh._resetStoreInstance();
+      } finally {
+        if (previousUserData === undefined) delete process.env.DAINTREE_USER_DATA;
+        else process.env.DAINTREE_USER_DATA = previousUserData;
+        vi.resetModules();
+      }
+    });
+
+    it("does not seed when conf merges new defaults during construction", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");
+      const opts = testOptions(tempDir);
+      opts.defaults = { _schemaVersion: 0, newDefault: "added" };
+
+      initializeStore(opts);
+
+      expect(store.get("newDefault" as never)).toBe("added");
+      expect(store.get("_schemaVersion" as never)).toBe(5);
+    });
   });
 
   it("preserves restored-from-backup recovery when conf merges defaults into restored backup", () => {
