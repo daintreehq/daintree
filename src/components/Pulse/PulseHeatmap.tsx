@@ -229,10 +229,11 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
   // by position, instead of a Radix tree per cell (up to 180 per card). The
   // date stays set after a close so the card keeps its text through the exit
   // fade. Hover and focus share it: whichever moved last owns the readout.
-  const [tip, setTip] = useState<{ date: string | null; open: boolean }>({
-    date: null,
-    open: false,
-  });
+  const [tip, setTip] = useState<{
+    date: string | null;
+    open: boolean;
+    source: "hover" | "focus" | null;
+  }>({ date: null, open: false, source: null });
   const pointerDownRef = useRef(false);
   const tipPosition = tip.date ? positions.get(tip.date) : undefined;
   const tipCell = tipPosition ? weeks[tipPosition.col]?.[tipPosition.row] : undefined;
@@ -244,48 +245,57 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     return target.closest("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
   };
 
-  const showTip = (date: string | null) => {
+  // `source` is who owns the readout: the pointer leaving only closes what the
+  // pointer opened, and a blur only what focus opened, so one input ending
+  // never wipes out the other's.
+  const showTip = (date: string, source: "hover" | "focus") => {
     setTip((prev) =>
-      date
-        ? prev.date === date && prev.open
-          ? prev
-          : { date, open: true }
-        : prev.open
-          ? { ...prev, open: false }
-          : prev
+      prev.date === date && prev.open && prev.source === source
+        ? prev
+        : { date, open: true, source }
+    );
+  };
+
+  const hideTip = (source?: "hover" | "focus") => {
+    setTip((prev) =>
+      prev.open && (source === undefined || prev.source === source)
+        ? { ...prev, open: false, source: null }
+        : prev
     );
   };
 
   const handlePointerOver = (event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") return;
     notifyTooltipPointerActivity();
-    showTip(cellDateOf(event.currentTarget, event.target));
+    const date = cellDateOf(event.currentTarget, event.target);
+    if (date) showTip(date, "hover");
+    else hideTip("hover");
   };
 
-  const handlePointerLeave = () => showTip(null);
+  const handlePointerLeave = () => hideTip("hover");
 
   // A press hands the screen to whatever the cell does, and the focus it
-  // causes is not a request for a tooltip: mirrors the shared trigger.
+  // causes is not a request for a tooltip: mirrors the shared trigger. The
+  // flag is cleared on a timer rather than pointerup, which never arrives
+  // here when the press is released outside the grid.
   const handlePointerDown = () => {
     pointerDownRef.current = true;
-    showTip(null);
-  };
-
-  const handlePointerUp = () => {
     setTimeout(() => {
       pointerDownRef.current = false;
     }, 0);
+    hideTip();
   };
 
   const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
     if (pointerDownRef.current || isTooltipFocusOpenSuppressed()) return;
-    showTip(cellDateOf(event.currentTarget, event.target));
+    const date = cellDateOf(event.currentTarget, event.target);
+    if (date) showTip(date, "focus");
   };
 
-  const handleBlur = () => showTip(null);
+  const handleBlur = () => hideTip("focus");
 
   const handleTipOpenChange = (next: boolean) => {
-    if (!next) showTip(null);
+    if (!next) hideTip();
   };
 
   const handleKeyDown = useCallback(
@@ -368,7 +378,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
         onPointerOver={handlePointerOver}
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
+        onClick={() => hideTip()}
         onFocus={handleFocus}
         onBlur={handleBlur}
       >
