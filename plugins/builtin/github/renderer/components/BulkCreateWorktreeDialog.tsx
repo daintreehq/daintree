@@ -69,6 +69,9 @@ export function BulkCreateWorktreeDialog({
   // click can't start another.
   const boundRunIdRef = useRef<string | null>(null);
   const prevIsOpenRef = useRef(false);
+  // An ended run the user has acknowledged. Dropped once the dialog closes or
+  // unmounts, not on the click, so its summary stays up until the dialog goes.
+  const acknowledgedRunIdRef = useRef<string | null>(null);
   const boundRun = useBulkCreateRunStore((state) =>
     boundRunId ? state.runs[boundRunId] : undefined
   );
@@ -289,6 +292,10 @@ export function BulkCreateWorktreeDialog({
   const processedCount = succeededCount + failedCount;
 
   useLayoutEffect(() => {
+    if (!isOpen && acknowledgedRunIdRef.current) {
+      dismissBulkCreateRun(acknowledgedRunIdRef.current);
+      acknowledgedRunIdRef.current = null;
+    }
     if (isOpen && !prevIsOpenRef.current) {
       const existing = projectId ? findBulkCreateRunToShow(projectId) : undefined;
       boundRunIdRef.current = existing?.id ?? null;
@@ -298,6 +305,15 @@ export function BulkCreateWorktreeDialog({
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, projectId, closeBaseBranchPicker]);
+
+  // ProjectDialogHost unmounts the dialog on close, so this is where an
+  // acknowledged run is usually dropped. A run still going is left alone.
+  useEffect(() => {
+    return () => {
+      if (acknowledgedRunIdRef.current) dismissBulkCreateRun(acknowledgedRunIdRef.current);
+      acknowledgedRunIdRef.current = null;
+    };
+  }, []);
 
   const handleCreate = useCallback(async () => {
     if (boundRunIdRef.current) return;
@@ -374,14 +390,14 @@ export function BulkCreateWorktreeDialog({
     const storedOnComplete = isDone
       ? useWorktreeSelectionStore.getState().bulkCreateDialog.onComplete
       : undefined;
-    if (isEnded && boundRunId) dismissBulkCreateRun(boundRunId);
+    if (isEnded) acknowledgedRunIdRef.current = boundRunId;
 
     onClose();
     storedOnComplete?.();
   }, [isDone, isEnded, boundRunId, onClose]);
 
   const handleDone = useCallback(() => {
-    if (boundRunId) dismissBulkCreateRun(boundRunId);
+    acknowledgedRunIdRef.current = boundRunId;
     // A cancelled run keeps the selection, as a cancel always has.
     if (isCancelled) {
       onClose();
