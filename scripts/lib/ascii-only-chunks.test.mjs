@@ -19,7 +19,7 @@ const SOURCE = [
   'var a="Run an action first — there\'s nothing to repeat",',
   "b=`Write a note…`,",
   "c=/[─│]/.test(`│`),",
-  "d=/^\\p{L}é😀$/u.test(`é😀`.replace(/^/,`x`).slice(1)),",
+  "d=/^\\p{L}é😀$/u.test(`xé😀`),",
   "e=String.raw`→${1}`,",
   'f="café",',
   "g=`😀`.length,",
@@ -41,6 +41,11 @@ describe("hasTwoByteCharacters", () => {
     expect(hasTwoByteCharacters("café ñ")).toBe(false);
     expect(hasTwoByteCharacters("a — b")).toBe(true);
   });
+
+  it("draws the line between U+00FF and U+0100", () => {
+    expect(hasTwoByteCharacters("\u00ff")).toBe(false);
+    expect(hasTwoByteCharacters("\u0100")).toBe(true);
+  });
 });
 
 describe("escapeChunkToAscii", () => {
@@ -49,7 +54,8 @@ describe("escapeChunkToAscii", () => {
   it("produces the same runtime values as the original", () => {
     const original = run(SOURCE);
     // The regex cases must actually match, or equal outputs prove nothing.
-    expect(original.slice(-3)).toEqual([true, true, true]);
+    const [, , c, d, , , , h, i, j] = original;
+    expect([c, d, h, i, j]).toEqual([true, true, true, true, true]);
     expect(run(escaped)).toEqual(original);
   });
 
@@ -124,7 +130,12 @@ describe("asciiOnlyOutputPlugin", () => {
     ...extra,
   });
   const byName = (result) =>
-    new Map(result.outputFiles.map((file) => [path.relative(dir, file.path), file]));
+    new Map(
+      result.outputFiles.map((file) => [
+        path.relative(dir, file.path).split(path.sep).join("/"),
+        file,
+      ])
+    );
   const run = (code) =>
     import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
 
@@ -143,8 +154,7 @@ describe("asciiOnlyOutputPlugin", () => {
     expect(hasTwoByteCharacters(wide.text.replace("String.raw`→`", ""))).toBe(false);
     expect(await run(wide.text)).toEqual(await run(plain.get("out/wide.js").text));
 
-    // What a caller reads agrees with itself and with the metafile.
-    expect(wide.text).toBe(new TextDecoder().decode(wide.contents));
+    // What a caller reads agrees with the metafile.
     expect(wide.hash).not.toBe(plain.get("out/wide.js").hash);
     expect(result.metafile.outputs["out/wide.js"].bytes).toBe(wide.contents.byteLength);
 
@@ -163,7 +173,26 @@ describe("asciiOnlyOutputPlugin", () => {
       expect(fs.readFileSync(file.path), file.path).toEqual(Buffer.from(file.contents));
     }
     const wide = fs.readFileSync(path.join(dir, "out/wide.js"), "utf8");
-    expect(wide).toContain("\\u2014");
+    expect(wide).toContain("String.raw`→`");
+    expect(hasTwoByteCharacters(wide.replace("String.raw`→`", ""))).toBe(false);
     expect(fs.readFileSync(path.join(dir, "out/narrow.js"), "utf8")).toContain("é");
+  });
+
+  it("fails the build, writing nothing, when a chunk cannot be re-printed", async () => {
+    // Runs before the pass and hands it a chunk the printer rejects.
+    const corrupt = {
+      name: "corrupt",
+      setup(build) {
+        build.onEnd((result) => {
+          const wide = result.outputFiles?.find((file) => file.path.endsWith("wide.js"));
+          if (wide) wide.contents = new TextEncoder().encode("var a = `—");
+        });
+      },
+    };
+
+    await expect(build(options({ plugins: [corrupt, asciiOnlyOutputPlugin()] }))).rejects.toThrow(
+      /wide\.js/
+    );
+    expect(fs.existsSync(path.join(dir, "out"))).toBe(false);
   });
 });

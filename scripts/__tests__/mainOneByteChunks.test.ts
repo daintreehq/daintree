@@ -46,7 +46,7 @@ const STARTUP_CLOSURES = [
 ];
 const HESITATIONS = "shared/utils/voiceHesitations.ts";
 const HINT =
-  "the build escapes literals, so this character sits in a tagged template's raw text or a kept /*! */ comment: pass it in as a string the template substitutes, as electron/services/pty/ClaudeUsageWarnings.ts does, or move the comment out of the chunk";
+  "check that the production build's ASCII pass ran: it escapes every literal, so what it leaves sits in a tagged template's raw text or a legal comment; pass such a character in as a string the template substitutes, as electron/services/pty/ClaudeUsageWarnings.ts does, or move the comment out of the chunk";
 
 const normalize = (file: string) => file.split(path.sep).join("/");
 
@@ -155,7 +155,7 @@ describe("the startup chunk checks", () => {
         },
       },
       "out/large.js": { code: "var a=/[—]/u,b=String.raw`→`;", meta: {} },
-      "out/small.js": { code: "var a=/[—]/u;", meta: {} },
+      "out/small.js": { code: "var a=/[ÿĀ]/u;", meta: {} },
       "out/lazy.js": { code: "var a=/[—]/u,b=String.raw`→`;", meta: {} },
       "out/carrier.js": {
         code: "var a=String.raw`→`;",
@@ -189,7 +189,10 @@ describe("the startup chunk checks", () => {
     const { guarded, offenders } = startupOffenders(fixture(), ["entry.ts"], 0);
     expect(guarded).toContain("out/small.js");
     expect(guarded).not.toContain("out/lazy.js");
-    expect(offenders).toContainEqual(expect.stringMatching(/^out\/small\.js .*U\+2014 at 8 /));
+    // U+00FF still fits a one-byte string; U+0100 does not.
+    expect(offenders.filter((offender) => offender.startsWith("out/small.js"))).toEqual([
+      expect.stringMatching(/U\+0100 at 9 /),
+    ]);
   });
 
   it("reports a large chunk only imported dynamically among the large ones", () => {
