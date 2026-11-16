@@ -42,7 +42,7 @@ const LIVE: PaneRecord = {
 };
 
 const getTerminalAsync = vi.fn<(id: string) => Promise<PaneRecord | null>>();
-const getClaudeProjectsRoot = vi.fn<(id: string) => string | null>();
+const getClaudeProjectsRoot = vi.fn<(id: string, sessionId?: string) => string | null>();
 
 function deps() {
   return {
@@ -101,7 +101,8 @@ describe("readClaudePaneContextUsage", () => {
       recordedAt: Date.parse(STAMP),
     });
     expect(getTerminalAsync).toHaveBeenCalledWith("t-1");
-    expect(getClaudeProjectsRoot).toHaveBeenCalledWith("t-1");
+    // The store holding the recorded session, which a switch may have left behind (#17087).
+    expect(getClaudeProjectsRoot).toHaveBeenCalledWith("t-1", SESSION);
     const after = await stat(transcript);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(await readFile(transcript, "utf8")).toBe(content);
