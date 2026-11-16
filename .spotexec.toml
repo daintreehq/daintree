@@ -13,7 +13,7 @@ pool = ["aws"]
 env_allow = ["NODE_OPTIONS", "TZ"]
 
 # One shared pool for every command: 8-vCPU VMs with at least 32 GiB, up to two
-# jobs to a VM (exclusive tasks take a whole one), and at most sixteen VMs per
+# jobs to a VM (exclusive tasks take a whole one), and at most twelve VMs per
 # machine. Past that, even a workflow of thirty agents queues for a slot
 # instead of launching more. Starting a VM costs a minute or more, and every VM
 # then bills its idle timeout after its last job, so a few warm VMs beat many
@@ -27,7 +27,7 @@ vcpus = 8
 min_memory_gib = 32
 instance_types = ["m6a.*", "m7a.*", "m8a.*", "r6a.*", "r7a.*", "r8a.*"]
 max_slots = 2
-max_instances = 16
+max_instances = 12
 idle_timeout = "10m"
 
 [sync]
