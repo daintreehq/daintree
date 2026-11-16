@@ -21,7 +21,7 @@ import {
 } from "@/store/worktreeSnapshotSync";
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(() => [] as ActionManifestEntry[]),
+  listForTransfer: vi.fn(() => [] as ActionManifestEntry[]),
   get: vi.fn((_id: string): ActionManifestEntry | null => null),
   dispatch: vi.fn(),
   getContext: vi.fn((): Record<string, unknown> => ({})),
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: mocks.list,
+    listForTransfer: mocks.listForTransfer,
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
     getContext: mocks.getContext,
@@ -257,7 +257,7 @@ describe("useMcpBridge", () => {
   });
 
   it("returns the current action manifest and falls back to an empty manifest on failure", () => {
-    mocks.list.mockReturnValueOnce([safeManifestEntry()]);
+    mocks.listForTransfer.mockReturnValueOnce([safeManifestEntry()]);
 
     renderHook(() => useMcpBridge());
 
@@ -266,7 +266,7 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ id: "actions.list" }),
     ]);
 
-    mocks.list.mockImplementationOnce(() => {
+    mocks.listForTransfer.mockImplementationOnce(() => {
       throw new Error("manifest exploded");
     });
 

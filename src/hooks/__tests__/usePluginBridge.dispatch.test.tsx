@@ -12,7 +12,7 @@ const dispatch = vi.hoisted(() =>
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch,
-    list: () => [],
+    listForTransfer: () => [],
     get: () => null,
     deniesPluginDispatch: () => false,
   },

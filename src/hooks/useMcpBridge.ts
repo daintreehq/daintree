@@ -1342,7 +1342,7 @@ export function useMcpBridge(): void {
 
     const cleanupManifest = window.electron.mcpBridge.onGetManifestRequest((requestId) => {
       try {
-        const manifest = actionService.list();
+        const manifest = actionService.listForTransfer();
         window.electron.mcpBridge.sendGetManifestResponse(requestId, manifest);
       } catch (err) {
         logError("[MCP Bridge] Failed to build manifest", err);
