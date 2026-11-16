@@ -11,10 +11,12 @@
 // can be offset by an improvement anywhere else; this test cannot be.
 
 import { describe, it, expect } from "vitest";
-import { compilerEventsFor } from "./lib/compiler-scan.mjs";
+import { compileForDiagnostics } from "./lib/compiler-scan.mjs";
 
 // Each file, with the functions that must come out compiled. Naming them is
-// what keeps the test from passing on a file the compiler skipped outright.
+// what keeps the test from passing on a file the compiler skipped outright,
+// and counting the caches in the emitted code is what keeps it from passing on
+// one a module-level `"use no memo"` compiled and then threw away.
 const SURFACES = {
   "src/components/Layout/Toolbar.tsx": ["Toolbar"],
   "src/hooks/projectSwitcher/useProjectSwitcherProjectMutations.ts": [
@@ -40,13 +42,15 @@ describe("React Compiler on the app shell's hot surfaces", () => {
   for (const [file, expected] of Object.entries(SURFACES)) {
     // A large component takes a few seconds to compile on a loaded runner.
     it(`compiles ${file} with no bailouts`, { timeout: 60_000 }, async () => {
-      const events = await compilerEventsFor(file);
+      const { events, code } = await compileForDiagnostics(file);
       const failures = events
         .filter((e) => ["CompileError", "CompileSkip", "PipelineError"].includes(e.kind))
         .map(describeFailure);
       expect(failures).toEqual([]);
       const compiled = events.filter((e) => e.kind === "CompileSuccess").map((e) => e.fnName);
       expect(compiled).toEqual(expect.arrayContaining(expected));
+      const caches = code.match(/\b_c\(\d+\)/g) ?? [];
+      expect(caches.length).toBeGreaterThanOrEqual(expected.length);
     });
   }
 });

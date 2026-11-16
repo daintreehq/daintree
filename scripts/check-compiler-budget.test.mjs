@@ -8,7 +8,9 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyBaselineEntries,
+  compareToBaseline,
   coverageShortfall,
+  formatHintGrowth,
   hintIncreases,
   regressedStrictCategories,
 } from "./check-compiler-budget.mjs";
@@ -216,5 +218,65 @@ describe("hintIncreases", () => {
         { "src/same.tsx": { hintCount: 2 }, "src/fixed.tsx": { hintCount: 4 } }
       )
     ).toEqual([]);
+  });
+});
+
+function counts(overrides = {}) {
+  return {
+    success: 1,
+    skip: 0,
+    error: 0,
+    pipeline: 0,
+    hintCount: 0,
+    errorBailouts: [],
+    ...overrides,
+  };
+}
+
+describe("compareToBaseline", () => {
+  it("reports a new file as clean only when it has no Todo either", () => {
+    const { newClean, regressions } = compareToBaseline(
+      {
+        "src/clean.tsx": counts(),
+        "src/todo.tsx": counts({ error: 1, hintCount: 1 }),
+      },
+      {}
+    );
+    expect(newClean).toEqual(["src/clean.tsx"]);
+    expect(regressions).toEqual([]);
+  });
+
+  it("still fails a new file over a strict bailout", () => {
+    const { newClean, regressions } = compareToBaseline(
+      {
+        "src/bad.tsx": counts({
+          error: 1,
+          errorBailouts: [{ category: "Refs", severity: "Error", reason: "refs" }],
+        }),
+      },
+      {}
+    );
+    expect(newClean).toEqual([]);
+    expect(regressions.map((r) => r.file)).toEqual(["src/bad.tsx"]);
+  });
+});
+
+describe("formatHintGrowth", () => {
+  it("warns per file with the Todos it now carries", () => {
+    const lines = formatHintGrowth([{ file: "src/new.tsx", from: 0, to: 1, isNew: true }], {
+      "src/new.tsx": {
+        hintBailouts: [
+          { category: "Todo", severity: "Hint", reason: "finally", line: 7, fnLine: 2 },
+        ],
+      },
+    });
+    expect(lines).toEqual([
+      expect.stringMatching(/^::warning file=src\/new\.tsx::.*new file \(Todo bailouts 0 → 1\)/),
+      "   todo :7: finally",
+    ]);
+  });
+
+  it("says nothing when no file grew", () => {
+    expect(formatHintGrowth([], {})).toEqual([]);
   });
 });

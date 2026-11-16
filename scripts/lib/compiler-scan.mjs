@@ -39,8 +39,8 @@ const COLLECTOR_REVISION = 1;
 // A single file with thousands of identical skip reasons or a repeated
 // serialized stack would otherwise be retained and printed in full. Counts
 // stay exact; only the retained samples are bounded.
-const MAX_SAMPLES_PER_FILE = 20;
-const MAX_SAMPLE_LENGTH = 200;
+export const MAX_SAMPLES_PER_FILE = 20;
+export const MAX_SAMPLE_LENGTH = 200;
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -86,15 +86,18 @@ function transformOptionsFor(rel, preset) {
 }
 
 /**
- * Every compiler event for one file, under the scan's own options and parser.
- * For a test that pins a file's compilation without scanning the whole tree.
+ * One file's compiler events and emitted code, under the scan's own options and
+ * parser. For a test that pins a file's compilation without scanning the tree.
+ * The code is part of the answer because the events alone can't tell a
+ * compiled function from one a module-level `"use no memo"` discarded: both
+ * report success.
  */
-export async function compilerEventsFor(rel) {
+export async function compileForDiagnostics(rel) {
   const events = [];
   const { preset } = buildPreset({ logEvent: (_filename, event) => events.push(event) });
   const source = await readFile(path.join(ROOT, rel), "utf8");
-  await babel.transformAsync(source, transformOptionsFor(rel, preset));
-  return events;
+  const result = await babel.transformAsync(source, transformOptionsFor(rel, preset));
+  return { events, code: result?.code ?? "" };
 }
 
 const SEVERITY_BY_CATEGORY = Object.fromEntries(LintRules.map((r) => [r.category, r.severity]));
@@ -164,7 +167,7 @@ export function bucketCompileError(event) {
   return { hints: hintBailouts.length, hintBailouts, strict };
 }
 
-function emptyEntry() {
+export function emptyEntry() {
   return {
     success: 0,
     skip: 0,
@@ -218,6 +221,19 @@ function pushSample(list, value) {
   if (list.length >= MAX_SAMPLES_PER_FILE) return;
   if (list.includes(text)) return;
   list.push(text);
+}
+
+/**
+ * Fold one `CompileError` event into a file's entry: the exact Hint count, a
+ * bounded and deduplicated sample of the Hints, and every strict bailout.
+ * Exported so the sampling bounds are tested without a scan.
+ */
+export function recordCompileError(entry, event) {
+  entry.error++;
+  const { hints, hintBailouts, strict } = bucketCompileError(event);
+  entry.hintCount += hints;
+  for (const bailout of hintBailouts) pushHintSample(entry.hintBailouts, bailout);
+  entry.errorBailouts.push(...strict);
 }
 
 function pushHintSample(list, bailout) {
@@ -282,14 +298,9 @@ export async function scanCompilerDiagnostics({ onProgress } = {}) {
           }
           break;
         }
-        case "CompileError": {
-          entry.error++;
-          const { hints, hintBailouts, strict } = bucketCompileError(event);
-          entry.hintCount += hints;
-          for (const bailout of hintBailouts) pushHintSample(entry.hintBailouts, bailout);
-          entry.errorBailouts.push(...strict);
+        case "CompileError":
+          recordCompileError(entry, event);
           break;
-        }
         case "PipelineError": {
           entry.pipeline++;
           // `data` is a serialized stack; the first line is the message and the

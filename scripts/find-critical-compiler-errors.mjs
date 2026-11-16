@@ -3,9 +3,9 @@
 // breaks the Rules of React), Warning (an incompatible library or unsupported
 // syntax), and Hint, the compiler's `Todo` for syntax it doesn't support yet.
 //
-// All three cost the function everything. A `Todo` is not cosmetic: the
-// compiler abandons the whole component or hook over it, exactly as it does
-// over an Error, and emits no memoization at all. This used to list Errors
+// A `Todo` is not cosmetic: the compiler abandons the whole component or hook
+// over it, exactly as it does over an Error, and emits no memoization at all.
+// (A few lint-only validations log an Error without abandoning anything.) This used to list Errors
 // alone, which hid all but 2 of the app's ~355 abandoned components, among them
 // the toolbar and every Canopy surface. The budget gate pools Hints into one
 // repo-wide total, so a file losing its compilation passes there whenever

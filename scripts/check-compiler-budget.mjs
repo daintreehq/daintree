@@ -122,6 +122,20 @@ export function hintIncreases(reportFiles, baselineFiles) {
   return increases.sort((a, b) => a.file.localeCompare(b.file));
 }
 
+/** The warning lines for `hintIncreases`, with a few of each file's Todos. */
+export function formatHintGrowth(hintGrowth, report) {
+  const lines = [];
+  for (const { file, from, to, isNew } of hintGrowth) {
+    lines.push(
+      `::warning file=${file}::React Compiler gave up on more of this ${isNew ? "new " : ""}file (Todo bailouts ${from} → ${to}); each abandons the whole function`
+    );
+    for (const b of getHintBailouts(report[file]).slice(0, 3)) {
+      lines.push(`   todo :${b.line ?? "?"}: ${b.reason}`);
+    }
+  }
+  return lines;
+}
+
 function readJson(file, label) {
   if (!existsSync(file)) {
     console.error(`::error::${label} not found at ${path.relative(ROOT, file)}`);
@@ -413,6 +427,65 @@ function assertFingerprintMatches(baseline, scan) {
   process.exit(1);
 }
 
+/**
+ * The per-file half of the gate: regressions, improvements, success drops and
+ * new clean files. Pure, so what counts as clean is tested without a scan.
+ */
+export function compareToBaseline(report, baseline) {
+  const regressions = [];
+  const improvements = [];
+  const successDrops = [];
+  const newClean = [];
+
+  for (const [file, entry] of Object.entries(report)) {
+    const base = baseline[file];
+    const strictCount = getStrictBailouts(entry).length;
+    if (!base) {
+      // New file in the report. Allowed only if it has zero gating bailouts —
+      // that means zero skip/pipeline AND zero strict (Error+Warning) bailouts.
+      // New-file Hints are absorbed by the global Hint budget, not gated
+      // per-file: a new component with a Todo fails only if it pushes the
+      // whole-repo total over its ceiling. It is warned about by name
+      // (`hintIncreases`), and never reported as clean.
+      const deltas = REGRESSION_KEYS.filter((k) => entry[k] > 0).map((k) => ({
+        key: k,
+        from: 0,
+        to: entry[k],
+      }));
+      for (const { category, from, to } of regressedStrictCategories(entry, undefined)) {
+        deltas.push({ key: `strictErrors[${category}]`, from, to });
+      }
+      if (deltas.length > 0) {
+        regressions.push({ file, deltas, isNew: true });
+      } else if (getHintCount(entry) === 0) {
+        newClean.push(file);
+      }
+      continue;
+    }
+    const baseStrictCount = getStrictBailouts(base).length;
+    const deltas = REGRESSION_KEYS.filter((k) => entry[k] > base[k]).map((k) => ({
+      key: k,
+      from: base[k],
+      to: entry[k],
+    }));
+    // Category-aware: catches both a count increase and a count-neutral swap
+    // to a different strict category.
+    for (const { category, from, to } of regressedStrictCategories(entry, base)) {
+      deltas.push({ key: `strictErrors[${category}]`, from, to });
+    }
+    if (deltas.length > 0) regressions.push({ file, deltas, isNew: false });
+    const improvedKeys = REGRESSION_KEYS.filter((k) => entry[k] < base[k]);
+    if (strictCount < baseStrictCount) improvedKeys.push("strictErrors");
+    if (improvedKeys.length > 0) {
+      improvements.push({ file, base, entry, improvedKeys, baseStrictCount, strictCount });
+    }
+    if (entry.success < base.success) {
+      successDrops.push({ file, from: base.success, to: entry.success });
+    }
+  }
+  return { regressions, improvements, successDrops, newClean };
+}
+
 // Build and write the markdown summary for downstream PR-comment aggregation.
 // Called on both the pass and fail paths so the aggregated comment always
 // carries a compiler-budget block.
@@ -608,57 +681,7 @@ async function main() {
   validateShape(baseline, "baseline", BASELINE_FILE);
   assertFingerprintMatches(rawBaseline, scan);
 
-  const regressions = [];
-  const improvements = [];
-  const successDrops = [];
-  const newClean = [];
-
-  for (const [file, entry] of Object.entries(report)) {
-    const base = baseline[file];
-    const strictCount = getStrictBailouts(entry).length;
-    if (!base) {
-      // New file in the report. Allowed only if it has zero gating bailouts —
-      // that means zero skip/pipeline AND zero strict (Error+Warning) bailouts.
-      // New-file Hints are absorbed by the global Hint budget below, not gated
-      // per-file: a new component with a Todo fails only if it pushes the
-      // whole-repo total over its ceiling. It is warned about by name below,
-      // and never reported as clean.
-      const deltas = REGRESSION_KEYS.filter((k) => entry[k] > 0).map((k) => ({
-        key: k,
-        from: 0,
-        to: entry[k],
-      }));
-      for (const { category, from, to } of regressedStrictCategories(entry, undefined)) {
-        deltas.push({ key: `strictErrors[${category}]`, from, to });
-      }
-      if (deltas.length > 0) {
-        regressions.push({ file, deltas, isNew: true });
-      } else if (getHintCount(entry) === 0) {
-        newClean.push(file);
-      }
-      continue;
-    }
-    const baseStrictCount = getStrictBailouts(base).length;
-    const deltas = REGRESSION_KEYS.filter((k) => entry[k] > base[k]).map((k) => ({
-      key: k,
-      from: base[k],
-      to: entry[k],
-    }));
-    // Category-aware: catches both a count increase and a count-neutral swap
-    // to a different strict category.
-    for (const { category, from, to } of regressedStrictCategories(entry, base)) {
-      deltas.push({ key: `strictErrors[${category}]`, from, to });
-    }
-    if (deltas.length > 0) regressions.push({ file, deltas, isNew: false });
-    const improvedKeys = REGRESSION_KEYS.filter((k) => entry[k] < base[k]);
-    if (strictCount < baseStrictCount) improvedKeys.push("strictErrors");
-    if (improvedKeys.length > 0) {
-      improvements.push({ file, base, entry, improvedKeys, baseStrictCount, strictCount });
-    }
-    if (entry.success < base.success) {
-      successDrops.push({ file, from: base.success, to: entry.success });
-    }
-  }
+  const { regressions, improvements, successDrops, newClean } = compareToBaseline(report, baseline);
 
   // Global Hint budget: the implicit sum of per-file hintCount across the
   // baseline is the ceiling. Per-file Hint churn is allowed to move freely (a
@@ -712,14 +735,7 @@ async function main() {
   for (const { file, from, to } of successDrops) {
     console.log(`::notice file=${file}::compile success count dropped ${from} → ${to}`);
   }
-  for (const { file, from, to, isNew } of hintGrowth) {
-    console.log(
-      `::warning file=${file}::React Compiler gave up on more of this ${isNew ? "new " : ""}file (Todo bailouts ${from} → ${to}); each abandons the whole function`
-    );
-    for (const b of getHintBailouts(report[file]).slice(0, 3)) {
-      console.log(`   todo :${b.line ?? "?"}: ${b.reason}`);
-    }
-  }
+  for (const line of formatHintGrowth(hintGrowth, report)) console.log(line);
 
   const reportStrictTotal = Object.values(report).reduce(
     (s, e) => s + getStrictBailouts(e).length,
@@ -814,7 +830,7 @@ async function main() {
   if (hintBudgetExceeded) parts.push("Hint budget exceeded");
   console.error(
     `\n[check-compiler-budget] FAILED — ${total} issue(s): ${parts.join(", ")}. ` +
-      `\`npm run compiler-budget:critical\` lists every bailout by file and line, Error, Warning and Hint. ` +
+      `\`npm run compiler-budget:critical\` lists the bailouts by severity, file and line, Hints included. ` +
       `Deleted and newly-clean files retire themselves and never appear here. If the change is intentional — an unavoidable strict, skip or pipeline bailout, a Todo the compiler can't lower yet, or a scan set that genuinely moved — run \`npm run compiler-budget:update\` to refresh the baseline.`
   );
   // `exitCode` rather than `process.exit()`: the annotations above can be long,

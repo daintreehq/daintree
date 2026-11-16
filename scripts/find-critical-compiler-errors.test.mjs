@@ -8,7 +8,13 @@
 
 import { describe, it, expect } from "vitest";
 import { LintRules } from "babel-plugin-react-compiler";
-import { bucketCompileError } from "./lib/compiler-scan.mjs";
+import {
+  MAX_SAMPLE_LENGTH,
+  MAX_SAMPLES_PER_FILE,
+  bucketCompileError,
+  emptyEntry,
+  recordCompileError,
+} from "./lib/compiler-scan.mjs";
 import { formatBailoutReport } from "./find-critical-compiler-errors.mjs";
 
 const HINT_CATEGORY = LintRules.find((r) => r.severity === "Hint")?.category;
@@ -201,6 +207,7 @@ describe("formatBailoutReport", () => {
     expect(warning).toBeGreaterThan(error);
     expect(hint).toBeGreaterThan(warning);
     expect(text).toContain("    :3  refs");
+    expect(text).toContain("    :2  lib");
     expect(text).toContain("Total: 1 Error, 1 Warning, 1 Hint diagnostic(s)");
   });
 
@@ -221,6 +228,25 @@ describe("formatBailoutReport", () => {
     expect(text).toContain("(+24 more not listed)");
   });
 
+  // An entry shaped before `hintCount` existed, or one whose count lags its
+  // samples, still reports every sample it lists.
+  it("never counts fewer Hints than it lists", () => {
+    const text = formatBailoutReport({
+      scanned: ["src/a.tsx"],
+      failures: [],
+      files: {
+        "src/a.tsx": {
+          hintBailouts: [
+            { category: "Todo", severity: "Hint", reason: "one", line: 1 },
+            { category: "Todo", severity: "Hint", reason: "two", line: 2 },
+          ],
+        },
+      },
+    }).join("\n");
+    expect(text).toContain("Hint (`Todo`), 2 in 1 file(s)");
+    expect(text).not.toContain("more not listed");
+  });
+
   it("never prints a bare all-clear over files that failed to scan", () => {
     const clean = formatBailoutReport({ scanned: ["src/a.tsx"], failures: [], files: {} });
     expect(clean).toEqual(["No compiler bailouts across 1 scanned files."]);
@@ -230,5 +256,51 @@ describe("formatBailoutReport", () => {
       files: {},
     }).join("\n");
     expect(partial).toContain("not a clean bill of health");
+  });
+});
+
+function todoEvent(reason, line, fnLine = 10) {
+  return {
+    kind: "CompileError",
+    fnLoc: { start: { line: fnLine } },
+    detail: { category: HINT_CATEGORY, reason, loc: { start: { line } } },
+  };
+}
+
+describe("recordCompileError", () => {
+  it("counts every Hint exactly while keeping a bounded sample", () => {
+    const entry = emptyEntry();
+    for (let i = 0; i < MAX_SAMPLES_PER_FILE + 5; i++)
+      recordCompileError(entry, todoEvent("todo", i));
+    expect(entry.hintCount).toBe(MAX_SAMPLES_PER_FILE + 5);
+    expect(entry.error).toBe(MAX_SAMPLES_PER_FILE + 5);
+    expect(entry.hintBailouts).toHaveLength(MAX_SAMPLES_PER_FILE);
+    expect(entry.hintBailouts[0]).toMatchObject({ reason: "todo", line: 0, fnLine: 10 });
+  });
+
+  it("samples a repeated Todo once but counts it each time", () => {
+    const entry = emptyEntry();
+    recordCompileError(entry, todoEvent("same", 4));
+    recordCompileError(entry, todoEvent("same", 4));
+    recordCompileError(entry, todoEvent("same", 4, 99));
+    expect(entry.hintCount).toBe(3);
+    expect(entry.hintBailouts.map((b) => b.fnLine)).toEqual([10, 99]);
+  });
+
+  it("truncates a long reason in the sample", () => {
+    const entry = emptyEntry();
+    recordCompileError(entry, todoEvent("x".repeat(MAX_SAMPLE_LENGTH + 50), 1));
+    expect(entry.hintBailouts[0].reason).toHaveLength(MAX_SAMPLE_LENGTH);
+  });
+
+  it("keeps strict bailouts out of the Hint sample", () => {
+    const entry = emptyEntry();
+    recordCompileError(entry, {
+      kind: "CompileError",
+      detail: { category: ERROR_CATEGORY, reason: "refs", loc: { start: { line: 3 } } },
+    });
+    expect(entry.hintCount).toBe(0);
+    expect(entry.hintBailouts).toEqual([]);
+    expect(entry.errorBailouts).toHaveLength(1);
   });
 });
