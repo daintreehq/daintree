@@ -39,6 +39,23 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   ),
 }));
 
+// Only the component root reads this store, so its selector calls count the
+// root's renders and nothing beneath it (#17051).
+const rootRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/store/terminalPendingDestructiveActionStore", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/store/terminalPendingDestructiveActionStore")>();
+  const store = actual.useTerminalPendingDestructiveActionStore;
+  const counted = Object.assign(
+    (selector: Parameters<typeof store>[0]) => {
+      rootRenders.count += 1;
+      return store(selector);
+    },
+    store
+  );
+  return { ...actual, useTerminalPendingDestructiveActionStore: counted };
+});
+
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePreferencesStore, type DeletedWorktreeCleanupSeconds } from "@/store/preferencesStore";
@@ -120,7 +137,63 @@ beforeEach(() => {
   setPanels([]);
 });
 
+
+// Patches a panel the way the status buffer does: a fresh object in a fresh
+// `panelsById`, with every bucket array left as it was.
+function streamOutput(id: string, line: number): void {
+  act(() => {
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        [id]: {
+          ...state.panelsById[id]!,
+          activityHeadline: `line ${line}`,
+          activityStatus: "working",
+          lastCommand: `make ${line}`,
+        } as never,
+      },
+    }));
+  });
+}
+
 describe("DeletedWorktreeCard", () => {
+  it("does not re-render while its own or any other terminal streams output", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "elsewhere", worktreeId: "wt-live" },
+    ]);
+    renderCard();
+    const before = rootRenders.count;
+
+    for (let line = 0; line < 3; line++) {
+      streamOutput("t1", line);
+      streamOutput("elsewhere", line);
+    }
+
+    expect(rootRenders.count).toBe(before);
+    // The row still follows the stream: it subscribes to its panel itself.
+    expect(screen.getByText("make 2")).toBeTruthy();
+  });
+
+  it("previews the panels as they are when the dismiss is clicked", () => {
+    setPanels([{ id: "t1", worktreeId: "wt-1", title: "Old name" }]);
+    renderCard();
+    act(() => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          t1: { ...state.panelsById.t1!, title: "New name" } as never,
+        },
+      }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /close 1 panel/i }));
+
+    const pending = useTerminalPendingDestructiveActionStore.getState().pending;
+    expect(JSON.stringify(pending)).toContain("New name");
+    expect(JSON.stringify(pending)).not.toContain("Old name");
+  });
+
   it("shows the last-known title, path, and Deleted badge", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     renderCard();

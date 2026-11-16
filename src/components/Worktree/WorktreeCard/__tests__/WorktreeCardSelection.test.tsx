@@ -45,7 +45,11 @@ const SESSION: PtyPanelData = {
 
 let mockTerminals: PtyPanelData[] = [SESSION];
 vi.mock("@/hooks/useWorktreeTerminals", () => ({
-  useWorktreeTerminals: () => ({
+  // The card holds ids and the section selects the panels; both read the
+  // fixture list here instead of the panel store.
+  selectPtyPanels: (_state: unknown, ids: readonly string[]) =>
+    mockTerminals.filter((t) => ids.includes(t.id)),
+  useWorktreeTerminalSummary: () => ({
     counts: {
       total: mockTerminals.length,
       byState: {
@@ -58,7 +62,7 @@ vi.mock("@/hooks/useWorktreeTerminals", () => ({
       },
       unread: 0,
     },
-    terminals: mockTerminals,
+    terminalIds: mockTerminals.map((t) => t.id),
     dominantAgentState: null,
   }),
 }));

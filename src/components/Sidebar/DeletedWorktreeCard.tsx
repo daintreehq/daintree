@@ -5,14 +5,16 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
+import { useShallow } from "zustand/react/shallow";
 import {
   getDeletedWorktreeTerminalIds,
+  selectDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
-import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
-import { WorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
+import { useWorktreeTerminalSummary } from "@/hooks/useWorktreeTerminals";
+import { LiveWorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   buildDestructivePreview,
@@ -55,8 +57,6 @@ export function DeletedWorktreeCard({
   homeDir,
   showDismissAction = true,
 }: DeletedWorktreeCardProps) {
-  const panelsById = usePanelStore((s) => s.panelsById);
-  const panelIdsByWorktreeId = usePanelStore((s) => s.panelIdsByWorktreeId);
   const setFocused = usePanelStore((s) => s.setFocused);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const pingTerminal = usePanelStore((s) => s.pingTerminal);
@@ -71,7 +71,7 @@ export function DeletedWorktreeCard({
   // collapsed rail did.
   const [isTerminalsExpanded, setIsTerminalsExpanded] = useState(true);
 
-  const { counts, terminals } = useWorktreeTerminals(worktree.id);
+  const { counts, terminalIds } = useWorktreeTerminalSummary(worktree.id);
 
   // Auto-cleanup countdown: a numeric seconds readout in the header plus the
   // row's own bottom separator draining from full width to empty. While the
@@ -81,20 +81,24 @@ export function DeletedWorktreeCard({
   const { hasCountdown, hold, remainingSeconds, remainingFraction } =
     useDeletedWorktreeCountdown(worktree);
 
-  const panels = useMemo(() => {
-    void panelIdsByWorktreeId;
-    return getDeletedWorktreeTerminalIds(worktree.id)
-      .map((id) => panelsById[id])
-      .filter((panel): panel is PanelInstance => panel != null);
-  }, [worktree.id, panelsById, panelIdsByWorktreeId]);
+  // Ids, not panels: a panel object is replaced on every activity write, and a
+  // `panelsById` subscription re-rendered this row for output in any terminal
+  // in the app (#17051). The dismiss reads the panels when it runs.
+  const panelIds = usePanelStore(
+    useShallow((s) => selectDeletedWorktreeTerminalIds(s, worktree.id))
+  );
   // Listed from the same set the dismiss would close (#9699): the live hook
   // keeps overlay and dialog panels, which never belong to a worktree row.
-  const listedTerminals = useMemo(() => {
-    const ids = new Set(panels.map((panel) => panel.id));
-    return terminals.filter((terminal) => ids.has(terminal.id));
-  }, [panels, terminals]);
+  const listedTerminalIds = useMemo(() => {
+    const ids = new Set(panelIds);
+    return terminalIds.filter((id) => ids.has(id));
+  }, [panelIds, terminalIds]);
 
   const handleDismiss = useCallback(() => {
+    const { panelsById } = usePanelStore.getState();
+    const panels = getDeletedWorktreeTerminalIds(worktree.id)
+      .map((id) => panelsById[id])
+      .filter((panel): panel is PanelInstance => panel != null);
     if (panels.length === 0) {
       // Nothing left to confirm — the pruning subscription is about to drop
       // this row anyway, but dismissing directly keeps the button honest.
@@ -111,7 +115,7 @@ export function DeletedWorktreeCard({
       worktreeTitle: worktree.title,
       preview,
     });
-  }, [panels, worktree.id, worktree.title, requestDestructiveAction, dismissDeletedWorktree]);
+  }, [worktree.id, worktree.title, requestDestructiveAction, dismissDeletedWorktree]);
 
   // `source: "focus"` — viewing a ghost row is an incidental, session-only
   // selection. The user-source path would persist the deleted id as the
@@ -160,10 +164,10 @@ export function DeletedWorktreeCard({
 
   // Defensive: the store prunes empty deleted-worktree rows, so an empty row should never
   // reach render. Bailing keeps a torn frame from showing a zero-terminal card.
-  if (panels.length === 0) return null;
+  if (panelIds.length === 0) return null;
 
-  const noun = panels.length === 1 ? "panel" : "panels";
-  const closeLabel = `Close ${panels.length} ${noun}`;
+  const noun = panelIds.length === 1 ? "panel" : "panels";
+  const closeLabel = `Close ${panelIds.length} ${noun}`;
 
   return (
     <div
@@ -273,12 +277,12 @@ export function DeletedWorktreeCard({
             </Tooltip>
           )}
         </div>
-        <WorktreeTerminalSection
+        <LiveWorktreeTerminalSection
           worktreeId={worktree.id}
           worktreeLabel={worktree.title}
           isExpanded={isTerminalsExpanded}
           counts={counts}
-          terminals={listedTerminals}
+          terminalIds={listedTerminalIds}
           onToggle={handleToggleTerminals}
           onTerminalSelect={handleTerminalSelect}
           rowClick="select"

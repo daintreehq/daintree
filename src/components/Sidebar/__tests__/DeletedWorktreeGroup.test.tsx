@@ -62,6 +62,23 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   ),
 }));
 
+// Only the component root reads this store, so its selector calls count the
+// root's renders and nothing beneath it (#17051).
+const rootRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/store/terminalPendingDestructiveActionStore", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/store/terminalPendingDestructiveActionStore")>();
+  const store = actual.useTerminalPendingDestructiveActionStore;
+  const counted = Object.assign(
+    (selector: Parameters<typeof store>[0]) => {
+      rootRenders.count += 1;
+      return store(selector);
+    },
+    store
+  );
+  return { ...actual, useTerminalPendingDestructiveActionStore: counted };
+});
+
 import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
@@ -132,7 +149,44 @@ beforeEach(() => {
   setPanels([]);
 });
 
+
+// Patches a panel the way the status buffer does: a fresh object in a fresh
+// `panelsById`, with every bucket array left as it was.
+function streamOutput(id: string, line: number): void {
+  act(() => {
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        [id]: {
+          ...state.panelsById[id]!,
+          activityHeadline: `line ${line}`,
+          activityStatus: "working",
+          lastCommand: `make ${line}`,
+        } as never,
+      },
+    }));
+  });
+}
+
 describe("DeletedWorktreeGroup", () => {
+  it("does not re-render while its members' or any other terminal streams output", () => {
+    setPanels([
+      { id: "t1", worktreeId: "wt-1" },
+      { id: "t2", worktreeId: "wt-2" },
+      { id: "elsewhere", worktreeId: "wt-live" },
+    ]);
+    renderGroup();
+    const before = rootRenders.count;
+
+    for (let line = 0; line < 3; line++) {
+      streamOutput("t1", line);
+      streamOutput("t2", line);
+      streamOutput("elsewhere", line);
+    }
+
+    expect(rootRenders.count).toBe(before);
+  });
+
   it("summarises worktree and terminal counts in one row", () => {
     setPanels([
       { id: "t1", worktreeId: "wt-1" },

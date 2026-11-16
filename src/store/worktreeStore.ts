@@ -259,7 +259,15 @@ function basenameOf(path: string): string | null {
  * worktree sessions.
  */
 export function getDeletedWorktreeTerminalIds(worktreeId: string): string[] {
-  const { panelIdsByWorktreeId, panelsById } = usePanelStore.getState();
+  return selectDeletedWorktreeTerminalIds(usePanelStore.getState(), worktreeId);
+}
+
+/** {@link getDeletedWorktreeTerminalIds} over a given panel-store state, for selectors. */
+export function selectDeletedWorktreeTerminalIds(
+  state: Pick<ReturnType<typeof usePanelStore.getState>, "panelIdsByWorktreeId" | "panelsById">,
+  worktreeId: string
+): string[] {
+  const { panelIdsByWorktreeId, panelsById } = state;
   const ids = panelIdsByWorktreeId[worktreeId];
   if (!ids || ids.length === 0) return [];
   return ids.filter((id) => {

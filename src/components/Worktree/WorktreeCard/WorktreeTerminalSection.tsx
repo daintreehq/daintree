@@ -6,7 +6,9 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { cn } from "@/lib/utils";
-import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
+import { useShallow } from "zustand/react/shallow";
+import { selectPtyPanels, type WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
+import { usePanelStore } from "@/store/panelStore";
 import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
@@ -849,4 +851,22 @@ export function WorktreeTerminalSection({
       {isExpanded && panel}
     </div>
   );
+}
+
+export type LiveWorktreeTerminalSectionProps = Omit<WorktreeTerminalSectionProps, "terminals"> & {
+  terminalIds: readonly string[];
+};
+
+/**
+ * The section bound to the panel store by terminal id. Its rows show fields an
+ * activity write replaces (status, last command), so the panels are selected
+ * here: each write re-renders this section rather than the card around it
+ * (#17051).
+ */
+export function LiveWorktreeTerminalSection({
+  terminalIds,
+  ...props
+}: LiveWorktreeTerminalSectionProps) {
+  const terminals = usePanelStore(useShallow((state) => selectPtyPanels(state, terminalIds)));
+  return <WorktreeTerminalSection {...props} terminals={terminals} />;
 }
