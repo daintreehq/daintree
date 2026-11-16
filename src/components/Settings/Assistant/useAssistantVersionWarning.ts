@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import * as semver from "semver";
+import semverLt from "semver/functions/lt";
 import { logError } from "@/utils/logger";
 import { getAgentConfig } from "@/config/agents";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -56,7 +56,7 @@ export function useAssistantVersionWarning(preferredAgentId: string | null) {
         }
         try {
           setVersionWarning(
-            semver.lt(installed, required)
+            semverLt(installed, required)
               ? { agentId: preferredAgentId, agentName, installed, required }
               : null
           );

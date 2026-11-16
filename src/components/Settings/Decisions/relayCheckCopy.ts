@@ -1,4 +1,5 @@
-import * as semver from "semver";
+import semverCompare from "semver/functions/compare";
+import semverValid from "semver/functions/valid";
 import type { StatusSeverity } from "@/lib/statusSeverity";
 import type {
   DecisionsRelayCheck,
@@ -137,10 +138,10 @@ export function describeRelayCheck(check: DecisionsRelayCheck): RelayObservation
  * protocol range's top.
  */
 function newerSide(compatibility: DecisionsRelayCompatibility): "relay" | "daintree" | null {
-  const relay = semver.valid(compatibility.relay.workerVersion);
-  const daintree = semver.valid(compatibility.daintree.workerVersion);
+  const relay = semverValid(compatibility.relay.workerVersion);
+  const daintree = semverValid(compatibility.daintree.workerVersion);
   if (relay && daintree) {
-    const order = semver.compare(relay, daintree);
+    const order = semverCompare(relay, daintree);
     if (order > 0) return "relay";
     if (order < 0) return "daintree";
   }

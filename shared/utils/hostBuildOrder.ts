@@ -1,4 +1,5 @@
-import * as semver from "semver";
+import semverCompare from "semver/functions/compare.js";
+import semverValid from "semver/functions/valid.js";
 import type { HostBuildOrder } from "../types/ipc/remoteHosts.js";
 
 /**
@@ -7,10 +8,10 @@ import type { HostBuildOrder } from "../types/ipc/remoteHosts.js";
  * after its release's earlier nightlies, before the release itself).
  */
 export function compareReleaseVersions(a: string, b: string): number | null {
-  const left = semver.valid(a);
-  const right = semver.valid(b);
+  const left = semverValid(a);
+  const right = semverValid(b);
   if (!left || !right) return null;
-  return semver.compare(left, right);
+  return semverCompare(left, right);
 }
 
 /**

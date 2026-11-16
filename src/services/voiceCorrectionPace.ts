@@ -16,7 +16,10 @@
  * Nothing is kept but lengths and timings.
  */
 
-import { isVoiceCleanupModel, type VoiceReasoningEffort } from "@shared/config/voiceCorrection";
+import {
+  isVoiceCleanupModel,
+  type VoiceReasoningEffort,
+} from "@shared/config/voiceCorrectionPolicy";
 import type { VoiceCorrectionModel, VoiceCorrectionPace } from "@shared/types/ipc/api";
 
 const STORAGE_PREFIX = "daintree-voice-cleanup-pace:";

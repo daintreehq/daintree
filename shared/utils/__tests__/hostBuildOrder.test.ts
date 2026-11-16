@@ -44,4 +44,9 @@ describe("compareReleaseVersions", () => {
     expect(compareReleaseVersions("1.9.0", "1.9.0")).toBe(0);
     expect(compareReleaseVersions("1.9", "1.9.0")).toBeNull();
   });
+
+  it("puts a release candidate before its release, numbering the candidates numerically", () => {
+    expect(Math.sign(compareReleaseVersions("1.9.0-rc.1", "1.9.0")!)).toBe(-1);
+    expect(Math.sign(compareReleaseVersions("1.9.0-rc.2", "1.9.0-rc.10")!)).toBe(-1);
+  });
 });

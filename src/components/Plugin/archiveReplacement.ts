@@ -1,4 +1,5 @@
-import * as semver from "semver";
+import semverCompare from "semver/functions/compare";
+import semverValid from "semver/functions/valid";
 
 /**
  * What approving an archive does to the plugin already installed under its
@@ -12,10 +13,10 @@ export function classifyArchiveReplacement(
   archiveVersion: string
 ): ArchiveReplacementKind {
   if (installedVersion === archiveVersion) return "reinstall";
-  const installed = semver.valid(installedVersion);
-  const archive = semver.valid(archiveVersion);
+  const installed = semverValid(installedVersion);
+  const archive = semverValid(archiveVersion);
   if (installed === null || archive === null) return "replace";
-  const order = semver.compare(archive, installed);
+  const order = semverCompare(archive, installed);
   if (order > 0) return "upgrade";
   if (order < 0) return "downgrade";
   return "replace";

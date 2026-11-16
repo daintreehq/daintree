@@ -204,7 +204,7 @@ import {
   VOICE_CLEANUP_AI_MODEL,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
-} from "@shared/config/voiceCorrection";
+} from "@shared/config/voiceCorrectionPolicy";
 import type { VoiceRewriteOutcome } from "@shared/types/voice";
 import { VoiceSessionTimeline, type VoiceCorrectionOutcome } from "@/services/voiceSessionTimeline";
 import { estimateCorrectionMs, recordCorrectionPace } from "@/services/voiceCorrectionPace";
