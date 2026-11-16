@@ -306,14 +306,16 @@ vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
   getProjectPushTargets: vi.fn(() => state.views),
   typedBroadcast: broadcasts,
-  typedBroadcastExcept: vi.fn((skip: (wc: unknown) => boolean, channel: string, payload: unknown) => {
-    broadcasts(channel, payload);
-    reached(
-      appViews.filter((wc) => !skip(wc)).map((wc) => wc.id),
-      channel,
-      payload
-    );
-  }),
+  typedBroadcastExcept: vi.fn(
+    (skip: (wc: unknown) => boolean, channel: string, payload: unknown) => {
+      broadcasts(channel, payload);
+      reached(
+        appViews.filter((wc) => !skip(wc)).map((wc) => wc.id),
+        channel,
+        payload
+      );
+    }
+  ),
   typedSend: sends,
   broadcastToRenderer: pushes,
 }));

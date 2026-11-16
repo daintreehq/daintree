@@ -102,7 +102,10 @@ describe("useAssistantWork", () => {
 
     await nextPoll();
     const stale = result.current;
-    expect(stale.get("studio")).toMatchObject({ coverage: "stale", workers: [{ terminalId: "w1" }] });
+    expect(stale.get("studio")).toMatchObject({
+      coverage: "stale",
+      workers: [{ terminalId: "w1" }],
+    });
 
     await nextPoll();
     expect(result.current).toBe(stale);

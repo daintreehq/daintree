@@ -1496,7 +1496,8 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
     // Nothing to hand over before anything was started, with Canopy on: the view reads it itself.
     const snapshot =
       service?.getSnapshot() ?? (readCanopyMode() === "on" ? null : hiddenOrIdleSnapshot());
-    if (snapshot) typedSend<"canopy:snapshot-updated">(win, CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
+    if (snapshot)
+      typedSend<"canopy:snapshot-updated">(win, CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
   };
   win.on("minimize", letGo);
   win.on("hide", letGo);
