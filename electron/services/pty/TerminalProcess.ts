@@ -52,6 +52,7 @@ import { TERMINAL_SESSION_PERSISTENCE_ENABLED } from "./terminalSessionPersisten
 import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
 import { createProcessStateValidator } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
+import { encodeUtf8 } from "./encodeUtf8.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller, type LineageKillSource } from "./ProcessTreeKiller.js";
 import {
@@ -112,8 +113,11 @@ export interface TerminalProcessCallbacks {
    * `streamEnd` is the UTF-8 byte offset, in this process's renderer-bound
    * stream, just past `data`. A live snapshot is stamped with the same offset
    * (#12791) so the renderer can tell which chunks it already contains.
+   * `encoded` is `data` as UTF-8, encoded once here for the offset so the
+   * output router does not encode it again; a standalone buffer the receiver
+   * may keep.
    */
-  emitData: (id: string, data: string, streamEnd: number) => void;
+  emitData: (id: string, data: string, streamEnd: number, encoded?: Uint8Array) => void;
   /**
    * Where this process's stream offsets start. The owner carries it over from
    * the previous process at the same id, so offsets never go backwards across
@@ -2200,8 +2204,9 @@ export class TerminalProcess {
   }
 
   private emitDataDirect(data: string): void {
-    this.emittedBytes += Buffer.byteLength(data, "utf8");
-    this.callbacks.emitData(this.id, data, this.emittedBytes);
+    const encoded = encodeUtf8(data);
+    this.emittedBytes += encoded.byteLength;
+    this.callbacks.emitData(this.id, data, this.emittedBytes, encoded);
   }
 
   /**
