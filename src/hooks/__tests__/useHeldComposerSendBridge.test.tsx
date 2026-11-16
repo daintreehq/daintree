@@ -143,14 +143,17 @@ describe("useHeldComposerSendBridge", () => {
     }
   });
 
-  it("reports a later drop after an earlier one's pane is gone", async () => {
+  it("forgets what it reported once nothing is dropped", async () => {
+    panels.set({ panelsById: { t1: { title: "Gemini", location: "trash" } } });
     renderHook(() => useHeldComposerSendBridge());
     await waitFor(() => expect(client.list).toHaveBeenCalled());
-    act(() => client.push?.(dropped("gone", "a")));
+    act(() => client.push?.(dropped("t1", "a")));
     expect(notify).toHaveBeenCalledTimes(1);
-    act(() => panels.set({ panelsById: { t2: { title: "Codex", location: "trash" } } }));
-    act(() => client.push?.(dropped("t2", "b")));
+
+    // The note is dismissed, then a panel write with nothing dropped.
+    act(() => useHeldComposerSendStore.getState().clearDropped("t1"));
+    act(() => panels.set({ panelsById: { t1: { title: "Gemini", location: "trash" } } }));
+    act(() => client.push?.(dropped("t1", "a")));
     expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[1]![0].message).toContain("Codex");
   });
 });

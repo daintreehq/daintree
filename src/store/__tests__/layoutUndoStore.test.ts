@@ -1274,15 +1274,17 @@ describe("selectLayoutPanelIds", () => {
     const renamed = { [t1.id]: { ...t1, title: "renamed" }, [t2.id]: { ...t2, location: "grid" } };
     expect(selectLayoutPanelIds({ panelsById: renamed as Record<string, PtyPanelData> })).toBe(ids);
 
-    const trashed = selectLayoutPanelIds({
-      panelsById: { [t1.id]: { ...t1, location: "trash" }, [t2.id]: t2 },
-    });
-    expect([...trashed]).toEqual([t2.id]);
-
+    // Same size, different panels.
     const swapped = selectLayoutPanelIds({ panelsById: { [t1.id]: t1, [t3.id]: t3 } });
     expect([...swapped].sort()).toEqual([t1.id, t3.id].sort());
 
+    const trashed = selectLayoutPanelIds({
+      panelsById: { [t1.id]: { ...t1, location: "trash" }, [t3.id]: t3 },
+    });
+    expect([...trashed]).toEqual([t3.id]);
+
     const grown = selectLayoutPanelIds({ panelsById: { [t1.id]: t1, [t2.id]: t2, [t3.id]: t3 } });
-    expect(grown.size).toBe(3);
+    expect([...grown].sort()).toEqual([t1.id, t2.id, t3.id].sort());
+    expect([...ids].sort()).toEqual([t1.id, t2.id].sort());
   });
 });

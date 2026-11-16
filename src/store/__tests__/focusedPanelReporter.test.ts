@@ -142,7 +142,10 @@ describe("subscribeFocusedPanelReporter", () => {
     expect(report).toHaveBeenCalledTimes(calls);
   });
 
-  it("leaves the DOM alone on store writes that touch neither focus nor the focused panel", async () => {
+  it("walks the DOM only when focus may have moved, while the focused terminal streams", async () => {
+    const dock = document.createElement("aside");
+    document.body.appendChild(dock);
+    useMacroFocusStore.getState().setRegionRef("portal", dock);
     mountPanel("t1").focus();
     const dispose = subscribeFocusedPanelReporter();
     await flushMicrotasks();
@@ -150,7 +153,7 @@ describe("subscribeFocusedPanelReporter", () => {
     const closest = vi.spyOn(Element.prototype, "closest");
     const contains = vi.spyOn(Node.prototype, "contains");
 
-    // The focused terminal streams too: its own record is replaced every write.
+    // The focused terminal's own record is replaced on every write too.
     for (let i = 0; i < 3; i++) {
       const { panelsById } = panelStore.getState();
       setPanels({
@@ -175,6 +178,33 @@ describe("subscribeFocusedPanelReporter", () => {
     expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: false, worktreeId: "wt-1" });
     closest.mockRestore();
     contains.mockRestore();
+    dispose();
+  });
+
+  it("reads nothing from the focused record on writes that leave it alone", async () => {
+    let reads = 0;
+    const t1 = {
+      id: "t1",
+      kind: "terminal",
+      detectedAgentId: "claude",
+      get worktreeId() {
+        reads++;
+        return "wt-1";
+      },
+    };
+    setPanels({ ...panelStore.getState().panelsById, t1 });
+    mountPanel("t1").focus();
+    const dispose = subscribeFocusedPanelReporter();
+    await flushMicrotasks();
+    expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: true, worktreeId: "wt-1" });
+    reads = 0;
+
+    const { panelsById } = panelStore.getState();
+    setPanels({ ...panelsById, b1: { ...panelsById.b1, title: "renamed" } });
+    await flushMicrotasks();
+    await nextFrame();
+
+    expect(reads).toBe(0);
     dispose();
   });
 
@@ -204,11 +234,12 @@ describe("subscribeFocusedPanelReporter", () => {
     await flushMicrotasks();
     expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: true, worktreeId: "wt-1" });
 
-    const remaining = { ...panelStore.getState().panelsById };
-    delete remaining.t1;
-    setPanels(remaining);
+    // A write that leaves t1's record alone, whose commit unmounts its pane (a
+    // tab switch, say) after the write's own sample. Removal fires no focusout.
+    const { panelsById } = panelStore.getState();
+    setPanels({ ...panelsById, b1: { ...panelsById.b1, title: "renamed" } });
     await flushMicrotasks();
-    // The commit lands after the write's own sample; removal fires no focusout.
+    expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: true, worktreeId: "wt-1" });
     terminal.parentElement!.remove();
     await nextFrame();
 
