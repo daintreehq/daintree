@@ -804,6 +804,7 @@ describe("findPRsByBranches", () => {
     const init = fetchMock().mock.calls[0]?.[1] as RequestInit | undefined;
     const body = JSON.parse(String(init?.body)) as { query: string };
     expect(body.query).toContain("detailedMergeStatus");
+    expect(body.query).toContain("userNotesCount");
     expect(result?.get("feature/a")?.number).toBe(12);
     expect(result?.get("feature/a")?.mergeState).toBe("conflicts");
     expect(result?.has("feature/b")).toBe(true);
@@ -991,6 +992,8 @@ describe("batchLookups", () => {
       ])
     );
     const result = await batch.findPRsByNumbers!(REPO, [3, 4, 5]);
+    const body = requestBody(fetchMock().mock.calls[0]) as { query: string };
+    expect(body.query).toContain("userNotesCount");
     expect(result.get(3)).toMatchObject({ mergeable: true, commentCount: 4 });
     expect(result.get(4)?.mergeable).toBeNull();
     expect(result.get(5)?.mergeable).toBe(false);
@@ -1061,8 +1064,13 @@ describe("batchLookups", () => {
     const fresh = await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
     expect(fetchMock()).toHaveBeenCalledTimes(2);
     expect(fresh.get(3)?.state).toBe("merged");
+
+    // The older read lands last; its view of the MR must not replace the newer
+    // one the cache already holds.
     pending.resolve(graphqlMRs([mrNode(3)]));
-    await older;
+    expect((await older).get(3)?.state).toBe("open");
+    expect((await batch.findPRsByNumbers!(REPO, [3])).get(3)?.state).toBe("merged");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
 
   it("drops a batch answer that lands after an invalidation", async () => {
@@ -1158,21 +1166,26 @@ describe("in-flight read sharing", () => {
       await settingsHeld;
       return "https://gitlab.com";
     });
-    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "opened" }));
+    const oldResponse = deferredFetch();
+    fetchMock().mockReturnValueOnce(oldResponse.promise);
     const before = gitlabForgeProvider.getPR(REPO, 3);
-    await Promise.resolve();
 
+    // Invalidated while the read is still resolving where to go.
     clearGitLabCaches();
     releaseSettings();
-    await before;
-    const pending = deferredFetch();
-    fetchMock().mockReturnValueOnce(pending.promise);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    // The old read is on the wire; a caller after the invalidation must not
+    // join it.
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({ iid: 3, state: "opened", title: "after" })
+    );
     const after = gitlabForgeProvider.getPR(REPO, 3);
-    const later = gitlabForgeProvider.getPR(REPO, 3);
     await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
-    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
-    await Promise.all([after, later]);
-    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    oldResponse.resolve(jsonResponse({ iid: 3, state: "opened", title: "before" }));
+
+    expect((await after)?.title).toBe("after");
+    expect((await before)?.title).toBe("before");
   });
 
   it("sends a bypassCache list on its own", async () => {

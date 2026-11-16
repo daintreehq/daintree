@@ -111,12 +111,22 @@ interface MergeRequestLookup {
   pr: PR;
   ciStatus: CIStatus | null | undefined;
 }
-const mergeRequestCache = new BoundedCache<MergeRequestLookup | null>({
+/** `seq` orders entries by when their read was sent; see {@link cacheMergeRequest}. */
+interface CachedMergeRequest {
+  seq: number;
+  lookup: MergeRequestLookup | null;
+}
+const mergeRequestCache = new BoundedCache<CachedMergeRequest>({
   maxEntries: 500,
   retainMs: MERGE_REQUEST_CACHE_TTL_MS,
 });
+let mergeRequestReadSeq = 0;
+interface MergeRequestChunkAnswer {
+  seq: number;
+  answers: Map<number, MergeRequestLookup | null>;
+}
 /** Pending number→MR chunks, so overlapping batch reads share one query. */
-const mergeRequestFlights = new Map<string, Promise<Map<number, MergeRequestLookup | null>>>();
+const mergeRequestFlights = new Map<string, Promise<MergeRequestChunkAnswer>>();
 /**
  * Hosts whose GraphQL schema can't serve the number query, so their batches go
  * straight to REST instead of failing the query first on every poll. Cleared
@@ -380,6 +390,7 @@ export async function findPRsByBranchesImpl(
 
   for (let start = 0; start < unique.length; start += GRAPHQL_BRANCH_CHUNK_SIZE) {
     const chunk = unique.slice(start, start + GRAPHQL_BRANCH_CHUNK_SIZE);
+    const seq = ++mergeRequestReadSeq;
     let response: MergeRequestsResponse;
     try {
       response = await gitlabGraphQL<MergeRequestsResponse>(repo.host, BRANCH_BATCH_QUERY, {
@@ -401,7 +412,7 @@ export async function findPRsByBranchesImpl(
       const lookup = mergeRequestLookupFromNode(node, repo.host);
       if (!lookup) continue;
       // A newly detected MR's CI read follows within the same pass.
-      cacheSet(mergeRequestCache, mergeRequestKey(repo, lookup.pr.number), lookup, epoch);
+      cacheMergeRequest(repo, lookup.pr.number, lookup, seq, epoch);
       const pr = lookup.pr;
       if (pr.headRef.length === 0) continue;
       if (!found.has(pr.headRef)) found.set(pr.headRef, pr);
@@ -462,6 +473,23 @@ function ciStatusFromPipeline(status: unknown, rawData: unknown): CIStatus | und
 
 function mergeRequestKey(repo: RepoRef, iid: number): string {
   return `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${iid}`;
+}
+
+/**
+ * Overlapping reads can answer out of order: an ordinary batch sent before a
+ * fresh one may land after it, and must not put the older view back.
+ */
+function cacheMergeRequest(
+  repo: RepoRef,
+  iid: number,
+  lookup: MergeRequestLookup | null,
+  seq: number,
+  epoch: number
+): void {
+  const key = mergeRequestKey(repo, iid);
+  const existing = mergeRequestCache.peek(key);
+  if (existing && existing.seq > seq) return;
+  cacheSet(mergeRequestCache, key, { seq, lookup }, epoch);
 }
 
 function mergeRequestLookupFromNode(
@@ -614,10 +642,10 @@ async function lookupMergeRequests(
       ? undefined
       : mergeRequestCache.get(mergeRequestKey(repo, iid), MERGE_REQUEST_CACHE_TTL_MS);
     if (cached === undefined) missing.push(iid);
-    else result.set(iid, cached);
+    else result.set(iid, cached.lookup);
   }
 
-  const flights: Array<Promise<Map<number, MergeRequestLookup | null>>> = [];
+  const flights: Array<Promise<MergeRequestChunkAnswer>> = [];
   for (let start = 0; start < missing.length; start += GRAPHQL_IID_CHUNK_SIZE) {
     const chunk = missing.slice(start, start + GRAPHQL_IID_CHUNK_SIZE);
     const flightKey = `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${chunk.join(",")}`;
@@ -626,20 +654,19 @@ async function lookupMergeRequests(
       flights.push(pending);
       continue;
     }
-    const started: Promise<Map<number, MergeRequestLookup | null>> = fetchMergeRequestChunk(
-      repo,
-      chunk,
-      fresh
-    ).finally(() => {
-      if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
-    });
+    const seq = ++mergeRequestReadSeq;
+    const started: Promise<MergeRequestChunkAnswer> = fetchMergeRequestChunk(repo, chunk, fresh)
+      .then((answers) => ({ seq, answers }))
+      .finally(() => {
+        if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
+      });
     mergeRequestFlights.set(flightKey, started);
     flights.push(started);
   }
-  for (const answered of await Promise.all(flights)) {
-    for (const [iid, lookup] of answered) {
+  for (const { seq, answers } of await Promise.all(flights)) {
+    for (const [iid, lookup] of answers) {
       result.set(iid, lookup);
-      cacheSet(mergeRequestCache, mergeRequestKey(repo, iid), lookup, epoch);
+      cacheMergeRequest(repo, iid, lookup, seq, epoch);
     }
   }
   return result;
