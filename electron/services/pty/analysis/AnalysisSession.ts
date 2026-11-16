@@ -17,10 +17,11 @@ import { Osc94Parser } from "../Osc94Parser.js";
 import { ParseBarrier, SubmissionCaptureHost } from "../SubmissionOutputCapture.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
+  applySessionRestore,
   mirrorNeedsResize,
   mirrorReplayInFlight,
+  readSessionRestore,
   resizeMirror,
-  restoreSessionFromFile,
 } from "../terminalSessionPersistence.js";
 import {
   measureVisibleContentDelta,
@@ -114,6 +115,7 @@ export class AnalysisSession {
   private disposed = false;
   private readonly submissionCaptures: SubmissionCaptureHost;
   private readonly parseBarrier = new ParseBarrier();
+  private pendingRestore: { bracketedPasteMode: boolean } | null;
 
   constructor(spec: AnalysisCreateSpec, emit: Emit) {
     this.terminalId = spec.terminalId;
@@ -147,15 +149,35 @@ export class AnalysisSession {
       onIdle: (now) => this.monitor?.onOscProgressIdle(now),
     });
 
-    if (spec.restore) {
-      const result = restoreSessionFromFile(terminal, this.terminalId);
-      if (result.restored) {
-        this.restoreBannerStart = result.bannerStartMarker;
-        this.restoreBannerEnd = result.bannerEndMarker;
-        this.scheduleDigest();
+    // A restore seeds the paste mode after its replay instead, whose parser
+    // reset would otherwise clear it.
+    this.pendingRestore = spec.restore ? { bracketedPasteMode: !!spec.bracketedPasteMode } : null;
+    if (!spec.restore && spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+  }
+
+  /**
+   * Replay the persisted session the spec asked for, reading it off disk
+   * without blocking this worker's other terminals. Undefined when no restore
+   * was asked for. The runtime holds this terminal's later messages until the
+   * promise settles, so live output never parses ahead of the restored screen.
+   */
+  restorePersistedSession(): Promise<void> | undefined {
+    const pending = this.pendingRestore;
+    if (!pending) return undefined;
+    this.pendingRestore = null;
+    return readSessionRestore(this.terminalId).then((payload) => {
+      const terminal = this.headlessTerminal;
+      if (this.disposed || !terminal) return;
+      if (payload) {
+        const result = applySessionRestore(terminal, this.terminalId, payload);
+        if (result.restored) {
+          this.restoreBannerStart = result.bannerStartMarker;
+          this.restoreBannerEnd = result.bannerEndMarker;
+          this.scheduleDigest();
+        }
       }
-    }
-    if (spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+      if (pending.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+    });
   }
 
   feedChunk(

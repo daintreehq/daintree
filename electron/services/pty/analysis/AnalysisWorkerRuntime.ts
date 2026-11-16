@@ -217,8 +217,11 @@ export class AnalysisWorkerRuntime {
     switch (msg.type) {
       case "create": {
         this.sessions.get(msg.terminalId)?.free();
-        this.sessions.set(msg.terminalId, new AnalysisSession(msg, this.emit));
-        return;
+        const session = new AnalysisSession(msg, this.emit);
+        this.sessions.set(msg.terminalId, session);
+        // Returned so handleMessage arms the per-terminal barrier behind the
+        // restore's disk read.
+        return session.restorePersistedSession();
       }
       case "data":
         this.sessions.get(msg.terminalId)?.feedChunk(msg.data, msg.flags, msg.epoch);

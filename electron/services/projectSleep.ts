@@ -271,14 +271,9 @@ async function runSleep(
       });
     }
 
-    for (const session of sessions) {
-      try {
-        writeHibernatedMarker(session.id);
-      } catch (markerError) {
-        // Costs this terminal its restore banner, nothing else.
-        console.warn(`[ProjectSleep] marker failed for ${session.id}:`, markerError);
-      }
-    }
+    // A failed marker costs that terminal its restore banner wording, nothing
+    // else, so the writer swallows its own failures.
+    await Promise.all(sessions.map((session) => writeHibernatedMarker(session.id)));
 
     // A draft can start in the seconds the kill took, and the view it lives in
     // is about to be destroyed. The terminals are already gone, so a hold here
