@@ -859,8 +859,9 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         }
 
         // The draft's rows are laid out and sized as of this write, so this is
-        // the moment the composer shell can read where they end — in the same
-        // frame as the text, before it paints.
+        // the moment the composer shell can ask where they end. It asks the
+        // view, whose next read and write answer it in the same frame as the
+        // text, before it paints, rather than reading layout mid-write.
         if (draftReset) {
           draftReset = false;
           view.dom.setAttribute(COMPOSER_DRAFT_RESET_ATTR, "");
