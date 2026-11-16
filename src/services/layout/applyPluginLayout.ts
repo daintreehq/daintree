@@ -11,10 +11,12 @@ import type { MaximizeTarget } from "@/store/slices/terminalFocusSlice";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
-import { requestLayoutApplyConfirmation } from "@/store/layoutApplyConfirmStore";
+import {
+  layoutApplyCancelEpoch,
+  requestLayoutApplyConfirmation,
+} from "@/store/layoutApplyConfirmStore";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
-import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { notify } from "@/lib/notify";
 import { logWarn } from "@/utils/logger";
@@ -385,6 +387,14 @@ export async function applyPluginLayout(
   const approvedDigests = new Map(
     recipes.map((recipe) => [recipe.id, recipeApprovalDigest(recipe.terminals)])
   );
+  // Loaded only once a recipe needs confirming. `recipes` is the snapshot the
+  // digests above were taken from, so the lines and the approval still agree.
+  // A withdrawal during the load had no request to decline, so it is honoured
+  // here.
+  const epoch = layoutApplyCancelEpoch();
+  const { formatRecipePreviewLines } =
+    await import("@/components/TerminalRecipe/recipeConfirmPreview");
+  if (layoutApplyCancelEpoch() !== epoch) return { status: "cancelled" };
   const approval = requestLayoutApplyConfirmation({
     layoutId: layout.id,
     layoutName: layout.name,

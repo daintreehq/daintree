@@ -38,12 +38,24 @@ export const useLayoutApplyConfirmStore = create<LayoutApplyConfirmState>((set, 
   },
 }));
 
+let cancelEpoch = 0;
+
+/**
+ * Moves on every cancellation. A caller that awaits between resolving a layout
+ * and raising its request compares it across the wait: a cancellation that
+ * landed meanwhile had no request to decline, so the caller declines instead.
+ */
+export function layoutApplyCancelEpoch(): number {
+  return cancelEpoch;
+}
+
 /**
  * Decline every request for a layout that is no longer offered — its plugin
  * unloaded, reloaded or was hidden — so its dialog never asks about it. With no
  * ids, every request is declined.
  */
 export function cancelLayoutApplyConfirmations(layoutIds?: ReadonlySet<string>): void {
+  cancelEpoch++;
   const { current, queue } = useLayoutApplyConfirmStore.getState();
   const cancelled = (item: PendingLayoutApplyConfirm) =>
     layoutIds === undefined || layoutIds.has(item.layoutId);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScheduledRun } from "@shared/types/scheduledRuns";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { machineTimeZone } from "@shared/utils/cron";
-import { formatRunInstant } from "../scheduleWords";
+import { formatRunInstant } from "../runTime";
 import { scheduledRunInboxEntry, scheduledRunInboxEntryId } from "../scheduledRunInboxEntry";
 
 const NOW = Date.UTC(2026, 10, 1, 9);

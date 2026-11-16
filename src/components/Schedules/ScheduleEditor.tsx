@@ -57,9 +57,8 @@ import {
   MISSED_RUN_OPTIONS,
   OVERLAP_CONSEQUENCE,
   OVERLAP_OPTIONS,
-  formatNextRunRelative,
-  formatRunInstant,
 } from "./scheduleWords";
+import { formatNextRunRelative, formatRunInstant } from "./runTime";
 
 export interface WorktreeChoice {
   /** Null is the project's main checkout. */

@@ -24,13 +24,8 @@ import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
 import { scheduleAgentName } from "./scheduleAgent";
 import { SCHEDULE_STARTERS, type ScheduleStarter } from "./scheduleStarters";
-import {
-  cadenceWords,
-  formatNextRunRelative,
-  formatRunInstant,
-  nextRunAt,
-  scheduleWorktreeLabel,
-} from "./scheduleWords";
+import { formatNextRunRelative, formatRunInstant } from "./runTime";
+import { cadenceWords, nextRunAt, scheduleWorktreeLabel } from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
 export type ScheduleRowAction = "run" | "history" | "edit" | "delete";

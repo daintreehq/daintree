@@ -19,7 +19,7 @@ import {
   type CadenceChoice,
   type CadenceKind,
 } from "./cadenceChoice";
-import { formatNextRunRelative, formatRunParts } from "./scheduleWords";
+import { formatNextRunRelative, formatRunParts } from "./runTime";
 
 const KIND_OPTIONS: SettingsSelectOption[] = [
   { value: "interval", label: "Every few minutes or hours" },

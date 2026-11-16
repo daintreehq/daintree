@@ -33,13 +33,8 @@ import {
   workerWords,
   type RunAction,
 } from "./runWords";
-import {
-  cadenceWords,
-  formatNextRunRelative,
-  formatRunInstant,
-  localDayNumber,
-  nextRunAt,
-} from "./scheduleWords";
+import { formatNextRunRelative, formatRunInstant, localDayNumber } from "./runTime";
+import { cadenceWords, nextRunAt } from "./scheduleWords";
 import type { ScheduleRunsState } from "./useScheduleRuns";
 
 interface ScheduleRunsProps {
