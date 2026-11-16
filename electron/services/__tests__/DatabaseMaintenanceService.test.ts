@@ -722,15 +722,18 @@ describe("DatabaseMaintenanceService", () => {
       Promise.resolve(fallback())
     );
     const openSync = vi.spyOn(fs, "openSync");
+    // The candidate is there: whatever was writing it may still be.
+    vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const service = new DatabaseMaintenanceService();
     service.initialize();
     service.startMaintenance();
 
-    vi.advanceTimersByTime(TICK);
-    await drainMicrotasks();
-    vi.advanceTimersByTime(TICK);
-    await drainMicrotasks();
+    // More ticks than the verification-failure latch allows.
+    for (let tick = 0; tick < 4; tick++) {
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+    }
 
     expect(mockSqlite.backup).not.toHaveBeenCalled();
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
@@ -746,9 +749,17 @@ describe("DatabaseMaintenanceService", () => {
       1
     );
 
-    await service.dispose();
-    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    // Once the worker takes backups again, they promote as before.
+    mockRunDbWork.mockImplementation(runOnWorker);
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
     expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup"
+    );
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).toHaveBeenLastCalledWith(
       "/fake/daintree.db.backup.final.tmp",
       "/fake/daintree.db.backup"
     );

@@ -101,12 +101,18 @@ const ALL_PAGES_PER_STEP = 0x7fffffff;
 
 async function backupTo(destPath: string): Promise<DbProbeResult> {
   try {
-    // Created owner-only before the copy, since it is a verbatim copy of the
-    // whole database; "w" truncates what an earlier run left. Created here,
-    // not on main, so main never opens a candidate this thread may still be
-    // writing after a timed-out request. POSIX-only, as main's chmod after.
+    // Owner-only before the copy, since it is a verbatim copy of the whole
+    // database: "w" truncates what an earlier run left, and the fchmod covers
+    // a leftover whose mode the open keeps. Done here, not on main, so main
+    // never opens a candidate this thread may still be writing after a
+    // timed-out request. POSIX-only, as main's chmod after.
     if (process.platform !== "win32") {
-      fs.closeSync(fs.openSync(destPath, "w", 0o600));
+      const fd = fs.openSync(destPath, "w", 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+      } finally {
+        fs.closeSync(fd);
+      }
     }
     await sqlite.backup(destPath, { progress: () => ALL_PAGES_PER_STEP });
   } catch (error) {

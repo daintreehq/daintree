@@ -430,6 +430,21 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(order).toEqual([backupId, backupId + 1, backupId + 2]);
   });
 
+  // chmod is a POSIX no-op on Windows.
+  (process.platform === "win32" ? it.skip : it)(
+    "copies into a leftover candidate only once it is owner-only",
+    async () => {
+      const destPath = path.join(tmpDir, "backup.tmp");
+      fs.writeFileSync(destPath, "left by a crashed run");
+      fs.chmodSync(destPath, 0o644);
+
+      const w = spawn();
+      const response = await request(w, { op: "backup", destPath });
+      expect(response).toMatchObject({ ok: true, result: "ok" });
+      expect(fs.statSync(destPath).mode & 0o777).toBe(0o600);
+    }
+  );
+
   it("reports a copy of a damaged database as corrupt rather than promotable", async () => {
     const damagedPath = path.join(tmpDir, "damaged.db");
     const seed = new Database(damagedPath);
