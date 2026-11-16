@@ -24,7 +24,7 @@ let mockPluginRows: PluginAttentionRow[] = [];
 const openPluginPanelMock = vi.fn((_panelId: string) => Promise.resolve(true));
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useFleetBandTerminals: (bands: unknown, live: boolean) => {
+  useFleetBandTerminals: (_bands: unknown, live: boolean) => {
     liveArgs.push(live);
     return mockTerminals;
   },

@@ -70,7 +70,11 @@ import {
 } from "@/components/ui/context-menu";
 
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
-import { selectDockRenderDescriptors, dockRenderDescriptorsEqual } from "./dockRenderItems";
+import {
+  selectDockRenderDescriptors,
+  dockRenderDescriptorsEqual,
+  type DockRenderDescriptor,
+} from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
 import { dockSessionTags } from "./dockSessionTag";
 
