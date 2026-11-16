@@ -162,6 +162,20 @@ describe("PartialEscapeTracker", () => {
     expect(tracker.tail).toBe("\x1b]0;title");
   });
 
+  // Replay would discard a wrongly kept U+FEFF again, so check the tails.
+  for (const [writes, tail] of [
+    [["\x1b]0;a\ud800", "\ufeffb"], "\x1b]0;a\ud800\ufeffb"],
+    [["\x1b]0;a\ud800\ud800", "\ufeffb"], "\x1b]0;a\ud800\ud800b"],
+    [["\x1b]0;a", "\ud800", "\ud800", "\ufeffb"], "\x1b]0;a\ud800\ud800b"],
+    [["\x1b]0;a", "\ud800", "", "\ufeffb"], "\x1b]0;a\ud800\ufeffb"],
+  ] as const) {
+    it(`keeps a U+FEFF only as a held surrogate's partner: ${JSON.stringify(writes)}`, () => {
+      const tracker = new PartialEscapeTracker();
+      for (const chunk of writes) tracker.feed(chunk);
+      expect(tracker.tail).toBe(tail);
+    });
+  }
+
   // The source decodes each write as it comes, holding a high surrogate that
   // ends one for the next.
   for (const writes of [
