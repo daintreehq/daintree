@@ -255,9 +255,10 @@ describe("PluginTrayButton", () => {
       (el) => el.textContent === label
     );
     // Truncation is visual only: the text node stays whole, and the clipped
-    // label says the rest on hover through TruncatedTooltip (rendered inline by
-    // the tooltip mock) — never a native `title`.
-    expect(copies).toHaveLength(2);
+    // label says the rest on hover through TruncatedTooltip — never a native
+    // `title`. jsdom measures no overflow, so the tooltip's own copy of the
+    // label is not mounted here.
+    expect(copies).toHaveLength(1);
     for (const el of copies) expect(el.hasAttribute("title")).toBe(false);
   });
 
