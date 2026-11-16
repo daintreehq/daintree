@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorktreeSnapshot } from "../../types/workspace-host.js";
 import {
+  WORKTREE_SNAPSHOT_VOLATILE_KEYS,
   applyWorktreeTick,
   toWorktreeTick,
   worktreeSnapshotContentEqual,
@@ -43,8 +44,27 @@ describe("worktreeSnapshotContentEqual", () => {
       workingTreeChangedAt: 2,
       workingTreeChangedDirs: null,
       pathMembershipChangedAt: 2,
+      lastFetchedAt: 2,
+      isFetchInFlight: true,
     });
     expect(worktreeSnapshotContentEqual(makeSnapshot(), next)).toBe(true);
+  });
+
+  it("treats a quiet fetch as a stamp-only change", () => {
+    const before = makeSnapshot({ lastFetchedAt: 100 });
+    const started = makeSnapshot({ lastFetchedAt: 100, isFetchInFlight: true });
+    const finished = makeSnapshot({ lastFetchedAt: 200 });
+    expect(worktreeSnapshotContentEqual(before, started)).toBe(true);
+    expect(worktreeSnapshotContentEqual(started, finished)).toBe(true);
+    expect(worktreeSnapshotContentEqual(finished, makeSnapshot({ lastFetchedAt: null }))).toBe(
+      true
+    );
+  });
+
+  it("still sees a fetch that moved the counts", () => {
+    const before = makeSnapshot({ lastFetchedAt: 100, behindCount: 0 });
+    const after = makeSnapshot({ lastFetchedAt: 200, behindCount: 3 });
+    expect(worktreeSnapshotContentEqual(before, after)).toBe(false);
   });
 
   it("compares structurally, not by reference", () => {
@@ -117,8 +137,38 @@ describe("worktree ticks", () => {
       workingTreeChangedAt: 7,
       workingTreeChangedDirs: [],
       pathMembershipChangedAt: 6,
+      lastFetchedAt: 5,
+      isFetchInFlight: true,
     });
     expect(applyWorktreeTick(base, structuredClone(toWorktreeTick(next)))).toEqual(next);
+  });
+
+  it("carry every volatile key, so nothing the gate ignores is lost on the wire", () => {
+    const base = makeSnapshot({ lastFetchedAt: 1 });
+    const next = makeSnapshot({
+      timestamp: 9,
+      lastGitStatusCheckedAt: 8,
+      workingTreeChangedAt: 7,
+      workingTreeChangedDirs: ["lib"],
+      pathMembershipChangedAt: 6,
+      lastFetchedAt: 5,
+      isFetchInFlight: true,
+    });
+    expect(worktreeSnapshotContentEqual(base, next)).toBe(true);
+    const tick = structuredClone(toWorktreeTick(next));
+    const rebuilt = applyWorktreeTick(base, tick);
+    for (const key of WORKTREE_SNAPSHOT_VOLATILE_KEYS) {
+      expect(Object.hasOwn(tick, key), key).toBe(true);
+      expect(rebuilt[key], key).toEqual(next[key]);
+    }
+  });
+
+  it("clear an in-flight fetch that has finished", () => {
+    const base = makeSnapshot({ lastFetchedAt: 1, isFetchInFlight: true });
+    const finished = makeSnapshot({ lastFetchedAt: 2 });
+    const rebuilt = applyWorktreeTick(base, toWorktreeTick(finished));
+    expect(rebuilt.isFetchInFlight).toBeUndefined();
+    expect(rebuilt.lastFetchedAt).toBe(2);
   });
 
   it("carry an absent stamp through as absent", () => {

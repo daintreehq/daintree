@@ -400,6 +400,8 @@ export interface WorktreeTick {
   workingTreeChangedAt?: number;
   workingTreeChangedDirs?: readonly string[] | null;
   pathMembershipChangedAt?: number;
+  lastFetchedAt?: number | null;
+  isFetchInFlight?: boolean;
 }
 
 /** Monitor configuration for polling intervals */

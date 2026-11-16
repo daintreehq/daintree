@@ -2,10 +2,10 @@ import type { WorktreeSnapshot, WorktreeTick } from "../types/workspace-host.js"
 
 /**
  * Snapshot fields that advance on events which change nothing else — a quiet
- * status poll, a raw watcher flush, the build time itself. The renderer keeps
- * all but `timestamp` in side maps rather than on the row (see
- * `createWorktreeStore`), so a snapshot that differs from the last one sent
- * only here travels as a {@link WorktreeTick} instead of a full re-send.
+ * status poll, a raw watcher flush, the build time itself, a background fetch
+ * that moved no refs. A snapshot that differs from the last one sent only here
+ * travels as a {@link WorktreeTick} instead of a full re-send; consumers
+ * rebuild the whole snapshot from it, so the fetch fields still reach the row.
  */
 export const WORKTREE_SNAPSHOT_VOLATILE_KEYS = [
   "timestamp",
@@ -13,6 +13,8 @@ export const WORKTREE_SNAPSHOT_VOLATILE_KEYS = [
   "workingTreeChangedAt",
   "workingTreeChangedDirs",
   "pathMembershipChangedAt",
+  "lastFetchedAt",
+  "isFetchInFlight",
 ] as const satisfies readonly (keyof WorktreeSnapshot)[];
 
 const VOLATILE_KEYS: ReadonlySet<string> = new Set(WORKTREE_SNAPSHOT_VOLATILE_KEYS);
@@ -79,6 +81,8 @@ export function toWorktreeTick(snapshot: WorktreeSnapshot): WorktreeTick {
     workingTreeChangedAt: snapshot.workingTreeChangedAt,
     workingTreeChangedDirs: snapshot.workingTreeChangedDirs,
     pathMembershipChangedAt: snapshot.pathMembershipChangedAt,
+    lastFetchedAt: snapshot.lastFetchedAt,
+    isFetchInFlight: snapshot.isFetchInFlight,
   };
 }
 
@@ -91,6 +95,8 @@ export function applyWorktreeTick(base: WorktreeSnapshot, tick: WorktreeTick): W
     workingTreeChangedAt: tick.workingTreeChangedAt,
     workingTreeChangedDirs: tick.workingTreeChangedDirs,
     pathMembershipChangedAt: tick.pathMembershipChangedAt,
+    lastFetchedAt: tick.lastFetchedAt,
+    isFetchInFlight: tick.isFetchInFlight,
   };
 }
 
