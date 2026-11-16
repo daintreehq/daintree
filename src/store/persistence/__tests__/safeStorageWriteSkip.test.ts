@@ -345,8 +345,11 @@ describe("debounced safe storage defers serialization to the flush (#17055)", ()
     const storage = createDebouncedSafeJSONStorage<Width>(300);
     storage.setItem("portal", { state: { width: 5 }, version: 0 });
 
+    // What a torn-down jsdom page leaves: `window` is the global object there,
+    // and teardown deletes its event methods along with `window` itself.
     vi.stubGlobal("window", undefined);
     vi.stubGlobal("document", undefined);
+    vi.stubGlobal("removeEventListener", undefined);
     try {
       expect(() => vi.advanceTimersByTime(300)).not.toThrow();
     } finally {

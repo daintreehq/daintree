@@ -610,20 +610,22 @@ function flushAllPending(): void {
 }
 
 function flushPendingWhenHidden(): void {
-  if (document.hidden) flushAllPending();
+  if (typeof document !== "undefined" && document.hidden) flushAllPending();
 }
 
 function attachPendingFlush(): () => void {
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return () => {};
   }
-  // Held for the detach, which runs from the last flush's timer: by then the
-  // globals may be gone (a torn-down page or test environment).
+  // The detach runs from the last flush's timer, when the page's globals (even
+  // `window.removeEventListener`) may already be gone, so it holds its own.
   const win = window;
+  const removeWindowListener = win.removeEventListener.bind(win);
   const doc =
     typeof document !== "undefined" && typeof document.addEventListener === "function"
       ? document
       : null;
+  const removeDocumentListener = doc?.removeEventListener.bind(doc);
   win.addEventListener("pagehide", flushAllPending);
   win.addEventListener("beforeunload", flushAllPending);
   doc?.addEventListener("visibilitychange", flushPendingWhenHidden);
@@ -632,9 +634,9 @@ function attachPendingFlush(): () => void {
   // without that export would throw on their first debounced write.
   const offCached = win.electron?.app?.onViewCachedFlush?.(flushAllPending);
   return () => {
-    win.removeEventListener("pagehide", flushAllPending);
-    win.removeEventListener("beforeunload", flushAllPending);
-    doc?.removeEventListener("visibilitychange", flushPendingWhenHidden);
+    removeWindowListener("pagehide", flushAllPending);
+    removeWindowListener("beforeunload", flushAllPending);
+    removeDocumentListener?.("visibilitychange", flushPendingWhenHidden);
     offCached?.();
   };
 }
@@ -686,8 +688,11 @@ export function createDebouncedSafeJSONStorage<T>(
     // later flush a newer enqueue before its own debounce window elapsed.
     clearTimeout(entry.timer);
     pending.delete(name);
-    if (pending.size === 0) trackPendingFlush(flushAll, false);
-    snapshots.settle(name, entry.value, writer.write(name, entry.value));
+    try {
+      snapshots.settle(name, entry.value, writer.write(name, entry.value));
+    } finally {
+      if (pending.size === 0) trackPendingFlush(flushAll, false);
+    }
   };
 
   // One key's failure (a value `JSON.stringify` rejects, a throwing merger)
