@@ -370,8 +370,12 @@ export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string
   const stopWatching = watch(() => {
     ended = true;
   });
-  const service = await getPluginService();
-  stopWatching();
+  let service: Awaited<ReturnType<typeof getPluginService>>;
+  try {
+    service = await getPluginService();
+  } finally {
+    stopWatching();
+  }
   if (ended) return;
   service.ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
 }

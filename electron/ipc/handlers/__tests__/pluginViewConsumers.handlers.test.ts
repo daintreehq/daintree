@@ -108,6 +108,15 @@ describe("plugin view consumer handler (#17068)", () => {
     }
   );
 
+  it("detaches its watch when the service fails to load", async () => {
+    vi.mocked(getPluginService).mockRejectedValueOnce(new Error("load failed"));
+    const wc = new FakeContents();
+    await expect(
+      handleReportViewConsumers(localCtx(wc), ["plugin-view:acme/side"])
+    ).rejects.toThrow("load failed");
+    expect(wc.eventNames()).toEqual([]);
+  });
+
   it("still records a report when nothing ended while the service loaded", async () => {
     let resolveService: (value: typeof service) => void = () => {};
     vi.mocked(getPluginService).mockImplementationOnce(
