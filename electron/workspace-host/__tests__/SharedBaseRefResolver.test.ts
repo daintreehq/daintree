@@ -146,7 +146,21 @@ describe("SharedBaseRefResolver", () => {
     expect(probes(repo)).toBe(2);
   });
 
-  it("starts sharing again once the conditional include is gone", async () => {
+  it("resolves privately when the repository config includes another file at all", async () => {
+    // The included file could hold conditions of its own.
+    writeFileSync(
+      join(commonDir, "config"),
+      '[remote "origin"]\n\turl = x\n[include]\n\tpath = more.inc\n'
+    );
+    const repo = makeRepo();
+    const resolver = new SharedBaseRefResolver();
+
+    await Promise.all(["a", "b"].map((wt) => resolver.resolve(request(repo, wt))));
+
+    expect(probes(repo)).toBe(2);
+  });
+
+  it("starts sharing again once the include is gone", async () => {
     writeFileSync(join(commonDir, "config"), '[IncludeIf "gitdir:/elsewhere/"]\n\tpath = x\n');
     const repo = makeRepo();
     const resolver = new SharedBaseRefResolver();
@@ -154,11 +168,38 @@ describe("SharedBaseRefResolver", () => {
     await resolver.resolve(request(repo, "b"));
     expect(probes(repo)).toBe(2);
 
-    writeFileSync(join(commonDir, "config"), "[include]\n\tpath = shared.inc\n");
+    writeFileSync(join(commonDir, "config"), '[remote "origin"]\n\turl = x\n');
     mtimes.set(join(commonDir, "config"), 2_000);
     await resolver.resolve(request(repo, "a"));
     await resolver.resolve(request(repo, "b"));
     expect(probes(repo)).toBe(3);
+  });
+
+  it("never hands one repository's or distro's answer to another", async () => {
+    const otherDir = mkdtempSync(join(tmpdir(), "shared-base-ref-other-"));
+    try {
+      writeFileSync(join(otherDir, "config"), '[remote "origin"]\n\turl = y\n');
+      const forkLayout = makeRepo(["origin", "upstream"]);
+      const plain = makeRepo(["origin"]);
+      const resolver = new SharedBaseRefResolver();
+      const wsl = (distro: string) => ({ distro }) as SharedBaseRequest["wslInvocation"];
+
+      const here = await resolver.resolve(request(forkLayout, "a"));
+      const there = await resolver.resolve(
+        request(plain, "b", { commonDir: otherDir, gitDir: join(otherDir, "worktrees", "b") })
+      );
+      const ubuntu = await resolver.resolve(
+        request(forkLayout, "c", { wslInvocation: wsl("Ubuntu") })
+      );
+      const debian = await resolver.resolve(request(plain, "d", { wslInvocation: wsl("Debian") }));
+
+      expect(here?.compareRef).toBe("upstream/main");
+      expect(there?.compareRef).toBe("origin/main");
+      expect(ubuntu?.compareRef).toBe("upstream/main");
+      expect(debian?.compareRef).toBe("origin/main");
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps separate answers per base branch and per git runtime", async () => {

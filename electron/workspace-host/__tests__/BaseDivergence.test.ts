@@ -18,7 +18,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
 }));
 
 import { BaseDivergence, type BaseDivergenceHost } from "../BaseDivergence.js";
-import { SharedBaseRefResolver } from "../SharedBaseRefResolver.js";
+import { RESOLUTION_MAX_AGE_MS, SharedBaseRefResolver } from "../SharedBaseRefResolver.js";
 import type { StatPrecheck } from "../StatPrecheck.js";
 
 function makeHost(overrides: Partial<BaseDivergenceHost> = {}): BaseDivergenceHost {
@@ -416,10 +416,20 @@ describe("BaseDivergence", () => {
       installRepo({
         remotes: ["origin", "upstream"],
         remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
-        symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+        symbolicRefs: { "@{u}": "refs/remotes/origin/unused" },
         revList: { "upstream/main...HEAD": "4\t1\n" },
         revParsePair: "abc\ndef\n",
       });
+      // Each worktree's `@{u}` names its own branch, so a sibling's answer
+      // showing up anywhere would be visible.
+      mockCreateHardenedGit.mockImplementation((path: string) => ({
+        raw: async (args: string[]) => {
+          const out = await mockGitRaw(args);
+          return args[1] === "--symbolic-full-name" && args[2] === "@{u}"
+            ? `refs/remotes/origin/feature/${path.split("/").pop()}\n`
+            : out;
+        },
+      }));
       const shared = new SharedBaseRefResolver();
       const siblings = ["a", "b", "c"].map((name) => makeSibling(name, shared));
 
@@ -434,10 +444,16 @@ describe("BaseDivergence", () => {
         "upstream/main...HEAD",
         "upstream/main...HEAD",
       ]);
-      for (const result of results) {
-        expect(result).toMatchObject({ baseCompareRef: "upstream/main", behindCount: 4 });
-      }
-      for (const sibling of siblings) expect(sibling.baseRemote).toBe("upstream");
+      results.forEach((result, i) => {
+        const ownUpstream = `refs/remotes/origin/feature/${["a", "b", "c"][i]}`;
+        expect(result).toMatchObject({
+          baseCompareRef: "upstream/main",
+          behindCount: 4,
+          upstreamRef: ownUpstream,
+        });
+        expect(siblings[i]!.upstreamRef).toBe(ownUpstream);
+        expect(siblings[i]!.baseRemote).toBe("upstream");
+      });
     });
 
     it("asks only for the missing upstream again when its retry comes due", async () => {
@@ -449,14 +465,59 @@ describe("BaseDivergence", () => {
           revList: { "origin/main...HEAD": "0\t1\n" },
         });
         const divergence = makeSibling("a", new SharedBaseRefResolver());
+        const upstreamReads = () => gitCalls("rev-parse", "--symbolic-full-name", "@{u}");
         await divergence.compute(true);
         expect(divergence.upstreamRef).toBeNull();
 
-        now += 30_000;
+        now += 29_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(1);
+
+        now += 1_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(2);
+
+        // Still missing, so the next ask backs off to twice the wait.
+        now += 59_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(2);
+        now += 1_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(3);
+
+        expect(gitCalls("remote")).toBe(1);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  });
+
+  describe("upstream resolution", () => {
+    it.each([
+      [
+        "re-reads a resolved upstream at the age ceiling when several remotes could own it",
+        ["origin", "upstream"],
+        2,
+      ],
+      ["never re-reads a resolved upstream on a clock with a single remote", ["origin"], 1],
+    ])("%s", async (_, remotes, expectedReads) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        installRepo({
+          remotes,
+          remoteBaseRefs: remotes.map((remote) => `refs/remotes/${remote}/main`),
+          symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+          revList: { "upstream/main...HEAD": "0\t1\n", "origin/main...HEAD": "0\t1\n" },
+          revParsePair: "abc\nabc\n",
+        });
+        const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
         await divergence.compute(true);
 
-        expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(2);
-        expect(gitCalls("remote")).toBe(1);
+        now += RESOLUTION_MAX_AGE_MS;
+        await divergence.compute(true);
+
+        expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(expectedReads);
       } finally {
         clock.mockRestore();
       }

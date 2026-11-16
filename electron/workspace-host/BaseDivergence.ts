@@ -286,7 +286,13 @@ export class BaseDivergence {
     // last real answer instead of adopting those.
     if (selection === null || signal.aborted) return this.resolution;
 
-    const upstreamRef = await this.resolveUpstream(branch, hasUpstream, dirs, signal);
+    const upstreamRef = await this.resolveUpstream(
+      branch,
+      hasUpstream,
+      selection.availableRemotes.length > 1,
+      dirs,
+      signal
+    );
     if (upstreamRef === undefined) return this.resolution;
 
     const previous = this.resolution;
@@ -312,12 +318,15 @@ export class BaseDivergence {
 
   /**
    * Full ref `@{u}` resolves to, or null without one; `undefined` when the
-   * read was cancelled. Re-read only when the branch or its config moved, or
-   * on the retry clock while a configured upstream has no ref.
+   * read was cancelled. Re-read when the branch or its config moved, on the
+   * retry clock while a configured upstream has no ref, and — with more than
+   * one remote to track — at the same age ceiling as the base selection, since
+   * an included config file can repoint it without touching anything stamped.
    */
   private async resolveUpstream(
     branch: string,
     hasUpstream: boolean,
+    ambiguous: boolean,
     dirs: GitDirs,
     signal: AbortSignal
   ): Promise<string | null | undefined> {
@@ -330,8 +339,10 @@ export class BaseDivergence {
     }
 
     const stamp = await this.buildUpstreamStamp(branch, dirs);
+    const age = Date.now() - this.upstreamAt;
     const retryDue =
-      this.upstream === null && Date.now() - this.upstreamAt >= this.unresolvedUpstreamRetryMs;
+      (this.upstream === null && age >= this.unresolvedUpstreamRetryMs) ||
+      (ambiguous && age >= RESOLUTION_MAX_AGE_MS);
     if (this.upstreamRead && !retryDue && (stamp === null || stamp === this.upstreamStamp)) {
       return this.upstream;
     }

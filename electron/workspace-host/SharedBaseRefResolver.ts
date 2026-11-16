@@ -61,6 +61,8 @@ interface Entry {
   stamp: string | null;
   resolvedAt: number;
   probe: Promise<ProbeOutcome> | null;
+  /** Callers inside `resolve` holding this entry; eviction skips it while any are. */
+  holders: number;
 }
 
 const ABANDONED = Symbol("abandoned");
@@ -77,16 +79,18 @@ const ABANDONED = Symbol("abandoned");
  * Worktrees only share an answer when their effective config is the shared
  * one. A worktree with its own `config.worktree` (`extensions.worktreeConfig`
  * can override `branch.<base>.*` and `remote.*` there) resolves privately, and
- * so does every worktree of a repository whose own config has a conditional
- * include: `onbranch:` and `gitdir:` conditions can differ between siblings.
- * Conditional includes in user-level config are not looked for: a `gitdir:`
- * pattern matches every sibling alike (their private git dirs all live under
- * the shared common dir), and steering a base branch's remote by the
- * checked-out branch from user config is not a setup worth a spawn per poll.
+ * so does every worktree of a repository whose own config includes another
+ * file: `onbranch:` and `gitdir:` conditions can differ between siblings, and
+ * an unconditional include can carry conditions of its own, which only
+ * following git's include rules would reveal. Includes in user-level config
+ * are not looked for: a `gitdir:` pattern matches every sibling alike (their
+ * private git dirs all live under the shared common dir), and steering a base
+ * branch's remote by the checked-out branch from user config is not a setup
+ * worth a spawn per poll.
  */
 export class SharedBaseRefResolver {
   private entries = new Map<string, Entry>();
-  private readonly includeScans = new Map<string, { mtime: number; conditional: boolean }>();
+  private readonly includeScans = new Map<string, { mtime: number; includes: boolean }>();
 
   /**
    * The cached selection for this request's repository, re-probed when its
@@ -106,28 +110,33 @@ export class SharedBaseRefResolver {
     for (;;) {
       if (request.signal.aborted) return this.entries.get(key)?.selection ?? null;
       const entry = this.entryFor(key);
-      if (entry.probe) {
-        const outcome = await waitUnlessAborted(entry.probe, request.signal);
-        if (outcome === ABANDONED) return entry.selection;
-        // The leader was cancelled. Live joiners go round again, and the first
-        // to get there leads the replacement probe the rest join.
-        if (outcome.cancelled && !request.signal.aborted) continue;
+      entry.holders++;
+      try {
+        if (entry.probe) {
+          const outcome = await waitUnlessAborted(entry.probe, request.signal);
+          if (outcome === ABANDONED) return entry.selection;
+          // The leader was cancelled. Live joiners go round again, and the
+          // first to get there leads the replacement probe the rest join.
+          if (outcome.cancelled && !request.signal.aborted) continue;
+          return outcome.selection;
+        }
+
+        const stamp = await this.buildStamp(request, entry.selection?.availableRemotes ?? []);
+        // Someone else started a probe, or the cache was cleared, during the stats.
+        if (entry.probe || this.entries.get(key) !== entry) continue;
+        if (entry.selection !== null && this.isFresh(entry, stamp)) return entry.selection;
+
+        const probe = this.probe(key, entry, request);
+        entry.probe = probe;
+        const settle = () => {
+          if (entry.probe === probe) entry.probe = null;
+        };
+        probe.then(settle, settle);
+        const outcome = await probe;
         return outcome.selection;
+      } finally {
+        entry.holders--;
       }
-
-      const stamp = await this.buildStamp(request, entry.selection?.availableRemotes ?? []);
-      // Someone else started a probe, or the cache was cleared, during the stats.
-      if (entry.probe || this.entries.get(key) !== entry) continue;
-      if (entry.selection !== null && this.isFresh(entry, stamp)) return entry.selection;
-
-      const probe = this.probe(key, entry, request);
-      entry.probe = probe;
-      const settle = () => {
-        if (entry.probe === probe) entry.probe = null;
-      };
-      probe.then(settle, settle);
-      const outcome = await probe;
-      return outcome.selection;
     }
   }
 
@@ -142,12 +151,12 @@ export class SharedBaseRefResolver {
     if (existing) return existing;
     if (this.entries.size >= MAX_ENTRIES) {
       for (const [oldKey, old] of this.entries) {
-        if (old.probe) continue;
+        if (old.probe || old.holders > 0) continue;
         this.entries.delete(oldKey);
         break;
       }
     }
-    const entry: Entry = { selection: null, stamp: null, resolvedAt: 0, probe: null };
+    const entry: Entry = { selection: null, stamp: null, resolvedAt: 0, probe: null, holders: 0 };
     this.entries.set(key, entry);
     return entry;
   }
@@ -212,31 +221,32 @@ export class SharedBaseRefResolver {
     try {
       const worktreeConfig = await request.statMtime(pathJoin(request.gitDir, "config.worktree"));
       if (worktreeConfig !== STAT_ABSENT_SENTINEL) return privateScope;
-      return (await this.hasConditionalIncludes(request)) ? privateScope : "";
+      return (await this.hasIncludes(request)) ? privateScope : "";
     } catch {
       return privateScope;
     }
   }
 
-  private async hasConditionalIncludes(request: SharedBaseRequest): Promise<boolean> {
+  private async hasIncludes(request: SharedBaseRequest): Promise<boolean> {
     const configPath = pathJoin(request.commonDir, "config");
     const mtime = await request.statMtime(configPath);
     if (mtime === STAT_ABSENT_SENTINEL) return false;
     const cached = this.includeScans.get(request.commonDir);
-    if (cached?.mtime === mtime) return cached.conditional;
+    if (cached?.mtime === mtime) return cached.includes;
 
     const { signal, dispose } = timeoutSignal(CONFIG_READ_TIMEOUT_MS);
-    let conditional: boolean;
+    let includes: boolean;
     try {
       const text = await readFile(configPath, { encoding: "utf-8", signal });
-      conditional = /^\s*\[\s*includeif\b/im.test(text);
+      // Section names are case-insensitive: `[include]`, `[includeIf "…"]`.
+      includes = /^\s*\[\s*include(?:if)?\b/im.test(text);
     } catch {
-      conditional = true;
+      includes = true;
     } finally {
       dispose();
     }
-    this.includeScans.set(request.commonDir, { mtime, conditional });
-    return conditional;
+    this.includeScans.set(request.commonDir, { mtime, includes });
+    return includes;
   }
 
   /**
