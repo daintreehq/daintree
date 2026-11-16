@@ -785,6 +785,9 @@ export class ActionService {
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.
         dispatchDeadlineAt: options?.dispatchDeadlineAt,
+        // Same unconditional stamp (#17036), agent only: it widens what one
+        // `actions.list` page holds, which only main's own walk may ask for.
+        actionsListWalk: source === "agent" && options?.actionsListWalk === true ? true : undefined,
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
@@ -935,8 +938,27 @@ export class ActionService {
    * default keeps the full manifest for MCP.
    */
   list(ctx?: ActionContext, options?: { includeSchemas?: boolean }): ActionManifestEntry[] {
+    return this.collectManifest(ctx, options?.includeSchemas !== false, false);
+  }
+
+  /**
+   * The full manifest for a caller that hands it straight to IPC (#17036).
+   * Entries are fresh objects, but their schemas are the cached ones and their
+   * examples the definition's own, rather than copies: the send's own
+   * structured clone is the isolation `list()` pays a second clone for. Never
+   * keep or write to what this returns; in DEV the cached schemas are frozen,
+   * so a write to one throws.
+   */
+  listForTransfer(ctx?: ActionContext): ActionManifestEntry[] {
+    return this.collectManifest(ctx, true, true);
+  }
+
+  private collectManifest(
+    ctx: ActionContext | undefined,
+    includeSchemas: boolean,
+    borrowShared: boolean
+  ): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
-    const includeSchemas = options?.includeSchemas !== false;
     const entries: ActionManifestEntry[] = [];
     for (const definition of this.registry.values()) {
       if (definition.danger === "restricted") continue;
@@ -947,7 +969,7 @@ export class ActionService {
           logWarn("Action isVisible threw", { actionId: definition.id, error: err });
         }
       }
-      entries.push(this.toManifestEntry(definition, context, includeSchemas));
+      entries.push(this.toManifestEntry(definition, context, includeSchemas, borrowShared));
     }
     return entries;
   }
@@ -967,7 +989,8 @@ export class ActionService {
   private toManifestEntry(
     definition: AnyActionDefinition,
     context: ActionContext,
-    includeSchemas = true
+    includeSchemas = true,
+    borrowShared = false
   ): ActionManifestEntry {
     // Fail closed if isEnabled throws: a single broken action must not crash
     // ActionService.list(), which runs during initial render and would take
@@ -1050,7 +1073,9 @@ export class ActionService {
     // physically shares — can't poison subsequent list()/get() reads. A shallow
     // spread only isolated the top level (issue #9569). structuredClone is safe
     // here: z.toJSONSchema finalizes through a JSON round-trip, so the cached
-    // value has no cycles or non-cloneable shapes.
+    // value has no cycles or non-cloneable shapes. A transfer borrows them
+    // instead, since its IPC send clones them anyway.
+    const share = <T>(value: T): T => (borrowShared ? value : structuredClone(value));
     const entry: ActionManifestEntry = {
       id: definition.id,
       name: definition.id,
@@ -1064,8 +1089,8 @@ export class ActionService {
         danger: definition.danger,
         category: definition.category,
       }),
-      inputSchema: schemas?.inputSchema ? structuredClone(schemas.inputSchema) : undefined,
-      outputSchema: schemas?.outputSchema ? structuredClone(schemas.outputSchema) : undefined,
+      inputSchema: schemas?.inputSchema ? share(schemas.inputSchema) : undefined,
+      outputSchema: schemas?.outputSchema ? share(schemas.outputSchema) : undefined,
       enabled,
       disabledReason,
       requiresArgs,
@@ -1076,7 +1101,7 @@ export class ActionService {
     if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
     if (definition.pluginId) entry.pluginId = definition.pluginId;
     if (definition.pluginId && definition.pluginName) entry.pluginName = definition.pluginName;
-    if (definition.examples) entry.examples = structuredClone(definition.examples);
+    if (definition.examples) entry.examples = share(definition.examples);
     if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
     if (paletteHidden) entry.paletteHidden = true;
     if (paletteRedirectTo) entry.paletteRedirectTo = paletteRedirectTo;

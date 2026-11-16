@@ -93,7 +93,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * relayed session, so an approval the call needs asks about this very
      * call (#13501).
      */
-    relayCallId?: string
+    relayCallId?: string,
+    /**
+     * Passed only by main's own `actions.list` walk (#17036), so a local view
+     * answers with one large page. See `WorkspaceDispatchOptions.actionsListWalk`.
+     */
+    walk?: { actionsListWalk: true }
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them

@@ -281,6 +281,15 @@ export interface ActionContext {
    */
   dispatchDeadlineAt?: number;
   /**
+   * The dispatch is main's own walk of `actions.list` (#17036), so the action
+   * pages at `ACTIONS_LIST_WALK_LIMIT` rather than the caller-facing limit.
+   * Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.actionsListWalk} for an agent dispatch only,
+   * stamped over whatever a `contextOverride` claimed, and left out of the
+   * launch-time snapshot like {@link dispatchDeadlineAt}.
+   */
+  actionsListWalk?: boolean;
+  /**
    * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
    * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
    * source, so a `contextOverride` can't claim one. Lets an action hold a plugin
@@ -764,6 +773,12 @@ export interface ActionDispatchOptions {
    * renderer bridge, from the deadline main sent or the run budget it granted.
    */
   dispatchDeadlineAt?: number;
+  /**
+   * Main's own `actions.list` walk (#17036) — NOT a client-supplied value. See
+   * {@link ActionContext.actionsListWalk}. Set only by the MCP renderer bridge,
+   * from the flag main put on its local dispatch request.
+   */
+  actionsListWalk?: boolean;
   /**
    * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
    * value. Set by the host from the plugin host's own closure (the

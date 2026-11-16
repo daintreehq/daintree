@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: () => [],
+    listForTransfer: () => [],
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
     getContext: mocks.getContext,

@@ -21,7 +21,7 @@ import {
 } from "@/store/worktreeSnapshotSync";
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(() => [] as ActionManifestEntry[]),
+  listForTransfer: vi.fn(() => [] as ActionManifestEntry[]),
   get: vi.fn((_id: string): ActionManifestEntry | null => null),
   dispatch: vi.fn(),
   getContext: vi.fn((): Record<string, unknown> => ({})),
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: mocks.list,
+    listForTransfer: mocks.listForTransfer,
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
     getContext: mocks.getContext,
@@ -181,6 +181,7 @@ describe("useMcpBridge", () => {
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
         dispatchDeadlineAt?: number;
+        actionsListWalk?: boolean;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -257,7 +258,7 @@ describe("useMcpBridge", () => {
   });
 
   it("returns the current action manifest and falls back to an empty manifest on failure", () => {
-    mocks.list.mockReturnValueOnce([safeManifestEntry()]);
+    mocks.listForTransfer.mockReturnValueOnce([safeManifestEntry()]);
 
     renderHook(() => useMcpBridge());
 
@@ -266,12 +267,36 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ id: "actions.list" }),
     ]);
 
-    mocks.list.mockImplementationOnce(() => {
+    mocks.listForTransfer.mockImplementationOnce(() => {
       throw new Error("manifest exploded");
     });
 
     manifestHandler?.("req-2");
     expect(sendGetManifestResponse).toHaveBeenCalledWith("req-2", []);
+  });
+
+  it("passes main's own actions.list walk to the dispatch, and nothing for any other request (#17036)", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-walk",
+      actionId: "actions.list",
+      args: { limit: 100 },
+      actionsListWalk: true,
+    });
+    await dispatchHandler?.({
+      requestId: "req-plain",
+      actionId: "actions.list",
+      args: { limit: 100 },
+    });
+
+    expect(mocks.dispatch.mock.calls.map(([, , options]) => options.actionsListWalk)).toEqual([
+      true,
+      undefined,
+    ]);
   });
 
   it("dispatches safe actions immediately without surfacing a confirmation modal", async () => {

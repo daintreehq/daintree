@@ -11,6 +11,7 @@ import {
   listActionManifest,
   searchActionManifest,
 } from "@shared/utils/actionIntrospection";
+import { ACTIONS_LIST_WALK_LIMIT } from "@shared/config/mcpIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -42,11 +43,15 @@ export function registerIntrospectionActions(
       offset: z.number().int().nonnegative(),
       hasMore: z.boolean(),
     }),
-    run: async (args: unknown, ctx: ActionContext) =>
-      listActionManifest(
+    run: async (args: unknown, ctx: ActionContext) => {
+      const query = (args as z.infer<typeof ActionsListArgsSchema>) ?? {};
+      // Main's own walk (#17036) takes the registry in one page; it pages the
+      // caller's permitted set back down itself.
+      return listActionManifest(
         actionService.list(ctx, { includeSchemas: false }),
-        (args as z.infer<typeof ActionsListArgsSchema>) ?? {}
-      ),
+        ctx.actionsListWalk ? { ...query, limit: ACTIONS_LIST_WALK_LIMIT } : query
+      );
+    },
   }));
 
   // Registered here purely for manifest registration — schema, description,

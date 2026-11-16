@@ -203,14 +203,34 @@ describe("registerWebviewHandlers", () => {
     });
   });
 
-  it("sends active state when frozen=false", async () => {
+  it("sends active state when frozen=false to a guest it froze", async () => {
     cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
+    await handler(null, 42, true);
+    debuggerMock.sendCommand.mockClear();
     await handler(null, 42, false);
 
     expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
       state: "active",
     });
+  });
+
+  it("sends nothing when frozen=false reaches a guest never frozen (#17036)", async () => {
+    const freshDebugger = {
+      isAttached: vi.fn(() => false),
+      attach: vi.fn(),
+      sendCommand: vi.fn(() => Promise.resolve()),
+    };
+    webContentsMock.fromId.mockReturnValueOnce({
+      ...mockWebContents,
+      debugger: freshDebugger as unknown as typeof debuggerMock,
+    });
+    cleanup = registerWebviewHandlers(deps);
+    const handler = getHandler("webview:set-lifecycle-state");
+    await handler(null, 42, false);
+
+    expect(freshDebugger.attach).not.toHaveBeenCalled();
+    expect(freshDebugger.sendCommand).not.toHaveBeenCalled();
   });
 
   it("returns early if webContents not found", async () => {

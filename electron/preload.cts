@@ -3392,6 +3392,7 @@ function buildElectronApi(): ElectronAPI {
           authorization?: McpDispatchAuthorization;
           requester?: McpRequester;
           dispatchDeadlineAt?: number;
+          actionsListWalk?: boolean;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

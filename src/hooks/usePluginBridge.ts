@@ -115,7 +115,7 @@ export function usePluginBridge(): void {
         if (disposed) return;
         try {
           const entries = actionService
-            .list(undefined, { includeSchemas: true })
+            .listForTransfer()
             .filter((entry) => !actionService.deniesPluginDispatch(entry.id as ActionId))
             .map(toPluginManifestEntry);
           window.electron.pluginBridge.sendActionsListResponse({ requestId, entries });

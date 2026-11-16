@@ -20,6 +20,8 @@
  *
  * Frozen renderers do not auto-resume on focus or reattach. Callers activating a
  * frozen view must call `unfreezeWebContents` before relying on its event loop.
+ * Frozen here means frozen by {@link freezeWebContents}: it is the only thing in
+ * the app that sends a freeze, so its record is what a thaw consults.
  *
  * Do not verify freeze with Playwright. It unconditionally enables focus emulation
  * on every page target and forces the renderer visible, so a
@@ -128,7 +130,18 @@ export async function freezeWebContents(wc: Electron.WebContents): Promise<void>
   if (!result.sent) track.freezesInFlight--;
 }
 
-export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
+/**
+ * Thaw a renderer main froze. One main never froze, or whose freeze a thaw has
+ * since released, is left alone: the CDP attach and two round trips would buy
+ * nothing, and every routed MCP call and activation lands here (#17036).
+ * `force` sends `"active"` regardless, for a caller that wants the lifecycle
+ * command itself rather than a thaw.
+ */
+export async function unfreezeWebContents(
+  wc: Electron.WebContents,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  if (!opts.force && !isWebContentsFrozen(wc)) return;
   const result = await setLifecycleState(wc, "active");
   const track = lifecycleTracks.get(wc);
   if (!track || !result.sent || !result.applied) return;

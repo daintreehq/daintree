@@ -105,9 +105,10 @@ vi.mock("../../plugin-capability/instances.js", () => ({
     hasGrant: vi.fn(() => projectTargetingGrant.granted),
   })),
 }));
-// Every dispatch thaws its target before sending (#13119); the fakes have no
-// debugger, so the thaw resolves at once and each send is one drain away.
+// Every dispatch thaws a frozen target before sending (#13119), and every fake
+// counts as frozen; the thaw resolves at once, so each send is one drain away.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: () => true,
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({

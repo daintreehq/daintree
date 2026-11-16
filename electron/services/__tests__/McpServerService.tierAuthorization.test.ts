@@ -17,6 +17,7 @@ import type {
   ActionDanger,
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { ACTIONS_LIST_WALK_LIMIT } from "../../../shared/config/mcpIntrospection.js";
 import {
   CORE_TIER_TOOLS,
   FULL_TIER_ADDONS,
@@ -249,6 +250,7 @@ type DispatchRequest = {
   args?: unknown;
   confirmed?: boolean;
   callerInfo?: { token4LastChars: string; userAgent: string };
+  actionsListWalk?: boolean;
 };
 
 type TextToolResult = {
@@ -898,6 +900,36 @@ describe("McpServerService", () => {
       // connectHttpClient sends the global apiKey header → external tier.
       expect(records[0].tier).toBe("external");
       expect(records[0].result).toBe("success");
+    });
+
+    it("takes an external session's actions.list walk from the focused view in one round trip (#17036)", async () => {
+      const dispatchMock = vi.fn((request: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: {
+          actions: manifestForAllAllowlistedTools(),
+          total: manifestForAllAllowlistedTools().length,
+          limit: request.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : 100,
+          offset: 0,
+          hasMore: false,
+        },
+      }));
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectHttpClient(service.currentPort!);
+      httpTransports.push(transport);
+
+      await client.callTool({ name: "actions.list", arguments: {} });
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock.mock.calls[0]![0]).toMatchObject({
+        actionId: "actions.list",
+        args: { offset: 0, limit: 100 },
+        actionsListWalk: true,
+      });
     });
 
     it("Streamable HTTP transport with a pane token stamps core tier and gates dispatch", async () => {

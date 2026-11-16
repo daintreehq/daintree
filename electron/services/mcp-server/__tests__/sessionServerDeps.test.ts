@@ -473,6 +473,96 @@ describe("createSessionServerDeps", () => {
     );
   });
 
+  // #17036: main's own actions.list walk asks a local view for one large page,
+  // and only on the routes that reach one.
+  describe("main's own actions.list walk", () => {
+    const WALK = { actionsListWalk: true } as const;
+
+    it("rides an unpinned dispatch beside its authorization", async () => {
+      const deps = fakeSource();
+      const { state, host } = mutableHost();
+      const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "x", role: ROLE });
+      state.bearer = { token4LastChars: "wxyz", userAgent: "client/1.0" };
+
+      await sessionDeps.dispatchAction(
+        "actions.list",
+        { limit: 100 },
+        true,
+        "skip-preference",
+        undefined,
+        WALK
+      );
+      await sessionDeps.dispatchAction("actions.list", { limit: 100 }, false);
+
+      expect(deps.dispatchAction).toHaveBeenNthCalledWith(
+        1,
+        "actions.list",
+        { limit: 100 },
+        true,
+        state.bearer,
+        "external",
+        "skip-preference",
+        WALK
+      );
+      expect(deps.dispatchAction).toHaveBeenNthCalledWith(
+        2,
+        "actions.list",
+        { limit: 100 },
+        false,
+        state.bearer,
+        "external"
+      );
+    });
+
+    it("rides a pinned dispatch's options", async () => {
+      const deps = fakeSource();
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", "help");
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
+
+      await sessionDeps.dispatchAction("actions.list", {}, false, undefined, undefined, WALK);
+
+      expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toEqual(WALK);
+    });
+
+    it("rides a workspace-bound dispatch's options without dropping a pane's own", async () => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+        workspaceBinding: { workspaceId: WS_A },
+        paneBinding: {
+          workspaceId: WS_A,
+          launchWebContentsId: 7,
+          actionContext: { focusedTerminalId: "term-focused" },
+        },
+      });
+
+      await sessionDeps.dispatchAction("actions.list", {}, false, undefined, undefined, WALK);
+      await sessionDeps.dispatchAction("actions.list", {}, false);
+
+      const [walked, plain] = dispatchActionForWorkspace.mock.calls.map(
+        (call) => (call as unknown[])[5] as Record<string, unknown>
+      );
+      expect(walked).toEqual({ ...plain, actionsListWalk: true });
+      expect(plain).not.toHaveProperty("actionsListWalk");
+      expect(plain).toHaveProperty("preferredWebContentsId", 7);
+    });
+  });
+
   it("keeps the pin and help-session id it captured after teardown clears the store", async () => {
     const deps = fakeSource();
     deps.sessionStore.sessionOriginMap.set("s", "help");

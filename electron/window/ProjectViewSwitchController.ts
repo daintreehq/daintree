@@ -659,12 +659,15 @@ export async function performSwitch(
     // requestAnimationFrame callbacks. That stalls the renderer's double-rAF
     // in `notifyViewPainted`, which is exactly the signal the paint gate is
     // waiting on. Page.setWebLifecycleState("active") (via
-    // `unfreezeWebContents`) keeps Blink in the foreground lifecycle so rAF
-    // keeps firing. Fire-and-forget: the helper swallows the CDP-error
-    // swallow-list and `console.warn`s unexpected failures itself, so no
-    // `.catch` here. Must run after did-finish-load — calling earlier hangs
-    // the CDP session on an uninitialised frame host (Chromium 146).
-    void unfreezeWebContents(view.webContents);
+    // `unfreezeWebContents`) went in to keep that rAF firing, though
+    // Chromium's handler only clears the page's frozen flag, so whether it
+    // does is unmeasured. Forced, since a view this new was never frozen and
+    // the helper otherwise skips it (#17036): the gate's timeouts were tuned
+    // with this command in place. Fire-and-forget: the helper swallows the
+    // CDP-error swallow-list and `console.warn`s unexpected failures itself,
+    // so no `.catch` here. Must run after did-finish-load — calling earlier
+    // hangs the CDP session on an uninitialised frame host (Chromium 146).
+    void unfreezeWebContents(view.webContents, { force: true });
 
     // Start confirming a drawn frame. Not before now: during the load the
     // skeleton CSS may not be applied yet (loadView waits for it), so a frame

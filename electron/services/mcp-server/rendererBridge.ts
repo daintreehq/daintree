@@ -965,6 +965,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -1009,6 +1010,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1125,6 +1127,12 @@ export function createRendererBridge(
             // capped by whoever is timing it. Also local-only: it is an
             // instant on this machine's clock, which another machine's isn't.
             dispatchDeadlineAt: hold.deadlineAt,
+            // Main's own `actions.list` walk (#17036). Local-only too: another
+            // machine's view pages at the public maximum, which the walk reads
+            // off each page.
+            ...(approval?.actionsListWalk === true && actionId === "actions.list"
+              ? { actionsListWalk: true }
+              : {}),
           });
         } catch (err) {
           clearTimeout(pendingDispatches.get(requestId)?.timer ?? timer);
@@ -1239,7 +1247,8 @@ export function createRendererBridge(
     confirmed = false,
     callerInfo?: McpBearerIdentity,
     sessionOrigin: McpSessionOrigin = "external",
-    authorization?: McpDispatchAuthorization
+    authorization?: McpDispatchAuthorization,
+    options?: Pick<WorkspaceDispatchOptions, "actionsListWalk">
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getActiveProjectWebContents(),
@@ -1250,7 +1259,7 @@ export function createRendererBridge(
       undefined,
       callerInfo,
       undefined,
-      { authorization }
+      { authorization, ...options }
     );
   }
 
@@ -1352,6 +1361,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "actionsListWalk"
     >,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {

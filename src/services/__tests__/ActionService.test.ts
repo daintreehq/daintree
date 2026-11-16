@@ -1121,6 +1121,35 @@ describe("ActionService", () => {
         ]);
       });
 
+      // Main's own `actions.list` walk (#17036): it widens one page past the
+      // caller-facing cap, so only main's agent dispatch may set it.
+      it("stamps ctx.actionsListWalk only from an agent dispatch's options, never a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { actionsListWalk: true },
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.actionsListWalk)).toEqual([
+          true,
+          undefined,
+          undefined,
+        ]);
+      });
+
       // The push half (#15646): what a confirm showed, which `git.push` pins
       // the push to. A caller able to plant one could pin a push to a review
       // nobody saw, so it rides on the options alone.
@@ -2846,6 +2875,71 @@ describe("ActionService", () => {
       const second = service.list()[0]!.inputSchema as Record<string, unknown>;
       expect(second.poisoned).toBeUndefined();
       expect((second.properties as Record<string, unknown>).poisoned).toBeUndefined();
+    });
+
+    it("lends a transfer the cached schemas and examples, and list() still copies them (#17036)", () => {
+      const examples = [{ args: { count: 1 }, description: "One" }];
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ count: z.number() }),
+        resultSchema: z.object({ total: z.number() }),
+        mcpOutputSchema: true,
+        examples,
+        run: vi.fn().mockResolvedValue({ total: 1 }),
+      } as unknown as ActionDefinition);
+
+      const [lentA] = service.listForTransfer();
+      const [lentB] = service.listForTransfer();
+      expect(lentA!.inputSchema).toBeDefined();
+      expect(lentA!.outputSchema).toBeDefined();
+      expect(lentA).not.toBe(lentB);
+      expect(lentA!.inputSchema).toBe(lentB!.inputSchema);
+      expect(lentA!.outputSchema).toBe(lentB!.outputSchema);
+      expect(lentA!.examples).toBe(examples);
+
+      const [copied] = service.list();
+      expect(copied!.inputSchema).toEqual(lentA!.inputSchema);
+      expect(copied!.inputSchema).not.toBe(lentA!.inputSchema);
+      expect(copied!.outputSchema).not.toBe(lentA!.outputSchema);
+      expect(copied!.examples).toEqual(examples);
+      expect(copied!.examples).not.toBe(examples);
+    });
+
+    it("gives a transfer the same entries list() does", () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ count: z.number() }),
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+      service.register({
+        id: "actions.search" as ActionId,
+        title: "Hidden",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      expect(service.listForTransfer()).toEqual(service.list());
+      expect(service.listForTransfer().map((entry) => entry.id)).toEqual(["actions.list"]);
     });
 
     it("isolates outputSchema from caller mutations", () => {

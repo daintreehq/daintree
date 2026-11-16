@@ -154,7 +154,8 @@ export interface SessionServerDepsSource {
     confirmed?: boolean,
     callerInfo?: McpBearerIdentity,
     sessionOrigin?: McpSessionOrigin,
-    authorization?: McpDispatchAuthorization
+    authorization?: McpDispatchAuthorization,
+    options?: Pick<WorkspaceDispatchOptions, "actionsListWalk">
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Pinned variants used for help-session bearers — route to the renderer
   // WebContents that minted the bearer at provision time (#7002). Optional
@@ -171,7 +172,7 @@ export interface SessionServerDepsSource {
     sessionOrigin?: McpSessionOrigin,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "approvalOnly" | "approvalReason" | "authorization" | "requester"
+      "approvalOnly" | "approvalReason" | "authorization" | "requester" | "actionsListWalk"
     >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
@@ -883,8 +884,12 @@ export function createSessionServerDeps(
     args,
     confirmed,
     authorization,
-    relayCallId
+    relayCallId,
+    walk
   ) => {
+    // Main's own `actions.list` walk (#17036), carried only on the routes
+    // that can reach a local view. A view-less host's catalog is one page.
+    const actionsListWalk = walk?.actionsListWalk === true;
     if (boundWorkspaceId !== null) {
       // A bound external session records no context: unlike a help session,
       // which replays the ActionContext snapshot taken when the user launched
@@ -968,7 +973,13 @@ export function createSessionServerDeps(
             args,
             confirmed,
             sessionOrigin,
-            authorization !== undefined ? { ...options, authorization } : options
+            authorization !== undefined || actionsListWalk
+              ? {
+                  ...options,
+                  ...(authorization !== undefined ? { authorization } : {}),
+                  ...(actionsListWalk ? { actionsListWalk: true } : {}),
+                }
+              : options
           )
         : Promise.reject(missingWorkspaceRoute());
     }
@@ -991,10 +1002,11 @@ export function createSessionServerDeps(
       // the model's turn (#8317). Absent for context-less sessions, in
       // which case pinned dispatch falls back to live renderer context.
       const boundContext = deps.sessionStore.sessionContextMap.get(sessionId);
-      return authorization !== undefined || assistantRequester !== undefined
+      return authorization !== undefined || assistantRequester !== undefined || actionsListWalk
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
             ...(authorization !== undefined ? { authorization } : {}),
             ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
+            ...(actionsListWalk ? { actionsListWalk: true } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -1005,6 +1017,19 @@ export function createSessionServerDeps(
     // null (→ undefined) for help-session bearers, so callerInfo never
     // reaches the renderer for the assistant's own dispatches.
     const callerInfo = host.getBearerInfoForSession(sessionId) ?? undefined;
+    if (actionsListWalk) {
+      return deps.dispatchAction(
+        actionId,
+        args,
+        confirmed,
+        callerInfo,
+        sessionOrigin,
+        authorization,
+        {
+          actionsListWalk: true,
+        }
+      );
+    }
     return authorization !== undefined
       ? deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin, authorization)
       : deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);

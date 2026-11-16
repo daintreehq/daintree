@@ -60,7 +60,9 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   },
 }));
 
+// Every view counts as frozen, so routed sends keep taking the thaw path.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: () => true,
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -309,6 +311,35 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       expect(envelope.result).toEqual({ ok: true, result: "from-view" });
       expect(viewless.runViewlessAction).not.toHaveBeenCalled();
     });
+
+    it("asks the view for main's own actions.list walk, and for nothing else (#17036)", async () => {
+      const wc = makeWebContents(7, (channel, payload) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        queueMicrotask(() =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id: 7 } },
+            { requestId: payload.requestId, result: { ok: true, result: null } }
+          )
+        );
+      });
+      mockWebContentsRegistry.set(7, wc);
+      mockProjectViews.set(WORKSPACE, [wc]);
+
+      await bridge.dispatchActionForWorkspace(WORKSPACE, "actions.list", {}, false, "external", {
+        actionsListWalk: true,
+      });
+      await bridge.dispatchActionForWorkspace(WORKSPACE, "actions.list", {});
+      await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", {}, false, "external", {
+        actionsListWalk: true,
+      });
+
+      const sent = vi
+        .mocked(wc.send)
+        .mock.calls.filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+        .map(([, payload]) => (payload as { actionsListWalk?: boolean }).actionsListWalk);
+      expect(sent).toEqual([true, undefined, undefined]);
+    });
   });
 
   describe("with a drive lease", () => {
@@ -357,6 +388,20 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         dispatchedWorkspace: { workspaceId: WORKSPACE },
       });
       expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    it("never asks another machine's view for main's own actions.list walk (#17036)", async () => {
+      const endpoint = makeRemoteEndpoint(async () => ({ result: { ok: true, result: null } }));
+      setMcpDriveTargetResolver((projectId) =>
+        projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
+      );
+
+      await bridge.dispatchActionForWorkspace(WORKSPACE, "actions.list", {}, false, "external", {
+        actionsListWalk: true,
+      });
+
+      const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+      expect(payload).not.toHaveProperty("actionsListWalk");
     });
 
     describe("how long it waits on the driving view (#15699)", () => {

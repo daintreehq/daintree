@@ -1342,7 +1342,7 @@ export function useMcpBridge(): void {
 
     const cleanupManifest = window.electron.mcpBridge.onGetManifestRequest((requestId) => {
       try {
-        const manifest = actionService.list();
+        const manifest = actionService.listForTransfer();
         window.electron.mcpBridge.sendGetManifestResponse(requestId, manifest);
       } catch (err) {
         logError("[MCP Bridge] Failed to build manifest", err);
@@ -1366,6 +1366,7 @@ export function useMcpBridge(): void {
         authorization,
         requester,
         dispatchDeadlineAt: sentDeadlineAt,
+        actionsListWalk,
       }) => {
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
@@ -1935,6 +1936,8 @@ export function useMcpBridge(): void {
                 // sent; a dispatch nobody was asked about keeps that one. An
                 // action that waits on a person gives up at it (#15648).
                 dispatchDeadlineAt: runDeadlineAt ?? dispatchDeadlineAt,
+                // Main's own `actions.list` walk asks for one large page (#17036).
+                ...(actionsListWalk === true ? { actionsListWalk: true } : {}),
               }),
             actionId
           );

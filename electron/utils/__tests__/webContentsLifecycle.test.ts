@@ -79,13 +79,55 @@ describe("webContentsLifecycle", () => {
   });
 
   describe("unfreezeWebContents", () => {
-    it("sends state: active", async () => {
+    it("sends state: active to a frozen renderer", async () => {
       const wc = createMockWc();
+      await freezeWebContents(wc as unknown as Electron.WebContents);
+      wc.debugger.sendCommand.mockClear();
       await unfreezeWebContents(wc as unknown as Electron.WebContents);
       const lifecycle = wc.debugger.sendCommand.mock.calls.find(
         (c) => c[0] === "Page.setWebLifecycleState"
       );
       expect(lifecycle?.[1]).toEqual({ state: "active" });
+      expect(isWebContentsFrozen(wc as unknown as Electron.WebContents)).toBe(false);
+    });
+
+    it("leaves a renderer main never froze alone, with no attach and no CDP (#17036)", async () => {
+      const wc = createMockWc();
+      await unfreezeWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.attach).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("leaves a renderer alone once a thaw has released its freeze", async () => {
+      const wc = createMockWc();
+      await freezeWebContents(wc as unknown as Electron.WebContents);
+      await unfreezeWebContents(wc as unknown as Electron.WebContents);
+      wc.debugger.sendCommand.mockClear();
+      await unfreezeWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("retries a thaw that failed, since the freeze still holds", async () => {
+      const wc = createMockWc();
+      await freezeWebContents(wc as unknown as Electron.WebContents);
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
+      await unfreezeWebContents(wc as unknown as Electron.WebContents);
+      expect(isWebContentsFrozen(wc as unknown as Electron.WebContents)).toBe(true);
+      wc.debugger.sendCommand.mockClear();
+      await unfreezeWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
+        state: "active",
+      });
+      expect(isWebContentsFrozen(wc as unknown as Electron.WebContents)).toBe(false);
+    });
+
+    it("sends state: active to a renderer never frozen when forced", async () => {
+      const wc = createMockWc();
+      await unfreezeWebContents(wc as unknown as Electron.WebContents, { force: true });
+      expect(wc.debugger.attach).toHaveBeenCalledWith("1.3");
+      expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
+        state: "active",
+      });
     });
   });
 
@@ -154,17 +196,14 @@ describe("webContentsLifecycle", () => {
       expect(isWebContentsFrozen(asWc(wc))).toBe(false);
     });
 
-    it("is per renderer, and a thaw of a renderer never frozen never holds it", async () => {
+    it("is per renderer, and a thaw of a renderer never frozen sends nothing and never holds it", async () => {
       const frozen = createMockWc();
       const thawed = createMockWc();
       await freezeWebContents(asWc(frozen));
-      const [thaw] = queueLifecycleCommands(thawed, 1);
 
-      const thawing = unfreezeWebContents(asWc(thawed));
-      expect(isWebContentsFrozen(asWc(thawed))).toBe(false);
-      thaw!.reject();
-      await thawing;
+      await unfreezeWebContents(asWc(thawed));
 
+      expect(thawed.debugger.sendCommand).not.toHaveBeenCalled();
       expect(isWebContentsFrozen(asWc(thawed))).toBe(false);
       expect(isWebContentsFrozen(asWc(frozen))).toBe(true);
     });
