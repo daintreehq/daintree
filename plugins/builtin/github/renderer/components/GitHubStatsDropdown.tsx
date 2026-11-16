@@ -5,9 +5,9 @@ import { GitHubResourceListSkeleton, CommitListSkeleton } from "./GitHubDropdown
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { withPluginUi } from "../withPluginUi";
 
-// The list bodies stay in their own chunks — this wrapper is registered (and
-// therefore bundled) at app start, but the heavy Virtuoso-backed lists load
-// only when the dropdown opens. `retryableImport`, not `lazy`: a lazy component
+// The list bodies stay in their own chunks — this wrapper loads on a stats
+// pill's hover or first open (`LazyGitHubStatsDropdown`), but the heavy
+// Virtuoso-backed lists load only when the dropdown opens. `retryableImport`, not `lazy`: a lazy component
 // caches its rejection forever, so one missed chunk fetch would disable the
 // dropdown for the whole session with no way back. Each waits for the kit too,
 // so a cold open swaps the skeleton for rows whose kit controls are all drawn.

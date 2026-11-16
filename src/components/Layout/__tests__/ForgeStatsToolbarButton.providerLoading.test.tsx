@@ -56,6 +56,7 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
 
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: () => null,
+  preloadBuiltinView: () => {},
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({

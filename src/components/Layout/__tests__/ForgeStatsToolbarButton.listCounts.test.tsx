@@ -74,6 +74,7 @@ function CaptureView(props: ForgeStatsDropdownProps) {
 }
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? CaptureView : null),
+  preloadBuiltinView: () => {},
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({

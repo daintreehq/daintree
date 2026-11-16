@@ -72,6 +72,7 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
 // Only the code forge contributes a stats dropdown; the issues provider has none.
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? () => null : null),
+  preloadBuiltinView: () => {},
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
