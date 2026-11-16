@@ -5,9 +5,11 @@ import {
   ActionsGetSchemaArgsSchema,
   ActionsListArgsSchema,
   ActionsSearchArgsSchema,
+} from "../../../shared/utils/actionIntrospection.js";
+import {
   listActionManifest,
   searchActionManifest,
-} from "../../../shared/utils/actionIntrospection.js";
+} from "../../../shared/utils/actionManifestQueries.js";
 import { getViewlessHelpBaseManifest } from "../mcp-server/baseManifest.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { countProjectPanels } from "./viewlessTerminals.js";

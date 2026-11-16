@@ -4,12 +4,11 @@
 import type { ActionContext } from "@shared/types/actions";
 import type { z } from "zod";
 import type { PersistedStoreInfoSchema } from "./schemas";
-import {
-  listActionManifest,
-  searchActionManifest,
-  type ActionsListArgsSchema,
-  type ActionsSearchArgsSchema,
+import type {
+  ActionsListArgsSchema,
+  ActionsSearchArgsSchema,
 } from "@shared/utils/actionIntrospection";
+import { listActionManifest, searchActionManifest } from "@shared/utils/actionManifestQueries";
 import { ACTIONS_LIST_WALK_LIMIT } from "@shared/config/mcpIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";

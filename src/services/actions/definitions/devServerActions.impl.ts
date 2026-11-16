@@ -91,7 +91,8 @@ async function refuseUnlessToolApplies(
 export async function toggleDevPreviewTool(
   toolId: string,
   requestedPanelId: string | undefined,
-  ctx: ActionContext
+  ctx: ActionContext,
+  focusedId: string | null
 ): Promise<{ panelId: string | null; active: boolean }> {
   // A command can switch a tool on before any preview pane has mounted —
   // the pane is what normally starts the session manager — and the tool
@@ -115,7 +116,7 @@ export async function toggleDevPreviewTool(
   }
   let panelId =
     requestedPanelId ??
-    (panels.focusedId && inWorktree(panels.focusedId) ? panels.focusedId : undefined) ??
+    (focusedId && inWorktree(focusedId) ? focusedId : undefined) ??
     panels.panelIds.find(inWorktree);
   const store = useDevPreviewToolStore.getState();
   // Nested dispatches keep the caller's source, so an agent's call isn't

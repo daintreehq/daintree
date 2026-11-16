@@ -90,8 +90,11 @@ export function registerDevServerActions(
     }),
     resultSchema: z.object({ panelId: z.string().nullable(), active: z.boolean() }),
     run: async (args: { toolId: string; panelId?: string }, ctx: ActionContext) => {
+      // Read before the chunk loads: focus can move while it does, and the
+      // toggle belongs to the preview that was focused when it was asked for.
+      const { focusedId } = usePanelStore.getState();
       const { toggleDevPreviewTool } = await import("./devServerActions.impl");
-      return toggleDevPreviewTool(args.toolId, args.panelId, ctx);
+      return toggleDevPreviewTool(args.toolId, args.panelId, ctx, focusedId);
     },
   }));
 
@@ -120,8 +123,9 @@ export function registerDevServerActions(
       .optional(),
     resultSchema: z.object({ panelId: z.string().nullable(), active: z.boolean() }),
     run: async (args: { panelId?: string } | undefined, ctx: ActionContext) => {
+      const { focusedId } = usePanelStore.getState();
       const { toggleDevPreviewTool } = await import("./devServerActions.impl");
-      return toggleDevPreviewTool(ELEMENT_PICKER_TOOL_ID, args?.panelId, ctx);
+      return toggleDevPreviewTool(ELEMENT_PICKER_TOOL_ID, args?.panelId, ctx, focusedId);
     },
   }));
 
