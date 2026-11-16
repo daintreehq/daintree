@@ -1484,8 +1484,9 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
   viewWindows.set(viewId, win);
   if (heardWindows.has(win)) return;
   heardWindows.add(win);
-  // Put away before anything here listened: no event will say so.
-  if (isPutAway(win)) putAwayWindows.add(win);
+  // Minimized before anything here listened: no event will say so. Not
+  // `isVisible()`, which macOS answers false for a window merely covered.
+  if (win.isMinimized()) putAwayWindows.add(win);
   const holdsPanel = () => [...activeViews].some((id) => viewWindows.get(id) === win);
   const letGo = () => {
     putAwayWindows.add(win);
@@ -1505,7 +1506,7 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
   // Windows brings a full-screen window back from the taskbar with
   // `enter-full-screen` and no `restore`; focus covers any other return.
   const comeBackIfShown = () => {
-    if (!isPutAway(win)) comeBack();
+    if (!win.isMinimized()) comeBack();
   };
   win.on("minimize", letGo);
   win.on("hide", letGo);

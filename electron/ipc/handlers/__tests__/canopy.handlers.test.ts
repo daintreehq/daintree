@@ -2363,6 +2363,14 @@ describe("canopy IPC", () => {
       expect((await snapshotOf(sender)).active).toBe(true);
     });
 
+    it("reads at a panel's pace in a shown window macOS calls not visible because it is covered", async () => {
+      const win = fakeWindow();
+      win.visible = false;
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(true);
+    });
+
     it.each(["enter-full-screen", "focus"] as const)(
       "comes back on %s with no restore, once the window is in sight",
       async (event) => {
@@ -2376,7 +2384,9 @@ describe("canopy IPC", () => {
         win.emit(event);
         expect((await snapshotOf(sender)).active).toBe(false);
 
+        // Covered, as macOS answers for a window just brought back: still back.
         win.minimized = false;
+        win.visible = false;
         win.emit(event);
         expect((await snapshotOf(sender)).active).toBe(true);
         expect(sends).toHaveBeenCalledTimes(1);
