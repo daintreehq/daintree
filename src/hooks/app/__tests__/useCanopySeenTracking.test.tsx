@@ -146,6 +146,31 @@ describe("useCanopySeenTracking", () => {
     expect(looks()).toEqual(["a:false"]);
   });
 
+  it("ends the look when the focused pane goes to the trash", () => {
+    renderHook(() => useCanopySeenTracking());
+    markSeen.mockClear();
+    act(() =>
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, a: terminal("a", "trash") },
+      }))
+    );
+    expect(looks()).toEqual(["a:false"]);
+  });
+
+  it("does no work for changes to any pane but the focused one", () => {
+    renderHook(() => useCanopySeenTracking());
+    const hasFocus = vi.mocked(document.hasFocus);
+    hasFocus.mockClear();
+    // A fresh object for each pane, as any change to one makes.
+    act(() =>
+      usePanelStore.setState((state) => ({ panelsById: { ...state.panelsById, b: terminal("b") } }))
+    );
+    act(() =>
+      usePanelStore.setState((state) => ({ panelsById: { ...state.panelsById, a: terminal("a") } }))
+    );
+    expect(hasFocus).not.toHaveBeenCalled();
+  });
+
   it("drops a refused report quietly", async () => {
     markSeen.mockRejectedValue(new Error("rate limited"));
     renderHook(() => useCanopySeenTracking());

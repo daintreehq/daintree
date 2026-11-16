@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useCanopyStore } from "@/store/canopyStore";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
@@ -14,9 +15,25 @@ export function useCanopySnapshotSync(): void {
     if (!canopy?.onSnapshotUpdated) return;
     const { applySnapshot } = useCanopyStore.getState();
     const unsubscribe = canopy.onSnapshotUpdated(applySnapshot);
-    safeFireAndForget(canopy.getSnapshot().then(applySnapshot), {
-      context: "Reading whether Canopy is set up",
+    const read = () =>
+      safeFireAndForget(canopy.getSnapshot().then(applySnapshot), {
+        context: "Reading whether Canopy is set up",
+      });
+    read();
+    // Main sends a cached view no snapshot: shown again, it reads what it missed.
+    let missed = isProjectViewCached();
+    const offLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") {
+        missed = true;
+        return;
+      }
+      if (!missed) return;
+      missed = false;
+      read();
     });
-    return unsubscribe;
+    return () => {
+      offLifecycle();
+      unsubscribe();
+    };
   }, []);
 }
