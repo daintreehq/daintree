@@ -564,9 +564,8 @@ export class WorkspaceService {
   // Credential changes that reached this host while backgrounded or with no
   // window on screen, the latest per provider, replayed once PR work resumes —
   // they would otherwise fetch every worktree and poll PRs in a host nothing is
-  // looking at. Per provider
-  // because a set and a clear have different effects, and one provider's
-  // must not swallow another's.
+  // looking at. Per provider because a set and a clear have different effects,
+  // and one provider's must not swallow another's.
   private readonly deferredCredentialUpdates = new Map<
     string,
     import("../../shared/types/forge.js").Credentials | null
@@ -2962,7 +2961,9 @@ export class WorkspaceService {
           }
         }
       }
-      await pullRequestService.refresh();
+      // The status pass above can take a while; a screen locked in the
+      // meantime leaves the PR catch-up to the poller's own restart.
+      if (this.appliedPermissions.status) await pullRequestService.refresh();
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
@@ -5542,9 +5543,10 @@ export class WorkspaceService {
     pullRequestService.setForgeSettings(args);
     // The issues binding may be what changed; its branch keys go with it.
     this.refreshIssueBranchClaim();
-    // A backgrounded host re-resolves when it is foregrounded; refreshing now
-    // would query the forge for a project nothing is showing (#12519).
-    if (!this.backgrounded) void pullRequestService.refresh();
+    // A backgrounded or off-screen host re-resolves when its poller restarts;
+    // refreshing now would query the forge for a project nothing is showing
+    // (#12519).
+    if (this.appliedPermissions.status) void pullRequestService.refresh();
     this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 

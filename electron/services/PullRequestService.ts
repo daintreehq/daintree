@@ -70,6 +70,9 @@ const UPDATE_DEBOUNCE_MS = 100;
 
 // Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
 const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
+// With no window focused nobody is reading the badges, and focus regain re-arms
+// at the focused cadence, so a merge or close only has to land eventually.
+const BLURRED_REVALIDATION_INTERVAL_MS = 5 * 60 * 1000;
 
 // Adaptive boost: when any resolved PR has CI in-flight (pending), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
@@ -137,6 +140,7 @@ class PullRequestService {
   private revalidationsRunning = 0;
   private earlyRevalidationAt: number | undefined;
   private pollIntervalMs: number = FOCUSED_POLL_INTERVAL_MS;
+  private focused = true;
   private cwd: string = "";
   private isPolling: boolean = false;
   private consecutiveErrors: number = 0;
@@ -1003,10 +1007,11 @@ class PullRequestService {
   /**
    * Switch poll cadence based on global window-focus state. Focused = ~30s
    * (snappy enough that PR transitions surface promptly), blurred = ~120s
-   * (conserves GitHub API quota during long background sessions). Called
-   * from main via the workspace-host IPC pipe; powerMonitor.ts is the focus
-   * aggregator and idempotency guard, so this method is only invoked on a
-   * real focus-state transition.
+   * (conserves GitHub API quota during long background sessions). Resolved-PR
+   * revalidation follows the same signal. Called from main via the
+   * workspace-host IPC pipe; powerMonitor.ts is the focus aggregator and
+   * idempotency guard, so this method is only invoked on a real focus-state
+   * transition.
    *
    * On focus regain, also fires an immediate catch-up poll throttled to
    * FOCUS_CATCHUP_THROTTLE_MS (5s) — protects against rapid alt-tabbing
@@ -1017,6 +1022,12 @@ class PullRequestService {
   public setFocusCadence(focused: boolean): void {
     const targetInterval = focused ? FOCUSED_POLL_INTERVAL_MS : BLURRED_POLL_INTERVAL_MS;
     this.updatePollInterval(targetInterval);
+    const focusChanged = focused !== this.focused;
+    this.focused = focused;
+    // A pass under way reschedules against the new cadence when it settles.
+    if (focusChanged && this.isPolling && this.revalidationsRunning === 0) {
+      this.scheduleRevalidation();
+    }
 
     if (!focused || !this.isPolling) {
       return;
@@ -1247,6 +1258,9 @@ class PullRequestService {
       const at = Date.now() + delayMs;
       this.earlyRevalidationAt = Math.min(this.earlyRevalidationAt ?? at, at);
       if (this.revalidationsRunning > 0) return;
+      // Blurred, the deadline waits for focus regain, and the armed tick keeps
+      // its time rather than being pushed back by every push.
+      if (!this.focused && this.revalidationTimer) return;
     }
 
     if (this.revalidationTimer) {
@@ -1269,12 +1283,13 @@ class PullRequestService {
     if (this.boostExpiresAt !== null && this.boostExpiresAt <= Date.now()) {
       this.boostExpiresAt = null;
     }
-    const cadenceMs =
-      this.boostExpiresAt !== null
+    const cadenceMs = !this.focused
+      ? BLURRED_REVALIDATION_INTERVAL_MS
+      : this.boostExpiresAt !== null
         ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
     const intervalMs =
-      this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
+      this.focused && this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
         ? Math.min(Math.max(0, this.earlyRevalidationAt - Date.now()), cadenceMs)
         : cadenceMs;
 

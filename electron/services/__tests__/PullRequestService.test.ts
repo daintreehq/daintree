@@ -2846,6 +2846,88 @@ describe("PullRequestService", () => {
     });
   });
 
+  describe("revalidation cadence while blurred (#17060)", () => {
+    const WINDOW_MS = 30 * 60 * 1000;
+
+    async function pollingService() {
+      mockForgeProviderResolved();
+      const { pullRequestService } = await import("../PullRequestService.js");
+      pullRequestService.initialize("/repo", "test-project-id");
+      const svc = pullRequestService as unknown as {
+        isPolling: boolean;
+        revalidateResolvedPRs: () => Promise<void>;
+        scheduleRevalidation: () => void;
+      };
+      svc.isPolling = true;
+      const revalidate = vi.spyOn(svc, "revalidateResolvedPRs").mockResolvedValue(undefined);
+      const ticksOver = async (ms: number) => {
+        revalidate.mockClear();
+        await vi.advanceTimersByTimeAsync(ms);
+        return revalidate.mock.calls.length;
+      };
+      return { pullRequestService, svc, ticksOver };
+    }
+
+    it("revalidates resolved PRs less often while no window has focus", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedTicks = await ticksOver(WINDOW_MS);
+
+      pullRequestService.setFocusCadence(false);
+      const blurredTicks = await ticksOver(WINDOW_MS);
+
+      expect(blurredTicks).toBeGreaterThan(0);
+      expect(blurredTicks).toBeLessThan(focusedTicks);
+
+      pullRequestService.destroy();
+    });
+
+    it("returns to the focused cadence as soon as focus comes back", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedTicks = await ticksOver(WINDOW_MS);
+
+      pullRequestService.setFocusCadence(false);
+      await ticksOver(60 * 1000);
+      pullRequestService.setFocusCadence(true);
+
+      expect(await ticksOver(WINDOW_MS)).toBe(focusedTicks);
+
+      pullRequestService.destroy();
+    });
+
+    it("holds a local push's early revalidation until focus comes back", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      const early = svc as unknown as { scheduleRevalidation: (delayMs?: number) => void };
+      pullRequestService.setFocusCadence(false);
+      svc.scheduleRevalidation();
+      await ticksOver(60 * 1000);
+
+      early.scheduleRevalidation(3 * 1000);
+      expect(await ticksOver(60 * 1000)).toBe(0);
+
+      pullRequestService.setFocusCadence(true);
+      expect(await ticksOver(0)).toBe(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("starts at the blurred cadence when polling starts while blurred", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedTicks = await ticksOver(WINDOW_MS);
+      pullRequestService.stop();
+
+      pullRequestService.setFocusCadence(false);
+      svc.isPolling = true;
+      svc.scheduleRevalidation();
+
+      expect(await ticksOver(WINDOW_MS)).toBeLessThan(focusedTicks);
+
+      pullRequestService.destroy();
+    });
+  });
+
   describe("CI enrichment gating (#10124)", () => {
     const ROLE_ENV = "DAINTREE_INSTANCE_ROLE";
 

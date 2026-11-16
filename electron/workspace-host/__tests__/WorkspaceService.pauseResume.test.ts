@@ -77,6 +77,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 
 const mockPullRequestService = {
   initialize: vi.fn(),
+  setForgeSettings: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
   reset: vi.fn(),
@@ -362,6 +363,28 @@ describe("WorkspaceService PR polling under the power policy (#17060)", () => {
 
     expect(mockPullRequestService.reset).toHaveBeenCalled();
     expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("a forge-settings change while nothing is on screen queries nothing until a window returns", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.updateForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: null,
+    });
+
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+  });
+
+  it("a wake refresh that finds nothing on screen leaves the PR catch-up to the poller", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    await service.refreshOnWake("req-wake-deep");
+
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
   });
 
   it("a credential sign-out while nothing is on screen does not start polling", () => {
