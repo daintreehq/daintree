@@ -182,6 +182,26 @@ describe("BulkWorktreeRunRegistry", () => {
     expect(isBulkWorktreeRunViewHeld(wc(OWNER))).toBe(false);
   });
 
+  it("keeps a run with a retry on its way through pruning and dismissal", () => {
+    registry.publish(
+      OWNER,
+      "proj-a",
+      snapshot("oldest", { phase: "done", items: [item(1, { stage: "failed" })] })
+    );
+    for (let i = 0; i < MAX_ENDED_BULK_RUNS - 1; i++) {
+      registry.publish(OTHER, "proj-b", snapshot(`ended-${i}`, { phase: "done" }));
+    }
+    expect(registry.command({ runId: "oldest", kind: "retry-failed" })).toEqual({
+      accepted: true,
+    });
+    expect(registry.dismiss("oldest")).toBe(false);
+
+    // Another run ending takes the cache past its cap before the retry reports.
+    registry.publish(OTHER, "proj-b", snapshot("newest", { phase: "done" }));
+    expect(registry.list().map((r) => r.runId)).toContain("oldest");
+    expect(isBulkWorktreeRunViewHeld(wc(OWNER))).toBe(true);
+  });
+
   it("settles a run whose view went away, keeping every worktree that landed", () => {
     registry.publish(
       OWNER,

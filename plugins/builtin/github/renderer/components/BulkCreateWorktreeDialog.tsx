@@ -98,7 +98,8 @@ export function BulkCreateWorktreeDialog({
   // A null viewer means two different things — still looking, and looked and
   // found nothing — and only the second one should read as a dead end.
   const [viewerResolved, setViewerResolved] = useState(false);
-  const viewerRef = useRef<{ login: string; avatarUrl?: string } | null>(null);
+  // Undefined until the lookup answers; null once it found no account.
+  const viewerRef = useRef<{ login: string; avatarUrl?: string } | null | undefined>(undefined);
   const currentUser = viewer?.login;
   const currentUserAvatar = viewer?.avatarUrl;
   const assignUnavailable = viewerResolved && !currentUser;
@@ -138,7 +139,7 @@ export function BulkCreateWorktreeDialog({
     // to nothing skips self-assignment (visible: the "assign to me" row goes
     // disabled and unchecked) rather than assigning the wrong account.
     setViewer(null);
-    viewerRef.current = null;
+    viewerRef.current = undefined;
     setViewerResolved(false);
     void forgeClient
       .getCurrentUser(projectPath)
@@ -301,8 +302,9 @@ export function BulkCreateWorktreeDialog({
 
   const processedCount = succeededCount + failedCount + stoppedCount;
   // A cancel can leave worktrees made but never set up, and they exist all the
-  // same: once cancelled, the count is of worktrees on disk.
-  const createdCount = isCancelled ? worktreesCreatedCount : succeededCount;
+  // same: once anything was stopped, the count is of worktrees on disk, through
+  // a retry of the failures too.
+  const createdCount = stoppedCount > 0 ? worktreesCreatedCount : succeededCount;
 
   useLayoutEffect(() => {
     if (!isOpen && acknowledgedRunIdRef.current) {
@@ -359,7 +361,8 @@ export function BulkCreateWorktreeDialog({
       plan: livePlan,
       recipeId: selectedRecipeId,
       recipe: selectedRecipe,
-      assignToSelf: assignWorktreeToSelf,
+      // What the form showed: an unavailable account is unchecked there.
+      assignToSelf: assignWorktreeToSelf && !assignUnavailable,
       getViewer: () => viewerRef.current,
       base: baseBranch,
       cloneTerminals,
@@ -372,6 +375,7 @@ export function BulkCreateWorktreeDialog({
     selectedRecipeId,
     selectedRecipe,
     assignWorktreeToSelf,
+    assignUnavailable,
     projectId,
     currentProject?.path,
     recipeSelectionTouchedRef,

@@ -178,6 +178,8 @@ export class BulkWorktreeRunRegistry {
     const record = this.runs.get(runId);
     if (!record) return false;
     if (record.snapshot.controllable && isBulkWorktreeRunLive(record.snapshot.phase)) return false;
+    // A retry on its way: the run is about to be live again.
+    if (record.holdTimer !== null) return false;
     this.releaseHold(record);
     this.runs.delete(runId);
     this.broadcast();
@@ -233,10 +235,14 @@ export class BulkWorktreeRunRegistry {
   }
 
   private pruneEnded(): void {
+    // A record still holding its view is live or has a retry on its way.
     const ended = [...this.runs.values()].filter(
-      (record) => !record.snapshot.controllable || !isBulkWorktreeRunLive(record.snapshot.phase)
+      (record) =>
+        record.holdTimer === null &&
+        (!record.snapshot.controllable || !isBulkWorktreeRunLive(record.snapshot.phase))
     );
     for (const record of ended.slice(0, Math.max(0, ended.length - MAX_ENDED_BULK_RUNS))) {
+      this.releaseHold(record);
       this.runs.delete(record.snapshot.runId);
     }
   }

@@ -403,6 +403,7 @@ describe("bulk create runner", () => {
     try {
       const bridge = installBridge();
       const creates = deferCreates();
+      const timersBefore = vi.getTimerCount();
       const { runId, done } = startBulkCreateRun(input([1]));
       await vi.advanceTimersByTimeAsync(0);
       const before = bridge.published.length;
@@ -418,9 +419,29 @@ describe("bulk create runner", () => {
       const afterEnd = bridge.published.length;
       await vi.advanceTimersByTimeAsync(BULK_RUN_HEARTBEAT_MS * 3);
       expect(bridge.published.length).toBe(afterEnd);
+      // The heartbeat itself is gone, not just idle.
+      expect(vi.getTimerCount()).toBe(timersBefore);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("skips assignment without looking again when the dialog's lookup found no account", async () => {
+    installBridge();
+    mockGetCurrentUser.mockResolvedValue({ login: "octocat" });
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+
+    const { runId, done } = startBulkCreateRun(
+      input([1], { assignToSelf: true, getViewer: () => null })
+    );
+    await done;
+
+    expect(mockGetCurrentUser).not.toHaveBeenCalled();
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(runOf(runId).progress.items.get(1)?.stage).toBe("succeeded");
   });
 
   it("looks up who to assign to itself when the dialog closed before its lookup landed", async () => {
@@ -433,7 +454,7 @@ describe("bulk create runner", () => {
     }));
 
     const { runId, done } = startBulkCreateRun(
-      input([1, 2], { assignToSelf: true, getViewer: () => null })
+      input([1, 2], { assignToSelf: true, getViewer: () => undefined })
     );
     await done;
 
@@ -445,13 +466,12 @@ describe("bulk create runner", () => {
     expect(runOf(runId).progress.items.get(2)?.stage).toBe("succeeded");
   });
 
-  it("relaunches failed recipe entries only against the recipe the first launch ran", async () => {
+  it("pins each item to the recipe its first launch ran, and relaunches only against that", async () => {
     installBridge();
-    recipesById.recipe = { id: "recipe", terminals: [{ type: "terminal" }, { type: "claude" }] };
-    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
-      worktreeId: `wt-${options.newBranch}`,
-      branch: options.newBranch,
-    }));
+    const first = { id: "recipe", terminals: [{ type: "terminal" }, { type: "claude" }] };
+    const edited = { id: "recipe", terminals: [{ type: "claude" }, { type: "terminal" }] };
+    recipesById.recipe = first;
+    const creates = deferCreates();
     mockRunRecipe.mockResolvedValueOnce({
       spawned: [{ index: 0, terminalId: "t-0" }],
       failed: [{ index: 1, error: "spawn refused" }],
@@ -459,23 +479,24 @@ describe("bulk create runner", () => {
     mockRunRecipe.mockResolvedValue({ spawned: [{ index: 1, terminalId: "t-1" }], failed: [] });
 
     const { runId, done } = startBulkCreateRun(
-      input([1], { recipeId: "recipe", recipe: recipesById.recipe as never })
+      input([1], { recipeId: "recipe", recipe: first as never })
     );
+    await flush();
+    // Edited while the worktree is still being made: the item runs the edit.
+    recipesById.recipe = edited;
+    creates.land(1);
     await done;
-    expect(mockRunRecipe.mock.calls[0]?.[4]).not.toHaveProperty("expectedRecipe");
+
+    const digestOf = (recipe: { terminals: unknown[] }) => ({
+      id: "recipe",
+      terminalsDigest: recipeApprovalDigest(recipe.terminals as RecipeTerminal[]),
+    });
+    expect(mockRunRecipe.mock.calls[0]?.[4]).toMatchObject({ expectedRecipe: digestOf(edited) });
 
     await retryFailedBulkCreateRun(runId);
-
-    const relaunch = mockRunRecipe.mock.calls[1]?.[4] as {
-      terminalIndices?: number[];
-      expectedRecipe?: { id: string; terminalsDigest: string };
-    };
-    expect(relaunch.terminalIndices).toEqual([1]);
-    expect(relaunch.expectedRecipe).toEqual({
-      id: "recipe",
-      terminalsDigest: recipeApprovalDigest(
-        (recipesById.recipe as { terminals: RecipeTerminal[] }).terminals
-      ),
+    expect(mockRunRecipe.mock.calls[1]?.[4]).toMatchObject({
+      terminalIndices: [1],
+      expectedRecipe: digestOf(edited),
     });
   });
 });

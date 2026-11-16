@@ -57,8 +57,12 @@ export interface BulkCreateRunInput {
   recipeId: string | null;
   recipe: TerminalRecipe | undefined;
   assignToSelf: boolean;
-  /** Read per item, so an identity that lands mid-run still assigns. */
-  getViewer: () => { login: string; avatarUrl?: string } | null;
+  /**
+   * Read per item, so an identity that lands mid-run still assigns. Null is a
+   * lookup that found no account, which skips assignment; undefined is one
+   * that hasn't answered, which the run then makes itself.
+   */
+  getViewer: () => { login: string; avatarUrl?: string } | null | undefined;
   /** The base issue branches are cut from. */
   base: { name: string; fromRemote: boolean } | null;
   /** The layout Clone was pressed with; null unless the recipe is Clone. */
@@ -91,6 +95,9 @@ interface BatchItemTracking {
   failedTerminalIndices: number[];
   // Once a launch has run, only failed entries launch again.
   terminalsLaunched: boolean;
+  // The recipe this item's first launch ran, by id and digest. Its indices
+  // mean those entries only, so every later launch must find the same recipe.
+  launchedRecipe?: { id: string; terminalsDigest: string };
 }
 
 function newTerminalTracking(): Pick<
@@ -197,8 +204,6 @@ interface RunRuntime {
   cancelRequested: boolean;
   /** Worktrees the current execution created, for what a cancel reports. */
   created: number;
-  /** The recipe the first launch ran, by id and digest, so a retry relaunching by index runs the same one. */
-  launchedRecipe: { id: string; terminalsDigest: string } | null;
   viewerLookup: Promise<{ login: string; avatarUrl?: string } | null> | null;
 }
 
@@ -380,18 +385,8 @@ export function startBulkCreateRun(input: BulkCreateRunInput): {
     queue: null,
     cancelRequested: false,
     created: 0,
-    launchedRecipe: null,
     viewerLookup: null,
   };
-  if (input.recipeId && input.recipeId !== CLONE_LAYOUT_ID) {
-    const recipe = useRecipeStore.getState().getRecipeById(input.recipeId);
-    if (recipe) {
-      rt.launchedRecipe = {
-        id: recipe.id,
-        terminalsDigest: recipeApprovalDigest(recipe.terminals),
-      };
-    }
-  }
   runtimes.set(runId, rt);
   useBulkCreateRunStore.setState((state) => ({ runs: { ...state.runs, [runId]: run } }));
   listenForCommands();
@@ -934,15 +929,26 @@ async function runBatch(
                 ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
                 : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
 
+            // Pinned in the same tick as the launch that resolves it, so the
+            // pin is the recipe this item actually ran; a relaunch by index
+            // after an edit is refused rather than starting other entries.
+            const pinTracked = tracking.get(itemNumber);
+            if (pinTracked && !pinTracked.launchedRecipe) {
+              const resolved = useRecipeStore.getState().getRecipeById(input.recipeId);
+              if (resolved) {
+                pinTracked.launchedRecipe = {
+                  id: resolved.id,
+                  terminalsDigest: recipeApprovalDigest(resolved.terminals),
+                };
+              }
+            }
             const results: RecipeSpawnResults = await useRecipeStore
               .getState()
               .runRecipeWithResults(input.recipeId, worktreePath, worktreeId, recipeContext, {
                 terminalIndices: pendingIndices,
                 spawnBatch: recipeSpawnBatches.get(itemNumber),
-                // Indices from an earlier launch only mean the same entries
-                // in the same recipe: an edit since refuses the relaunch.
-                ...(pendingIndices !== undefined && rt.launchedRecipe
-                  ? { expectedRecipe: rt.launchedRecipe }
+                ...(pinTracked?.launchedRecipe
+                  ? { expectedRecipe: pinTracked.launchedRecipe }
                   : {}),
               });
 
@@ -998,7 +1004,8 @@ async function runBatch(
           if (planned.mode === "issue" && input.assignToSelf && itemNumber) {
             // The dialog's lookup normally has the viewer by now; one closed
             // before its lookup landed leaves the run to look for itself.
-            const viewer = input.getViewer() ?? (await lookUpViewer(rt, rootPath));
+            const known = input.getViewer();
+            const viewer = known === undefined ? await lookUpViewer(rt, rootPath) : known;
             if (rt.generation !== gen) return;
             const username = viewer?.login;
             // Snap the avatar alongside the login before any async work so
