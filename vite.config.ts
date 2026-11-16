@@ -266,6 +266,8 @@ export default defineConfig(({ command, mode }) => {
                 // (slot/checkbox/switch) and the deferred overlay primitives.
                 // Splitting these out of `vendor-radix-overlay` prevents the
                 // eager `vendor-radix` chunk from pulling in the overlay chunk.
+                // `react-dismissable-layer` is here, not with the overlays,
+                // because `DialogDismissSurface` imports it on the boot path.
                 name: "vendor-radix-utils",
                 test: /node_modules[\\/]@radix-ui[\\/](primitive|react-compose-refs|react-context|react-presence|react-primitive|react-use-controllable-state|react-use-previous|react-use-size|react-use-callback-ref|react-use-layout-effect|react-use-escape-keydown|react-use-effect-event|react-use-rect|react-id|react-slot|react-dismissable-layer)[\\/]/,
                 priority: 14,

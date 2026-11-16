@@ -325,6 +325,11 @@ jobs:
       - name: Check default-disabled plugins stay lazy
         run: npm run check:vanilla-plugin-bundles
 
+      # And for the Radix overlays (#17028): menus, popovers, tooltips and
+      # selects load on first gesture, so none may ride in a startup chunk.
+      - name: Check Radix overlays stay deferred
+        run: npm run check:radix-overlay-bundles
+
       # Performance/size budgets (renderer bundle, first-render chunk, import
       # counts, compiler perf) are intentionally NOT run in CI during pre-1.0
       # development — premature gating just churns thresholds and blocks rapid

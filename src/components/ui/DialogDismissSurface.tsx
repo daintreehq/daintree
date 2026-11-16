@@ -25,7 +25,10 @@ import { useDismissableLayerSurface } from "@radix-ui/react-dismissable-layer";
  * The static Radix import is deliberate — `dismissable-layer` is a leaf module
  * (its only sizeable dependency, `react-slot`, is already eager via `button`),
  * and the hook has to be a stable function identity or the React Compiler bails
- * out of every component that reaches it.
+ * out of every component that reaches it. It stays cheap only because
+ * `vite.config.ts` groups the package into the eager `vendor-radix-utils`
+ * chunk: left in `vendor-radix-overlay`, this one edge would preload every
+ * deferred Radix overlay before first paint.
  */
 export function DialogDismissSurface({ node }: { node: HTMLDivElement | null }) {
   // Radix keys its registry off the node it is handed and drops it when this
