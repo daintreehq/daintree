@@ -148,8 +148,6 @@ body[data-performance-mode="true"] .surface-chrome {
 }
 
 body[data-performance-mode="true"] .surface-toolbar {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
   background-color: var(--color-surface-toolbar) !important;
 }
 
@@ -178,15 +176,25 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
  * and Radix Presence exits are untouched. Each glyph keeps its resting frame
  * and colour — the same static rendering reduced motion already uses. A window
  * that can still be seen never gets this; it gets the reduced rate below.
- * Transient loaders
- * (`animate-spin`, the gated skeleton pulses) are left alone: they end on
- * their own, and a frozen one would read as a hang. */
+ * Transient loaders stop as well. A loader ends on its own, but a view can sit
+ * hidden for the whole of a long wait, and nothing here can be caught frozen:
+ * the stop lifts before anyone sees the view again. */
 body[data-power-saving="true"] .animate-spin-slow,
+body[data-power-saving="true"] .animate-spin,
 body[data-power-saving="true"] .animate-activity-pulse,
 body[data-power-saving="true"] .animate-breathe,
 body[data-power-saving="true"] .animate-pulse,
 body[data-power-saving="true"] .motion-safe\:animate-pulse {
   animation: none;
+  will-change: auto;
+}
+
+/* The skeleton pulses pause rather than stop. Dropping a delayed bone's
+ * animation would replay its anti-flicker reveal when the view came back, so
+ * every bone already on screen would blink out for the length of the gate. */
+body[data-power-saving="true"] .animate-pulse-delayed,
+body[data-power-saving="true"] .animate-pulse-immediate {
+  animation-play-state: paused;
   will-change: auto;
 }
 
@@ -206,21 +214,38 @@ body[data-motion-rate="reduced"] .animate-spin-slow {
   animation-timing-function: steps(20, end);
 }
 
+/* Tailwind's spinner turns once a second, so twelve steps is 30 degrees a
+ * step, the coarsest that still reads as turning. */
+body[data-motion-rate="reduced"] .animate-spin {
+  animation-timing-function: steps(12, end);
+}
+
 body[data-motion-rate="reduced"] .animate-activity-pulse,
 body[data-motion-rate="reduced"] .animate-breathe,
 body[data-motion-rate="reduced"] .animate-pulse,
-body[data-motion-rate="reduced"] .motion-safe\:animate-pulse {
+body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
+body[data-motion-rate="reduced"] .animate-pulse-immediate {
   animation-timing-function: steps(2, end);
 }
 
+/* The delayed bone's first animation is its one-shot reveal, which keeps its
+ * ease; only the pulse after it steps. */
+body[data-motion-rate="reduced"] .animate-pulse-delayed {
+  animation-timing-function: ease-out, steps(2, end);
+}
+
 body[data-motion-rate="reduced"] .animate-skeleton-shimmer::after,
-body[data-motion-rate="reduced"] .pulse-skeleton-shimmer::after {
+body[data-motion-rate="reduced"] .pulse-skeleton-shimmer::after,
+body[data-motion-rate="reduced"] .forge-status-loading::after,
+body[data-motion-rate="reduced"] .palette-loading-bar__sweep {
   animation-timing-function: steps(8, end);
 }
 
-/* `animation: none` alone leaves the shimmer's gradient stripe parked mid-bone. */
+/* `animation: none` alone leaves a sweep's gradient stripe parked mid-track. */
 body[data-power-saving="true"] .animate-skeleton-shimmer::after,
-body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
+body[data-power-saving="true"] .pulse-skeleton-shimmer::after,
+body[data-power-saving="true"] .forge-status-loading::after,
+body[data-power-saving="true"] .palette-loading-bar__sweep {
   display: none;
   will-change: auto;
 }

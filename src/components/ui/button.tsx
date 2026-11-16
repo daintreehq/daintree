@@ -69,7 +69,9 @@ const buttonVariants = cva(
         link: "font-normal text-text-secondary underline underline-offset-2 hover:text-text-primary",
         subtle:
           "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
-        pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
+        // No backdrop blur: both fills are opaque panel surfaces, so a blur
+        // would cost an offscreen pass per pill and show nothing.
+        pill: "rounded-full bg-surface-panel ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
         // The text-grade danger ink: the graphical one fell under 4.5:1 on its
         // own hover wash. The focus ring stays the app's one focus colour.
         "ghost-danger": "text-status-danger-text hover:bg-status-error/10",
