@@ -67,6 +67,7 @@ export interface HostMetricsClientOptions {
     touch?(hostId: HostId): void;
     get(hostId: HostId): MetricsConnection | undefined;
     connectionState(hostId: HostId): HostConnectionState;
+    onStateChange(listener: (hostId: HostId, state: HostConnectionState) => void): () => void;
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
     /** This Shell launch, as every host it dials knows it. */
     readonly localClient?: { clientId: string; clientName: string };
@@ -76,10 +77,15 @@ export interface HostMetricsClientOptions {
     get(hostId: HostId): HostDescriptor | null;
     onChange(listener: () => void): () => void;
   };
-  /** This machine's own sampler; subscribed only while some other host exists. */
+  /** This machine's own sampler; subscribed only while something reads it beside another host. */
   localLoop: {
     subscribe(listener: (summary: HostMetricsSummary) => void): () => void;
   } | null;
+  /** Whether a view on this machine is showing host figures; none when absent. */
+  figuresDemand?: {
+    followed(): boolean;
+    onChange(listener: () => void): () => void;
+  };
   /** Push to every local view. */
   emit(event: HostMetricsEvent): void;
   /** Present an opted-in host's attention event in one view; false when no view took it. */
@@ -247,7 +253,9 @@ export class HostMetricsClient {
   start(): void {
     this.disposers.push(
       this.options.manager.onSessionOpened((hostId, session) => this.wire(hostId, session)),
-      this.options.registry.onChange(() => this.syncHosts())
+      this.options.registry.onChange(() => this.syncHosts()),
+      this.options.manager.onStateChange(() => this.syncLocalSampling()),
+      this.options.figuresDemand?.onChange(() => this.syncLocalSampling()) ?? (() => {})
     );
     this.syncHosts();
   }
@@ -650,17 +658,7 @@ export class HostMetricsClient {
         }
       }
     }
-    if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {
-      this.stopLocal = this.options.localLoop.subscribe((summary) => {
-        this.record(LOCAL_HOST_ID, summary);
-        // A project closed here fires no worktree event; the sample tick catches it.
-        this.localWorktrees?.poke();
-      });
-    } else if (hosts.length === 0 && this.stopLocal) {
-      this.stopLocal();
-      this.stopLocal = null;
-      this.rings.delete(LOCAL_HOST_ID);
-    }
+    this.syncLocalSampling();
     // A window showing another host lists this machine's worktrees too.
     const follow = this.options.local.onWorktreesMaybeChanged;
     if (hosts.length > 0 && !this.stopLocalWorktrees && follow) {
@@ -691,5 +689,37 @@ export class HostMetricsClient {
       this.stopLocalProjects();
       this.stopLocalProjects = null;
     }
+  }
+
+  /**
+   * This machine's own summary is read beside another host's: by a view
+   * showing host figures, and while a host is connected, by the sample tick
+   * that catches a project closed here for a window on that host. Saved hosts
+   * that are all disconnected leave it unsampled, as its reads are
+   * subprocesses every few seconds (#17027).
+   */
+  private syncLocalSampling(): void {
+    const wanted = this.localSummaryWanted();
+    if (wanted && !this.stopLocal && this.options.localLoop) {
+      this.stopLocal = this.options.localLoop.subscribe((summary) => {
+        this.record(LOCAL_HOST_ID, summary);
+        // A project closed here fires no worktree event; the sample tick catches it.
+        this.localWorktrees?.poke();
+      });
+    } else if (!wanted && this.stopLocal) {
+      this.stopLocal();
+      this.stopLocal = null;
+      // Not current once nothing updates it: the next reader waits for a fresh sample.
+      this.rings.delete(LOCAL_HOST_ID);
+    }
+  }
+
+  private localSummaryWanted(): boolean {
+    const hosts = this.options.registry.list().filter((host) => !isLocalHostId(host.id));
+    if (hosts.length === 0) return false;
+    if (this.options.figuresDemand?.followed() === true) return true;
+    return hosts.some(
+      (host) => this.options.manager.connectionState(host.id).status === "connected"
+    );
   }
 }

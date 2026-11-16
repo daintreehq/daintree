@@ -1,5 +1,9 @@
-import { defineIpcNamespace, op } from "../define.js";
+import { z } from "zod";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
+import type { IpcContext } from "../types.js";
 import { getRemoteService, requireRemoteService } from "../../remote/runtime.js";
+import { setHostFiguresFollowed } from "../../services/hostFiguresDemand.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { HOST_METRICS_METHOD_CHANNELS } from "./hostMetrics.preload.js";
 import type {
   HostFleetSubmitPayload,
@@ -9,6 +13,43 @@ import type {
   HostProcessInventoryResult,
   HostWorktreeEntry,
 } from "../../../shared/types/ipc/hostMetrics.js";
+
+const setFollowingSchema = z.object({ following: z.boolean() }).strict();
+
+/** Each following view's watch for going away without saying so, by WebContents id. */
+const followers = new Map<number, () => void>();
+
+function stopFollowing(webContentsId: number): void {
+  const unwatch = followers.get(webContentsId);
+  if (!unwatch) return;
+  followers.delete(webContentsId);
+  unwatch();
+  setHostFiguresFollowed(webContentsId, false);
+}
+
+/**
+ * A view that reloads, crashes or closes never sends its release, so its
+ * demand goes with it here.
+ */
+function startFollowing(ctx: IpcContext): void {
+  const sender = ctx.event?.sender;
+  // Figures are this machine's; only its own views follow them.
+  if (!sender || followers.has(sender.id)) return;
+  const id = sender.id;
+  const onNavigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) stopFollowing(id);
+  };
+  const onGone = () => stopFollowing(id);
+  sender.on("did-start-navigation", onNavigate);
+  sender.on("render-process-gone", onGone);
+  const unwatchDestroyed = onWebContentsDestroyed(sender, onGone);
+  followers.set(id, () => {
+    sender.removeListener("did-start-navigation", onNavigate);
+    sender.removeListener("render-process-gone", onGone);
+    unwatchDestroyed();
+  });
+  setHostFiguresFollowed(id, true);
+}
 
 export const hostMetricsNamespace = defineIpcNamespace({
   name: "hostMetrics",
@@ -43,9 +84,23 @@ export const hostMetricsNamespace = defineIpcNamespace({
       async (payload: { hostId: string }): Promise<HostProcessInventoryResult> =>
         requireRemoteService("hostMetrics").processInventory(payload)
     ),
+    /** Whether this view shows host figures now, so this machine samples itself only while one does. */
+    setFollowing: opValidated(
+      HOST_METRICS_METHOD_CHANNELS.setFollowing,
+      setFollowingSchema,
+      async (ctx: IpcContext, payload: { following: boolean }): Promise<void> => {
+        if (payload.following) startFollowing(ctx);
+        else if (ctx.event?.sender) stopFollowing(ctx.event.sender.id);
+      },
+      { withContext: true }
+    ),
   },
 });
 
 export function registerHostMetricsHandlers(): () => void {
-  return hostMetricsNamespace.register();
+  const unregister = hostMetricsNamespace.register();
+  return () => {
+    unregister();
+    for (const webContentsId of [...followers.keys()]) stopFollowing(webContentsId);
+  };
 }

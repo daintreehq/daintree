@@ -32,9 +32,12 @@ const logger = createLogger("main:HostModeService");
 
 declare module "../runtime.js" {
   interface RemoteServices {
-    hostMode: HostModeService;
+    hostMode: HostMode;
   }
 }
+
+/** What core code reaches through the registry: the service itself, or the stand-in that loads it. */
+export type HostMode = Pick<HostModeService, keyof HostModeService>;
 
 export interface HostModeSettings {
   enabled: boolean;

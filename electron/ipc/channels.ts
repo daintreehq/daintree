@@ -1833,6 +1833,7 @@ export const CHANNELS = {
   HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
   HOST_METRICS_LINK_ACTIVITY: "host-metrics:link-activity",
   HOST_METRICS_PROCESS_INVENTORY: "host-metrics:process-inventory",
+  HOST_METRICS_SET_FOLLOWING: "host-metrics:set-following",
   HOST_METRICS_EVENT: "host-metrics:event",
 
   // Remote Hosts: canopyHost (shell).

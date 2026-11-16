@@ -2517,6 +2517,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostProcessInventoryResult;
   };
+  "host-metrics:set-following": {
+    args: [payload: { following: boolean }];
+    result: void;
+  };
   "host-metrics:submit-fleet": {
     args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
     result: void;

@@ -603,6 +603,7 @@ export const CHANNEL_LOCALITY = {
   "host-metrics:list-fleet-targets": "shell",
   "host-metrics:link-activity": "shell",
   "host-metrics:process-inventory": "shell",
+  "host-metrics:set-following": "shell",
   "host-metrics:list-worktrees": "shell",
   "host-metrics:submit-fleet": "shell",
   "host-mode:event": "shell",
