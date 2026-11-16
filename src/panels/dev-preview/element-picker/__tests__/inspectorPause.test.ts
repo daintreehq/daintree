@@ -200,8 +200,8 @@ describe("Element Picker pausing out of sight (#17067)", () => {
 
     void controller!.connect();
     finishFirst();
-    await Promise.resolve();
-    await Promise.resolve();
+    // A whole task: any flush that stopped waiting with the first bind is done.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(flushed).toBe(false);
 
     finishSecond();
