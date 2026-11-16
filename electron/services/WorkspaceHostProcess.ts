@@ -299,9 +299,10 @@ export class WorkspaceHostProcess extends EventEmitter {
   attachWorktreePort(port: MessagePortMain, portId: number): boolean {
     if (!this.child || this.isDisposed) return false;
     try {
-      this.child.postMessage({ type: "attach-worktree-port", portId } satisfies WorkspaceHostRequest, [
-        port,
-      ]);
+      this.child.postMessage(
+        { type: "attach-worktree-port", portId } satisfies WorkspaceHostRequest,
+        [port]
+      );
       return true;
     } catch (error) {
       console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach worktree port:`, error);
@@ -317,7 +318,10 @@ export class WorkspaceHostProcess extends EventEmitter {
   detachWorktreePort(portId: number): void {
     if (!this.child || this.isDisposed) return;
     try {
-      this.child.postMessage({ type: "detach-worktree-port", portId } satisfies WorkspaceHostRequest);
+      this.child.postMessage({
+        type: "detach-worktree-port",
+        portId,
+      } satisfies WorkspaceHostRequest);
     } catch (error) {
       console.error(`[WorkspaceHost:${this.serviceName}] Failed to detach worktree port:`, error);
     }
