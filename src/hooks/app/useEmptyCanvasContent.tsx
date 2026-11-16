@@ -3,7 +3,7 @@ import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStarted
 import { isAwaitingClone, isGitBackedProject } from "@shared/types";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
-import { ContentGridEmptyState } from "@/components/Terminal/ContentGridEmptyState";
+import { ContentGridEmptyStateGate } from "@/components/Terminal/ContentGridEmptyStateGate";
 import { resolveEmptyCanvas } from "@/components/Terminal/emptyCanvas";
 import { LazyProjectCloneView, LazyWelcomeScreen } from "@/lazyPanels";
 import { ProjectSurfaceView, useProjectSurface } from "@/components/Plugin/ProjectSurfaceView";
@@ -67,7 +67,7 @@ export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistSta
     if (currentProject && !isGitBackedProject(currentProject)) {
       return {
         emptyContent: (
-          <ContentGridEmptyState
+          <ContentGridEmptyStateGate
             hasLaunchTarget
             hasProjectContext
             hasWorktrees={false}
@@ -88,7 +88,7 @@ export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistSta
   if (canvas.kind === "scratch") {
     return {
       emptyContent: (
-        <ContentGridEmptyState
+        <ContentGridEmptyStateGate
           hasLaunchTarget
           hasProjectContext={false}
           hasWorktrees={false}

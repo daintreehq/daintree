@@ -11,11 +11,11 @@ const LazyDiagnosticsDock = lazy(() =>
 );
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal";
-import { FleetArmingRibbon } from "@/components/Fleet";
+import { FleetArmingRibbonGate } from "@/components/Fleet/FleetArmingRibbonGate";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
-import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
+import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGate";
 import { ProjectDialogHost } from "./ProjectDialogHost";
 import { ChordIndicator } from "./ChordIndicator";
 
@@ -1001,7 +1001,7 @@ export function AppLayout({
           agentAvailability={agentAvailability}
           projectSwitcherPalette={projectSwitcherPalette}
         />
-        <FleetArmingRibbon />
+        <FleetArmingRibbonGate />
       </div>
       <TerminalDestructiveActionConfirmDialog />
       <PluginPanelReloadConfirmDialog />
@@ -1011,7 +1011,7 @@ export function AppLayout({
           <LazyMoveOrRenameProjectDialog />
         </Suspense>
       )}
-      <ImportConfigDialog />
+      <ImportConfigDialogGate />
       {/* Not under the sidebar: these open from actions, the palette and
           keybindings too, so they must answer whatever the sidebar shows. */}
       {hasWorkspace && isHydrated && <ProjectDialogHost />}

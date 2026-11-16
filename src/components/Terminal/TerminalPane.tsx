@@ -29,9 +29,8 @@ import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { canPanelTakeFind } from "@/lib/findInPanel";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
-import { ArtifactOverlay } from "./ArtifactOverlay";
-
-import { TerminalSearchBar } from "./TerminalSearchBar";
+import { ArtifactOverlayGate } from "./ArtifactOverlayGate";
+import { LazyTerminalSearchBar } from "./LazyTerminalSearchBar";
 import { focusPaneSearchInput } from "./paneSearchFocus";
 import { targetOwnsCopy } from "./terminalCopyKey";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
@@ -67,7 +66,7 @@ import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
-import { UpdateCwdDialog } from "./UpdateCwdDialog";
+import { UpdateCwdDialogGate } from "./UpdateCwdDialogGate";
 import { CompactErrorList } from "../Errors/CompactErrorList";
 import { TerminalScratchpad } from "./TerminalScratchpad";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
@@ -2044,9 +2043,9 @@ function TerminalPaneComponent({
                       hasBottomBar={showHybridInputBar}
                     />
                   </Suspense>
-                  <ArtifactOverlay key={id} terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+                  <ArtifactOverlayGate key={id} terminalId={id} worktreeId={worktreeId} cwd={cwd} />
                   {isSearchOpen && (
-                    <TerminalSearchBar
+                    <LazyTerminalSearchBar
                       terminalId={id}
                       onClose={() => {
                         setIsSearchOpen(false);
@@ -2142,7 +2141,7 @@ function TerminalPaneComponent({
         <TerminalScratchpad key={id} terminalId={id} />
       </div>
 
-      <UpdateCwdDialog
+      <UpdateCwdDialogGate
         key={id}
         isOpen={isUpdateCwdOpen}
         terminalId={id}

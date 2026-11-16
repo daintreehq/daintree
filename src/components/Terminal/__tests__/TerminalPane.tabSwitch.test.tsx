@@ -72,6 +72,8 @@ vi.mock("../MissingCliGate", () => ({
 
 import { TerminalPane } from "../TerminalPane";
 import { usePanelStore } from "@/store/panelStore";
+import { __test_resetArtifactStore, __test_seedArtifactStore } from "@/hooks/useArtifacts";
+import type { Artifact } from "@shared/types";
 
 // The pane's hooks subscribe across many IPC namespaces on mount; none of them
 // bears on what a tab switch resets, so every call is inert: a subscription
@@ -129,6 +131,7 @@ describe("TerminalPane reused across a tab group's tabs (#16878)", () => {
 
   afterEach(() => {
     cleanup();
+    __test_resetArtifactStore();
     vi.unstubAllGlobals();
   });
 
@@ -137,7 +140,7 @@ describe("TerminalPane reused across a tab group's tabs (#16878)", () => {
     await act(async () => {
       window.dispatchEvent(new Event("daintree:find-in-panel"));
     });
-    expect(screen.getByTestId("search-bar").textContent).toBe("a");
+    expect((await screen.findByTestId("search-bar")).textContent).toBe("a");
 
     view.rerender(<Pane id="b" />);
     expect(screen.queryByTestId("search-bar")).toBeNull();
@@ -159,9 +162,13 @@ describe("TerminalPane reused across a tab group's tabs (#16878)", () => {
     expect(mounts.panel).toBe(1);
   });
 
-  it("starts the next tab's artifact overlay fresh", () => {
+  it("starts the next tab's artifact overlay fresh", async () => {
+    // The overlay only loads for a terminal that has collected an artifact.
+    for (const id of ["a", "b"]) {
+      __test_seedArtifactStore(id, [{ id: `${id}-1`, content: "x" } as Artifact]);
+    }
     const view = render(<Pane id="a" />);
-    fireEvent.click(screen.getByTestId("artifacts"));
+    fireEvent.click(await screen.findByTestId("artifacts"));
     expect(screen.getByTestId("artifacts").textContent).toBe("a:on");
 
     view.rerender(<Pane id="b" />);

@@ -1,4 +1,5 @@
 import { lazy, useEffect, useState, type ComponentType } from "react";
+import { logError } from "@/utils/logger";
 
 /**
  * `React.lazy` that renders synchronously once its chunk has been preloaded.
@@ -91,6 +92,36 @@ export function usePreloadedComponent(component: PreloadTarget): PreloadStatus {
     };
   }, [component, loading]);
   return status;
+}
+
+/**
+ * A component whose chunk loads when it first mounts and that draws nothing
+ * until it has, for UI a host mounts only once its state is active: a ribbon
+ * for armed panes, a dialog someone asked for, an empty canvas.
+ *
+ * Not through Suspense, whose fallback would hold the first reveal back for
+ * React's 300ms throttle. A chunk that fails to load draws nothing and is
+ * logged, since nothing on screen says so; the next mount tries again.
+ */
+export function lazyWhenLoaded<M, P extends object>(
+  load: () => Promise<M>,
+  pick: (mod: M) => ComponentType<P>
+): PreloadableComponent<P, M> {
+  const Preloadable = lazyWithPreload(load, pick);
+
+  function WhenLoaded(props: P) {
+    const status = usePreloadedComponent(Preloadable);
+    const failure = status.status === "failed" ? status : null;
+    useEffect(() => {
+      if (failure !== null) logError("Deferred component failed to load", failure.error);
+    }, [failure]);
+    return status.status === "ready" ? <Preloadable {...props} /> : null;
+  }
+
+  return Object.assign(WhenLoaded, {
+    preload: Preloadable.preload,
+    isLoaded: Preloadable.isLoaded,
+  });
 }
 
 interface PreloadTarget {

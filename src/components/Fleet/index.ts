@@ -1,4 +1,4 @@
-export { FleetArmingRibbon } from "./FleetArmingRibbon";
+export { FleetArmingRibbonGate } from "./FleetArmingRibbonGate";
 export { FleetPickerPalette } from "./FleetPickerPalette";
 export {
   buildFleetTargetPreviews,

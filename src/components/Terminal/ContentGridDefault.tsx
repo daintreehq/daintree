@@ -25,7 +25,7 @@ import { GridShell } from "./GridShell";
 import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
-import { ContentGridEmptyState } from "./ContentGridEmptyState";
+import { ContentGridEmptyStateGate } from "./ContentGridEmptyStateGate";
 import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
 import { DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { ProjectSurfaceFrame } from "@/components/Plugin/ProjectSurfaceFrame";
@@ -297,7 +297,7 @@ export function ContentGridDefault({
                       surfaceActions={<SurfacePaletteAction />}
                     >
                       {ctx.emptyContent ?? (
-                        <ContentGridEmptyState
+                        <ContentGridEmptyStateGate
                           hasLaunchTarget={ctx.hasActiveWorktree}
                           hasProjectContext={ctx.projectName !== null}
                           hasWorktrees={ctx.hasWorktrees}

@@ -49,7 +49,6 @@ vi.stubGlobal(
 );
 
 import { ImportConfigDialog } from "../ImportConfigDialog";
-import { IMPORT_CONFIG_EVENT } from "../importConfigEvent";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -128,15 +127,30 @@ afterEach(() => {
 
 async function open(preview: ConfigBundlePreview) {
   previewImport.mockResolvedValue(preview);
-  render(<ImportConfigDialog />);
+  // ImportConfigDialogGate turns each import event into a request (its own suite).
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
+    render(<ImportConfigDialog request={1} />);
   });
 }
 
 const bodyText = () => document.body.textContent ?? "";
 
 describe("ImportConfigDialog", () => {
+  it("starts one import per request, not per render", async () => {
+    previewImport.mockResolvedValue(REPLACING);
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<ImportConfigDialog request={1} />);
+    });
+    expect(previewImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => view.rerender(<ImportConfigDialog request={1} />));
+    expect(previewImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => view.rerender(<ImportConfigDialog request={2} />));
+    expect(previewImport).toHaveBeenCalledTimes(2);
+  });
+
   it("names what it replaces, not only how many", async () => {
     await open(REPLACING);
 

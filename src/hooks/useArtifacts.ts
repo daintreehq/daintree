@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import { isElectronAvailable } from "./useElectron";
 import type {
   Artifact,
@@ -33,6 +33,29 @@ const removedTerminals = new Set<string>();
 
 function notifyListeners(terminalId: string, artifacts: Artifact[]) {
   listeners.forEach((listener) => listener(terminalId, artifacts));
+}
+
+/**
+ * Holds the shared `onDetected` IPC subscription for one mounted owner and
+ * returns its release; the last release drops the subscription.
+ */
+function acquireDetection(): () => void {
+  refState.count++;
+
+  if (refState.count === 1 && !refState.unsubscribe) {
+    refState.unsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
+      appendArtifacts(payload.terminalId, payload.artifacts);
+    });
+  }
+
+  return () => {
+    refState.count--;
+
+    if (refState.count === 0 && refState.unsubscribe) {
+      refState.unsubscribe();
+      refState.unsubscribe = null;
+    }
+  };
 }
 
 /**
@@ -171,6 +194,39 @@ export function orderPatchesForApply(patches: Artifact[]): Artifact[] {
   return sortArtifacts(patches, "extraction");
 }
 
+/**
+ * Whether a terminal has artifacts, for a pane that loads the artifact overlay
+ * only once one arrives. It owns detection and clears the terminal's teardown
+ * tombstone exactly as `useArtifacts` does, so a terminal with no overlay yet
+ * still collects its first batch.
+ */
+export function useHasArtifacts(terminalId: string): boolean {
+  useEffect(() => {
+    if (!isElectronAvailable()) return;
+    return acquireDetection();
+  }, []);
+
+  useEffect(() => {
+    // Same re-spawn rule as `useArtifacts` (#10023).
+    removedTerminals.delete(terminalId);
+  }, [terminalId]);
+
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const listener = (tid: string) => {
+        if (tid === terminalId) onChange();
+      };
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    [terminalId]
+  );
+
+  return useSyncExternalStore(subscribe, () => (artifactStore.get(terminalId)?.length ?? 0) > 0);
+}
+
 export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: string) {
   const [artifacts, setArtifacts] = useState<Artifact[]>(() => artifactStore.get(terminalId) || []);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -178,23 +234,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
   useEffect(() => {
     if (!isElectronAvailable()) return;
-
-    refState.count++;
-
-    if (refState.count === 1 && !refState.unsubscribe) {
-      refState.unsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
-        appendArtifacts(payload.terminalId, payload.artifacts);
-      });
-    }
-
-    return () => {
-      refState.count--;
-
-      if (refState.count === 0 && refState.unsubscribe) {
-        refState.unsubscribe();
-        refState.unsubscribe = null;
-      }
-    };
+    return acquireDetection();
   }, []);
 
   useEffect(() => {
