@@ -25,6 +25,7 @@ import {
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
+import { releaseHeldSends } from "./frozenViewDelivery.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
 import { isBulkWorktreeRunViewHeld } from "../services/BulkWorktreeRunRegistry.js";
@@ -361,6 +362,9 @@ export function activateView(
 
   if (!entry.view.webContents.isDestroyed()) {
     unregisterCachedViewWebContents(entry.view.webContents.id);
+    // Sends no longer wait on a thaw once the view is active, so what waited
+    // goes now, ahead of everything this activation sends (#17038).
+    releaseHeldSends(entry.view.webContents);
   }
 
   // Defensive unfreeze: efficiency transitions and view activations are

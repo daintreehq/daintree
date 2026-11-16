@@ -389,6 +389,11 @@ export type PtyHostRequest =
   // `windowProjectMap` holds one active project per window and says nothing
   // about the views behind it. Main owns the answer and pushes it on change.
   | { type: "set-fallback-eligible-projects"; projectIds: string[] }
+  // Projects whose every view may be CDP-frozen (#17038). Such a renderer
+  // drains no IPC until it thaws, so output copied to it while no window shows
+  // the project only piles up for the warm paint gate. Main owns the freeze
+  // and pushes the whole set on change.
+  | { type: "set-frozen-view-projects"; projectIds: string[] }
   // The drive leases a remote client is party to. Input and resizes from any
   // port other than the holder's are dropped for their terminals. Main owns
   // the lease and replaces the whole table on change.

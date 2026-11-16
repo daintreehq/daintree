@@ -37,13 +37,14 @@ vi.mock("../../utils.js", () => ({
   broadcastToRenderer: vi.fn(),
   sendToRenderer: vi.fn(),
   // Registering the CRUD handlers starts real `ProjectStatsService` and
-  // `FleetSnapshotService` pollers whose compute broadcasts through this.
-  // Omitting it is what produced the CI red: the poller tick rejected with
-  // "No 'typedBroadcast' export is defined on the mock", and because that
-  // rejection only lands if the tick fires before teardown, it surfaced on a
-  // loaded runner and not locally. The disposer below stops the pollers; this
+  // `FleetSnapshotService` pollers whose compute broadcasts through
+  // `typedBroadcastLatestWins`. Omitting it is what produced the CI red: the
+  // poller tick rejected with "No export is defined on the mock", and because
+  // that rejection only lands if the tick fires before teardown, it surfaced on
+  // a loaded runner and not locally. The disposer below stops the pollers; this
   // stub keeps a tick that fires mid-test inside the unit boundary.
   typedBroadcast: vi.fn(),
+  typedBroadcastLatestWins: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)

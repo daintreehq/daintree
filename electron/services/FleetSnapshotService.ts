@@ -1,5 +1,6 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { typedBroadcast } from "../ipc/utils.js";
+import { typedBroadcastLatestWins } from "../ipc/utils.js";
+import { sendLatestWins } from "../window/frozenViewDelivery.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
@@ -180,11 +181,12 @@ export class FleetSnapshotService {
   pushSnapshotTo(webContents: Electron.WebContents): void {
     if (webContents.isDestroyed()) return;
     if (this.lastBroadcast === null) return;
-    try {
-      webContents.send(CHANNELS.FLEET_SNAPSHOT_UPDATED, this.lastBroadcast);
-    } catch {
-      // Silently ignore send failures during window initialization/disposal.
-    }
+    sendLatestWins(
+      webContents,
+      CHANNELS.FLEET_SNAPSHOT_UPDATED,
+      CHANNELS.FLEET_SNAPSHOT_UPDATED,
+      this.lastBroadcast
+    );
   }
 
   /** {@link pushSnapshotTo} for a view attached over a link. */
@@ -537,7 +539,8 @@ export class FleetSnapshotService {
 
   private publish(snapshot: FleetSnapshot): void {
     this.lastBroadcast = snapshot;
-    typedBroadcast<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
+    // A whole fleet each time, so a frozen view needs only the newest (#17038).
+    typedBroadcastLatestWins<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
     // Snapshot the set so a listener that unsubscribes mid-delivery can't skip
     // a sibling, and isolate each one: a throwing listener must not be able to
     // turn a healthy read into the degraded path in `computeOnce`'s catch.

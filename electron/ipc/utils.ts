@@ -12,6 +12,7 @@ import {
   isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
 import { isProjectlessAppView } from "../window/projectlessViews.js";
+import { isFrozenCachedView, sendLatestWins } from "../window/frozenViewDelivery.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { isViewHydrated } from "../window/viewHydration.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
@@ -693,6 +694,10 @@ function deliverToLocalProjectViews(
  * since those used to reach every renderer and still must reach some. Every
  * view gets a payload each call, even an empty one, so per-batch consumers keep
  * their cadence. With no live project views, every renderer gets the whole batch.
+ *
+ * A frozen cached view gets nothing: it can't run a per-batch consumer, and
+ * every sample queued for it would run at once on thaw, inside the warm paint
+ * gate, only for the next batch to supersede them (#17038).
  */
 export function broadcastSlicedToProjectRenderers<T>(
   channel: string,
@@ -734,6 +739,7 @@ export function broadcastSlicedToProjectRenderers<T>(
     const whole = [wrap(entries)];
     for (const wc of getAllAppWebContents()) {
       if (wc.isDestroyed() || isWithheldFromView(wc.id, channel, whole)) continue;
+      if (isFrozenCachedView(wc)) continue;
       try {
         wc.send(channel, ...whole);
       } catch {
@@ -742,6 +748,7 @@ export function broadcastSlicedToProjectRenderers<T>(
     }
   } else {
     for (const { webContents, projectId } of views) {
+      if (isFrozenCachedView(webContents)) continue;
       const payload = payloadFor(projectId);
       if (isWithheldFromView(webContents.id, channel, [payload])) continue;
       try {
@@ -1234,6 +1241,38 @@ export function typedBroadcastExcept<K extends keyof IpcEventMap>(
   payload: IpcEventMap[K]
 ): void {
   broadcastToRendererExcept(skip, channel as string, payload);
+}
+
+/**
+ * {@link typedBroadcast} for a full-state snapshot that replaces the
+ * renderer's copy outright. A frozen cached view keeps only the newest one and
+ * gets it on thaw or activation, rather than queueing every intermediate one
+ * (#17038). Never for a delta: dropping one would lose it.
+ */
+export function typedBroadcastLatestWins<K extends keyof IpcEventMap>(
+  channel: K,
+  payload: IpcEventMap[K]
+): void {
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed()) continue;
+    if (isWithheldFromView(wc.id, channel as string, [payload])) continue;
+    sendLatestWins(wc, channel as string, channel as string, payload);
+  }
+  broadcastToRemoteEndpoints(channel as string, [payload]);
+}
+
+/**
+ * {@link sendToWebContents} for a full-state snapshot, held as
+ * {@link typedBroadcastLatestWins} holds it while the view is frozen.
+ */
+export function sendLatestWinsToWebContents(
+  webContents: WebContents | null | undefined,
+  channel: string,
+  payload: unknown
+): void {
+  if (!webContents || webContents.isDestroyed()) return;
+  if (isWithheldFromView(webContents.id, channel, [payload])) return;
+  sendLatestWins(webContents, channel, channel, payload);
 }
 
 /**

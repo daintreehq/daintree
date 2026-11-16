@@ -56,8 +56,8 @@ const helpSessionMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
-  typedBroadcast: broadcastMock,
-  sendToWebContents: sendToWebContentsMock,
+  typedBroadcastLatestWins: broadcastMock,
+  sendLatestWinsToWebContents: sendToWebContentsMock,
 }));
 
 vi.mock("../events.js", () => ({ events: eventEmitter }));

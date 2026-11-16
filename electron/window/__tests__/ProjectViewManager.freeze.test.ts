@@ -117,6 +117,20 @@ vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: { getProjectById: vi.fn(() => null) },
 }));
 
+// Holding for a frozen view is frozenViewDelivery.test.ts's subject; here every
+// latest-wins push is a plain send, as it is to a view that isn't frozen.
+vi.mock("../frozenViewDelivery.js", () => ({
+  sendLatestWins: (
+    wc: { isDestroyed: () => boolean; send: (channel: string, ...args: unknown[]) => void },
+    _key: string,
+    channel: string,
+    ...args: unknown[]
+  ) => {
+    if (!wc.isDestroyed()) wc.send(channel, ...args);
+  },
+  releaseHeldSends: vi.fn(),
+}));
+
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(false),
   readJsHeapUsedBytes: vi.fn().mockResolvedValue(null),
@@ -139,6 +153,7 @@ import {
   registerCachedViewWebContents,
   unregisterCachedViewWebContents,
 } from "../webContentsRegistry.js";
+import { releaseHeldSends } from "../frozenViewDelivery.js";
 import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
@@ -1581,6 +1596,20 @@ describe("ProjectViewManager — background resize forwarding", () => {
     const sends = backgroundResizeSends(initialWc);
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toEqual({ width: 1280, height: 800 });
+  });
+
+  it("hands a returning view what was held for it once its cached mark is gone (#17038)", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.mocked(releaseHeldSends).mockClear();
+    vi.mocked(unregisterCachedViewWebContents).mockClear();
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    expect(releaseHeldSends).toHaveBeenCalledWith(initialWc);
+    expect(unregisterCachedViewWebContents).toHaveBeenCalledWith(initialWc.id);
+    expect(vi.mocked(unregisterCachedViewWebContents).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(releaseHeldSends).mock.invocationCallOrder[0]!
+    );
   });
 
   it("skips destroyed webContents without throwing", async () => {

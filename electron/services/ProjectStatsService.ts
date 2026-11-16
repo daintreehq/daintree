@@ -1,5 +1,5 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { sendToWebContents, typedBroadcast } from "../ipc/utils.js";
+import { sendLatestWinsToWebContents, typedBroadcastLatestWins } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
@@ -157,7 +157,7 @@ export class ProjectStatsService {
    */
   pushSnapshotTo(webContents: Electron.WebContents): void {
     if (Object.keys(this.lastBroadcast).length === 0) return;
-    sendToWebContents(webContents, CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
+    sendLatestWinsToWebContents(webContents, CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
   }
 
   /** {@link pushSnapshotTo} for a view attached over a link. */
@@ -350,7 +350,7 @@ export class ProjectStatsService {
         // (shallowEqual would otherwise suppress it).
         this.lastBroadcast = {};
         this.acknowledgeableCompletionAt = new Map();
-        typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
+        typedBroadcastLatestWins<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
         return;
       }
 
@@ -466,7 +466,11 @@ export class ProjectStatsService {
       this.acknowledgeableCompletionAt = acknowledgeable;
       if (!this.shallowEqual(statusMap, this.lastBroadcast)) {
         this.lastBroadcast = statusMap;
-        typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);
+        // The whole map each time, so a frozen view needs only the newest (#17038).
+        typedBroadcastLatestWins<"project:stats-updated">(
+          CHANNELS.PROJECT_STATS_UPDATED,
+          statusMap
+        );
       }
     } catch (error) {
       console.error("[ProjectStatsService] Failed to compute stats:", error);

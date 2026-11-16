@@ -22,6 +22,7 @@ import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
+import { sendLatestWins } from "./frozenViewDelivery.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { AgentState } from "../../shared/types/agent.js";
 import type { CachedViewReleaseBlock } from "../../shared/types/appError.js";
@@ -1765,9 +1766,13 @@ export class ProjectViewManager {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
       if (entry.state !== "cached") continue;
-      const wc = entry.view.webContents;
-      if (wc.isDestroyed()) continue;
-      wc.send(CHANNELS.PROJECT_BACKGROUND_RESIZE, { width, height });
+      // Only the settled size matters to a frozen view, not every one it missed.
+      sendLatestWins(
+        entry.view.webContents,
+        CHANNELS.PROJECT_BACKGROUND_RESIZE,
+        CHANNELS.PROJECT_BACKGROUND_RESIZE,
+        { width, height }
+      );
     }
   }
 

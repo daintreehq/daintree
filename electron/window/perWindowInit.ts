@@ -11,6 +11,7 @@ import {
 } from "./webContentsRegistry.js";
 import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
+import { startFrozenViewProjectsPublisher } from "./frozenViewProjects.js";
 import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
@@ -435,6 +436,11 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   // real value arrives as views register and broker their ports.
   setFallbackEligibleProjectsListener((projectIds) => {
     ptyClient?.setFallbackEligibleProjects(projectIds);
+  });
+  // Likewise the projects whose views are all frozen (#17038), so the host
+  // stops copying output a hidden project's views could not read.
+  startFrozenViewProjectsPublisher((projectIds) => {
+    ptyClient?.setFrozenViewProjects(projectIds);
   });
 
   // A window whose port the host tore down has no reachable view any more,

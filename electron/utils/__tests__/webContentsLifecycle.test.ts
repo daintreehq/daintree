@@ -9,6 +9,7 @@ import {
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
   isWebContentsFrozen,
+  onFrozenStateChange,
 } from "../webContentsLifecycle.js";
 
 interface MockDebugger {
@@ -477,6 +478,91 @@ describe("webContentsLifecycle", () => {
       const thawing = unfreezeWebContents(asWc(wc));
       await Promise.all([freezing, thawing]);
       expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+    });
+
+    describe("onFrozenStateChange (#17038)", () => {
+      function record() {
+        const seen: Array<[MockWebContents, boolean]> = [];
+        const stop = onFrozenStateChange((wc, frozen) => {
+          seen.push([wc as unknown as MockWebContents, frozen]);
+        });
+        return { seen, stop };
+      }
+
+      it("reports each flip once: frozen at the request, released once a thaw succeeds", async () => {
+        const wc = createMockWc();
+        const { seen, stop } = record();
+
+        const freezing = freezeWebContents(asWc(wc));
+        expect(seen).toEqual([[wc, true]]);
+        await freezing;
+        await freezeWebContents(asWc(wc));
+        expect(seen).toEqual([[wc, true]]);
+
+        await unfreezeWebContents(asWc(wc));
+        await unfreezeWebContents(asWc(wc));
+        expect(seen).toEqual([
+          [wc, true],
+          [wc, false],
+        ]);
+        stop();
+      });
+
+      it("reports a release when a freeze that never went out is given up", async () => {
+        const wc = createMockWc({ attached: true });
+        const { sent } = holdCommands(wc);
+        const { seen, stop } = record();
+
+        const freezing = freezeWebContents(asWc(wc));
+        const [enable] = await sent(1);
+        enable!.reject();
+        await freezing;
+
+        expect(isWebContentsFrozen(asWc(wc))).toBe(false);
+        expect(seen).toEqual([
+          [wc, true],
+          [wc, false],
+        ]);
+        stop();
+      });
+
+      it("reports nothing for a thaw that failed, and the next thaw releases", async () => {
+        const wc = createMockWc({ attached: true });
+        await freezeWebContents(asWc(wc));
+        const { seen, stop } = record();
+        const [failing, succeeding] = queueLifecycleCommands(wc, 2);
+
+        const first = unfreezeWebContents(asWc(wc));
+        failing!.reject();
+        await first;
+        expect(seen).toEqual([]);
+
+        const second = unfreezeWebContents(asWc(wc));
+        succeeding!.resolve();
+        await second;
+        expect(seen).toEqual([[wc, false]]);
+        stop();
+      });
+
+      it("keeps telling the other listeners when one throws, and stops telling one that left", async () => {
+        const wc = createMockWc();
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const stopThrowing = onFrozenStateChange(() => {
+          throw new Error("boom");
+        });
+        const { seen, stop } = record();
+        stop();
+        const { seen: kept, stop: stopKept } = record();
+
+        await freezeWebContents(asWc(wc));
+
+        expect(seen).toEqual([]);
+        expect(kept).toEqual([[wc, true]]);
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        stopThrowing();
+        stopKept();
+        errorSpy.mockRestore();
+      });
     });
   });
 
