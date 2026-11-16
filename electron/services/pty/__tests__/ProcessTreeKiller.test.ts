@@ -1051,6 +1051,174 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
   });
 });
 
+// #17045: closing a project kills every terminal in one synchronous burst, and
+// each kill used to take its own `ps -A` twice.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill bursts", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  // Three terminals: shell P(1000 + 100k) with one child P(1001 + 100k).
+  const shells = [P(1000), P(1100), P(1200)];
+  const rowsFor = (shell: number): CensusRow[] => [
+    [shell, 1, `shell-${shell}`],
+    [shell + 1, shell, `child-${shell}`],
+  ];
+  const everyTree = shells.flatMap(rowsFor);
+
+  function killersFor(lineage: LineageKillSource): ProcessTreeKiller[] {
+    return shells.map((shell) => new ProcessTreeKiller(makePty(shell), makeTreeCache([]), lineage));
+  }
+
+  it("reads one census for the burst's captures and one for its escalations", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) {
+      killer.captureTree();
+      killer.execute(false);
+    }
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual(shells.map((shell) => shell + 1));
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+      new Set(shells.flatMap((shell) => [shell, shell + 1]))
+    );
+  });
+
+  it("never escalates off a census read before the kill's own SIGTERM pass", () => {
+    const [a, b] = [P(1000), P(1100)];
+    const lineage = makeCensusLineage([
+      makeCensus([...rowsFor(a), ...rowsFor(b)]),
+      // A's immediate escalation, read after A's SIGTERMs but before B's.
+      makeCensus([...rowsFor(a), ...rowsFor(b)]),
+      // B's, read after B's SIGTERMs: its child exited and the PID was reused.
+      makeCensus([...rowsFor(a), [b, 1, `shell-${b}`], [b + 1, 1, "replacement"]]),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    killerB.captureTree();
+    killerA.execute(true);
+    const aKills = signalsOf(killSpy, "SIGKILL");
+    killSpy.mockClear();
+    killerB.execute(true);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+    expect(new Set(aKills)).toEqual(new Set([a, a + 1]));
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([b + 1]);
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([b]);
+  });
+
+  it("shares a failed census instead of retrying it for every kill", () => {
+    const lineage = makeCensusLineage([null]);
+    const killers = shells.map(
+      (shell) => new ProcessTreeKiller(makePty(shell), makeTreeCache([shell + 1]), lineage)
+    );
+
+    for (const killer of killers) {
+      killer.captureTree();
+      killer.execute(false);
+    }
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual(shells.map((shell) => shell + 1));
+  });
+
+  it("reads again once the burst is over", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(everyTree),
+      makeCensus([...everyTree, [P(1102), P(1100), "forked-since"]]),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    killerA.execute(false);
+    vi.advanceTimersByTime(1);
+    killerB.captureTree();
+    killerB.execute(false);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(1001), P(1101), P(1102)]);
+  });
+
+  it("reads again when a burst outlasts the census's shelf life", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.captureTree();
+    vi.setSystemTime(Date.now() + 60_000);
+    killerB.captureTree();
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+  });
+
+  it("escalates only the members still waiting when the shared timer fires", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) killer.execute(false);
+    killers[0].abort();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+      new Set([P(1100), P(1101), P(1200), P(1201)])
+    );
+  });
+
+  it("reads no escalation census once every member has left", () => {
+    const lineage = makeCensusLineage([makeCensus(everyTree), makeCensus(everyTree)]);
+    const killers = killersFor(lineage);
+
+    for (const killer of killers) killer.execute(false);
+    for (const killer of killers) killer.abort();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps escalations with different grace windows apart", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(everyTree),
+      makeCensus(everyTree),
+      makeCensus(everyTree),
+    ]);
+    const [killerA, killerB] = killersFor(lineage);
+
+    killerA.execute(false, 500);
+    killerB.execute(false, 2000);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1000), P(1001)]));
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(1500);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(1100), P(1101)]));
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(3);
+  });
+});
+
 // Windows: every tree kill is the verified helper (fresh creation-time walk,
 // handle-checked identities, wait for exit) — never `taskkill /T`, never a
 // bare-PID kill from here. PIDs sit far above any real PID on the test host.

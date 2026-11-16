@@ -31,7 +31,108 @@ const WINDOWS_EXIT_BATCH_WAIT_MS = 500;
  * to a kill that never happened.
  */
 const CAPTURED_CENSUS_MAX_AGE_MS = 1000;
+/**
+ * Outer bound on sharing one kill census within a burst. A burst is
+ * synchronous, so this only matters when one is stretched — a long teardown
+ * loop, or a burst begun in a check-phase callback that spans an idle poll —
+ * and the next kill then reads afresh rather than trust an old table.
+ */
+const SHARED_CENSUS_MAX_AGE_MS = 250;
 const SHELL_GONE = Symbol("shell-gone");
+
+/** Numbers every shared census read, so a kill can tell which came after its own signals. */
+let censusSeq = 0;
+
+/** Killers whose delayed SIGKILL escalations fire together off one census. */
+interface EscalationGroup {
+  burst: KillBurst;
+  delayMs: number;
+  timer: NodeJS.Timeout | null;
+  members: Map<
+    object,
+    { freshAfter: number; run: (readCensus: () => KillCensus | null) => void }
+  >;
+}
+
+/**
+ * The kills one synchronous stretch of the host's thread runs against a
+ * ledger: a project closing or sleeping, the host disposing every terminal.
+ * Each kill used to take its own `ps -A` before releasing its PTY and another
+ * when it escalated, 2N full process-table reads for N terminals (#17045).
+ *
+ * A burst's kills share both. The capture census is read before the first
+ * member releases its PTY, so it is pre-hangup for every member, and nothing
+ * but the burst's own synchronous work runs between it and their SIGTERMs —
+ * the same gap a lone kill has between its capture and its signals. Their
+ * escalations share one timer, armed for the last member, and one census read
+ * when it fires, after every member's SIGTERM pass. No kill ever reuses a
+ * census read before its own latest signals ({@link readSharedCensus}), so an
+ * immediate escalation still reads afresh. The burst ends when the event loop
+ * next turns: a kill after an await, an I/O wait or a grace window reads again.
+ */
+interface KillBurst {
+  latest: { census: KillCensus | null; seq: number; atMs: number } | null;
+  escalations: Map<number, EscalationGroup>;
+}
+
+const killBursts = new WeakMap<LineageKillSource, KillBurst>();
+
+function currentKillBurst(lineage: LineageKillSource): KillBurst {
+  const open = killBursts.get(lineage);
+  if (open) return open;
+  const burst: KillBurst = { latest: null, escalations: new Map() };
+  killBursts.set(lineage, burst);
+  const end = setImmediate(() => {
+    if (killBursts.get(lineage) === burst) killBursts.delete(lineage);
+  });
+  end.unref?.();
+  return burst;
+}
+
+/**
+ * The burst's census when one was read after `freshAfter` and is still young
+ * enough, otherwise a fresh read that becomes the burst's. A failed read is
+ * shared as well: it would fail again, and each retry costs up to its full
+ * timeout on the host's only thread.
+ */
+function readSharedCensus(lineage: LineageKillSource, freshAfter: number): KillCensus | null {
+  const burst = currentKillBurst(lineage);
+  const latest = burst.latest;
+  if (
+    latest &&
+    latest.seq > freshAfter &&
+    Date.now() - latest.atMs <= SHARED_CENSUS_MAX_AGE_MS
+  ) {
+    return latest.census;
+  }
+  const atMs = Date.now();
+  const census = lineage.takeKillCensus?.() ?? null;
+  burst.latest = { census, seq: ++censusSeq, atMs };
+  return census;
+}
+
+function fireEscalationGroup(lineage: LineageKillSource, group: EscalationGroup): void {
+  group.timer = null;
+  if (group.burst.escalations.get(group.delayMs) === group) {
+    group.burst.escalations.delete(group.delayMs);
+  }
+  let after = 0;
+  for (const member of group.members.values()) after = Math.max(after, member.freshAfter);
+  let census: KillCensus | null | undefined;
+  const readCensus = () => {
+    if (census === undefined) census = readSharedCensus(lineage, after);
+    return census;
+  };
+  for (const [killer, member] of [...group.members]) {
+    // A member an earlier one's escalation aborted has nothing left to run.
+    if (!group.members.delete(killer)) continue;
+    try {
+      member.run(readCensus);
+    } catch (err) {
+      console.warn(`[ProcessTreeKiller] escalation failed: ${(err as Error)?.message}`);
+    }
+  }
+}
 
 /** A Windows tree kill in flight, and when it has settled. */
 interface WindowsJob {
@@ -336,6 +437,15 @@ function logWindowsKillProblems(
  */
 export class ProcessTreeKiller {
   private killTreeTimer: NodeJS.Timeout | null = null;
+  /** The shared escalation this killer's pending SIGKILL waits in, if any. */
+  private escalationGroup: EscalationGroup | null = null;
+  /**
+   * `censusSeq` when this killer last signalled, or saw its root exit. A census
+   * numbered at or below it was read before that and cannot tell a survivor
+   * from a replacement, or shows a shell that is gone, so the killer never
+   * reuses one.
+   */
+  private freshAfter = 0;
   private registeredRootPid: number | null = null;
   /** `census: null` records a capture that failed, so the kill does not retry it. */
   private capturedCensus: { census: KillCensus | null; atMs: number } | null = null;
@@ -432,7 +542,7 @@ export class ProcessTreeKiller {
     this.capturedCensus = null;
     if (process.platform === "win32" || !(this.ptyProcess.pid > 0)) return;
     const atMs = Date.now();
-    this.capturedCensus = { census: this.lineage?.takeKillCensus?.() ?? null, atMs };
+    this.capturedCensus = { census: this.readCensus(), atMs };
   }
 
   private takeCensus(): KillCensus | null {
@@ -443,7 +553,18 @@ export class ProcessTreeKiller {
     if (captured && Date.now() - captured.atMs <= CAPTURED_CENSUS_MAX_AGE_MS) {
       return captured.census;
     }
-    return this.lineage?.takeKillCensus?.() ?? null;
+    return this.readCensus();
+  }
+
+  /** A kill-time census, shared with the rest of this kill's burst when it may be. */
+  private readCensus(): KillCensus | null {
+    const lineage = this.lineage;
+    if (!lineage?.takeKillCensus) return null;
+    return readSharedCensus(lineage, this.freshAfter);
+  }
+
+  private requireFreshCensus(): void {
+    this.freshAfter = censusSeq;
   }
 
   /**
@@ -557,7 +678,7 @@ export class ProcessTreeKiller {
     // miss everything the first SIGTERM already orphaned from the shell.
     if (immediate && pending && pending.shellPid === shellPid) {
       this.capturedCensus = null;
-      this.escalate(pending, this.lineage?.takeKillCensus?.() ?? null);
+      this.escalate(pending, this.readCensus());
       return [...pending.targets.keys(), shellPid];
     }
 
@@ -648,6 +769,7 @@ export class ProcessTreeKiller {
         }
       }
     }
+    this.requireFreshCensus();
 
     // Everything signalled above, by identity. Once its parent dies a target
     // reparents to PID 1 where no walk from the shell reaches it, so the
@@ -679,26 +801,57 @@ export class ProcessTreeKiller {
     if (immediate) {
       // Re-read even here: a snapshot taken before the SIGTERM pass cannot
       // prove that a target survived it rather than exiting and being replaced.
-      if (state) this.escalate(state, this.lineage?.takeKillCensus?.() ?? null);
+      if (state) this.escalate(state, this.readCensus());
       else this.sigkillSweep(shellPid);
       return targets;
     }
 
-    const delay = escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS;
-
-    // Re-read descendants inside the timer so children spawned in the
+    // Re-read descendants when the timer fires so children spawned in the
     // grace window between SIGTERM and SIGKILL are also reaped. Capturing
     // the snapshot in a closure here would orphan late-forked subprocesses.
     this.escalation = state;
-    this.killTreeTimer = setTimeout(() => {
-      this.killTreeTimer = null;
+    this.scheduleEscalation(shellPid, escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS);
+    return targets;
+  }
+
+  /**
+   * Arm the delayed SIGKILL. With a ledger that can take censuses it joins the
+   * burst's shared escalation, so the burst's kills read one census between
+   * them when the grace window ends (see {@link KillBurst}).
+   */
+  private scheduleEscalation(shellPid: number, delayMs: number): void {
+    const run = (readCensus: () => KillCensus | null) => {
+      this.escalationGroup = null;
       const current = this.escalation;
       this.escalation = null;
-      if (current) this.escalate(current, this.lineage?.takeKillCensus?.() ?? null);
+      if (current) this.escalate(current, readCensus());
       else this.sigkillSweep(shellPid);
-    }, delay);
-    this.killTreeTimer.unref?.();
-    return targets;
+    };
+
+    const lineage = this.lineage;
+    if (!lineage?.takeKillCensus) {
+      this.killTreeTimer = setTimeout(() => {
+        this.killTreeTimer = null;
+        run(() => null);
+      }, delayMs);
+      this.killTreeTimer.unref?.();
+      return;
+    }
+
+    const burst = currentKillBurst(lineage);
+    let group = burst.escalations.get(delayMs);
+    if (!group) {
+      group = { burst, delayMs, timer: null, members: new Map() };
+      burst.escalations.set(delayMs, group);
+    }
+    group.members.set(this, { freshAfter: this.freshAfter, run });
+    this.escalationGroup = group;
+    // Re-armed for each member so the last to signal still gets its full
+    // grace window; earlier members wait at most the burst's length longer.
+    if (group.timer) clearTimeout(group.timer);
+    const armed = group;
+    group.timer = setTimeout(() => fireEscalationGroup(lineage, armed), delayMs);
+    group.timer.unref?.();
   }
 
   /**
@@ -744,6 +897,7 @@ export class ProcessTreeKiller {
 
     this.recordIdentities(census, ordered);
     for (const pid of ordered) this.signal(pid, "SIGKILL");
+    this.requireFreshCensus();
   }
 
   /**
@@ -762,6 +916,8 @@ export class ProcessTreeKiller {
   reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): number[] {
     this.abort();
     this.capturedCensus = null;
+    // Anything read before now may still list the shell that just exited.
+    this.requireFreshCensus();
 
     const shellPid = this.ptyProcess.pid;
     if (shellPid === undefined || shellPid <= 0) return [];
@@ -792,7 +948,7 @@ export class ProcessTreeKiller {
     // identities recorded for the survivor check are the processes signalled
     // below. Skipped on the exit path, whose budget belongs to the kill itself
     // and whose check could never run.
-    const census = immediate ? null : (this.lineage?.takeKillCensus?.() ?? null);
+    const census = immediate ? null : this.readCensus();
     if (census) {
       orphans = this.resolveOrphans(shellPid, [], census);
       this.recordIdentities(census, orphans);
@@ -802,6 +958,7 @@ export class ProcessTreeKiller {
       this.signal(pid, "SIGTERM");
       this.signal(pid, "SIGCONT");
     }
+    this.requireFreshCensus();
 
     if (immediate) {
       // `process.on("exit")` context — no timer will ever fire, so escalate now.
@@ -822,6 +979,15 @@ export class ProcessTreeKiller {
    */
   abort(): void {
     this.escalation = null;
+    const group = this.escalationGroup;
+    if (group) {
+      this.escalationGroup = null;
+      group.members.delete(this);
+      if (group.members.size === 0 && group.timer) {
+        clearTimeout(group.timer);
+        group.timer = null;
+      }
+    }
     if (this.killTreeTimer) {
       clearTimeout(this.killTreeTimer);
       this.killTreeTimer = null;
