@@ -473,7 +473,40 @@ export function useCanopyInboxActions({
   const asideFailed = (title: string, error: unknown, retry: () => void) =>
     failToast(title, error, { label: "Retry", onClick: retry });
   // Each gives Z up on the host it was done on: a toast's Retry once another
-  // host is shown leaves that host's Z alone.
+  // host is shown leaves that host's Z alone. Arrow constants rather than named
+  // function expressions: React Compiler can't hoist a function expression that
+  // names itself, and gives up on the whole hook.
+  const unpark = (item: CanopyItem) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .unparkRun(runId)
+        .catch((error: unknown) =>
+          asideFailed("Couldn't unpark the agent", error, () => unpark(item))
+        )
+    );
+  };
+  const snooze = (item: CanopyItem, option: AgentSnoozeDurationOption) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .snoozeRun(runId, option)
+        .catch((error: unknown) =>
+          asideFailed("Couldn't snooze the agent", error, () => snooze(item, option))
+        )
+    );
+  };
+  const wake = (item: CanopyItem) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .unsnoozeRun(runId)
+        .catch((error: unknown) => asideFailed("Couldn't wake the agent", error, () => wake(item)))
+    );
+  };
   const setAside = {
     canSetAside,
     // Opened once the menu has closed: by then the panel may show another host.
@@ -482,39 +515,9 @@ export function useCanopyInboxActions({
         setParkRunId(placeOf(item, hostId, ownHostId).runId);
       }
     },
-    onUnpark: function unpark(item: CanopyItem) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      if (showsHost(hostId)) clearUndo();
-      safeFireAndForget(
-        window.electron.fleet
-          .unparkRun(runId)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't unpark the agent", error, () => unpark(item))
-          )
-      );
-    },
-    onSnooze: function snooze(item: CanopyItem, option: AgentSnoozeDurationOption) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      if (showsHost(hostId)) clearUndo();
-      safeFireAndForget(
-        window.electron.fleet
-          .snoozeRun(runId, option)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't snooze the agent", error, () => snooze(item, option))
-          )
-      );
-    },
-    onWake: function wake(item: CanopyItem) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      if (showsHost(hostId)) clearUndo();
-      safeFireAndForget(
-        window.electron.fleet
-          .unsnoozeRun(runId)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't wake the agent", error, () => wake(item))
-          )
-      );
-    },
+    onUnpark: unpark,
+    onSnooze: snooze,
+    onWake: wake,
   };
 
   // Decisions' list holds this computer's answers: a run on another host

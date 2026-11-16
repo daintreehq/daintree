@@ -8,7 +8,10 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyBaselineEntries,
+  compareToBaseline,
   coverageShortfall,
+  formatHintGrowth,
+  hintIncreases,
   regressedStrictCategories,
 } from "./check-compiler-budget.mjs";
 import { isInScanSurface, toPosixRelative } from "./lib/compiler-scan-surface.mjs";
@@ -188,5 +191,92 @@ describe("scan surface", () => {
   it("normalises Windows separators so baseline keys match on either platform", () => {
     expect(toPosixRelative("src\\components\\Foo.tsx")).toBe("src/components/Foo.tsx");
     expect(isInScanSurface("src\\components\\Foo.tsx")).toBe(true);
+  });
+});
+
+describe("hintIncreases", () => {
+  // The pooled budget nets these two to zero and passes; the per-file view is
+  // what still names the file that lost its compilation.
+  it("names a file whose Hints grew while another file's shrank", () => {
+    const increases = hintIncreases(
+      { "src/worse.tsx": { hintCount: 3 }, "src/better.tsx": { hintCount: 0 } },
+      { "src/worse.tsx": { hintCount: 1 }, "src/better.tsx": { hintCount: 2 } }
+    );
+    expect(increases).toEqual([{ file: "src/worse.tsx", from: 1, to: 3, isNew: false }]);
+  });
+
+  it("names a new file that arrives with Hints", () => {
+    expect(hintIncreases({ "src/new.tsx": { hintCount: 2 } }, {})).toEqual([
+      { file: "src/new.tsx", from: 0, to: 2, isNew: true },
+    ]);
+  });
+
+  it("stays quiet for unchanged and improved files", () => {
+    expect(
+      hintIncreases(
+        { "src/same.tsx": { hintCount: 2 }, "src/fixed.tsx": { hintCount: 0 } },
+        { "src/same.tsx": { hintCount: 2 }, "src/fixed.tsx": { hintCount: 4 } }
+      )
+    ).toEqual([]);
+  });
+});
+
+function counts(overrides = {}) {
+  return {
+    success: 1,
+    skip: 0,
+    error: 0,
+    pipeline: 0,
+    hintCount: 0,
+    errorBailouts: [],
+    ...overrides,
+  };
+}
+
+describe("compareToBaseline", () => {
+  it("reports a new file as clean only when it has no Todo either", () => {
+    const { newClean, regressions } = compareToBaseline(
+      {
+        "src/clean.tsx": counts(),
+        "src/todo.tsx": counts({ error: 1, hintCount: 1 }),
+      },
+      {}
+    );
+    expect(newClean).toEqual(["src/clean.tsx"]);
+    expect(regressions).toEqual([]);
+  });
+
+  it("still fails a new file over a strict bailout", () => {
+    const { newClean, regressions } = compareToBaseline(
+      {
+        "src/bad.tsx": counts({
+          error: 1,
+          errorBailouts: [{ category: "Refs", severity: "Error", reason: "refs" }],
+        }),
+      },
+      {}
+    );
+    expect(newClean).toEqual([]);
+    expect(regressions.map((r) => r.file)).toEqual(["src/bad.tsx"]);
+  });
+});
+
+describe("formatHintGrowth", () => {
+  it("warns per file with the Todos it now carries", () => {
+    const lines = formatHintGrowth([{ file: "src/new.tsx", from: 0, to: 1, isNew: true }], {
+      "src/new.tsx": {
+        hintBailouts: [
+          { category: "Todo", severity: "Hint", reason: "finally", line: 7, fnLine: 2 },
+        ],
+      },
+    });
+    expect(lines).toEqual([
+      expect.stringMatching(/^::warning file=src\/new\.tsx::.*new file \(Todo bailouts 0 → 1\)/),
+      "   todo :7: finally",
+    ]);
+  });
+
+  it("says nothing when no file grew", () => {
+    expect(formatHintGrowth([], {})).toEqual([]);
   });
 });

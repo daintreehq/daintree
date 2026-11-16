@@ -49,6 +49,153 @@ export interface UseProjectSwitcherProjectMutationsOptions {
   copyToClipboard: (text: string) => Promise<boolean>;
 }
 
+type ProjectStoreState = ReturnType<typeof useProjectStore.getState>;
+
+// The confirmations run outside the hook: React Compiler can't lower a `try`
+// with a `finally`, or one without a `catch`, and would give up on the whole
+// hook, handing the palette fresh actions on every render of the app root.
+async function stopProjectConfirmed(
+  capturedId: string,
+  {
+    closeActiveProject,
+    closeProject,
+    setStopConfirmProjectId,
+    setIsStoppingProject,
+  }: Pick<ProjectStoreState, "closeActiveProject" | "closeProject"> & {
+    setStopConfirmProjectId: (projectId: string | null) => void;
+    setIsStoppingProject: (isStopping: boolean) => void;
+  }
+): Promise<void> {
+  setIsStoppingProject(true);
+
+  try {
+    const isActive = useProjectStore.getState().currentProject?.id === capturedId;
+    if (isActive) {
+      await closeActiveProject(capturedId);
+    } else {
+      await closeProject(capturedId, { killTerminals: true });
+    }
+    setStopConfirmProjectId(null);
+  } catch (error) {
+    const retry = async () => {
+      const isActive = useProjectStore.getState().currentProject?.id === capturedId;
+      try {
+        if (isActive) {
+          await closeActiveProject(capturedId);
+        } else {
+          await closeProject(capturedId, { killTerminals: true });
+        }
+      } catch (retryError) {
+        notify({
+          type: "error",
+          title: "Couldn't stop project",
+          message: distinctDetail(
+            formatErrorMessage(retryError, "Couldn't stop project"),
+            "Couldn't stop project"
+          ),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+        });
+      }
+    };
+    notify({
+      type: "error",
+      title: "Couldn't stop project",
+      message: distinctDetail(
+        formatErrorMessage(error, "Couldn't stop project"),
+        "Couldn't stop project"
+      ),
+      actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+    });
+  } finally {
+    setIsStoppingProject(false);
+  }
+}
+
+async function sleepProjectConfirmed(
+  capturedId: string,
+  {
+    doSleepProject,
+    setSleepConfirmProject,
+    setIsSleepingProject,
+  }: {
+    doSleepProject: (projectId: string) => Promise<void>;
+    setSleepConfirmProject: (project: SearchableProject | null) => void;
+    setIsSleepingProject: (isSleeping: boolean) => void;
+  }
+): Promise<void> {
+  setIsSleepingProject(true);
+  try {
+    await doSleepProject(capturedId);
+    setSleepConfirmProject(null);
+  } finally {
+    setIsSleepingProject(false);
+  }
+}
+
+async function removeProjectConfirmed(
+  removeConfirmProject: SearchableProject,
+  {
+    closeActiveProject,
+    removeProject,
+    setRemoveConfirmProject,
+    setIsRemovingProject,
+  }: Pick<ProjectStoreState, "closeActiveProject" | "removeProject"> & {
+    setRemoveConfirmProject: (project: SearchableProject | null) => void;
+    setIsRemovingProject: (isRemoving: boolean) => void;
+  }
+): Promise<void> {
+  setIsRemovingProject(true);
+
+  const capturedId = removeConfirmProject.id;
+
+  try {
+    if (removeConfirmProject.isActive) {
+      await closeActiveProject(capturedId);
+    } else {
+      await removeProject(capturedId);
+    }
+    setRemoveConfirmProject(null);
+  } catch (error) {
+    const retry = async () => {
+      const isActive = useProjectStore.getState().currentProject?.id === capturedId;
+      try {
+        if (isActive) {
+          await closeActiveProject(capturedId);
+        } else {
+          await removeProject(capturedId);
+        }
+      } catch (retryError) {
+        notify({
+          type: "error",
+          title: isActive ? "Couldn't close project" : "Couldn't remove project",
+          message: distinctDetail(
+            formatErrorMessage(
+              retryError,
+              isActive ? "Couldn't close project" : "Couldn't remove project"
+            ),
+            isActive ? "Couldn't close project" : "Couldn't remove project"
+          ),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+        });
+      }
+    };
+    notify({
+      type: "error",
+      title: removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project",
+      message: distinctDetail(
+        formatErrorMessage(
+          error,
+          removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
+        ),
+        removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
+      ),
+      actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+    });
+  } finally {
+    setIsRemovingProject(false);
+  }
+}
+
 /**
  * The project row actions and their confirmations: stop, remove, sleep,
  * restart, pin, relocate and copy path.
@@ -169,51 +316,12 @@ export function useProjectSwitcherProjectMutations({
 
   const confirmStopProject = useCallback(async () => {
     if (!stopConfirmProjectId) return;
-    setIsStoppingProject(true);
-
-    const capturedId = stopConfirmProjectId;
-
-    try {
-      const isActive = useProjectStore.getState().currentProject?.id === capturedId;
-      if (isActive) {
-        await closeActiveProject(capturedId);
-      } else {
-        await closeProject(capturedId, { killTerminals: true });
-      }
-      setStopConfirmProjectId(null);
-    } catch (error) {
-      const retry = async () => {
-        const isActive = useProjectStore.getState().currentProject?.id === capturedId;
-        try {
-          if (isActive) {
-            await closeActiveProject(capturedId);
-          } else {
-            await closeProject(capturedId, { killTerminals: true });
-          }
-        } catch (retryError) {
-          notify({
-            type: "error",
-            title: "Couldn't stop project",
-            message: distinctDetail(
-              formatErrorMessage(retryError, "Couldn't stop project"),
-              "Couldn't stop project"
-            ),
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
-        }
-      };
-      notify({
-        type: "error",
-        title: "Couldn't stop project",
-        message: distinctDetail(
-          formatErrorMessage(error, "Couldn't stop project"),
-          "Couldn't stop project"
-        ),
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-      });
-    } finally {
-      setIsStoppingProject(false);
-    }
+    await stopProjectConfirmed(stopConfirmProjectId, {
+      closeActiveProject,
+      closeProject,
+      setStopConfirmProjectId,
+      setIsStoppingProject,
+    });
   }, [stopConfirmProjectId, closeActiveProject, closeProject]);
 
   // The row as the store has it now. Sleep and remove are reachable from the
@@ -319,69 +427,21 @@ export function useProjectSwitcherProjectMutations({
 
   const confirmSleep = useCallback(async () => {
     if (!sleepConfirmProject || isSleepingProject) return;
-    setIsSleepingProject(true);
-    const capturedId = sleepConfirmProject.id;
-    try {
-      await doSleepProject(capturedId);
-      setSleepConfirmProject(null);
-    } finally {
-      setIsSleepingProject(false);
-    }
+    await sleepProjectConfirmed(sleepConfirmProject.id, {
+      doSleepProject,
+      setSleepConfirmProject,
+      setIsSleepingProject,
+    });
   }, [sleepConfirmProject, isSleepingProject, doSleepProject]);
 
   const confirmRemoveProject = useCallback(async () => {
     if (!removeConfirmProject || isRemovingProject) return;
-
-    setIsRemovingProject(true);
-
-    const capturedId = removeConfirmProject.id;
-
-    try {
-      if (removeConfirmProject.isActive) {
-        await closeActiveProject(capturedId);
-      } else {
-        await removeProject(capturedId);
-      }
-      setRemoveConfirmProject(null);
-    } catch (error) {
-      const retry = async () => {
-        const isActive = useProjectStore.getState().currentProject?.id === capturedId;
-        try {
-          if (isActive) {
-            await closeActiveProject(capturedId);
-          } else {
-            await removeProject(capturedId);
-          }
-        } catch (retryError) {
-          notify({
-            type: "error",
-            title: isActive ? "Couldn't close project" : "Couldn't remove project",
-            message: distinctDetail(
-              formatErrorMessage(
-                retryError,
-                isActive ? "Couldn't close project" : "Couldn't remove project"
-              ),
-              isActive ? "Couldn't close project" : "Couldn't remove project"
-            ),
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
-        }
-      };
-      notify({
-        type: "error",
-        title: removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project",
-        message: distinctDetail(
-          formatErrorMessage(
-            error,
-            removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
-          ),
-          removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
-        ),
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-      });
-    } finally {
-      setIsRemovingProject(false);
-    }
+    await removeProjectConfirmed(removeConfirmProject, {
+      closeActiveProject,
+      removeProject,
+      setRemoveConfirmProject,
+      setIsRemovingProject,
+    });
   }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject]);
 
   return {
