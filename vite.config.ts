@@ -267,7 +267,7 @@ export default defineConfig(({ command, mode }) => {
                 // Splitting these out of `vendor-radix-overlay` prevents the
                 // eager `vendor-radix` chunk from pulling in the overlay chunk.
                 name: "vendor-radix-utils",
-                test: /node_modules[\\/]@radix-ui[\\/](primitive|react-compose-refs|react-context|react-presence|react-primitive|react-use-controllable-state|react-use-previous|react-use-size|react-use-callback-ref|react-use-layout-effect|react-use-escape-keydown|react-use-effect-event|react-use-rect|react-id|react-slot)[\\/]/,
+                test: /node_modules[\\/]@radix-ui[\\/](primitive|react-compose-refs|react-context|react-presence|react-primitive|react-use-controllable-state|react-use-previous|react-use-size|react-use-callback-ref|react-use-layout-effect|react-use-escape-keydown|react-use-effect-event|react-use-rect|react-id|react-slot|react-dismissable-layer)[\\/]/,
                 priority: 14,
               },
               {
@@ -278,7 +278,7 @@ export default defineConfig(({ command, mode }) => {
                 // slot/checkbox/switch path doesn't have to wait for the
                 // deferred chunk.
                 name: "vendor-radix-overlay",
-                test: /node_modules[\\/]@radix-ui[\\/](react-tooltip|react-popover|react-dropdown-menu|react-select|react-context-menu|react-menu|react-popper|react-arrow|react-collection|react-roving-focus|react-focus-scope|react-focus-guards|react-dismissable-layer|react-portal|react-visually-hidden|react-direction)[\\/]/,
+                test: /node_modules[\\/]@radix-ui[\\/](react-tooltip|react-popover|react-dropdown-menu|react-select|react-context-menu|react-menu|react-popper|react-arrow|react-collection|react-roving-focus|react-focus-scope|react-focus-guards|react-portal|react-visually-hidden|react-direction)[\\/]/,
                 priority: 13,
               },
               {
