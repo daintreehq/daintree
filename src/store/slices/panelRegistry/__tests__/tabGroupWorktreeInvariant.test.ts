@@ -119,6 +119,10 @@ describe("Tab Group Worktree Invariant", () => {
     vi.useRealTimers();
   });
 
+  afterEach(() => {
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  });
+
   describe("moveTerminalToWorktree with grouped panels", () => {
     it("moves the group even when target worktree already has many grid panels", () => {
       // Scrollable grid (#8805): cross-worktree group moves no longer fail on
@@ -173,7 +177,8 @@ describe("Tab Group Worktree Invariant", () => {
       expect(group1?.worktreeId).toBe("wt-a");
     });
 
-    it("applies renderer policy to all panels in moved group", () => {
+    it("promotes only the active tab of a moved group", () => {
+      setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "wt-b", restoreWorktreeId: null }));
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
@@ -189,7 +194,7 @@ describe("Tab Group Worktree Invariant", () => {
       );
       expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
         "t2",
-        TerminalRefreshTier.VISIBLE
+        TerminalRefreshTier.BACKGROUND
       );
     });
   });

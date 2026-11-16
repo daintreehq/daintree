@@ -45,7 +45,6 @@ import {
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import {
   getAgentConfig,
@@ -84,7 +83,7 @@ import {
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
-import { optimizeForDock } from "./layout";
+import { applyGridPlacementTier, optimizeForDock } from "./layout";
 import {
   deriveRuntimeStatus,
   reconcileWorktreeAfterSpawn,
@@ -1538,10 +1537,8 @@ export const createRestartActions = (
       return;
     }
 
-    withTerminalService(
-      (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-      id
-    );
+    const moved = get().panelsById[id];
+    applyGridPlacementTier(id, moved ?? terminal, get().getPanelGroup(id));
   },
 
   // No transfer, no capture, no restart: creating the worktree and filing the
