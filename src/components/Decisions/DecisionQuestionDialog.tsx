@@ -11,6 +11,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type {
@@ -19,6 +20,8 @@ import type {
   DecisionThreadEntry,
 } from "@shared/types/decisionsQuestion";
 import { DecisionMarkdown } from "./DecisionMarkdown";
+import { DecisionQuestionImages } from "./DecisionQuestionImages";
+import { imagesKey } from "./questionImageLoader";
 import {
   aliasLabel,
   choiceLabels,
@@ -103,7 +106,15 @@ function ThreadEntry({
   );
 }
 
-function QuestionBody({ question }: { question: DecisionQuestionContent }) {
+function QuestionBody({
+  question,
+  terminalId,
+  active,
+}: {
+  question: DecisionQuestionContent;
+  terminalId: string;
+  active: boolean;
+}) {
   return (
     <div className="flex flex-col gap-4" data-testid="decision-question-content">
       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
@@ -154,7 +165,14 @@ function QuestionBody({ question }: { question: DecisionQuestionContent }) {
         </section>
       )}
       {question.attachments.length > 0 && (
-        <p className="text-2xs text-text-secondary">Asked with images; they aren't shown here.</p>
+        // Keyed by the images it lists, so a read again every few seconds keeps what's loaded.
+        <DecisionQuestionImages
+          key={imagesKey(terminalId, question.questionId, question.attachments)}
+          terminalId={terminalId}
+          questionId={question.questionId}
+          attachments={question.attachments}
+          active={active}
+        />
       )}
       <section className="flex flex-col gap-1.5" aria-label="Answers and follow-ups">
         <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
@@ -230,6 +248,7 @@ export function DecisionQuestionDialog() {
   const request = useDecisionsQuestionViewStore((state) => state.request);
   const step = useDecisionsQuestionViewStore((state) => state.step);
   const close = useDecisionsQuestionViewStore((state) => state.close);
+  const clearReviews = useDecisionsImageReviewStore((state) => state.clear);
   const announce = useAnnouncerStore((state) => state.announce);
   const on = useDecisionsOn();
   const [tagged, setTagged] = useState<TaggedRead | null>(null);
@@ -247,6 +266,11 @@ export function DecisionQuestionDialog() {
   useEffect(() => {
     if (!on && isOpen) close();
   }, [on, isOpen, close]);
+
+  // Nor does a record of which images were seen outlast Decisions being on.
+  useEffect(() => {
+    if (!on) clearReviews();
+  }, [on, clearReviews]);
 
   useEffect(() => {
     if (!isOpen || !on || terminalId === null || questionId === null) return;
@@ -377,7 +401,9 @@ export function DecisionQuestionDialog() {
       <AppDialog.Body resetScrollKey={key ?? undefined}>
         <div data-testid="decision-question-body">
           {current === null && showSkeleton && <QuestionSkeleton />}
-          {current?.result === "read" && <QuestionBody question={current.question} />}
+          {current?.result === "read" && terminalId !== null && (
+            <QuestionBody question={current.question} terminalId={terminalId} active={isOpen} />
+          )}
           {current !== null && current.result !== "read" && (
             <Callout
               severity={current.result === "failed" ? "warning" : "neutral"}
