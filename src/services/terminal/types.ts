@@ -98,6 +98,11 @@ export interface ManagedTerminal {
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
+  /**
+   * Brings the cached selection up to date before a read. Set by the listener
+   * installer, which defers extracting selection text while a drag is live.
+   */
+  syncCachedSelection?: () => void;
   exitSubscribers: Set<(exitCode: number | null) => void>;
   parserHandler?: { dispose: () => void };
   getRefreshTier: RefreshTierProvider;

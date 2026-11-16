@@ -765,6 +765,132 @@ describe("installTerminalBoundListeners", () => {
     expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");
   });
 
+  describe("selection cache during a drag", () => {
+    function setup() {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = makeMockManaged();
+      const deps = makeDeps();
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+      const getSelection = terminal.getSelection as ReturnType<typeof vi.fn>;
+      const press = (button = 0) =>
+        managed.hostElement.dispatchEvent(new MouseEvent("mousedown", { button }));
+      const release = () => window.dispatchEvent(new MouseEvent("mouseup"));
+      return { captured, managed, deps, getSelection, press, release };
+    }
+
+    it("extracts the selection once on release, not on every change while dragging", () => {
+      const { captured, deps, getSelection, press, release } = setup();
+      press();
+      for (let i = 0; i < 200; i++) captured.onSelectionChange!();
+      expect(getSelection).not.toHaveBeenCalled();
+      expect(deps.setCachedSelection).not.toHaveBeenCalled();
+
+      getSelection.mockReturnValue("dragged text");
+      release();
+      expect(getSelection).toHaveBeenCalledTimes(1);
+      expect(deps.setCachedSelection).toHaveBeenCalledWith("t1", "dragged text");
+
+      // After the drag, changes are extracted eagerly again.
+      getSelection.mockReturnValue("");
+      captured.onSelectionChange!();
+      expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");
+    });
+
+    it("does not extract on release when the drag changed nothing", () => {
+      const { getSelection, press, release } = setup();
+      press();
+      release();
+      expect(getSelection).not.toHaveBeenCalled();
+    });
+
+    it("extracts the live selection on a read mid-drag, before xterm reports it", () => {
+      const { managed, deps, getSelection, press } = setup();
+      press();
+      getSelection.mockReturnValue("partial");
+      managed.syncCachedSelection!();
+      expect(deps.setCachedSelection).toHaveBeenLastCalledWith("t1", "partial");
+
+      getSelection.mockReturnValue("partial and more");
+      managed.syncCachedSelection!();
+      expect(deps.setCachedSelection).toHaveBeenLastCalledWith("t1", "partial and more");
+    });
+
+    it("leaves the cache alone on a read outside a drag with nothing stale", () => {
+      const { managed, getSelection } = setup();
+      managed.syncCachedSelection!();
+      expect(getSelection).not.toHaveBeenCalled();
+    });
+
+    it("ignores a non-primary press", () => {
+      const { captured, deps, getSelection, press } = setup();
+      press(2);
+      getSelection.mockReturnValue("word");
+      captured.onSelectionChange!();
+      expect(deps.setCachedSelection).toHaveBeenCalledWith("t1", "word");
+    });
+
+    it("ends the drag when the window loses focus", () => {
+      const { captured, deps, getSelection, press } = setup();
+      press();
+      captured.onSelectionChange!();
+      getSelection.mockReturnValue("kept");
+      window.dispatchEvent(new Event("blur"));
+      expect(deps.setCachedSelection).toHaveBeenCalledWith("t1", "kept");
+    });
+
+    it("hands Linux copy-on-select the selection as it stands at the host's mouseup", () => {
+      isLinuxMock.mockReturnValue(true);
+      const { deps, getSelection, press } = setup();
+      const primaryDeps = (
+        installLinuxPrimarySelectionListenersMock.mock.calls as unknown as Array<
+          [{ getCachedSelection: () => string | undefined }]
+        >
+      )[0]![0];
+      (deps.getCachedSelection as ReturnType<typeof vi.fn>).mockImplementation(
+        () => (deps.setCachedSelection as ReturnType<typeof vi.fn>).mock.lastCall?.[1]
+      );
+
+      press();
+      getSelection.mockReturnValue("fresh drag");
+      expect(primaryDeps.getCachedSelection()).toBe("fresh drag");
+    });
+
+    it("drops its listeners and resolver on teardown", () => {
+      const { captured, managed, deps, getSelection, press } = setup();
+      const add = vi.spyOn(window, "addEventListener");
+      const remove = vi.spyOn(window, "removeEventListener");
+      try {
+        press();
+        const added = add.mock.calls.filter(([type]) => type === "mouseup" || type === "blur");
+        expect(added).toHaveLength(2);
+
+        for (const unsub of managed.listeners) unsub();
+        expect(managed.syncCachedSelection).toBeUndefined();
+        for (const [type, handler] of added) {
+          expect(remove).toHaveBeenCalledWith(type, handler);
+        }
+      } finally {
+        add.mockRestore();
+        remove.mockRestore();
+      }
+
+      // The host's mousedown listener is gone too: a press no longer starts a
+      // drag, so a change (the mock's disposable does not unhook it) is
+      // extracted at once.
+      press();
+      getSelection.mockReturnValue("after teardown");
+      captured.onSelectionChange!();
+      expect(deps.setCachedSelection).toHaveBeenCalledWith("t1", "after teardown");
+    });
+  });
+
   it("suppresses wheel→arrow translation when an agent terminal is in the alt-screen buffer (issue #6621)", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);

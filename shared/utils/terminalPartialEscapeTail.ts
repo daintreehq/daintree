@@ -44,9 +44,7 @@ function isExecutable(c: number): boolean {
   return c <= 0x17 || c === 0x19 || (c >= 0x1c && c <= 0x1f);
 }
 
-// `ignoreBOM` keeps a U+FEFF as a character, the way xterm's own UTF-8 decoder
-// does, and makes decoding window by window match decoding the whole chunk.
-const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+const decoder = new TextDecoder();
 
 // First window `feedBytes` decodes; each later one doubles. Most sequences end
 // within a few bytes, so a chunk of plain output after one costs one window.
@@ -238,6 +236,11 @@ export class PartialEscapeTracker {
 
   private step(c: number): T {
     const state = this.state;
+
+    // xterm's decoders discard U+FEFF anywhere in the stream, so its parser
+    // never sees one. That also makes the leading BOM `TextDecoder` strips from
+    // each `feedBytes` window immaterial.
+    if (c === 0xfeff) return T.Drop;
 
     // "Anywhere" transitions. The string states' own terminators land here
     // too: ESC ends an OSC/DCS/APC string and leaves the parser in ESCAPE.

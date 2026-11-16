@@ -138,6 +138,15 @@ describe("PartialEscapeTracker", () => {
     expect(tracker.tail).toBe("\x1b");
   });
 
+  it("leaves out a U+FEFF, which xterm's decoders discard before its parser", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feed("\x1b]0;ti\ufefftle");
+    expect(tracker.tail).toBe("\x1b]0;title");
+    tracker.reset();
+    tracker.feed("\x1b\ufeff[3");
+    expect(tracker.tail).toBe("\x1b[3");
+  });
+
   it("drops the pending sequence on CAN and SUB", () => {
     const tracker = new PartialEscapeTracker();
     tracker.feed("\x1b]0;ti\x18");
@@ -269,7 +278,7 @@ describe("PartialEscapeTracker byte input", () => {
   });
 
   it("decodes a long pending string window by window as the whole chunk would", () => {
-    const wholeDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+    const wholeDecoder = new TextDecoder();
     const bom = [0xef, 0xbb, 0xbf];
     const stray = new Array<number>(700).fill(0x80);
     for (let pad = 0; pad < 4; pad++) {
@@ -278,7 +287,8 @@ describe("PartialEscapeTracker byte input", () => {
         ["\x1bP1$q", ""],
         ["\x1b_G", ""],
       ] as const) {
-        const body = "a".repeat(pad) + "é€😀".repeat(400);
+        // The BOMs land at some window starts, where TextDecoder strips them.
+        const body = "a".repeat(pad) + "é€😀\ufeff".repeat(400);
         const bytes = Uint8Array.from([
           ...encoder.encode(opener + body),
           ...bom,
