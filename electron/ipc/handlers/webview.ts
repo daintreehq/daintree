@@ -49,6 +49,33 @@ function createPaneObjectLedger(): PaneObjectLedger {
   return { rows: new Map(), live: [], inspected: new Set() };
 }
 
+/**
+ * The handles no other pane's rows still own. One console call is recorded for
+ * every pane capturing the guest, with the same handles, so a pane letting go
+ * of a row must not release what another pane has kept — an expanded row, or
+ * one still inside that pane's window. Free with a single pane on the guest.
+ */
+function unsharedObjectIds(
+  session: CdpSession,
+  paneId: string,
+  objectIds: Iterable<string>
+): string[] {
+  const ids = [...objectIds];
+  const others: PaneObjectLedger[] = [];
+  for (const [otherPaneId, ledger] of session.rowObjectIdsByPane) {
+    if (otherPaneId !== paneId) others.push(ledger);
+  }
+  if (others.length === 0) return ids;
+  return ids.filter((objectId) => {
+    for (const ledger of others) {
+      for (const owned of ledger.rows.values()) {
+        if (owned?.has(objectId)) return false;
+      }
+    }
+    return true;
+  });
+}
+
 /** Forget every row. Returns the handles they still owned, for the caller to release or drop. */
 function resetPaneObjectLedger(ledger: PaneObjectLedger): string[] {
   const ids: string[] = [];
@@ -467,7 +494,7 @@ function recordRowObjects(
       if (agedIds) {
         // Re-setting an existing key keeps its place in the cap's FIFO.
         ledger.rows.set(aged, null);
-        if (agedIds.size > 0) releaseObjectIds(wcId, agedIds);
+        if (agedIds.size > 0) releaseObjectIds(wcId, unsharedObjectIds(session, paneId, agedIds));
       }
     }
   }
@@ -478,7 +505,9 @@ function recordRowObjects(
     const evictedIds = ledger.rows.get(oldest.value);
     ledger.rows.delete(oldest.value);
     ledger.inspected.delete(oldest.value);
-    if (evictedIds && evictedIds.size > 0) releaseObjectIds(wcId, evictedIds);
+    if (evictedIds && evictedIds.size > 0) {
+      releaseObjectIds(wcId, unsharedObjectIds(session, paneId, evictedIds));
+    }
   }
 }
 
@@ -489,14 +518,19 @@ async function releaseObjectsForPane(
 ): Promise<void> {
   const ledger = session.rowObjectIdsByPane.get(paneId);
   if (!ledger) return;
-  await releaseLedger(wc, ledger);
+  await releaseLedger(wc, session, paneId, ledger);
 }
 
-async function releaseLedger(wc: Electron.WebContents, ledger: PaneObjectLedger): Promise<void> {
+async function releaseLedger(
+  wc: Electron.WebContents,
+  session: CdpSession,
+  paneId: string,
+  ledger: PaneObjectLedger
+): Promise<void> {
   // Drop ownership before awaiting: an expansion result landing mid-release
   // must not attach new handles to a record that is about to disappear, and
   // must not read a released row as still owning anything.
-  const ids = resetPaneObjectLedger(ledger);
+  const ids = unsharedObjectIds(session, paneId, resetPaneObjectLedger(ledger));
   if (ids.length === 0) return;
 
   await Promise.allSettled(
@@ -1041,7 +1075,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     const wc = webContents.fromId(webContentsId);
     if (ledger && wc && !wc.isDestroyed()) {
-      await releaseLedger(wc, ledger);
+      await releaseLedger(wc, session, paneId, ledger);
     }
 
     // If no more panes are capturing, give up the domain leases but keep the

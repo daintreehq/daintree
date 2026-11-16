@@ -1173,6 +1173,7 @@ export const CHANNEL_LOCALITY = {
   "site-preview:clear-selection": "shell",
   "site-preview:detach": "shell",
   "site-preview:set-mode": "shell",
+  "site-preview:set-paused": "shell",
   "slash-commands:list": "host",
   "sound:get-dir": "shell",
   "sound:play-ui-event": "shell",

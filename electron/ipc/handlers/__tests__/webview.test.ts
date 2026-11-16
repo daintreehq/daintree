@@ -1358,14 +1358,12 @@ describe("registerWebviewHandlers", () => {
         Array.from({ length: MAX_LIVE_OBJECT_ROWS + 5 }, (_, i) => `newer-${i}`)
       );
       expect(releasedIds()).not.toContain("inspected-obj");
-      const nested = await getHandler("webview:get-console-properties")(
-        null,
-        42,
-        "pane-1",
-        rowId,
-        "nested-obj"
+      debuggerMock.sendCommand.mockClear();
+      await getHandler("webview:get-console-properties")(null, 42, "pane-1", rowId, "nested-obj");
+      expect(debuggerMock.sendCommand).toHaveBeenCalledWith(
+        "Runtime.getProperties",
+        expect.objectContaining({ objectId: "nested-obj" })
       );
-      expect(nested.released).toBeUndefined();
 
       // The rest of the cap fills behind it, which takes the row off screen.
       emitObjects(
@@ -1374,6 +1372,40 @@ describe("registerWebviewHandlers", () => {
       );
       expect(releasedIds()).toContain("inspected-obj");
       expect(releasedIds()).toContain("nested-obj");
+    });
+
+    it("keeps a handle another pane on the guest still holds (#17067)", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const start = getHandler("webview:start-console-capture");
+      await start(null, 42, "pane-1");
+      await start(null, 42, "pane-2");
+      const listener = getMessageListener();
+      emitObjects(listener, ["shared-obj"]);
+      const rows = embedderMock.send.mock.calls
+        .filter(([channel]: string[]) => channel === "webview:console-message")
+        .map((call) => call[1] as { id: number; paneId: string });
+      const pane2Row = rows.find((row) => row.paneId === "pane-2")!.id;
+      debuggerMock.sendCommand.mockImplementation((cmd: string) =>
+        Promise.resolve(cmd === "Runtime.getProperties" ? { result: [] } : undefined)
+      );
+      await getHandler("webview:get-console-properties")(
+        null,
+        42,
+        "pane-2",
+        pane2Row,
+        "shared-obj"
+      );
+
+      // Both panes age the row out; only pane-1 lets go of it.
+      emitObjects(
+        listener,
+        Array.from({ length: MAX_LIVE_OBJECT_ROWS }, (_, i) => `newer-${i}`)
+      );
+
+      expect(releasedIds()).not.toContain("shared-obj");
+      // A handle neither pane holds any more still goes.
+      emitObjects(listener, ["one-more"]);
+      expect(releasedIds()).toContain("newer-0");
     });
 
     it("records nothing for a pane whose capture is stopping (#17067)", async () => {

@@ -889,6 +889,11 @@ describe("SitePreviewBridge", () => {
     });
     expect(bootstraps(harness)[0]).toContain("paused: false");
     expect(bootstraps(harness).at(-1)).toContain("paused: true");
+
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", false);
+    expect(String(evaluations(harness).at(-1)?.params?.expression)).toContain(
+      "api.setPaused(false)"
+    );
   });
 
   it("re-applies a pause made while the bootstrap was still installing", async () => {
@@ -967,6 +972,20 @@ describe("SitePreviewBridge out-of-band ops", () => {
     const sources = evaluations(harness).map((c) => String(c.params?.expression));
     expect(sources.some((e) => e.includes("+page.svelte"))).toBe(false);
     expect(sources.some((e) => e.includes("Card.svelte"))).toBe(false);
+  });
+
+  it("carries a pause asked for while suspended into the resumed install", async () => {
+    const harness = await suspendedHarness();
+    const before = evaluations(harness).length;
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    expect(evaluations(harness)).toHaveLength(before);
+
+    harness.wc.url = "http://localhost:5173/";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(bootstraps(harness)).toHaveLength(2);
+    });
+    expect(bootstraps(harness).at(-1)).toContain("paused: true");
   });
 
   it("carries the mode set while suspended into the resumed install", async () => {

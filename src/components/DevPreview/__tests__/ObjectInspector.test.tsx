@@ -6,7 +6,9 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import type {
   CdpGetPropertiesResult,
   CdpPropertyDescriptor,
+  SerializedConsoleRow,
 } from "@shared/types/ipc/webviewConsole";
+import { MAX_LIVE_OBJECT_ROWS } from "@shared/config/devPreviewConsole";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectInspector } from "../ObjectInspector";
 import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
@@ -151,56 +153,95 @@ describe("ObjectInspector property values", () => {
 });
 
 describe("ObjectInspector released values (#17067)", () => {
-  function renderValue(objectId: string) {
+  /** A console row as the panel renders it: focusable, reading its value from the store. */
+  function StoreRow() {
+    const arg = useConsoleCaptureStore((state) => state.messages.get("pane-1")?.[0]?.args[0]);
+    if (!arg) return null;
+    return (
+      <div tabIndex={0} data-console-row={3}>
+        <ObjectInspector arg={arg} webContentsId={7} paneId="pane-1" rowId={3} path="0" />
+      </div>
+    );
+  }
+
+  function renderRow() {
     return render(
       <TooltipProvider delayDuration={0}>
-        <ObjectInspector
-          arg={{ type: "object", objectId, preview: "{a: 1}" }}
-          webContentsId={7}
-          paneId="pane-1"
-          rowId={3}
-          path="0"
-        />
+        <StoreRow />
       </TooltipProvider>
     );
   }
 
-  beforeEach(() => {
-    useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
-    useConsoleCaptureStore.getState().addStructuredMessage({
-      id: 3,
+  function row(id: number, objectId = `obj-${id}`): SerializedConsoleRow {
+    return {
+      id,
       paneId: "pane-1",
       level: "log",
       cdpType: "log",
-      args: [{ type: "object", objectId: "obj-1", preview: "{a: 1}" }],
+      args: [{ type: "object", objectId, preview: "{a: 1}" }],
       summaryText: "{a: 1}",
       groupDepth: 0,
       timestamp: 0,
       navigationGeneration: 0,
-    });
+    };
+  }
+
+  function addRow(next: SerializedConsoleRow) {
+    useConsoleCaptureStore.getState().addStructuredMessage(next);
     flushConsoleCaptureBuffer();
+  }
+
+  beforeEach(() => {
+    useConsoleCaptureStore.getState().removePane("pane-1");
+    addRow(row(3, "obj-1"));
   });
 
   afterEach(() => {
     useConsoleCaptureStore.getState().removePane("pane-1");
   });
 
-  it("stops offering the value when main says the row's handles are gone", async () => {
+  it("stops offering the value, and keeps focus on its row, when main says it is gone", async () => {
     getConsoleProperties.mockResolvedValue({ properties: [], released: true });
-    renderValue("obj-1");
-
+    const { container } = renderRow();
     const disclosure = screen.getByRole("button", { name: /\{a: 1\}/ });
+    disclosure.focus();
+
     fireEvent.click(disclosure);
-    await waitFor(() => {
-      const [row] = useConsoleCaptureStore.getState().getMessages("pane-1");
-      expect(row!.args[0]).toMatchObject({ type: "object", objectId: "" });
+
+    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    const [kept] = useConsoleCaptureStore.getState().getMessages("pane-1");
+    expect(kept!.args[0]).toMatchObject({ type: "object", objectId: "" });
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
+  });
+
+  it("keeps an expanded value inspectable after it ages out of the live window", async () => {
+    getConsoleProperties.mockResolvedValue({ properties: [] });
+    renderRow();
+    fireEvent.click(screen.getByRole("button", { name: /\{a: 1\}/ }));
+    await waitFor(() => expect(getConsoleProperties).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      for (let id = 4; id < 4 + MAX_LIVE_OBJECT_ROWS + 1; id++) addRow(row(id));
     });
-    // Not opened onto an empty tree.
-    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+
+    expect(screen.getByRole("button", { name: /\{a: 1\}/ })).not.toBeNull();
+  });
+
+  it("hands focus to the row when a focused value ages out", async () => {
+    const { container } = renderRow();
+    screen.getByRole("button", { name: /\{a: 1\}/ }).focus();
+
+    await act(async () => {
+      for (let id = 4; id < 4 + MAX_LIVE_OBJECT_ROWS + 1; id++) addRow(row(id));
+    });
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
   });
 
   it("shows a released value as its preview, with no control, and says why", async () => {
-    renderValue("");
+    useConsoleCaptureStore.getState().releaseRowHandles("pane-1", 3);
+    renderRow();
 
     expect(screen.queryByRole("button")).toBeNull();
     const preview = screen.getByText("{a: 1}");

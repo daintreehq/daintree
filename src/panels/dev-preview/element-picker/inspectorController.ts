@@ -568,6 +568,8 @@ export class InspectorController implements DevPreviewToolSession {
   private surfacesVisible = false;
   /** What the page was last told about pausing, and which binding it was told on. */
   private pauseSent: { sessionId: string; paused: boolean } | null = null;
+  /** The bind on its way, which a cached view's freeze has to wait for. */
+  private bindInFlight: Promise<unknown> | null = null;
   /** The host's last word on whether the preview is showing a page, and which. */
   private pageReady = false;
   private pageUrl = "";
@@ -616,8 +618,8 @@ export class InspectorController implements DevPreviewToolSession {
     this.unsubscribers.push(subscribeComposerMemory(() => this.holdSources()));
     const lifecycle = deps.viewLifecycle;
     if (lifecycle) {
-      this.unsubscribers.push(lifecycle.subscribe(() => void this.syncPause()));
-      this.unsubscribers.push(lifecycle.subscribeCachedFlush(() => this.syncPause(true)));
+      this.unsubscribers.push(lifecycle.subscribe(() => this.syncPause()));
+      this.unsubscribers.push(lifecycle.subscribeCachedFlush(() => this.pauseBeforeFreeze()));
     }
   }
 
@@ -635,7 +637,7 @@ export class InspectorController implements DevPreviewToolSession {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
     if (patch.selection !== undefined || patch.workspace !== undefined) this.holdSources();
-    if (patch.binding !== undefined) void this.syncPause();
+    if (patch.binding !== undefined) this.syncPause();
   }
 
   /**
@@ -652,16 +654,32 @@ export class InspectorController implements DevPreviewToolSession {
    * Tell the page when that changes what it was last told. A new binding's
    * page starts running, so it only ever needs telling to stop.
    */
-  private syncPause(paused: boolean = this.wantsPause()): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+  private syncPause(paused: boolean = this.wantsPause()): void {
+    if (this.disposed) return;
     const binding = this.state.binding;
-    if (binding.status !== "bound") return Promise.resolve();
-    const sent = this.pauseSent?.sessionId === binding.sessionId ? this.pauseSent.paused : false;
-    if (sent === paused) return Promise.resolve();
-    this.pauseSent = { sessionId: binding.sessionId, paused };
-    return this.deps.preview
-      .setPaused({ sessionId: binding.sessionId, paused })
-      .catch(() => undefined);
+    if (binding.status !== "bound") return;
+    const sessionId = binding.sessionId;
+    const before = this.pauseSent?.sessionId === sessionId ? this.pauseSent.paused : false;
+    if (before === paused) return;
+    const sent = { sessionId, paused };
+    this.pauseSent = sent;
+    void this.deps.preview.setPaused(sent).catch(() => {
+      // Not applied, so the page is as it was: the next change sends it again.
+      if (this.pauseSent === sent) this.pauseSent = { sessionId, paused: before };
+    });
+  }
+
+  /**
+   * Main holds a cached view's freeze until this settles. It waits for a bind
+   * on its way — a frozen view could not hear the reply — then sends the
+   * pause. Sending is enough: main applies it to the page whether or not this
+   * view is frozen by then, and a page that is frozen itself (parked in the
+   * dock) must not hold up the view's freeze.
+   */
+  private async pauseBeforeFreeze(): Promise<void> {
+    const pending = this.bindInFlight;
+    if (pending) await pending.catch(() => undefined);
+    this.syncPause(true);
   }
 
   /**
@@ -728,7 +746,7 @@ export class InspectorController implements DevPreviewToolSession {
       // a cold dev server — up to a minute of "waiting" beside a loaded page.
       void this.retryConnect();
     }
-    void this.syncPause();
+    this.syncPause();
   }
 
   updateContext(context: InspectorContext): void {
@@ -1002,8 +1020,14 @@ export class InspectorController implements DevPreviewToolSession {
     // snapshot can't be replayed, and a session on the panel isn't proof it
     // was this controller's.
     let state: SitePreviewBindingState;
+    const pending = this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+    this.bindInFlight = pending;
+    const settled = () => {
+      if (this.bindInFlight === pending) this.bindInFlight = null;
+    };
+    pending.then(settled, settled);
     try {
-      state = await this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+      state = await pending;
     } catch (error) {
       if (request !== this.bindRequest) return;
       this.bufferedEvents = [];

@@ -126,9 +126,13 @@ export function useDevPreviewConsoleCapture(
     safeFireAndForget(started, { context: "Starting dev-preview console capture" });
 
     const store = useConsoleCaptureStore.getState();
+    // Row ids only grow, and this capture stops hearing rows before any later
+    // mount of the pane starts: everything up to here is this capture's.
+    let lastRowId = -1;
 
     const offMessage = window.electron.webview.onConsoleMessage((row) => {
       if (row.paneId !== paneId) return;
+      lastRowId = row.id;
       if (
         isViteHmrFailureMessage(row.summaryText) &&
         row.navigationGeneration >= currentGenerationRef.current
@@ -164,9 +168,10 @@ export function useDevPreviewConsoleCapture(
         .then(() => {
           if (activeCaptureTokenRef.current !== captureToken) return;
           activeCaptureTokenRef.current = null;
-          // Stopping releases every handle main holds for this pane; the rows
-          // stay on screen as previews.
-          useConsoleCaptureStore.getState().releaseHandles(paneId);
+          // Stopping releases every handle main holds for this pane on this
+          // guest; the rows stay on screen as previews. A remount may already
+          // be capturing, so only the rows this capture delivered are touched.
+          if (lastRowId >= 0) useConsoleCaptureStore.getState().releaseHandles(paneId, lastRowId);
           return window.electron.webview.stopConsoleCapture(webContentsId, paneId);
         });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });

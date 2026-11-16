@@ -48,8 +48,12 @@ interface ConsoleCaptureState {
   markInspected(paneId: string, rowId: number): void;
   /** Main reported this row's handles gone: stop offering to expand its values. */
   releaseRowHandles(paneId: string, rowId: number): void;
-  /** Capture stopped and main released every handle: no row can be expanded any more. */
-  releaseHandles(paneId: string): void;
+  /**
+   * A capture stopped and main released its handles: none of the rows it
+   * delivered, up to `throughRowId`, can be expanded any more. Rows a later
+   * capture of the pane delivered are newer, and stay as they are.
+   */
+  releaseHandles(paneId: string, throughRowId: number): void;
 }
 
 // Types that should not be rendered as visible rows
@@ -305,12 +309,16 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
     });
   },
 
-  releaseHandles(paneId: string) {
-    inspectedRows.delete(paneId);
+  releaseHandles(paneId: string, throughRowId: number) {
+    const inspected = inspectedRows.get(paneId);
+    if (inspected) {
+      for (const rowId of inspected) if (rowId <= throughRowId) inspected.delete(rowId);
+    }
     flushConsoleCaptureBuffer();
     mapPaneMessages(paneId, (messages) => {
-      if (!messages.some(hasHandles)) return null;
-      return messages.map(withoutHandles);
+      const released = (msg: ConsoleMessage) => msg.id <= throughRowId && hasHandles(msg);
+      if (!messages.some(released)) return null;
+      return messages.map((msg) => (released(msg) ? withoutHandles(msg) : msg));
     });
   },
 }));

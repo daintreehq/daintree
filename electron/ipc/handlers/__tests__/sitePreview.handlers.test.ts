@@ -97,12 +97,14 @@ describe("sitePreview handlers", () => {
     await all.detach.handler(ctx("project-a"), { sessionId: "s1" });
     await all.setMode.handler(ctx("project-a"), { sessionId: "s1", mode: "select" });
     await all.setPaused.handler(ctx("project-a"), { sessionId: "s1", paused: true });
+    await all.setPaused.handler(ctx("project-a"), { sessionId: "s1", paused: false });
     await all.clearSelection.handler(ctx("project-a"), { sessionId: "s1" });
     await all.clearHover.handler(ctx("project-a"), { sessionId: "s1" });
 
     expect(bridge.detach).toHaveBeenCalledWith("project-a", "s1");
     expect(bridge.setMode).toHaveBeenCalledWith("project-a", "s1", "select");
     expect(bridge.setPaused).toHaveBeenCalledWith("project-a", "s1", true);
+    expect(bridge.setPaused).toHaveBeenLastCalledWith("project-a", "s1", false);
     expect(bridge.clearSelection).toHaveBeenCalledWith("project-a", "s1");
     expect(bridge.clearHover).toHaveBeenCalledWith("project-a", "s1");
   });
@@ -116,6 +118,7 @@ describe("sitePreview handlers", () => {
       all.setMode.schema.safeParse({ sessionId: "s1", mode: "select", script: "x" }).success
     ).toBe(false);
     expect(all.setMode.schema.safeParse({ sessionId: "s1", mode: "inspect" }).success).toBe(false);
+    expect(all.setPaused.schema.safeParse({ sessionId: "s1", paused: false }).success).toBe(true);
     expect(all.setPaused.schema.safeParse({ sessionId: "s1", paused: "yes" }).success).toBe(false);
     expect(
       all.setPaused.schema.safeParse({ sessionId: "s1", paused: true, mode: "select" }).success

@@ -132,23 +132,64 @@ describe("Element Picker pausing out of sight (#17067)", () => {
     expect(pauses()).toEqual([true, false]);
   });
 
-  it("has the pause on its way before main can freeze a cached view", async () => {
+  it("sends the pause before a cached view can freeze, without waiting on the page", async () => {
     const lifecycle = open(true);
     await bound();
-    let delivered = false;
-    host.preview.setPaused.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      delivered = true;
-    });
+    // A page that never answers — frozen in the dock, say — must not hold the
+    // view's freeze.
+    host.preview.setPaused.mockImplementationOnce(() => new Promise<undefined>(() => {}));
 
-    // The flush runs before the view reads as cached, and main holds the
-    // freeze until it settles.
     await lifecycle.cache();
 
-    expect(delivered).toBe(true);
     expect(pauses()).toEqual([true]);
     lifecycle.set(false);
     expect(pauses()).toEqual([true]);
+  });
+
+  it("holds a cached view's freeze for a bind on its way, then pauses what it bound", async () => {
+    let finishBind: () => void = () => {};
+    host.picker.bind.mockImplementationOnce(
+      (request) =>
+        new Promise((resolve) => {
+          finishBind = () =>
+            resolve({
+              sessionId: "session-1",
+              panelId: request.panelId,
+              projectId: "p1",
+              documentEpoch: 0,
+              mode: request.mode ?? "select",
+              guestReady: false,
+              droppedMessages: 0,
+              suspended: false,
+            });
+        })
+    );
+    const lifecycle = open(true);
+    await vi.waitFor(() => expect(host.picker.bind).toHaveBeenCalled());
+
+    let flushed = false;
+    const flush = Promise.resolve(lifecycle.cache()).then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+
+    finishBind();
+    await flush;
+    expect(pauses()).toEqual([true]);
+  });
+
+  it("sends a change again after one the host could not apply", async () => {
+    open(false);
+    await bound();
+    host.preview.setPaused.mockRejectedValueOnce(new Error("binding gone"));
+
+    controller!.update(context(true));
+    await vi.waitFor(() => expect(pauses()).toEqual([true, false]));
+    await Promise.resolve();
+    controller!.update(context(true));
+
+    expect(pauses()).toEqual([true, false, false]);
   });
 
   it("stops hearing the view's lifecycle once switched off", async () => {

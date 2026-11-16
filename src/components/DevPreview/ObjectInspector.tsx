@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useId, useRef, useState } from "react";
+import {
+  createContext,
+  type FocusEvent,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { CdpRemoteArg, CdpPropertyDescriptor } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
@@ -174,6 +183,32 @@ export function ObjectInspector({
   const staleTooltip = useRowFocusTooltip();
   const disclosureRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
+  /** The console row holding this value, while focus is on one of its controls. */
+  const focusedRowRef = useRef<HTMLElement | null>(null);
+  const trackFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    focusedRowRef.current = event.currentTarget.closest<HTMLElement>("[data-console-row]");
+  }, []);
+  const forgetFocus = useCallback(() => {
+    focusedRowRef.current = null;
+  }, []);
+  const canExpand =
+    arg.type === "object" &&
+    !!arg.objectId &&
+    webContentsId != null &&
+    !isStale &&
+    depth < MAX_DEPTH;
+
+  // The controls go when the value stops being expandable — its handles
+  // released, aged out of the live window, or gone with a navigation. Removing
+  // a focused element drops focus on the page, so it moves to the value's row.
+  useLayoutEffect(() => {
+    if (canExpand) return;
+    const row = focusedRowRef.current;
+    focusedRowRef.current = null;
+    if (row === null || !row.isConnected) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body) row.focus({ preventScroll: true });
+  }, [canExpand]);
 
   const handleExpand = useCallback(async () => {
     if (isExpanded) {
@@ -236,7 +271,6 @@ export function ObjectInspector({
   }
 
   // Object type
-  const canExpand = !!arg.objectId && webContentsId != null && !isStale && depth < MAX_DEPTH;
   const displayText = arg.preview ?? arg.description ?? arg.className ?? "Object";
 
   if (isStale) {
@@ -279,6 +313,8 @@ export function ObjectInspector({
         ref={disclosureRef}
         type="button"
         onClick={() => void handleExpand()}
+        onFocus={trackFocus}
+        onBlur={forgetFocus}
         aria-expanded={isExpanded}
         aria-controls={isExpanded && properties ? propertiesId : undefined}
         aria-busy={isLoading || undefined}
@@ -301,6 +337,8 @@ export function ObjectInspector({
             ref={retryRef}
             type="button"
             onClick={() => void handleExpand()}
+            onFocus={trackFocus}
+            onBlur={forgetFocus}
             className={cn(DISCLOSURE_TOGGLE_CLASS, "min-h-6 -my-1")}
           >
             Retry

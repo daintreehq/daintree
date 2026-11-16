@@ -215,6 +215,36 @@ describe("useDevPreviewConsoleCapture", () => {
     expect(kept?.args[0]).toMatchObject({ type: "object", objectId: "", preview: "{}" });
   });
 
+  it("leaves a remount's rows inspectable when an earlier mount's stop lands late (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    let resolveFirstStart: () => void = () => {};
+    startConsoleCapture.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstStart = resolve;
+        })
+    );
+    const objectRow = (id: number, objectId: string) =>
+      row({ id, paneId: PANE_ID, args: [{ type: "object", objectId, preview: "{}" }] });
+    const firstWebview = makeWebviewElement();
+    const first = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, firstWebview, true, false));
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(1));
+    addRowViaCb(objectRow(1, "first-guest-obj"));
+    first.unmount();
+
+    const secondWebview = makeWebviewElement();
+    renderHook(() => useDevPreviewConsoleCapture(PANE_ID, secondWebview, true, false));
+    addRowViaCb(objectRow(2, "second-guest-obj"));
+    resolveFirstStart();
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledTimes(1));
+
+    const [stopped, live] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(stopped?.args[0]).toMatchObject({ objectId: "" });
+    expect(live?.args[0]).toMatchObject({ objectId: "second-guest-obj" });
+  });
+
   it("stops capture when the panel becomes evicted", async () => {
     const webview = makeWebviewElement();
     const { rerender } = renderHook(
