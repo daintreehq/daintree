@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
 import type { PromptTemplateContribution, TerminalLinkContribution } from "@shared/types/plugin";
@@ -60,6 +61,18 @@ export interface PluginTerminalLink {
 interface PluginRuntimeState {
   promptTemplates: readonly PluginPromptTemplate[];
   terminalLinks: readonly PluginTerminalLink[];
+  /**
+   * Every scope pattern a running plugin declares a file-decoration provider
+   * for (`contributes.fileDecorationProviders[].scopes`), deduplicated and
+   * sorted. A path list asks for decorations only when one of these matches its
+   * scope, so a surface no plugin decorates sends nothing while it scrolls.
+   *
+   * Declared, not bound: main activates a matching plugin on its first pull, so
+   * waiting for a bound implementation would never let that pull happen. It
+   * over-approximates per project (main still filters by the asking view's
+   * project), which only costs the pull the surface used to make anyway.
+   */
+  fileDecorationScopes: readonly string[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -136,6 +149,7 @@ async function pullPluginRuntimeSnapshot(
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
     const promptTemplates: PluginPromptTemplate[] = [];
     const terminalLinks: PluginTerminalLink[] = [];
+    const decorationScopes = new Set<string>();
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -173,6 +187,9 @@ async function pullPluginRuntimeSnapshot(
             link,
           });
         }
+        for (const provider of p.manifest.contributes?.fileDecorationProviders ?? []) {
+          for (const scope of provider.scopes) decorationScopes.add(scope);
+        }
       }
       pluginMetaById.set(id, {
         devMode: p.devMode,
@@ -200,6 +217,10 @@ async function pullPluginRuntimeSnapshot(
     }
     if (JSON.stringify(terminalLinks) !== JSON.stringify(current.terminalLinks)) {
       next.terminalLinks = terminalLinks;
+    }
+    const fileDecorationScopes = [...decorationScopes].sort();
+    if (fileDecorationScopes.join("\0") !== current.fileDecorationScopes.join("\0")) {
+      next.fileDecorationScopes = fileDecorationScopes;
     }
     if (Object.keys(next).length > 0) set(next);
   } catch (err) {
@@ -262,6 +283,7 @@ function ensureSubscribed(
 export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
   promptTemplates: [],
   terminalLinks: [],
+  fileDecorationScopes: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
@@ -287,7 +309,32 @@ export function _resetPluginRuntimeStoreForTest(): void {
   usePluginRuntimeStore.setState({
     promptTemplates: [],
     terminalLinks: [],
+    fileDecorationScopes: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });
+}
+
+/** The registry's match rule (`fileDecorationRegistry.scopeMatchesPattern`). */
+function decorationScopeMatches(scope: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith("*")) return scope.startsWith(pattern.slice(0, -1));
+  return scope === pattern;
+}
+
+/**
+ * Whether any running plugin declares a file-decoration provider for `scope`.
+ * Subscribes the store on first use; false until the first snapshot lands, and
+ * for an empty scope.
+ */
+export function useHasFileDecorationProvider(scope: string): boolean {
+  const init = usePluginRuntimeStore((state) => state.init);
+  useEffect(() => {
+    init();
+  }, [init]);
+  return usePluginRuntimeStore(
+    (state) =>
+      scope.length > 0 &&
+      state.fileDecorationScopes.some((pattern) => decorationScopeMatches(scope, pattern))
+  );
 }
