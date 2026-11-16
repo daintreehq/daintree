@@ -62,7 +62,8 @@ export function choiceLabels(
   options: DecisionQuestionContent["options"]
 ): string[] {
   return answer.choices.map(
-    (choice) => choice.label ?? options.find((option) => option.id === choice.id)?.label ?? choice.id
+    (choice) =>
+      choice.label ?? options.find((option) => option.id === choice.id)?.label ?? choice.id
   );
 }
 

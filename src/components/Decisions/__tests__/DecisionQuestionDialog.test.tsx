@@ -162,12 +162,8 @@ describe("DecisionQuestionDialog", () => {
     fireEvent.click(screen.getByTestId("decision-question-next"));
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-8"));
     expect(screen.getByTestId("decision-question-position").textContent).toBe("2 of 2");
-    expect(screen.getByTestId("decision-question-requirement").textContent).not.toBe(
-      requirementA
-    );
-    expect(screen.getByTestId("decision-question-next").getAttribute("aria-disabled")).toBe(
-      "true"
-    );
+    expect(screen.getByTestId("decision-question-requirement").textContent).not.toBe(requirementA);
+    expect(screen.getByTestId("decision-question-next").getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));

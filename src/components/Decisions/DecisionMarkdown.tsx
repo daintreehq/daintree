@@ -15,8 +15,7 @@ const NO_URLS = () => "";
  */
 const COMPONENTS: Components = {
   a: ({ children }) => <span className="underline decoration-dotted">{children}</span>,
-  img: ({ alt }) =>
-    alt ? <span className="text-text-secondary">[{alt}]</span> : null,
+  img: ({ alt }) => (alt ? <span className="text-text-secondary">[{alt}]</span> : null),
 };
 
 /**

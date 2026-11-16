@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  DecisionThreadAnswer,
-  DecisionThreadMessage,
-} from "@shared/types/decisionsQuestion";
+import type { DecisionThreadAnswer, DecisionThreadMessage } from "@shared/types/decisionsQuestion";
 import {
   choiceLabels,
   emptyEntryText,

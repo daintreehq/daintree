@@ -141,14 +141,14 @@ function QuestionBody({ question }: { question: DecisionQuestionContent }) {
             ))}
           </ul>
           {question.allowText && (
-            <p className="text-2xs text-text-secondary">An answer may also be in their own words.</p>
+            <p className="text-2xs text-text-secondary">
+              An answer may also be in their own words.
+            </p>
           )}
         </section>
       )}
       {question.attachments.length > 0 && (
-        <p className="text-2xs text-text-secondary">
-          Asked with images; they aren't shown here.
-        </p>
+        <p className="text-2xs text-text-secondary">Asked with images; they aren't shown here.</p>
       )}
       <section className="flex flex-col gap-1.5" aria-label="Answers and follow-ups">
         <h3 className="text-xs font-medium text-text-secondary">Answers and follow-ups</h3>
@@ -358,12 +358,7 @@ export function DecisionQuestionDialog() {
             >
               {position}
             </span>
-            <StepButton
-              ref={nextRef}
-              direction="next"
-              available={hasNext}
-              onStep={() => goTo(1)}
-            />
+            <StepButton ref={nextRef} direction="next" available={hasNext} onStep={() => goTo(1)} />
           </div>
         )}
         <AppDialog.CloseButton />
