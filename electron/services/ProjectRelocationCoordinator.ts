@@ -601,7 +601,7 @@ export class ProjectRelocationCoordinator {
     // TerminalProcess.kill() (#3177) — do NOT add another here.
     if (ptyClient) {
       const killed = await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
-      for (const terminal of killed) writeHibernatedMarker(terminal.id);
+      await Promise.all(killed.map((terminal) => writeHibernatedMarker(terminal.id)));
     }
     // Force-drop the workspace host rooted at the OLD path, bypassing the
     // refCount guard the open window holds (the folder is moving out from under

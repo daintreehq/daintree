@@ -9,6 +9,21 @@ import {
 import { getPtyPowerLevel, resetPtyPowerLevelForTesting } from "../ptyPowerPolicy.js";
 import type { AnalysisFinalSnapshot, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
+// Lets a test hold a restore's disk read open after the bytes are in.
+const restoreRead = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../terminalSessionPersistence.js")>();
+  return {
+    ...actual,
+    readSessionRestore: async (terminalId: string) => {
+      const hold = restoreRead.hold;
+      const payload = await actual.readSessionRestore(terminalId);
+      if (hold) await hold;
+      return payload;
+    },
+  };
+});
+
 // Exercises the worker-side protocol end-to-end without spawning a real
 // worker thread: the runtime + AnalysisSession (headless xterm, monitor) run
 // in-process, exactly as they do inside the worker.
@@ -181,6 +196,59 @@ describe("AnalysisWorkerRuntime", () => {
       const after = await serializeRequest(12);
       if (after.type !== "response") throw new Error("expected a response");
       expect(after.result).toMatchObject({ cols: 120, rows: 40 });
+    });
+
+    it("holds a restoring terminal's messages behind its disk read, and no other terminal's", async () => {
+      await fsp.writeFile(
+        path.join(userDataDir, "terminal-sessions", "restored.restore"),
+        "DAINTREE_SESSION_v2\n80x24\nfrom disk",
+        "utf8"
+      );
+      let release!: () => void;
+      restoreRead.hold = new Promise<void>((resolve) => (release = resolve));
+
+      runtime.handleMessage({
+        type: "create",
+        terminalId: "restored",
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        restore: true,
+        spawnedAt: 99,
+        epoch: 0,
+      });
+      runtime.handleMessage({
+        type: "data",
+        terminalId: "restored",
+        data: "live output\r\n",
+        flags: { agentLive: false },
+        epoch: 0,
+      });
+      const restoredResponse = serializeRequest(31);
+
+      // Another terminal on the same worker is served while the read is held.
+      sendData("other terminal\r\n");
+      runtime.handleMessage({
+        type: "request",
+        requestId: 32,
+        terminalId: "t1",
+        op: "serialize",
+        generation: 1,
+      });
+      const other = await waitFor(() =>
+        emitted.find((m) => m.type === "response" && m.requestId === 32)
+      );
+      if (other.type !== "response") throw new Error("expected a response");
+      expect((other.result as { data: string }).data).toContain("other terminal");
+      expect(emitted.some((m) => m.type === "response" && m.requestId === 31)).toBe(false);
+
+      restoreRead.hold = null;
+      release();
+      const restored = await restoredResponse;
+      if (restored.type !== "response") throw new Error("expected a response");
+      const data = (restored.result as { data: string }).data;
+      expect(data.indexOf("from disk")).toBeGreaterThanOrEqual(0);
+      expect(data.indexOf("from disk")).toBeLessThan(data.indexOf("live output"));
     });
 
     it("serializes the banner-aware persistence form itself when a restore banner exists", async () => {

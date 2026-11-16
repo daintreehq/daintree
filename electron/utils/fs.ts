@@ -121,7 +121,33 @@ export async function syncParentDirectory(filePath: string): Promise<void> {
   }
 }
 
-function syncParentDirectorySync(filePath: string): void {
+/**
+ * Flush a file written without durability, at a moment that needs it to
+ * survive a power cut. False when the file is gone, which needs no flush.
+ */
+export function syncFileSync(filePath: string): boolean {
+  let fd: number;
+  try {
+    // Writable because Windows refuses to flush a handle opened read-only.
+    fd = openSync(filePath, "r+");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return false;
+    throw error;
+  }
+  try {
+    fsyncSync(fd);
+    return true;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // Suppress close errors; sync failure (if any) is the primary error
+    }
+  }
+}
+
+/** Synchronous {@link syncParentDirectory}. */
+export function syncParentDirectorySync(filePath: string): void {
   if (process.platform === "win32") return;
   const dirPath = dirname(filePath);
   let fd: number | undefined;
@@ -153,17 +179,19 @@ function syncParentDirectorySync(filePath: string): void {
  * not during the write, and not at the destination path. A crash mid-write
  * therefore can't strand a world-readable temp with sensitive contents.
  * Silently skipped on Windows.
+ *
+ * `durable: false` has the meaning it has on {@link resilientAtomicWriteFileSync}.
  */
 export async function resilientAtomicWriteFile(
   filePath: string,
   data: string | Buffer | Uint8Array,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number }
+  options?: { mode?: number; durable?: boolean }
 ): Promise<void> {
   const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
   try {
     await resilientRename(tempPath, filePath);
-    await syncParentDirectory(filePath);
+    if (options?.durable !== false) await syncParentDirectory(filePath);
   } catch (error) {
     fsUnlink(tempPath).catch(() => {});
     throw error;
@@ -177,16 +205,20 @@ export async function resilientAtomicWriteFile(
  * For a caller that has to order the rename itself, such as against a
  * synchronous writer of the same path (an async rename queued on libuv's
  * threadpool can land after a later synchronous write).
+ *
+ * `durable: false` skips the temp file's flush, for a caller that then skips
+ * the directory sync too (see {@link resilientAtomicWriteFileSync}).
  */
 export async function prepareAtomicWriteFile(
   filePath: string,
   data: string | Buffer | Uint8Array,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number }
+  options?: { mode?: number; durable?: boolean }
 ): Promise<string> {
   const tempPath = generateTempPath(filePath);
   const applyMode = options?.mode !== undefined && process.platform !== "win32";
-  const baseWriteOptions = typeof data === "string" ? { encoding, flush: true } : { flush: true };
+  const flush = options?.durable !== false;
+  const baseWriteOptions = typeof data === "string" ? { encoding, flush } : { flush };
   const writeOptions = (
     applyMode ? { ...baseWriteOptions, mode: options!.mode } : baseWriteOptions
   ) as Parameters<typeof writeFileSync>[2];
@@ -273,13 +305,15 @@ function isTransientRenameError(error: unknown): boolean {
  * spinning the event loop the way {@link resilientRenameSync} does.
  *
  * Resolves `false`, with the temp file removed, when `shouldCommit()` refused.
+ * `durable: false` and `onCommitted` have the meaning they have on
+ * {@link resilientAtomicWriteFileSync}.
  */
 export async function resilientAtomicWriteFileIf(
   filePath: string,
   data: string | Buffer | Uint8Array,
   shouldCommit: () => boolean,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number }
+  options?: { mode?: number; durable?: boolean; onCommitted?: () => void }
 ): Promise<boolean> {
   const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
   let committed = false;
@@ -290,10 +324,10 @@ export async function resilientAtomicWriteFileIf(
       try {
         renameSync(tempPath, filePath);
         committed = true;
-        break;
       } catch (error) {
         if (!isTransientRenameError(error) || Date.now() >= deadline) throw error;
       }
+      if (committed) break;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       delayMs = Math.min(delayMs * 2, RENAME_RETRY_MAX_DELAY_MS);
     }
@@ -305,7 +339,9 @@ export async function resilientAtomicWriteFileIf(
     await fsUnlink(tempPath).catch(() => {});
     return false;
   }
-  await syncParentDirectory(filePath);
+  // Still the rename's tick, but outside its retry: the temp is gone now.
+  options?.onCommitted?.();
+  if (options?.durable !== false) await syncParentDirectory(filePath);
   return true;
 }
 

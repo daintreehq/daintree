@@ -578,11 +578,12 @@ describe("TerminalProcess snapshots", () => {
       terminal.flushEventDrivenSnapshot();
       await flushMicrotasks();
 
-      expect(persistAsyncMock).toHaveBeenCalledWith("t1", {
-        data: "agent-scrollback",
-        cols: 80,
-        rows: 24,
-      });
+      expect(persistAsyncMock).toHaveBeenCalledWith(
+        "t1",
+        { data: "agent-scrollback", cols: 80, rows: 24 },
+        undefined,
+        { durable: false }
+      );
     });
 
     it("suppresses an immediate repeat with unchanged content", async () => {

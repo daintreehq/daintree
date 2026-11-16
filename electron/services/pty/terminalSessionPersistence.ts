@@ -1,9 +1,12 @@
 // eager-import-allow: reads/writes terminal session snapshots via sync fs
 import { readFileSync, statSync, unlinkSync, mkdirSync } from "fs";
-import { mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import {
+  resilientAtomicWriteFile,
   resilientAtomicWriteFileIf,
   resilientAtomicWriteFileSync,
+  syncFileSync,
+  syncParentDirectorySync,
   tightenDirPermissions,
   tightenDirPermissionsSync,
   OWNER_RW_FILE_MODE,
@@ -367,40 +370,111 @@ function scheduleReplayWindowClose(
   });
 }
 
-export function restoreSessionFromFile(
-  headlessTerminal: HeadlessTerminalType,
+/**
+ * A session file read and validated off disk, ready to replay into a mirror.
+ * Reading consumes the terminal's hibernation marker, so a payload is applied
+ * once or dropped.
+ */
+export interface SessionRestorePayload {
+  content: string;
+  captureGeometry: TerminalGeometry | null;
+  mtimeMs: number;
+  wasHibernated: boolean;
+}
+
+function sessionFileTooLarge(terminalId: string, size: number): boolean {
+  if (size <= SESSION_SNAPSHOT_MAX_BYTES + SESSION_PREAMBLE_MAX_BYTES) return false;
+  console.warn(
+    `[terminalSessionPersistence] Session snapshot too large for ${terminalId} (${size} bytes), skipping restore`
+  );
+  return true;
+}
+
+function parseSessionRead(terminalId: string, raw: string): ParsedSessionFile | null {
+  const parsed = extractSessionContent(raw);
+  if (parsed === null) return null;
+  if (Buffer.byteLength(parsed.content, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) {
+    // Belt-and-suspenders: file may have grown between the stat and the read.
+    console.warn(
+      `[terminalSessionPersistence] Session snapshot grew past size limit for ${terminalId}, skipping restore`
+    );
+    return null;
+  }
+  return parsed;
+}
+
+function warnRestoreFailure(terminalId: string, error: unknown): void {
+  // Stat→read race: file vanished between size gate and read. Treat as the
+  // normal "no prior session" path rather than logging restore noise.
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+  console.warn(`[terminalSessionPersistence] Failed to restore session for ${terminalId}:`, error);
+}
+
+// The marker only picks the banner's wording, so failing to consume it must
+// not cost the scrollback it labels.
+function warnMarkerFailure(terminalId: string, error: unknown): void {
+  console.warn(
+    `[terminalSessionPersistence] Failed to consume the hibernation marker for ${terminalId}:`,
+    error
+  );
+}
+
+/**
+ * Read a terminal's session file without blocking the calling thread, for
+ * {@link applySessionRestore}. Null when there is nothing usable to replay.
+ */
+export async function readSessionRestore(
   terminalId: string
-): RestoreResult {
+): Promise<SessionRestorePayload | null> {
   const sessionPath = getSessionPath(terminalId);
-  if (!sessionPath) return NULL_RESTORE;
-
+  if (!sessionPath) return null;
   try {
-    let stat: ReturnType<typeof statSync>;
+    const { size, mtimeMs } = await stat(sessionPath);
+    if (sessionFileTooLarge(terminalId, size)) return null;
+    const parsed = parseSessionRead(terminalId, await readFile(sessionPath, "utf8"));
+    if (parsed === null) return null;
+    let wasHibernated = false;
     try {
-      stat = statSync(sessionPath);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return NULL_RESTORE;
-      throw e;
+      wasHibernated = await takeHibernatedMarker(terminalId);
+    } catch (error) {
+      warnMarkerFailure(terminalId, error);
     }
-    if (stat.size > SESSION_SNAPSHOT_MAX_BYTES + SESSION_PREAMBLE_MAX_BYTES) {
-      console.warn(
-        `[terminalSessionPersistence] Session snapshot too large for ${terminalId} (${stat.size} bytes), skipping restore`
-      );
-      return NULL_RESTORE;
-    }
-    const raw = readFileSync(sessionPath, "utf8");
-    const parsed = extractSessionContent(raw);
-    if (parsed === null) return NULL_RESTORE;
-    const { content, geometry: captureGeometry } = parsed;
-    if (Buffer.byteLength(content, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) {
-      // Belt-and-suspenders: file may have grown between statSync and readFileSync.
-      console.warn(
-        `[terminalSessionPersistence] Session snapshot grew past size limit for ${terminalId}, skipping restore`
-      );
-      return NULL_RESTORE;
-    }
-    const sessionMtime: number = stat.mtimeMs;
+    return { content: parsed.content, captureGeometry: parsed.geometry, mtimeMs, wasHibernated };
+  } catch (error) {
+    warnRestoreFailure(terminalId, error);
+    return null;
+  }
+}
 
+function readSessionRestoreSync(terminalId: string): SessionRestorePayload | null {
+  const sessionPath = getSessionPath(terminalId);
+  if (!sessionPath) return null;
+  try {
+    const { size, mtimeMs } = statSync(sessionPath);
+    if (sessionFileTooLarge(terminalId, size)) return null;
+    const parsed = parseSessionRead(terminalId, readFileSync(sessionPath, "utf8"));
+    if (parsed === null) return null;
+    let wasHibernated = false;
+    try {
+      wasHibernated = readAndDeleteHibernatedMarker(terminalId);
+    } catch (error) {
+      warnMarkerFailure(terminalId, error);
+    }
+    return { content: parsed.content, captureGeometry: parsed.geometry, mtimeMs, wasHibernated };
+  } catch (error) {
+    warnRestoreFailure(terminalId, error);
+    return null;
+  }
+}
+
+/** Replay a session read by {@link readSessionRestore} into a fresh mirror. */
+export function applySessionRestore(
+  headlessTerminal: HeadlessTerminalType,
+  terminalId: string,
+  payload: SessionRestorePayload
+): RestoreResult {
+  const { content, captureGeometry, mtimeMs, wasHibernated } = payload;
+  try {
     // Replay at the grid the snapshot was captured on, then reflow to the grid
     // this mirror owes its owner (#11552). The mirror is brand new and empty
     // here, so aligning it up front costs nothing — and it must happen BEFORE
@@ -416,8 +490,7 @@ export function restoreSessionFromFile(
       headlessTerminal.write("\x1b[?1049l");
     }
 
-    const ts = sessionMtime ? formatRestoreTimestamp(sessionMtime) : "";
-    const wasHibernated = readAndDeleteHibernatedMarker(terminalId);
+    const ts = mtimeMs ? formatRestoreTimestamp(mtimeMs) : "";
     let label: string;
     if (wasHibernated) {
       // Neutral wording: the marker is a bare flag with no room for a reason,
@@ -459,15 +532,21 @@ export function restoreSessionFromFile(
     // close the window here or every later resize parks into a window nothing
     // will ever drain.
     closeReplayWindow(headlessTerminal);
-    // Stat→read race: file vanished between size gate and read. Treat as the
-    // normal "no prior session" path rather than logging restore noise.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return NULL_RESTORE;
-    console.warn(
-      `[terminalSessionPersistence] Failed to restore session for ${terminalId}:`,
-      error
-    );
+    warnRestoreFailure(terminalId, error);
     return NULL_RESTORE;
   }
+}
+
+/**
+ * Read and replay in one synchronous step, for a caller with no way to hold
+ * live output back while an async read is in flight.
+ */
+export function restoreSessionFromFile(
+  headlessTerminal: HeadlessTerminalType,
+  terminalId: string
+): RestoreResult {
+  const payload = readSessionRestoreSync(terminalId);
+  return payload ? applySessionRestore(headlessTerminal, terminalId, payload) : NULL_RESTORE;
 }
 
 export function persistSessionSnapshotSync(
@@ -494,9 +573,16 @@ export function persistSessionSnapshotSync(
     // At the rename, in the same tick: the directory fsync after it can still
     // throw with this screen in place, and an older async write must not then
     // cover it. A failure before the rename leaves that older write standing.
-    onCommitted: () => pendingSessionWrites.delete(sessionPath),
+    onCommitted: () => {
+      pendingSessionWrites.delete(sessionPath);
+      backgroundSessionWrites.delete(sessionPath);
+    },
   });
 }
+
+// Session files whose newest write skipped its flushes, so shutdown can flush
+// them instead of rewriting them. Paths only: a multi-MB screen is never held.
+const backgroundSessionWrites = new Set<string>();
 
 /**
  * The right to commit the next async write of one session file. Identity is
@@ -575,11 +661,16 @@ function dropSessionWrite(claim: SessionWriteClaim): void {
  * file when it is called; with one it writes only if that claim still stands.
  * Either way it commits only while nothing newer has claimed, written or
  * deleted the file since.
+ *
+ * `durable: false` is for the periodic rewrites of a running terminal: it
+ * skips both fsyncs, and {@link flushPendingSessionWritesSync} flushes the
+ * file at shutdown instead.
  */
 export async function persistSessionSnapshotAsync(
   terminalId: string,
   snapshot: SerializedTerminalSnapshot,
-  claim?: SessionWriteClaim
+  claim?: SessionWriteClaim,
+  options?: { durable?: boolean }
 ): Promise<void> {
   if (claim) {
     if (!holdsSessionWrite(claim)) return;
@@ -603,12 +694,22 @@ export async function persistSessionSnapshotAsync(
     const dir = path.dirname(owned.sessionPath);
     await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
     await tightenDirPermissions(dir);
+    const durable = options?.durable !== false;
     await resilientAtomicWriteFileIf(
       owned.sessionPath,
       formatSessionFile(snapshot),
       () => holdsSessionWrite(owned),
       "utf8",
-      { mode: OWNER_RW_FILE_MODE }
+      {
+        mode: OWNER_RW_FILE_MODE,
+        durable,
+        // At the rename, in the same tick: a durable write's directory sync can
+        // still be pending when a newer background write lands over it.
+        onCommitted: () => {
+          if (durable) backgroundSessionWrites.delete(owned.sessionPath);
+          else backgroundSessionWrites.add(owned.sessionPath);
+        },
+      }
     );
   } finally {
     dropSessionWrite(owned);
@@ -620,11 +721,17 @@ export async function persistSessionSnapshotAsync(
  * rest. pty-host teardown exits without draining promises, so the final screen
  * of a terminal that exited moments before shutdown would otherwise go down
  * with its unfinished write.
+ *
+ * Then flush every file whose newest write was a non-durable background one:
+ * a terminal with nothing new since gets no teardown write of its own.
  */
 export function flushPendingSessionWritesSync(): void {
   const claims = [...pendingSessionWrites.values()];
   pendingSessionWrites.clear();
-  if (!TERMINAL_SESSION_PERSISTENCE_ENABLED || isSessionPersistSuppressed()) return;
+  if (!TERMINAL_SESSION_PERSISTENCE_ENABLED || isSessionPersistSuppressed()) {
+    backgroundSessionWrites.clear();
+    return;
+  }
   for (const claim of claims) {
     const payload = claim.snapshot ?? claim.fallback;
     if (!payload) continue;
@@ -637,6 +744,27 @@ export function flushPendingSessionWritesSync(): void {
       );
     }
   }
+  syncBackgroundSessionWritesSync();
+}
+
+function syncBackgroundSessionWritesSync(): void {
+  const paths = [...backgroundSessionWrites];
+  backgroundSessionWrites.clear();
+  let synced: string | null = null;
+  for (const sessionPath of paths) {
+    try {
+      if (syncFileSync(sessionPath)) synced = sessionPath;
+    } catch (error) {
+      console.warn(`[terminalSessionPersistence] Failed to flush ${sessionPath}:`, error);
+    }
+  }
+  if (!synced) return;
+  // Every session file shares one directory, so one sync covers all renames.
+  try {
+    syncParentDirectorySync(synced);
+  } catch (error) {
+    console.warn(`[terminalSessionPersistence] Failed to flush the session directory:`, error);
+  }
 }
 
 export async function deleteSessionFile(terminalId: string): Promise<void> {
@@ -645,6 +773,7 @@ export async function deleteSessionFile(terminalId: string): Promise<void> {
   // Before the unlink is issued, so a write still in flight either landed
   // already (and the unlink takes it) or sees its claim gone and stands down.
   pendingSessionWrites.delete(sessionPath);
+  backgroundSessionWrites.delete(sessionPath);
   await unlink(sessionPath).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "ENOENT") throw e;
   });
@@ -665,17 +794,35 @@ export function getHibernatedMarkerPath(terminalId: string): string | null {
   return path.join(dir, `${safeId}.hibernated`);
 }
 
-export function writeHibernatedMarker(terminalId: string): void {
+/**
+ * Best-effort; never rejects. The marker only picks the restore banner's
+ * wording, so it skips the flushes that would make it survive a power cut.
+ */
+export async function writeHibernatedMarker(terminalId: string): Promise<void> {
   const markerPath = getHibernatedMarkerPath(terminalId);
   if (!markerPath) return;
-  const dir = getSessionDir();
-  if (!dir) return;
+  const dir = path.dirname(markerPath);
   try {
-    mkdirSync(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
-    tightenDirPermissionsSync(dir);
-    resilientAtomicWriteFileSync(markerPath, "", "utf8", { mode: OWNER_RW_FILE_MODE });
+    await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
+    await tightenDirPermissions(dir);
+    await resilientAtomicWriteFile(markerPath, "", "utf8", {
+      mode: OWNER_RW_FILE_MODE,
+      durable: false,
+    });
   } catch {
     // best-effort
+  }
+}
+
+async function takeHibernatedMarker(terminalId: string): Promise<boolean> {
+  const markerPath = getHibernatedMarkerPath(terminalId);
+  if (!markerPath) return false;
+  try {
+    await unlink(markerPath);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
   }
 }
 
@@ -765,7 +912,10 @@ export async function evictSessionFiles(opts: {
           }
           continue;
         }
-        if (entry.includes(".restore.") && entry.endsWith(".tmp")) {
+        if (
+          (entry.includes(".restore.") || entry.includes(".hibernated.")) &&
+          entry.endsWith(".tmp")
+        ) {
           const tmpPath = path.join(dir, entry);
           let size: number;
           let mtimeMs: number;
