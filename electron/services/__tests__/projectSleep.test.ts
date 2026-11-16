@@ -51,7 +51,7 @@ const hibernationMock = vi.hoisted(() => ({
 vi.mock("../HibernationService.js", () => ({ getHibernationService: () => hibernationMock }));
 
 const persistenceMock = vi.hoisted(() => ({
-  writeHibernatedMarker: vi.fn<(terminalId: string) => void>(),
+  writeHibernatedMarker: vi.fn<(terminalId: string) => Promise<void>>(async () => {}),
 }));
 vi.mock("../pty/terminalSessionPersistence.js", () => persistenceMock);
 
@@ -191,6 +191,23 @@ describe("sleepProject", () => {
       // No window is showing it, so there is nothing to drop — and a view that
       // outlived the eviction must not be blanked by it.
       expect(broadcastMock).not.toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
+    it("evicts nothing until every terminal's restore marker is on disk", async () => {
+      let release!: () => void;
+      persistenceMock.writeHibernatedMarker.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (release = resolve))
+      );
+
+      const sleeping = sleepProject("proj-1", policy(), makeDeps());
+      await vi.waitFor(() => expect(persistenceMock.writeHibernatedMarker).toHaveBeenCalled());
+      await flushMicrotasks();
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+
+      release();
+      expect(await sleeping).toMatchObject({ status: "slept" });
+      expect(hibernationMock.evictProjectRenderer).toHaveBeenCalled();
     });
 
     it("refuses when a dispatch starts while the kill's snapshot is in flight", async () => {

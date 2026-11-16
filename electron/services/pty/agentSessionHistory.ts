@@ -1,6 +1,6 @@
 // eager-import-allow: reads/writes agent session history via sync fs
-import { readFileSync, statSync } from "fs";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { readFileSync } from "fs";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   resilientAtomicWriteFile,
@@ -232,40 +232,29 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
   return records;
 }
 
-// In-memory cache of the parsed journal, keyed by resolved file path. The resume
+// In-memory copy of the parsed journal, keyed by resolved file path. The resume
 // palette calls listAgentSessions() -> readSessionHistorySync() on every open,
-// which otherwise re-reads and re-parses the whole journal (up to 50 records per
-// worktree) each time. The cache is gated on the file's stat (size + mtimeMs) so
-// a direct on-disk change (or a write from any other path) is still picked up on
-// the next read; every writer refreshes it with the array it just persisted.
-// Memory-only — rebuilt from disk on first read after boot, no cross-process
-// coordination needed (all journal I/O runs on the single main-process loop).
-interface HistoryCacheEntry {
-  records: AgentSessionRecord[];
-  size: number;
-  mtimeMs: number;
-}
-const historyCache = new Map<string, HistoryCacheEntry>();
+// and that runs on Main's event loop. Main is the journal's only writer and
+// every writer replaces the entry with the array it just persisted, so once the
+// file has been read the entry IS the journal: a read never touches the disk
+// again, not even to stat it. A hand edit made while the app runs is therefore
+// seen only after a restart. A write that fails drops the entry, because it may
+// have landed before it threw, and an absent file is cached as `[]` the same
+// way. Memory-only — rebuilt from disk on first read after boot.
+const historyCache = new Map<string, AgentSessionRecord[]>();
+// Bumped by every writer, so a cold async read that started before a write
+// can't publish the bytes it read over the array that write cached.
+let historyCacheGeneration = 0;
 
-function readCache(
-  filePath: string,
-  size: number,
-  mtimeMs: number
-): AgentSessionRecord[] | undefined {
-  const entry = historyCache.get(filePath);
-  if (entry && entry.size === size && entry.mtimeMs === mtimeMs) {
-    return entry.records;
-  }
-  return undefined;
+function invalidateCache(filePath: string): void {
+  historyCache.delete(filePath);
+  historyCacheGeneration++;
 }
 
-function writeCache(
-  filePath: string,
-  records: AgentSessionRecord[],
-  size: number,
-  mtimeMs: number
-): void {
-  historyCache.set(filePath, { records, size, mtimeMs });
+/** Forget every journal read so far, as a restart would. */
+export function resetSessionHistoryCacheForTesting(): void {
+  historyCache.clear();
+  historyCacheGeneration++;
 }
 
 const writeListeners = new Set<() => void>();
@@ -280,16 +269,19 @@ export function onSessionHistoryWritten(listener: () => void): () => void {
   return () => writeListeners.delete(listener);
 }
 
-// Refresh the cache after a write with the exact array just persisted, keyed to
-// the freshly-written file's stat so the next read is a cache hit. If the stat
-// fails, drop the entry so the next read falls back to a disk re-read.
-function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[]): void {
+// Every writer's last step, run inside the write queue. The cache takes the
+// exact array persisted, so the next read is a hit without a disk round-trip.
+async function writeJournal(filePath: string, records: AgentSessionRecord[]): Promise<void> {
   try {
-    const s = statSync(filePath);
-    writeCache(filePath, records, s.size, s.mtimeMs);
-  } catch {
-    historyCache.delete(filePath);
+    await resilientAtomicWriteFile(filePath, JSON.stringify(records, null, 2), "utf-8", {
+      mode: OWNER_RW_FILE_MODE,
+    });
+  } catch (error) {
+    invalidateCache(filePath);
+    throw error;
   }
+  invalidateCache(filePath);
+  historyCache.set(filePath, records);
   for (const listener of [...writeListeners]) {
     try {
       listener();
@@ -386,18 +378,17 @@ function unreadableJournalError(error: unknown): Error {
 function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResult {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return { status: "ok", records: [] };
+  const cached = historyCache.get(filePath);
+  if (cached) return { status: "ok", records: cached };
   try {
-    const s = statSync(filePath);
-    const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return { status: "ok", records: cached };
-    const content = readFileSync(filePath, "utf8");
-    const records = normalizeRecords(JSON.parse(content));
-    writeCache(filePath, records, s.size, s.mtimeMs);
+    const records = parseJournal(readFileSync(filePath, "utf8"));
+    historyCache.set(filePath, records);
     return { status: "ok", records };
   } catch (error) {
-    // Never let a failed read leave a `[]` cached as if it were the journal.
-    historyCache.delete(filePath);
-    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isMissingPathError(error)) {
+      historyCache.set(filePath, []);
+      return { status: "ok", records: [] };
+    }
     if (isCorruptionError(error)) {
       return quarantineCorruptJournalSync(filePath, error)
         ? { status: "ok", records: [] }
@@ -408,20 +399,28 @@ function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResu
   }
 }
 
+function parseJournal(content: string): AgentSessionRecord[] {
+  return normalizeRecords(JSON.parse(content));
+}
+
 async function readSessionHistoryResult(userData?: string): Promise<SessionHistoryReadResult> {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return { status: "ok", records: [] };
+  const cached = historyCache.get(filePath);
+  if (cached) return { status: "ok", records: cached };
+  const generation = historyCacheGeneration;
+  const publish = (records: AgentSessionRecord[]): void => {
+    if (historyCacheGeneration === generation) historyCache.set(filePath, records);
+  };
   try {
-    const s = await stat(filePath);
-    const cached = readCache(filePath, s.size, s.mtimeMs);
-    if (cached) return { status: "ok", records: cached };
-    const content = await readFile(filePath, "utf8");
-    const records = normalizeRecords(JSON.parse(content));
-    writeCache(filePath, records, s.size, s.mtimeMs);
+    const records = parseJournal(await readFile(filePath, "utf8"));
+    publish(records);
     return { status: "ok", records };
   } catch (error) {
-    historyCache.delete(filePath);
-    if (isMissingPathError(error)) return { status: "ok", records: [] };
+    if (isMissingPathError(error)) {
+      publish([]);
+      return { status: "ok", records: [] };
+    }
     if (isCorruptionError(error)) {
       return (await quarantineCorruptJournal(filePath, error))
         ? { status: "ok", records: [] }
@@ -478,10 +477,7 @@ export async function persistAgentSession(
       retentionDaysToMs(retentionDays)
     );
 
-    await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, updated);
+    await writeJournal(filePath, updated);
     // Return the record as it actually landed (bookmark possibly carried
     // forward) so a bookmark capture can echo the durable record to the caller.
     return updated.find((r) => r.sessionId === fullRecord.sessionId) ?? fullRecord;
@@ -532,10 +528,7 @@ export async function pruneAgentSessions(
       throw unreadableJournalError(existing.error);
     }
     const pruned = evictRecords(existing.records, Date.now(), retentionDaysToMs(retentionDays));
-    await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, pruned);
+    await writeJournal(filePath, pruned);
   });
 }
 
@@ -574,10 +567,7 @@ export async function rewriteAgentSessionPathsForProject(
       return { ...r, worktreeId: nextWorktreeId, cwd: nextCwd };
     });
     if (!changed) return;
-    await resilientAtomicWriteFile(filePath, JSON.stringify(rewritten, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, rewritten);
+    await writeJournal(filePath, rewritten);
   });
 }
 
@@ -612,10 +602,7 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
       worktreeId === undefined
         ? existing.records.filter(isBookmarked)
         : existing.records.filter((r) => r.worktreeId !== worktreeId || isBookmarked(r));
-    await resilientAtomicWriteFile(filePath, JSON.stringify(retained, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, retained);
+    await writeJournal(filePath, retained);
   });
 }
 
@@ -652,10 +639,7 @@ export async function promoteBookmark(
       return promoted;
     });
     if (!promoted) return null;
-    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, next);
+    await writeJournal(filePath, next);
     return promoted;
   });
 }
@@ -686,10 +670,7 @@ export async function renameBookmark(
       return renamed;
     });
     if (!renamed) return null;
-    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, next);
+    await writeJournal(filePath, next);
     return renamed;
   });
 }
@@ -728,10 +709,7 @@ export async function deleteBookmark(
     });
     const now = Date.now();
     const evicted = evictRecords(stripped, now, retentionDaysToMs(retentionDays));
-    await resilientAtomicWriteFile(filePath, JSON.stringify(evicted, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, evicted);
+    await writeJournal(filePath, evicted);
     return true;
   });
 }
@@ -771,10 +749,7 @@ export async function removeFromCanopyTrash(
       return { ...r, trash: { ...trash, removedAt: now } };
     });
     if (removed === 0) return 0;
-    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, next);
+    await writeJournal(filePath, next);
     return removed;
   });
 }
@@ -804,10 +779,7 @@ export async function adoptCanopyTrashClose(
     if (!record || record.trash) return false;
     const next = [...existing.records];
     next[index] = { ...record, closedBy: "user", trash };
-    await resilientAtomicWriteFile(filePath, JSON.stringify(next, null, 2), "utf-8", {
-      mode: OWNER_RW_FILE_MODE,
-    });
-    refreshCacheAfterWrite(filePath, next);
+    await writeJournal(filePath, next);
     return true;
   });
 }

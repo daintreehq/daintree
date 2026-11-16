@@ -126,7 +126,9 @@ describe("SessionSnapshotter", () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE, undefined, {
+        durable: false,
+      });
     });
 
     it("uses banner-aware sync serialize when banner markers are present", async () => {
@@ -137,7 +139,9 @@ describe("SessionSnapshotter", () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE, undefined, {
+        durable: false,
+      });
     });
 
     it("skips scheduling when launchAgentId is set (agent terminal)", async () => {
@@ -283,7 +287,9 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE, undefined, {
+        durable: false,
+      });
     });
 
     it("strips restore banner via sync serializeForPersistence when banner markers are present", async () => {
@@ -294,7 +300,9 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE, undefined, {
+        durable: false,
+      });
     });
 
     it("throttles repeated calls within 2s", async () => {
@@ -503,6 +511,18 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnKill();
 
       expect(persistSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a worker-backed kill write durable, unlike the periodic ones", async () => {
+      const host = createHost();
+      host.serializeForPersistence = () => Promise.resolve(BANNER_STATE);
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushSyncOnKill();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock.mock.calls[0]).toEqual(["t-test", BANNER_STATE]);
     });
   });
 

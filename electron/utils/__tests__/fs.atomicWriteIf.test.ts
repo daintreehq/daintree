@@ -129,6 +129,19 @@ describe("resilientAtomicWriteFileIf", () => {
     expect(dirSyncs()).toEqual([[tmpDir]]);
   });
 
+  posixIt("skips the parent sync when not durable, and still honours the check", async () => {
+    await expect(
+      resilientAtomicWriteFileIf(target, "background", () => true, "utf-8", { durable: false })
+    ).resolves.toBe(true);
+    await expect(
+      resilientAtomicWriteFileIf(target, "refused", () => false, "utf-8", { durable: false })
+    ).resolves.toBe(false);
+
+    expect(readFileSync(target, "utf8")).toBe("background");
+    expect(dirSyncs()).toEqual([]);
+    expect(stragglers()).toEqual([]);
+  });
+
   posixIt("surfaces a failed directory sync with the file already in place", async () => {
     dirSyncTap.mockRejectedValueOnce(errno("EIO"));
 
