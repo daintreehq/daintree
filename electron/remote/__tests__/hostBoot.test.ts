@@ -41,17 +41,26 @@ vi.mock("../../boot/hostModeLaunch.js", () => ({
   isHostModeRequested: (argv: string[]) => argv.includes("--host-mode"),
 }));
 
-import { startHostRole } from "../hostBoot.js";
-import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+type HostBoot = typeof import("../hostBoot.js");
+type Runtime = typeof import("../runtime.js");
 
+let startHostRole: HostBoot["startHostRole"];
+let getRemoteService: Runtime["getRemoteService"];
+let _resetRemoteServicesForTest: Runtime["_resetRemoteServicesForTest"];
 let teardowns: Array<() => void | Promise<void>> = [];
 const addTeardown = (teardown: () => void | Promise<void>) => void teardowns.push(teardown);
 const originalArgv = process.argv;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   m.settings = { enabled: false, startAtLogin: false, advertise: true };
   process.argv = [...originalArgv];
+  // Each case starts from a cold module registry, so whether Host mode's module
+  // was evaluated is this case's doing, whatever ran before it.
+  vi.resetModules();
+  m.defaultsLoaded = false;
+  ({ startHostRole } = await import("../hostBoot.js"));
+  ({ getRemoteService, _resetRemoteServicesForTest } = await import("../runtime.js"));
 });
 
 afterEach(async () => {
@@ -62,7 +71,6 @@ afterEach(async () => {
 });
 
 describe("startHostRole", () => {
-  // First: the module registry is per file, so this is the only case that sees it unloaded.
   it("leaves Host mode and the Host server unloaded while Host mode is off", async () => {
     await expect(startHostRole({ hostMode: false }, addTeardown)).resolves.toBeNull();
 
@@ -89,6 +97,7 @@ describe("startHostRole", () => {
 
   it("loads and listens at once when Host mode is on for the launch", async () => {
     await expect(startHostRole({ hostMode: true }, addTeardown)).resolves.toBeNull();
+    expect(m.defaultsLoaded).toBe(true);
     expect(m.createHostModeService).toHaveBeenCalledTimes(1);
     expect(m.service.startListening).toHaveBeenCalledTimes(1);
     expect(m.service.refreshStartAtLogin).not.toHaveBeenCalled();

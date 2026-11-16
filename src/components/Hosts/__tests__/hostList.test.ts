@@ -476,6 +476,7 @@ describe("host status and host figures", () => {
     act(() => lifecycle.active?.());
     await settle();
     expect(metricsListeners.length).toBe(1);
+    expect(setFollowing).toHaveBeenLastCalledWith({ following: true });
     expect(getSnapshots).toHaveBeenCalledTimes(2);
     expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
   });

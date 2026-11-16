@@ -445,7 +445,13 @@ describe("HostMetricsClient", () => {
     const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
     h.client.start();
     expect(h.localListeners.size).toBe(0);
-    for (const status of ["connecting", "unreachable", "disconnected"] as const) {
+    for (const status of [
+      "connecting",
+      "unreachable",
+      "version-mismatch",
+      "driven-elsewhere",
+      "disconnected",
+    ] as const) {
       h.setState("studio-01", { status } as HostConnectionState);
       expect(h.localListeners.size).toBe(0);
     }
@@ -488,6 +494,31 @@ describe("HostMetricsClient", () => {
     expect(h.localListeners.size).toBe(0);
     h.client.dispose();
   });
+
+  it.each([
+    ["the host drops first", ["drop", "release"]],
+    ["the view lets go first", ["release", "drop"]],
+  ] as const)(
+    "keeps sampling while either a connected host or a following view still wants it (%s)",
+    (_order, steps) => {
+      const h = harness([descriptor("studio-01")]);
+      h.client.start();
+      h.setState("studio-01", { status: "connected" } as HostConnectionState);
+      h.setFollowed(true);
+      expect(h.localListeners.size).toBe(1);
+
+      const [first, second] = steps.map((step) =>
+        step === "drop"
+          ? () => h.setState("studio-01", { status: "disconnected" })
+          : () => h.setFollowed(false)
+      );
+      first!();
+      expect(h.localListeners.size).toBe(1);
+      second!();
+      expect(h.localListeners.size).toBe(0);
+      h.client.dispose();
+    }
+  );
 
   it("stops sampling and hearing demand on dispose", () => {
     const h = harness([descriptor("studio-01")]);

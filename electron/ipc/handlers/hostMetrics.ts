@@ -28,23 +28,33 @@ function stopFollowing(webContentsId: number): void {
 }
 
 /**
- * A view that reloads, crashes or closes never sends its release, so its
- * demand goes with it here.
+ * A view whose document is replaced (a reload, an error page), that crashes or
+ * that closes never sends its release, so its demand goes with it here. Only a
+ * navigation that commits counts: one the app's `will-navigate` guard cancels
+ * leaves the document, and what it follows, in place.
  */
 function startFollowing(ctx: IpcContext): void {
   const sender = ctx.event?.sender;
   // Figures are this machine's; only its own views follow them.
   if (!sender || followers.has(sender.id)) return;
   const id = sender.id;
-  const onNavigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
-    if (details.isMainFrame && !details.isSameDocument) stopFollowing(id);
-  };
   const onGone = () => stopFollowing(id);
-  sender.on("did-start-navigation", onNavigate);
+  const onFailedLoad = (
+    _event: unknown,
+    _code: number,
+    _description: string,
+    _url: string,
+    isMainFrame: boolean
+  ) => {
+    if (isMainFrame) stopFollowing(id);
+  };
+  sender.on("did-navigate", onGone);
+  sender.on("did-fail-provisional-load", onFailedLoad);
   sender.on("render-process-gone", onGone);
   const unwatchDestroyed = onWebContentsDestroyed(sender, onGone);
   followers.set(id, () => {
-    sender.removeListener("did-start-navigation", onNavigate);
+    sender.removeListener("did-navigate", onGone);
+    sender.removeListener("did-fail-provisional-load", onFailedLoad);
     sender.removeListener("render-process-gone", onGone);
     unwatchDestroyed();
   });

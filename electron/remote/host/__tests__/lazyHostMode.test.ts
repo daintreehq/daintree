@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HostModeStatus } from "../../../../shared/types/ipc/hostMode.js";
+import type { HostModeStatus, SetHostModePayload } from "../../../../shared/types/ipc/hostMode.js";
 import type { HostMode, HostModeSettings } from "../HostModeService.js";
 import { createLazyHostMode } from "../lazyHostMode.js";
 
@@ -13,7 +13,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function realStatus(): HostModeStatus {
+/** The service's status, marked with the call that answered, so a forwarded answer can't be mistaken for another. */
+function realStatus(from = "getStatus"): HostModeStatus {
   return {
     supported: true,
     enabled: true,
@@ -24,7 +25,7 @@ function realStatus(): HostModeStatus {
     attachedClients: [
       { clientId: "c1", clientName: "laptop", connectedAt: 1, drivingProjectIds: [] },
     ],
-    rows: [{ id: "socket", state: "ok", detail: "Listening" }],
+    rows: [{ id: "socket", state: "ok", detail: `Listening (${from})` }],
   };
 }
 
@@ -34,10 +35,10 @@ function fakeService() {
     stopListening: vi.fn(async () => {}),
     refreshStartAtLogin: vi.fn(async () => {}),
     getAttachedClients: vi.fn(() => realStatus().attachedClients),
-    getStatus: vi.fn(async () => realStatus()),
-    setEnabled: vi.fn(async () => realStatus()),
-    enableFromSetup: vi.fn(async () => realStatus()),
-    runKeychainPreflight: vi.fn(async () => realStatus()),
+    getStatus: vi.fn(async () => realStatus("getStatus")),
+    setEnabled: vi.fn(async (_payload: SetHostModePayload) => realStatus("setEnabled")),
+    enableFromSetup: vi.fn(async () => realStatus("enableFromSetup")),
+    runKeychainPreflight: vi.fn(async () => realStatus("runKeychainPreflight")),
     dispose: vi.fn(async () => {}),
   } satisfies HostMode;
 }
@@ -62,12 +63,12 @@ function harness(settings: Partial<HostModeSettings> = {}) {
 
 describe("createLazyHostMode", () => {
   it("answers status and attached machines from the settings alone while Host mode is off", async () => {
-    const h = harness({ advertise: false });
+    const h = harness({ advertise: false, startAtLogin: true });
 
     await expect(h.hostMode.getStatus()).resolves.toEqual({
       supported: true,
       enabled: false,
-      startAtLogin: false,
+      startAtLogin: true,
       advertise: false,
       socketPath: "/run/host.sock",
       listening: false,
@@ -86,16 +87,33 @@ describe("createLazyHostMode", () => {
   });
 
   it.each([
-    ["startListening", (m: HostMode) => m.startListening()],
-    ["setEnabled", (m: HostMode) => m.setEnabled({ enabled: false })],
-    ["enableFromSetup", (m: HostMode) => m.enableFromSetup()],
-    ["runKeychainPreflight", (m: HostMode) => m.runKeychainPreflight()],
-    ["refreshStartAtLogin", (m: HostMode) => m.refreshStartAtLogin()],
-  ] as const)("loads the service and hands %s to it", async (method, call) => {
+    ["startListening", (m: HostMode) => m.startListening(), [], undefined],
+    [
+      "setEnabled",
+      (m: HostMode) => m.setEnabled({ enabled: false, advertise: false }),
+      [{ enabled: false, advertise: false }],
+      realStatus("setEnabled"),
+    ],
+    [
+      "setEnabled",
+      (m: HostMode) => m.setEnabled({ enabled: true, startAtLogin: true }),
+      [{ enabled: true, startAtLogin: true }],
+      realStatus("setEnabled"),
+    ],
+    ["enableFromSetup", (m: HostMode) => m.enableFromSetup(), [], realStatus("enableFromSetup")],
+    [
+      "runKeychainPreflight",
+      (m: HostMode) => m.runKeychainPreflight(),
+      [],
+      realStatus("runKeychainPreflight"),
+    ],
+    ["refreshStartAtLogin", (m: HostMode) => m.refreshStartAtLogin(), [], undefined],
+  ] as const)("loads the service and hands %s to it", async (method, call, args, answer) => {
     const h = harness();
-    await call(h.hostMode);
+    await expect(call(h.hostMode)).resolves.toEqual(answer);
     expect(h.create).toHaveBeenCalledTimes(1);
     expect(h.service[method]).toHaveBeenCalledTimes(1);
+    expect(h.service[method]).toHaveBeenCalledWith(...args);
   });
 
   it("builds the service once for concurrent first calls, then answers from it", async () => {
@@ -113,6 +131,10 @@ describe("createLazyHostMode", () => {
     expect(h.create).toHaveBeenCalledTimes(1);
     expect(h.service.getStatus).toHaveBeenCalledTimes(1);
     expect(h.hostMode.getAttachedClients()).toEqual(realStatus().attachedClients);
+    // Loaded, the service answers status even while the setting still reads off.
+    expect(h.settings.enabled).toBe(false);
+    await expect(h.hostMode.getStatus()).resolves.toEqual(realStatus("getStatus"));
+    expect(h.service.getStatus).toHaveBeenCalledTimes(2);
     await h.hostMode.stopListening();
     expect(h.service.stopListening).toHaveBeenCalledTimes(1);
   });
