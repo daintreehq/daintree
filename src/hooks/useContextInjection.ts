@@ -53,6 +53,12 @@ interface PendingInjection {
 // render state.
 const cancelledUuids = new Set<string>();
 
+type PanelStoreState = ReturnType<typeof usePanelStore.getState>;
+
+// One panel-store subscription for every mounted hook, held only while an
+// injection waits on its agent, so steady-state panel writes reach nothing here.
+let stopWatchingPending: (() => void) | null = null;
+
 const globalInjectionState = {
   isInjecting: false,
   isPendingInjection: false,
@@ -89,15 +95,66 @@ const globalInjectionState = {
     return () => this.listeners.delete(listener);
   },
 
+  setPending(pending: PendingInjection | null) {
+    this.pendingInjection = pending;
+    if (pending) {
+      stopWatchingPending ??= usePanelStore.subscribe(onPanelStoreWhilePending);
+    } else if (stopWatchingPending) {
+      stopWatchingPending();
+      stopWatchingPending = null;
+    }
+  },
+
   clearPending() {
     if (this.pendingInjection) {
       this.pendingInjection.reject(new Error("Injection cancelled"));
-      this.pendingInjection = null;
+      this.setPending(null);
       this.isPendingInjection = false;
       this.notify();
     }
   },
 };
+
+function onPanelStoreWhilePending(state: PanelStoreState, prevState: PanelStoreState): void {
+  const pending = globalInjectionState.pendingInjection;
+  if (!pending) return;
+
+  const terminal = state.panelsById[pending.terminalId];
+  const prevTerminal = prevState.panelsById[pending.terminalId];
+
+  // Handle terminal deletion while waiting
+  if (!terminal && prevTerminal) {
+    pending.reject(new Error("Terminal was deleted while waiting for agent"));
+    globalInjectionState.setPending(null);
+    globalInjectionState.isPendingInjection = false;
+    globalInjectionState.activeTerminalId = null;
+    globalInjectionState.lastProgress = null;
+    globalInjectionState.notify();
+    return;
+  }
+
+  // Waiting would only end in a refusal; the person who locked it can see why now.
+  if (terminal && isPtyPanel(terminal) && terminal.isInputLocked === true) {
+    pending.reject(new Error(INPUT_LOCKED_INJECTION_REFUSAL));
+    globalInjectionState.setPending(null);
+    globalInjectionState.isPendingInjection = false;
+    globalInjectionState.activeTerminalId = null;
+    globalInjectionState.lastProgress = null;
+    globalInjectionState.notify();
+    return;
+  }
+
+  // Only process if agent state changed to ready
+  const currAgentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
+  const prevAgentState =
+    prevTerminal && isPtyPanel(prevTerminal) ? prevTerminal.agentState : undefined;
+  if (terminal && isAgentReady(currAgentState) && !isAgentReady(prevAgentState)) {
+    pending.resolve();
+    globalInjectionState.setPending(null);
+    globalInjectionState.isPendingInjection = false;
+    globalInjectionState.notify();
+  }
+}
 
 /**
  * Cancel the active context injection from outside a component (e.g. the
@@ -192,52 +249,6 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     return () => {
       currentErrorIdRef.current = null;
     };
-  }, []);
-
-  // Subscribe to terminal store to detect agent state changes for pending injections
-  useEffect(() => {
-    const unsubscribe = usePanelStore.subscribe((state, prevState) => {
-      const pending = globalInjectionState.pendingInjection;
-      if (!pending) return;
-
-      const terminal = state.panelsById[pending.terminalId];
-      const prevTerminal = prevState.panelsById[pending.terminalId];
-
-      // Handle terminal deletion while waiting
-      if (!terminal && prevTerminal) {
-        pending.reject(new Error("Terminal was deleted while waiting for agent"));
-        globalInjectionState.pendingInjection = null;
-        globalInjectionState.isPendingInjection = false;
-        globalInjectionState.activeTerminalId = null;
-        globalInjectionState.lastProgress = null;
-        globalInjectionState.notify();
-        return;
-      }
-
-      // Waiting would only end in a refusal; the person who locked it can see why now.
-      if (terminal && isPtyPanel(terminal) && terminal.isInputLocked === true) {
-        pending.reject(new Error(INPUT_LOCKED_INJECTION_REFUSAL));
-        globalInjectionState.pendingInjection = null;
-        globalInjectionState.isPendingInjection = false;
-        globalInjectionState.activeTerminalId = null;
-        globalInjectionState.lastProgress = null;
-        globalInjectionState.notify();
-        return;
-      }
-
-      // Only process if agent state changed to ready
-      const currAgentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
-      const prevAgentState =
-        prevTerminal && isPtyPanel(prevTerminal) ? prevTerminal.agentState : undefined;
-      if (terminal && isAgentReady(currAgentState) && !isAgentReady(prevAgentState)) {
-        pending.resolve();
-        globalInjectionState.pendingInjection = null;
-        globalInjectionState.isPendingInjection = false;
-        globalInjectionState.notify();
-      }
-    });
-
-    return unsubscribe;
   }, []);
 
   // The error store is the surface every caller sees: App's own instance, which
@@ -348,14 +359,14 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         // Wait for agent to become idle
         try {
           await new Promise<void>((resolve, reject) => {
-            globalInjectionState.pendingInjection = {
+            globalInjectionState.setPending({
               id: currentInjectionId,
               terminalId: activeTerminal,
               worktreeId,
               selectedPaths,
               resolve,
               reject,
-            };
+            });
 
             // Immediately re-check if agent became ready between initial check and pending setup
             const currentTerminal = usePanelStore.getState().panelsById[activeTerminal];
@@ -365,7 +376,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
                 : undefined;
             if (currentTerminal && isAgentReady(currentAgentState)) {
               resolve();
-              globalInjectionState.pendingInjection = null;
+              globalInjectionState.setPending(null);
               globalInjectionState.isPendingInjection = false;
             }
           });

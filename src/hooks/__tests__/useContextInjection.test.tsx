@@ -324,6 +324,61 @@ describe("useContextInjection", () => {
     expect(injectMock).not.toHaveBeenCalled();
   });
 
+  it("watches the panel store once, and only while an injection waits on its agent", async () => {
+    terminalState.panelsById = {
+      "term-agent": {
+        id: "term-agent",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      "term-2": { id: "term-2", worktreeId: "wt-1", agentState: "idle" },
+    };
+    terminalState.focusedId = "term-agent";
+    terminalState.panelIds = ["term-agent", "term-2"];
+
+    const { result } = renderHook(() => useContextInjection("term-agent"));
+    renderHook(() => useContextInjection("term-2"));
+    renderHook(() => useContextInjection());
+    expect(panelListeners.size).toBe(0);
+
+    act(() => {
+      void result.current.inject("wt-1", "term-agent");
+    });
+    await vi.waitFor(() => expect(result.current.isPendingInjection).toBe(true));
+    expect(panelListeners.size).toBe(1);
+
+    act(() => updatePanel("term-agent", { agentState: "idle" }));
+    expect(result.current.isPendingInjection).toBe(false);
+    expect(panelListeners.size).toBe(0);
+  });
+
+  it("stops watching the panel store when a waiting injection is cancelled", async () => {
+    terminalState.panelsById = {
+      "term-agent": {
+        id: "term-agent",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+    };
+    terminalState.focusedId = "term-agent";
+    terminalState.panelIds = ["term-agent"];
+
+    const { result } = renderHook(() => useContextInjection("term-agent"));
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-agent");
+    });
+    await vi.waitFor(() => expect(panelListeners.size).toBe(1));
+
+    await act(async () => {
+      cancelContextInjection();
+      await injectPromise;
+    });
+    expect(panelListeners.size).toBe(0);
+  });
+
   it("cancelling during the availability check aborts before any context is written", async () => {
     let resolveAvailable!: (value: boolean) => void;
     isAvailableMock.mockImplementation(

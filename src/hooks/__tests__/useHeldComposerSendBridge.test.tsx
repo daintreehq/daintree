@@ -125,4 +125,32 @@ describe("useHeldComposerSendBridge", () => {
     act(() => panels.set({ panelsById: {} }));
     expect(notify).toHaveBeenCalledTimes(1);
   });
+
+  it("does nothing on panel writes while nothing is dropped", async () => {
+    renderHook(() => useHeldComposerSendBridge());
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    const store = useHeldComposerSendStore.getState();
+    const forget = vi.spyOn(store, "forgetDroppedExcept");
+    try {
+      for (let i = 0; i < 3; i++) {
+        act(() => panels.set({ panelsById: { t1: { title: `tick ${i}`, location: "grid" } } }));
+      }
+      act(() => panels.set({ panelsById: {} }));
+      expect(forget).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      forget.mockRestore();
+    }
+  });
+
+  it("reports a later drop after an earlier one's pane is gone", async () => {
+    renderHook(() => useHeldComposerSendBridge());
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    act(() => client.push?.(dropped("gone", "a")));
+    expect(notify).toHaveBeenCalledTimes(1);
+    act(() => panels.set({ panelsById: { t2: { title: "Codex", location: "trash" } } }));
+    act(() => client.push?.(dropped("t2", "b")));
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[1]![0].message).toContain("Codex");
+  });
 });

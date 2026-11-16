@@ -39,6 +39,10 @@ function mountPanel(id: string): HTMLButtonElement {
 }
 
 const flushMicrotasks = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+const nextFrame = async () => {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await flushMicrotasks();
+};
 
 let hasFocus: ReturnType<typeof vi.spyOn>;
 let report: ReturnType<typeof vi.fn>;
@@ -136,6 +140,80 @@ describe("subscribeFocusedPanelReporter", () => {
     browser.focus();
     await flushMicrotasks();
     expect(report).toHaveBeenCalledTimes(calls);
+  });
+
+  it("leaves the DOM alone on store writes that touch neither focus nor the focused panel", async () => {
+    mountPanel("t1").focus();
+    const dispose = subscribeFocusedPanelReporter();
+    await flushMicrotasks();
+    const calls = report.mock.calls.length;
+    const closest = vi.spyOn(Element.prototype, "closest");
+    const contains = vi.spyOn(Node.prototype, "contains");
+
+    // The focused terminal streams too: its own record is replaced every write.
+    for (let i = 0; i < 3; i++) {
+      const { panelsById } = panelStore.getState();
+      setPanels({
+        ...panelsById,
+        t1: { ...panelsById.t1, activityHeadline: `tick ${i}` },
+        b1: { ...panelsById.b1, title: `tick ${i}` },
+      });
+      await flushMicrotasks();
+    }
+    await nextFrame();
+    expect(report).toHaveBeenCalledTimes(calls);
+
+    // A change to what the focused record reports still lands, without a walk.
+    const { panelsById } = panelStore.getState();
+    setPanels({ ...panelsById, t1: { ...panelsById.t1, detectedAgentId: undefined } });
+    await flushMicrotasks();
+    await nextFrame();
+
+    expect(closest).not.toHaveBeenCalled();
+    expect(contains).not.toHaveBeenCalled();
+    expect(report).toHaveBeenCalledTimes(calls + 1);
+    expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: false, worktreeId: "wt-1" });
+    closest.mockRestore();
+    contains.mockRestore();
+    dispose();
+  });
+
+  it("reads again once the Portal dock registers around the focused element", async () => {
+    const dock = document.createElement("aside");
+    const tab = document.createElement("button");
+    dock.appendChild(tab);
+    document.body.appendChild(dock);
+    tab.focus();
+    const dispose = subscribeFocusedPanelReporter();
+    await flushMicrotasks();
+    expect(report).toHaveBeenLastCalledWith({ kind: null, agent: false, worktreeId: null });
+
+    // Registered in an effect, with no store notification of its own.
+    useMacroFocusStore.getState().setRegionRef("portal", dock);
+    setPanels({ ...panelStore.getState().panelsById });
+    await flushMicrotasks();
+
+    expect(report).toHaveBeenLastCalledWith({ kind: "portal", agent: false, worktreeId: null });
+    dispose();
+  });
+
+  it("reads again when a store write's commit removes the focused panel", async () => {
+    const terminal = mountPanel("t1");
+    terminal.focus();
+    const dispose = subscribeFocusedPanelReporter();
+    await flushMicrotasks();
+    expect(report).toHaveBeenLastCalledWith({ kind: "terminal", agent: true, worktreeId: "wt-1" });
+
+    const remaining = { ...panelStore.getState().panelsById };
+    delete remaining.t1;
+    setPanels(remaining);
+    await flushMicrotasks();
+    // The commit lands after the write's own sample; removal fires no focusout.
+    terminal.parentElement!.remove();
+    await nextFrame();
+
+    expect(report).toHaveBeenLastCalledWith({ kind: null, agent: false, worktreeId: null });
+    dispose();
   });
 
   it("re-sends an unchanged answer when the view becomes visible again", async () => {
