@@ -136,13 +136,13 @@ export class PanelSuspectLedgerService {
       this.pruneCorruptedSiblings(entries);
     }
 
-    const { ledger, droppedRecords } = this.readLedger();
+    const { ledger, needsWrite } = this.readLedger();
     this.ledger = ledger;
 
     const now = Date.now();
     const panels = pendingCrash?.panels ?? null;
 
-    let changed = droppedRecords;
+    let changed = needsWrite;
     if (panels && panels.length > 0 && this.foldPendingCrash(panels, now)) {
       changed = true;
     }
@@ -316,13 +316,14 @@ export class PanelSuspectLedgerService {
   }
 
   /**
-   * `droppedRecords` is true when malformed entries were filtered out, so the
-   * caller persists the cleaned ledger. A quarantined or missing file needs no
-   * write: an absent ledger already reads as a fresh one.
+   * `needsWrite` is true when what's on disk doesn't match the returned ledger:
+   * malformed entries were filtered out, or the file was corrupt (rewriting it
+   * repairs the path even when the quarantine rename failed). A missing file
+   * needs no write, since an absent ledger already reads as a fresh one.
    */
-  private readLedger(): { ledger: PanelSuspectLedger; droppedRecords: boolean } {
+  private readLedger(): { ledger: PanelSuspectLedger; needsWrite: boolean } {
     if (!fs.existsSync(this.ledgerPath)) {
-      return { ledger: freshLedger(), droppedRecords: false };
+      return { ledger: freshLedger(), needsWrite: false };
     }
     try {
       const raw = fs.readFileSync(this.ledgerPath, "utf8");
@@ -336,26 +337,26 @@ export class PanelSuspectLedgerService {
         // Per-entry validation — drop malformed records, keep the rest. A
         // single corrupt entry shouldn't wipe the whole ledger.
         const cleaned: Record<string, PanelSuspectRecord> = {};
-        let droppedRecords = false;
+        let needsWrite = false;
         for (const [id, record] of Object.entries(parsed.panels)) {
           if (typeof id === "string" && id.length > 0 && isValidRecord(record)) {
             cleaned[id] = record;
           } else {
-            droppedRecords = true;
+            needsWrite = true;
           }
         }
-        return { ledger: { version: 1, panels: cleaned }, droppedRecords };
+        return { ledger: { version: 1, panels: cleaned }, needsWrite };
       }
       console.warn("[PanelSuspectLedger] Invalid ledger structure — quarantining and resetting");
       this.quarantineLedgerFile();
-      return { ledger: freshLedger(), droppedRecords: false };
+      return { ledger: freshLedger(), needsWrite: true };
     } catch (err) {
       console.warn(
         "[PanelSuspectLedger] Failed to parse ledger file — quarantining and resetting",
         err
       );
       this.quarantineLedgerFile();
-      return { ledger: freshLedger(), droppedRecords: false };
+      return { ledger: freshLedger(), needsWrite: true };
     }
   }
 

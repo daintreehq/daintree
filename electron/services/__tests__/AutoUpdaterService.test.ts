@@ -3194,6 +3194,23 @@ describe("AutoUpdaterService", () => {
       expect(trackEventMock).toHaveBeenCalledTimes(1);
     });
 
+    it("still clears the attempt marker when clearing the version marker throws", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateVersion"
+          ? "2.0.0"
+          : key === "pendingUpdateInstallStage"
+            ? "attempted"
+            : undefined
+      );
+      storeMock.delete.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+
+      expect(() => autoUpdaterService.initialize()).not.toThrow();
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateInstallStage");
+    });
+
     it("swallows a thrown trackEvent so initialize never throws", () => {
       storeMock.get.mockImplementation((key: string) =>
         key === "pendingUpdateVersion" ? "2.0.0" : undefined

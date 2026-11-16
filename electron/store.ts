@@ -1260,16 +1260,25 @@ function resolveConfigPath(cwd: string | undefined): string | null {
 
 // On the valid path, `rawBuffer` carries the bytes already read here so the
 // caller can use them as the pre-construction wipe-detection snapshot instead
-// of reading config.json a second time. It is absent only on the fail-open
-// branch below, where no usable bytes were obtained.
+// of reading config.json a second time, and `parsed` carries their parse so an
+// unchanged file can seed the store's value cache without a third parse. Both
+// are absent only on the fail-open branch below, where no usable bytes were
+// obtained.
 type ConfigPreflightResult =
-  { status: "valid"; rawBuffer?: Buffer } | { status: "missing" } | { status: "corrupt" };
+  | { status: "valid"; rawBuffer?: Buffer; parsed?: Record<string, unknown> }
+  | { status: "missing" }
+  | { status: "corrupt" };
 
 function preflightValidateConfig(configPath: string): ConfigPreflightResult {
-  if (!fs.existsSync(configPath)) return { status: "missing" };
+  let raw: string;
   try {
-    const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(raw);
+    raw = fs.readFileSync(configPath, "utf8");
+  } catch {
+    // existsSync only on the failure path, so a present file costs one read.
+    return fs.existsSync(configPath) ? { status: "valid" } : { status: "missing" };
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { status: "corrupt" };
     }
@@ -1280,7 +1289,11 @@ function preflightValidateConfig(configPath: string): ConfigPreflightResult {
     // file with invalid UTF-8 byte sequences that still parses as JSON: those
     // bytes round-trip through U+FFFD, so rawBuffer matches what electron-store
     // itself decodes and rewrites — which is exactly what detectStoreWipe needs.
-    return { status: "valid", rawBuffer: Buffer.from(raw, "utf8") };
+    return {
+      status: "valid",
+      rawBuffer: Buffer.from(raw, "utf8"),
+      parsed: parsed as Record<string, unknown>,
+    };
   } catch (err) {
     if (err instanceof SyntaxError) return { status: "corrupt" };
     return { status: "valid" };
@@ -1423,6 +1436,38 @@ export function _resetPendingSettingsRecovery(): void {
 
 let storeInstance: Store<StoreSchema> | undefined;
 
+// Options that change how conf turns the file into its `store` (validation,
+// decryption, a custom parser, migrations). Any of them rules out standing in
+// for conf's read with preflight's plain JSON.parse.
+const CACHE_SEED_BLOCKING_OPTIONS = [
+  "schema",
+  "encryptionKey",
+  "serialize",
+  "deserialize",
+  "migrations",
+] as const;
+
+/**
+ * The snapshot conf's `store` getter would return for a file preflight parsed,
+ * or null when that can't be reproduced exactly. conf hands back a
+ * null-prototype copy of the parsed root with its `__internal__` bookkeeping
+ * detached; a key that could spell that bookkeeping through dot-prop paths or
+ * escapes declines seeding rather than re-implementing conf's key parser.
+ */
+function confSnapshotFromPreflight(
+  options: object,
+  parsed: Record<string, unknown>
+): Record<string, unknown> | null {
+  const confOptions = options as Record<string, unknown>;
+  if (CACHE_SEED_BLOCKING_OPTIONS.some((option) => confOptions[option] !== undefined)) {
+    return null;
+  }
+  for (const key of Object.keys(parsed)) {
+    if (key.includes("__internal__") || key.includes("\\")) return null;
+  }
+  return Object.assign(Object.create(null) as Record<string, unknown>, parsed);
+}
+
 /**
  * Drop the cached store snapshot. The proxy invalidates automatically for all
  * mutations routed through it; this export exists for the rare paths that
@@ -1529,9 +1574,8 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
   if (storeInstance) return storeInstance;
 
   const configPath = resolveConfigPath(options.cwd);
-  storeWasFreshAtBoot = configPath !== null && !fs.existsSync(configPath);
-
   const preflight = configPath ? preflightValidateConfig(configPath) : null;
+  storeWasFreshAtBoot = preflight?.status === "missing";
   if (preflight?.status === "corrupt") {
     console.warn("[Store] Detected corrupt config.json");
     const quarantinedPath = quarantineCorruptConfig(configPath!) ?? undefined;
@@ -1559,6 +1603,17 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
     const postSnapshot = configPath ? readRawSnapshot(configPath) : null;
     const wipedDuringConstruction =
       preSnapshot !== null && detectStoreWipe(preSnapshot, postSnapshot);
+    // Byte-identical bytes before and after construction mean conf neither
+    // cleared nor rewrote the file, so preflight's parse is what the first
+    // store.get() would otherwise read and parse a third time.
+    const cacheSeed =
+      preflight?.status === "valid" &&
+      preflight.parsed &&
+      preflight.rawBuffer &&
+      postSnapshot !== null &&
+      preflight.rawBuffer.equals(postSnapshot)
+        ? confSnapshotFromPreflight(options, preflight.parsed)
+        : null;
     if (wipedDuringConstruction) {
       console.warn(
         "[Store] electron-store silently replaced config.json during construction; preserving .bak"
@@ -1583,6 +1638,7 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
       tightenFilePermissions(`${configFilePath}.bak`);
     };
     storeInstance = created;
+    if (cacheSeed) primaryStore.seed(cacheSeed);
     return created;
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
@@ -1691,7 +1747,11 @@ const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset", "appe
  */
 function createCachedStoreProxy<TStore extends { path: string; store: unknown }>(
   getInstance: () => TStore
-): { proxy: TStore; invalidate: () => void } {
+): {
+  proxy: TStore;
+  invalidate: () => void;
+  seed: (snapshot: Record<string, unknown>) => void;
+} {
   let valueCache: Record<string, unknown> | null = null;
   // Bumped by every mutation, so a write-through set can tell whether a nested
   // write (from a synchronous change listener) superseded its snapshot.
@@ -1699,6 +1759,11 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
   const invalidate = () => {
     mutationEpoch++;
     valueCache = null;
+  };
+  // Installs a snapshot the caller has already proven equal to the file's
+  // current `store`, so the first get() skips its read + parse.
+  const seed = (snapshot: Record<string, unknown>) => {
+    valueCache = snapshot;
   };
 
   const proxy = new Proxy({} as TStore, {
@@ -1781,7 +1846,7 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
     },
   });
 
-  return { proxy, invalidate };
+  return { proxy, invalidate, seed };
 }
 
 const primaryStore = createCachedStoreProxy(getOrLazyInitInstance);
