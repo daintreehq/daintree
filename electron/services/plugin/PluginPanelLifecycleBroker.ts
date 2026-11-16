@@ -133,8 +133,17 @@ export class PluginPanelLifecycleBroker {
    * dropped individually — a plugin that unloaded mid-batch must not cost the
    * rest of the batch its delivery. Returns the plugins whose panels the batch
    * moved.
+   *
+   * A `replay` batch restores what main lost of a renderer's panels (a remote
+   * host's fresh session, #17068) without delivering it: those are resting
+   * phases a live subscriber already heard, not transitions, and a later
+   * subscriber gets them from {@link subscribe}'s own replay.
    */
-  ingest(sourceId: number, events: readonly unknown[]): Set<string> {
+  ingest(
+    sourceId: number,
+    events: readonly unknown[],
+    opts: { replay?: boolean } = {}
+  ): Set<string> {
     const touched = new Set<string>();
     if (!Array.isArray(events)) return touched;
     for (const raw of events) {
@@ -155,7 +164,7 @@ export class PluginPanelLifecycleBroker {
         if (event.phase !== "restored") panels.set(event.panelId, event);
       }
 
-      this.emit(event);
+      if (!opts.replay) this.emit(event);
     }
     return touched;
   }

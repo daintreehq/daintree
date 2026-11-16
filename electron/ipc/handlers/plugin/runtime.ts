@@ -320,7 +320,8 @@ export async function handleRestartWorker(
  */
 export async function handleReportPanelLifecycle(
   ctx: IpcContext,
-  events: PluginPanelLifecycleEvent[]
+  events: PluginPanelLifecycleEvent[],
+  options?: { replay?: boolean }
 ): Promise<void> {
   // `ctx.event.sender` lets the service forget this renderer's panels when its
   // view is destroyed — otherwise a closed project view's panels linger and get
@@ -328,7 +329,8 @@ export async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
-    panelLifecycleSourceFor(ctx)
+    panelLifecycleSourceFor(ctx),
+    { replay: options?.replay === true }
   );
 }
 
@@ -353,8 +355,10 @@ export async function handleReportPanelInventory(
  * never leaves a worker held open for views no longer on screen.
  */
 export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string[]): Promise<void> {
+  const service = await getPluginService();
   const sender = ctx.event?.sender;
-  // Its `destroyed` has already fired, so a watch would never forget this report.
+  // Checked after the await: once `destroyed` has fired, a watch attached now
+  // would never forget this report.
   if (sender?.isDestroyed()) return;
   const source = sender ? undefined : panelLifecycleSourceFor(ctx);
   const watch = sender
@@ -363,7 +367,7 @@ export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string
       ? watchSourceHandle(source)
       : undefined;
   if (!watch) return;
-  (await getPluginService()).ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
+  service.ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
 }
 
 /**

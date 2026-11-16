@@ -1650,11 +1650,12 @@ export class PluginService {
   ingestPanelLifecycleEvents(
     sourceId: number,
     events: readonly unknown[],
-    sender?: PanelLifecycleSourceHandle
+    sender?: PanelLifecycleSourceHandle,
+    opts: { replay?: boolean } = {}
   ): void {
     if (this.disposed) return;
     if (sender) this.watchPanelLifecycleSource(sourceId, sender);
-    this.noteViewConsumersMoved(this.panelLifecycleBroker.ingest(sourceId, events));
+    this.noteViewConsumersMoved(this.panelLifecycleBroker.ingest(sourceId, events, opts));
   }
 
   /**

@@ -492,6 +492,25 @@ describe("live panel count (#17068)", () => {
     expect([...touched].sort()).toEqual(["acme", "other"]);
   });
 
+  it("records a replay without delivering it, and hands it to a later subscriber", () => {
+    const broker = makeBroker();
+    const live = vi.fn();
+    broker.subscribe("acme", live);
+
+    const touched = broker.ingest(2, [event({ phase: "hidden" })], { replay: true });
+    expect(live).not.toHaveBeenCalled();
+    expect([...touched]).toEqual(["acme"]);
+    expect(broker.livePanelCount("acme")).toBe(1);
+
+    const late = vi.fn();
+    broker.subscribe("acme", late);
+    expect(late).toHaveBeenCalledWith(expect.objectContaining({ panelId: "p1", phase: "hidden" }));
+
+    // A real transition after the replay is delivered as ever.
+    broker.ingest(2, [event({ phase: "mounted" })]);
+    expect(live).toHaveBeenCalledWith(expect.objectContaining({ phase: "mounted" }));
+  });
+
   it("forgets a cleared renderer's panels and names whose they were", () => {
     const broker = makeBroker();
     broker.ingest(1, [event(), event({ panelId: "p2", panelKindId: "other.panel" })]);

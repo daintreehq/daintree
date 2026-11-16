@@ -86,6 +86,36 @@ describe("pluginViewConsumers (#17068)", () => {
     expect(await drainReports()).toHaveLength(3);
   });
 
+  it("backs off to a minute at most, and starts over after a report lands", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    report.mockRejectedValue(new Error("ipc down"));
+    retainPluginViewConsumer("acme.dash");
+    await drainReports();
+
+    // 1, 2, 4, 8, 16, 32 seconds, then a minute each time.
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]) {
+      const before = report.mock.calls.length;
+      vi.advanceTimersByTime(delay - 1);
+      await drainReports();
+      expect(report.mock.calls.length, `before ${delay}`).toBe(before);
+      vi.advanceTimersByTime(1);
+      await drainReports();
+      expect(report.mock.calls.length, `at ${delay}`).toBe(before + 1);
+    }
+
+    report.mockResolvedValue(undefined);
+    vi.advanceTimersByTime(60_000);
+    await drainReports();
+    const landed = report.mock.calls.length;
+
+    report.mockRejectedValueOnce(new Error("ipc down"));
+    retainPluginViewConsumer("plugin-view:acme/side");
+    await drainReports();
+    vi.advanceTimersByTime(1_000);
+    await drainReports();
+    expect(report.mock.calls.length).toBe(landed + 2);
+  });
+
   it("retries a failed empty report, so main doesn't hold a closed view open", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     const release = retainPluginViewConsumer("acme.dash");

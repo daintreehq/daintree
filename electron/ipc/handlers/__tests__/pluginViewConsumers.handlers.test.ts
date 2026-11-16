@@ -5,12 +5,14 @@ import { PluginHostedViewConsumers } from "../../../services/plugin/PluginHosted
 const service = vi.hoisted(() => ({
   consumers: null as PluginHostedViewConsumers | null,
   ingestHostedViewConsumers: vi.fn(),
+  ingestPanelLifecycleEvents: vi.fn(),
 }));
 vi.mock("../plugin/service.js", () => ({ getPluginService: vi.fn(async () => service) }));
 
 import type { ClientEndpoint } from "../../endpoint.js";
 import type { IpcContext } from "../../types.js";
-import { handleReportViewConsumers } from "../plugin/runtime.js";
+import { getPluginService } from "../plugin/service.js";
+import { handleReportPanelLifecycle, handleReportViewConsumers } from "../plugin/runtime.js";
 
 let nextId = 1;
 
@@ -50,6 +52,7 @@ const owner = (viewId: string) => (viewId.startsWith("plugin-view:acme/") ? "acm
 const count = () => service.consumers!.count("acme", owner);
 
 beforeEach(() => {
+  service.ingestPanelLifecycleEvents.mockReset();
   service.consumers = new PluginHostedViewConsumers(() => {});
   service.ingestHostedViewConsumers.mockReset().mockImplementation((sourceId, watch, viewIds) => {
     service.consumers!.record(sourceId, watch, viewIds);
@@ -81,6 +84,34 @@ describe("plugin view consumer handler (#17068)", () => {
     wc.destroyed = true;
     await handleReportViewConsumers(localCtx(wc), ["plugin-view:acme/side"]);
     expect(service.ingestHostedViewConsumers).not.toHaveBeenCalled();
+  });
+
+  it("drops a report whose view was destroyed while the service was still loading", async () => {
+    let resolveService: (value: typeof service) => void = () => {};
+    vi.mocked(getPluginService).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveService = resolve;
+        }) as unknown as ReturnType<typeof getPluginService>
+    );
+    const wc = new FakeContents();
+    const pending = handleReportViewConsumers(localCtx(wc), ["plugin-view:acme/side"]);
+    wc.destroyed = true;
+    wc.emit("destroyed");
+    resolveService(service);
+    await pending;
+    expect(service.ingestHostedViewConsumers).not.toHaveBeenCalled();
+  });
+
+  it("passes a panel lifecycle replay through as one, and a plain batch as transitions", async () => {
+    const wc = new FakeContents();
+    const events = [{ panelId: "p1", panelKindId: "acme.dash", pluginId: "acme", phase: "hidden" }];
+    await handleReportPanelLifecycle(localCtx(wc), events as never, { replay: true });
+    await handleReportPanelLifecycle(localCtx(wc), events as never);
+    expect(service.ingestPanelLifecycleEvents.mock.calls.map((call) => call[3])).toEqual([
+      { replay: true },
+      { replay: false },
+    ]);
   });
 
   it("forgets a remote view's mounts when its endpoint closes", async () => {
