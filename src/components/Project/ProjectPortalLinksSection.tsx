@@ -241,20 +241,20 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
                     readOnly={pending}
                   />
                   <Button
-                    onClick={() => void saveEdit()}
-                    disabled={pending}
-                    size="sm"
-                    variant="contrast"
-                  >
-                    Save
-                  </Button>
-                  <Button
                     onClick={() => setEditing(null)}
                     disabled={pending}
                     size="sm"
                     variant="outline"
                   >
                     Cancel
+                  </Button>
+                  <Button
+                    onClick={() => void saveEdit()}
+                    disabled={pending}
+                    size="sm"
+                    variant="contrast"
+                  >
+                    Save
                   </Button>
                 </div>
               )}
