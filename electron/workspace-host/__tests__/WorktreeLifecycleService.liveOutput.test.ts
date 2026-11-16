@@ -62,12 +62,13 @@ describe("WorktreeLifecycleService live output (#17115)", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
     const fsModule = await import("fs/promises");
     mockAccess = vi.mocked(fsModule.access);
     mockReadFile = vi.mocked(fsModule.readFile);
     mockSpawn = vi.mocked((await import("child_process")).spawn);
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
+    // After every import: a frozen clock stalls a loader that resolves through a timer.
+    vi.useFakeTimers();
     service = new WorktreeLifecycleService("/home/testuser", approveEverything);
   });
 
