@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { ReviewMarkCapture } from "@shared/types/ipc/reviewMarks";
 import { debounce } from "@/utils/debounce";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   captureForReviewMark,
@@ -35,6 +36,13 @@ export interface ReviewHubCapture {
  */
 const CAPTURE_WAIT_MS = 1_500;
 
+/**
+ * The same wait for a foreground read (an opening, Refresh), which someone is
+ * watching: a capture that lands inside the Doherty threshold saves the second
+ * read at no visible cost, and one that doesn't can't hold the list back longer.
+ */
+const FOREGROUND_CAPTURE_WAIT_MS = UI_DOHERTY_THRESHOLD;
+
 /** One opening of one worktree; ended by the subscription's cleanup. */
 interface Session {
   live: boolean;
@@ -47,6 +55,17 @@ interface CaptureLane {
   /** Sends a status read if the capture is still running when it fires; once per run. */
   timer: ReturnType<typeof setTimeout> | null;
   earlyReadSent: boolean;
+  /** The foreground read waiting on this run's capture, by request id; null once sent. */
+  foreground: number | null;
+  /** Sends the waiting foreground read if the capture is still running when it fires. */
+  foregroundTimer: ReturnType<typeof setTimeout> | null;
+}
+
+function clearLaneTimers(lane: CaptureLane): void {
+  if (lane.timer !== null) clearTimeout(lane.timer);
+  if (lane.foregroundTimer !== null) clearTimeout(lane.foregroundTimer);
+  lane.timer = null;
+  lane.foregroundTimer = null;
 }
 
 /**
@@ -63,6 +82,8 @@ interface CaptureLane {
  * content the hub hadn't read. The cached snapshot seeded at open has none.
  * Each capture run is followed by one status read (two when the capture is
  * slow), never one per request: staging status is rate limited on the host.
+ * An opening's read is that read, sent as a foreground one, so a quick capture
+ * opens the hub on a single `getStagingStatus`.
  */
 export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseReviewHubStatusArgs) {
   const [status, setStatus] = useState<StagingStatus | null>(null);
@@ -87,6 +108,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   // a worktree switch: a capture from another opening is never shown with this
   // one's reads.
   const sessionRef = useRef<Session>({ live: false });
+  const openedSessionRef = useRef<Session | null>(null);
   // The worktree the subscription is open on. A callback a staging action held
   // across a worktree switch still reads its own worktree, and that read must
   // never land in this one's list.
@@ -106,37 +128,48 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     return latest && latest.path === path ? latest.capture : null;
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (!worktreePath) return;
-    const requestId = ++refreshIdRef.current;
-    const publishSeq = ++publishSeqRef.current;
-    const readSeq = beginStagingStatusRead();
-    const capture = captureForRead(worktreePath);
+  /** Raises `loading` for a foreground read and numbers it; a newer one supersedes it. */
+  const beginForegroundRead = useCallback((): number => {
     setLoading(true);
     setLoadError(null);
-    try {
-      const result = await window.electron.git.getStagingStatus(worktreePath);
-      rememberStagingStatus(worktreePath, result, readSeq);
-      if (
-        refreshIdRef.current === requestId &&
-        publishSeq > publishedSeqRef.current &&
-        isOpenPath(worktreePath)
-      ) {
-        publishedSeqRef.current = publishSeq;
-        setStatusIsFresh(true);
-        setStatus(result);
-        setStatusCapture(capture);
+    return ++refreshIdRef.current;
+  }, []);
+
+  const sendForegroundRead = useCallback(
+    async (requestId: number) => {
+      const publishSeq = ++publishSeqRef.current;
+      const readSeq = beginStagingStatusRead();
+      const capture = captureForRead(worktreePath);
+      try {
+        const result = await window.electron.git.getStagingStatus(worktreePath);
+        rememberStagingStatus(worktreePath, result, readSeq);
+        if (
+          refreshIdRef.current === requestId &&
+          publishSeq > publishedSeqRef.current &&
+          isOpenPath(worktreePath)
+        ) {
+          publishedSeqRef.current = publishSeq;
+          setStatusIsFresh(true);
+          setStatus(result);
+          setStatusCapture(capture);
+        }
+      } catch (err) {
+        if (refreshIdRef.current === requestId) {
+          setLoadError(formatErrorMessage(err, "Failed to load staging status"));
+        }
+      } finally {
+        if (refreshIdRef.current === requestId) {
+          setLoading(false);
+        }
       }
-    } catch (err) {
-      if (refreshIdRef.current === requestId) {
-        setLoadError(formatErrorMessage(err, "Failed to load staging status"));
-      }
-    } finally {
-      if (refreshIdRef.current === requestId) {
-        setLoading(false);
-      }
-    }
-  }, [worktreePath, captureForRead, isOpenPath]);
+    },
+    [worktreePath, captureForRead, isOpenPath]
+  );
+
+  const refresh = useCallback(async () => {
+    if (!worktreePath) return;
+    await sendForegroundRead(beginForegroundRead());
+  }, [worktreePath, beginForegroundRead, sendForegroundRead]);
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -171,16 +204,18 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   /**
    * Capture, then read status once the capture lands, or once it's taken too
    * long. A request while one is capturing asks for one more capture after it,
-   * and the lane still reads status once, at its end. Where this view can't
-   * capture, the read goes straight out, unless `captureOnly` says it was only
-   * wanted for the capture.
+   * and the lane still reads status once, at its end. A `foreground` request
+   * makes that read a foreground one: `loading` goes up at once, and the read
+   * goes out when the capture lands or at `FOREGROUND_CAPTURE_WAIT_MS`,
+   * whichever is first. Where this view can't capture, the read goes straight
+   * out.
    */
-  const readWithCapture = useCallback(
-    (captureOnly = false) => {
+  const requestCapture = useCallback(
+    (foreground: boolean) => {
       const session = sessionRef.current;
-      if (!session.live) return;
+      if (!session.live || !worktreePath) return;
       if (!worktreeId || !reviewMarkCapturesAvailable()) {
-        if (!captureOnly) void backgroundRefresh();
+        void (foreground ? refresh() : backgroundRefresh());
         return;
       }
       const path = worktreePath;
@@ -188,8 +223,32 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
       const lane: CaptureLane =
         current && current.session === session && current.running
           ? current
-          : { session, running: false, again: false, timer: null, earlyReadSent: false };
-      if (lane.timer === null && !lane.earlyReadSent) {
+          : {
+              session,
+              running: false,
+              again: false,
+              timer: null,
+              earlyReadSent: false,
+              foreground: null,
+              foregroundTimer: null,
+            };
+      if (foreground) {
+        lane.foreground = beginForegroundRead();
+        if (lane.foregroundTimer === null) {
+          lane.foregroundTimer = setTimeout(() => {
+            lane.foregroundTimer = null;
+            const requestId = lane.foreground;
+            if (!lane.running || !session.live || requestId === null) return;
+            // The read that doesn't wait for the capture, which stands in for
+            // an early one; the run still sends the read after the capture.
+            lane.foreground = null;
+            lane.earlyReadSent = true;
+            if (lane.timer !== null) clearTimeout(lane.timer);
+            lane.timer = null;
+            if (refreshIdRef.current === requestId) void sendForegroundRead(requestId);
+          }, FOREGROUND_CAPTURE_WAIT_MS);
+        }
+      } else if (lane.timer === null && !lane.earlyReadSent) {
         lane.timer = setTimeout(() => {
           lane.timer = null;
           if (!lane.running || !session.live) return;
@@ -214,13 +273,34 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
           }
         } while (lane.again);
         lane.running = false;
-        if (lane.timer !== null) clearTimeout(lane.timer);
-        lane.timer = null;
-        if (session.live) void backgroundRefresh();
+        clearLaneTimers(lane);
+        if (!session.live) return;
+        const requestId = lane.foreground;
+        lane.foreground = null;
+        // A foreground read sent since (a staging action's) supersedes this
+        // one, but it may have gone out before the capture landed.
+        if (requestId !== null && refreshIdRef.current === requestId) {
+          void sendForegroundRead(requestId);
+        } else {
+          void backgroundRefresh();
+        }
       })();
     },
-    [worktreeId, worktreePath, backgroundRefresh]
+    [
+      worktreeId,
+      worktreePath,
+      refresh,
+      backgroundRefresh,
+      beginForegroundRead,
+      sendForegroundRead,
+    ]
   );
+
+  /** A capture and the silent read after it: what events and a mark ask for. */
+  const readWithCapture = useCallback(() => requestCapture(false), [requestCapture]);
+
+  /** A capture and a foreground read after it: what an opening and Refresh ask for. */
+  const refreshWithCapture = useCallback(() => requestCapture(true), [requestCapture]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -247,27 +327,35 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
         debouncedBgRefresh();
       }
     });
-    // The opening's first capture, so a mark is possible without waiting for an
-    // event. The opening's own foreground read covers status where there's none.
-    readWithCapture(true);
+    // The opening's read, after its first capture so a mark is possible without
+    // waiting for an event. Every session starts with one, a worktree switch
+    // and a `worktreeId` that arrives after the opening included.
+    refreshWithCapture();
 
     return () => {
       session.live = false;
+      const lane = laneRef.current;
+      if (lane?.session === session) clearLaneTimers(lane);
       latestCaptureRef.current = null;
       unsubscribeUpdate();
       unsubscribeTick();
       debouncedBgRefresh.cancel();
       debouncedBgRefreshRef.current = null;
     };
-  }, [isOpen, worktreePath, readWithCapture]);
+  }, [isOpen, worktreePath, readWithCapture, refreshWithCapture]);
 
+  /**
+   * Once per session, which the subscription has already started, with its
+   * read, by the time this runs: a second call in the same session would mark
+   * the status on screen stale with no read coming to refresh it.
+   */
   const beginOpen = useCallback(() => {
+    if (openedSessionRef.current === sessionRef.current) return;
+    openedSessionRef.current = sessionRef.current;
     setStatusIsFresh(false);
     // A background read still in flight belongs to the previous worktree (or
     // the previous opening); landing it would mark this one fresh.
     bgRefreshIdRef.current++;
-    // The capture lane's session is the subscription's, which has already
-    // started this opening's first capture by the time this runs.
     setStatusCapture(null);
     setStatus(worktreePath ? getCachedStagingStatus(worktreePath) : null);
   }, [worktreePath]);
@@ -293,6 +381,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     loadError,
     refresh,
     readWithCapture,
+    refreshWithCapture,
     debouncedBgRefreshRef,
     beginOpen,
     reset,

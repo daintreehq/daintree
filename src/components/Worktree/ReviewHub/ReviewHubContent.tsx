@@ -246,6 +246,7 @@ export function ReviewHubContent({
     loadError,
     refresh,
     readWithCapture,
+    refreshWithCapture,
     debouncedBgRefreshRef,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
@@ -1149,10 +1150,11 @@ export function ReviewHubContent({
 
   useEffect(() => {
     if (isOpen) {
-      // This branch also re-runs when worktreePath changes while open (via
-      // `refresh`'s identity): drop the previous worktree's staging status so
-      // the file list and readiness rail never mix two worktrees' state. The
-      // cache is keyed by worktree, so what it seeds is this worktree's.
+      // This branch also re-runs when worktreePath changes while open: drop the
+      // previous worktree's staging status so the file list and readiness rail
+      // never mix two worktrees' state. The cache is keyed by worktree, so what
+      // it seeds is this worktree's. The status subscription has already sent
+      // the opening's read, after its first capture.
       beginStatusOpen();
       setActionError(null);
       clearPushError();
@@ -1160,7 +1162,6 @@ export function ReviewHubContent({
       const hasDraft =
         useReviewCommitDraftStore.getState().draftsByWorktree[worktreePath] !== undefined;
       setCommitSeed(seed && !hasDraft ? { worktreePath, message: seed } : null);
-      void refresh();
     } else {
       // Abandons every in-flight read by bumping its request generation, and
       // clears the loading flags those reads' `finally` blocks no longer will:
@@ -1196,7 +1197,6 @@ export function ReviewHubContent({
     }
   }, [
     isOpen,
-    refresh,
     writeCursorKey,
     worktreePath,
     beginStatusOpen,
@@ -1818,9 +1818,8 @@ export function ReviewHubContent({
                       } else if (diffMode === "since-review") {
                         if (!refreshBusy) reviewMark.retryCompare();
                       } else if (!loading) {
-                        void refresh();
-                        // A fresh capture too, so a mark covers what this read shows.
-                        readWithCapture(true);
+                        // After a fresh capture, so a mark covers what this read shows.
+                        refreshWithCapture();
                       }
                     }}
                     // Not `disabled`: pressing it would drop keyboard focus to the page.
