@@ -493,6 +493,8 @@ describe("bulk create runner", () => {
     });
     expect(mockRunRecipe.mock.calls[0]?.[4]).toMatchObject({ expectedRecipe: digestOf(edited) });
 
+    // A later edit doesn't move the pin: the retry still asks for what ran.
+    recipesById.recipe = first;
     await retryFailedBulkCreateRun(runId);
     expect(mockRunRecipe.mock.calls[1]?.[4]).toMatchObject({
       terminalIndices: [1],

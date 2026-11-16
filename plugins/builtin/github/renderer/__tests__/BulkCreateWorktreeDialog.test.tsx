@@ -2219,6 +2219,22 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
   });
 
+  it("still assigns when the dialog closes before its identity lookup answers", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    // The dialog's lookup never answers; the run's own one does.
+    mockGetCurrentUser.mockImplementationOnce(() => new Promise(() => {}));
+    mockGetCurrentUser.mockImplementation(async () => ({ login: "octocat" }));
+
+    const { unmount } = render(<BulkCreateWorktreeDialog {...assignProps} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      unmount();
+    });
+    await advanceTimersGradually(1000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "octocat");
+  });
+
   it("accounts mixed assignment outcomes correctly in a 3-item batch", async () => {
     // The original bug surfaced in bulk accounting — every prior test in this
     // describe block uses a single-item batch. This test guards the regression
