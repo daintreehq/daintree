@@ -91,6 +91,50 @@ describe("WorktreePortClient", () => {
     client._handlePortClose(2);
     expect(disconnected).toHaveBeenCalledTimes(1);
   });
+
+  it("lets a port the host retired go without reporting a disconnect (#17037)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const client = new WorktreePortClient();
+    const disconnected = vi.fn();
+    const ready = vi.fn();
+    client.onDisconnected(disconnected);
+    client.onReady(ready);
+    const retired = new FakePort();
+    client.attach(asPort(retired));
+    const pending = client.request("get-all-states");
+
+    retired.reply({ type: "port-retired" });
+
+    expect(retired.close).toHaveBeenCalledTimes(1);
+    await expect(pending).rejects.toThrow("[BrokerError|HOST_EXITED] Worktree port retired");
+    expect(client.isReady()).toBe(false);
+    // The host's own close arrives after its notice.
+    retired.fireClose();
+    expect(disconnected).not.toHaveBeenCalled();
+    await expect(client.request("get-all-states")).rejects.toThrow("Worktree port not ready");
+
+    const fresh = new FakePort();
+    client.attach(asPort(fresh));
+    expect(client.isReady()).toBe(true);
+    expect(ready).toHaveBeenCalledTimes(2);
+    fresh.fireClose();
+    expect(disconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a retired notice from a port it already replaced", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const client = new WorktreePortClient();
+    const stale = new FakePort();
+    client.attach(asPort(stale));
+    const current = new FakePort();
+    client.attach(asPort(current));
+
+    stale.reply({ type: "port-retired" });
+
+    expect(client.isReady()).toBe(true);
+    expect(current.close).not.toHaveBeenCalled();
+  });
 });
 
 describe("connectWorktreePortClient", () => {

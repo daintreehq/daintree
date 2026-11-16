@@ -1,4 +1,7 @@
+import type { WorktreePortRetiredNotice } from "../../shared/types/worktree-port.js";
 import { fanoutEventToPorts, type FanoutLogger, type FanoutPort } from "./worktreePortFanout.js";
+
+const RETIRED_NOTICE: WorktreePortRetiredNotice = { type: "port-retired" };
 
 /**
  * The workspace host's live worktree ports. Main's broker names each one when
@@ -32,9 +35,10 @@ export class WorktreePortRegistry<TPort extends FanoutPort> {
   }
 
   /**
-   * Stop posting into the port Main retired and close it. False for an id this
-   * host never held or already let go: a port to the host's previous process,
-   * or one that closed on its own first.
+   * Stop posting into the port Main retired and close it, telling the view
+   * first so it does not read the close as this host going away. False for an
+   * id this host never held or already let go: a port to the host's previous
+   * process, or one that closed on its own first.
    */
   detach(portId: number): boolean {
     const port = this.byId.get(portId);
@@ -42,6 +46,11 @@ export class WorktreePortRegistry<TPort extends FanoutPort> {
     // Forget before closing: `close()` fires the port's own close listener,
     // which then finds nothing left to remove.
     this.forget(port);
+    try {
+      port.postMessage(RETIRED_NOTICE);
+    } catch {
+      // A port that can't take the notice is closing anyway.
+    }
     try {
       port.close();
     } catch {

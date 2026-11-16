@@ -369,10 +369,13 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // seq without advancing), so it must still apply — otherwise cold
             // start never initializes and an epoch-change re-hydrate is silently
             // swallowed (#8403 review findings #1, #2). A differing epoch means
-            // the host restarted and always wins. On cold start we still must
-            // hydrate, so retry (the generation guard prevents stale overlaps).
+            // the host restarted and always wins. Retry rather than drop it:
+            // a cold start must still hydrate, and a store re-hydrating after a
+            // port gap (a cached view coming back) still lacks what it missed
+            // meanwhile, which the live update alone doesn't carry. The
+            // generation guard prevents stale overlaps.
             if (compareVersion(snapshotVersion, store.getState().version) < 0) {
-              if (!store.getState().isInitialized) fetchInitialState();
+              fetchInitialState();
               return;
             }
 

@@ -240,3 +240,12 @@ export type WorktreePortRequestArgs<K extends WorktreePortAction> =
   Record<string, never> extends WorktreePortPayload<K>
     ? [payload?: WorktreePortPayload<K>]
     : [payload: WorktreePortPayload<K>];
+
+/**
+ * The workspace host's last message on a port main retired (its view was
+ * cached, given a fresh port, or torn down), sent just before the host closes
+ * it. A close after this notice is planned, not the host going away (#17037).
+ */
+export interface WorktreePortRetiredNotice {
+  type: "port-retired";
+}

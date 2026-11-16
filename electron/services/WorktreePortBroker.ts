@@ -10,6 +10,7 @@ import { ipcMain, MessageChannelMain, type WebContents } from "electron";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createLogger } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const logger = createLogger("main:WorktreePortBroker");
 
@@ -436,7 +437,7 @@ export class WorktreePortBroker {
       logger.warn("Worktree port detach not sent", {
         projectPath: host.projectPath,
         token,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error, "Worktree port detach failed"),
       });
     }
   }

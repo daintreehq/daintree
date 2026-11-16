@@ -194,6 +194,21 @@ describe("WorkspaceHostProcess IPC contract (real worker_threads boundary)", () 
         expect(Array.isArray(attachCall![1])).toBe(true);
         expect((attachCall![1] as unknown[]).length).toBe(1);
         expect((attachCall![1] as unknown[])[0]).toBe(channel.port2);
+
+        // Each port goes out under the id it was attached with.
+        const second = new MessageChannel();
+        try {
+          host.attachWorktreePort(second.port2 as any, 12);
+          const bodies = postSpy.mock.calls
+            .filter((c) => (c[0] as any)?.type === "attach-worktree-port")
+            .map((c) => c[0]);
+          expect(bodies).toEqual([
+            { type: "attach-worktree-port", portId: 7 },
+            { type: "attach-worktree-port", portId: 12 },
+          ]);
+        } finally {
+          second.port1.close();
+        }
       } finally {
         try {
           channel.port1.close();
@@ -216,11 +231,15 @@ describe("WorkspaceHostProcess IPC contract (real worker_threads boundary)", () 
       const postSpy = vi.spyOn(handle.fakeChild, "postMessage");
 
       host.detachWorktreePort(7);
+      host.detachWorktreePort(12);
 
-      const detachCall = postSpy.mock.calls.find(
+      const detachCalls = postSpy.mock.calls.filter(
         (c) => (c[0] as any)?.type === "detach-worktree-port"
       );
-      expect(detachCall).toEqual([{ type: "detach-worktree-port", portId: 7 }]);
+      expect(detachCalls).toEqual([
+        [{ type: "detach-worktree-port", portId: 7 }],
+        [{ type: "detach-worktree-port", portId: 12 }],
+      ]);
     } finally {
       host.dispose();
     }

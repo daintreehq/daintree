@@ -23,7 +23,14 @@ vi.mock("electron", async () => {
 
   function makePort(): MockPort {
     const ee = new EE() as MockPort;
-    ee.close = vi.fn();
+    let closed = false;
+    // Electron's MessagePortMain emits "close" on its own wrapper when closed —
+    // a transferred, neutered one included — and only the first time.
+    ee.close = vi.fn(() => {
+      if (closed) return;
+      closed = true;
+      ee.emit("close");
+    });
     return ee;
   }
 
@@ -321,6 +328,7 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.hasPort(webContents.id)).toBe(true);
     expect(createdChannels[0].port1.close).not.toHaveBeenCalled();
     expect(createdChannels[1].port1.close).toHaveBeenCalledTimes(1);
+    expect(host.detachWorktreePort).not.toHaveBeenCalled();
     expect(broker.closePortsForHost("/tmp/project")).toEqual([webContents.id]);
   });
 
@@ -510,10 +518,10 @@ describe("WorktreePortBroker adversarial", () => {
     expect(broker.hasPort(viewB.id)).toBe(true);
   });
 
-  it("closes the port when port1 emits 'close' (host-side shutdown / transfer failure)", () => {
-    // The webContents lifecycle events don't fire when the host-side shuts the
-    // port (utility process crash, port transfer failure on the workspace
-    // host). port1.on('close') is the authoritative signal for those paths.
+  it("closes the port when port1 emits 'close' (a far end that kept port1 here closed it)", () => {
+    // The webContents lifecycle events don't fire when a relay holding port1
+    // in this process closes it. A port transferred to a workspace host is
+    // neutered here and never reports its far end closing.
     const broker = new WorktreePortBroker();
     const host = createHost();
     const webContents = createWebContents();
@@ -839,6 +847,7 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
     createdChannels.length = 0;
     nextWebContentsId = 1;
     ipcMain.removeAllListeners();
+    vi.clearAllMocks();
   });
 
   function attachedId(host: HostLike, call = 0): number {
@@ -918,20 +927,6 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
     expect(second.detachWorktreePort).not.toHaveBeenCalled();
   });
 
-  it("keeps the live port when the host refuses a replacement", () => {
-    const broker = new WorktreePortBroker();
-    const host = createHost();
-    const webContents = createWebContents();
-    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
-    vi.mocked(host.attachWorktreePort).mockReturnValueOnce(false);
-
-    expect(
-      broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents), { force: true })
-    ).toBe(false);
-
-    expect(host.detachWorktreePort).not.toHaveBeenCalled();
-  });
-
   it("tells the host to close a port the renderer never received", () => {
     const broker = new WorktreePortBroker();
     const host = createHost();
@@ -940,6 +935,23 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
     expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(false);
 
     expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+  });
+
+  it("closes both the replaced port and its undelivered replacement on the host", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    webContents.setThrowOnPostMessage(true);
+
+    expect(
+      broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents), { force: true })
+    ).toBe(false);
+
+    const [oldId, replacementId] = [attachedId(host, 0), attachedId(host, 1)];
+    expect(oldId).not.toBe(replacementId);
+    expect(vi.mocked(host.detachWorktreePort).mock.calls).toEqual([[oldId], [replacementId]]);
+    expect(broker.hasPort(webContents.id)).toBe(false);
   });
 
   it("tells the host to close a released endpoint's port", () => {
@@ -1004,6 +1016,7 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
 
     broker.closePortsForView(webContents.id);
 
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
     expect(broker.hasPort(webContents.id)).toBe(false);
     expect(createdChannels[0]!.port1.close).toHaveBeenCalledTimes(1);
   });
@@ -1021,6 +1034,10 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
 
     expect(createdChannels[0]!.port1.close).toHaveBeenCalledTimes(1);
     expect(broker.hasPort(webContents.id)).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "Worktree port detach not sent",
+      expect.anything()
+    );
   });
 });
 
