@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useLayoutEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IFuseOptions } from "fuse.js";
@@ -106,6 +107,39 @@ describe("useSearchablePalette search work", () => {
     openFromOutside("panel");
     expect(result.current.query).toBe("");
     expect(result.current.results).toHaveLength(5);
+    expect(result.current.selectedIndex).toBe(0);
+  });
+
+  it("reopens a deferred palette on its browse rows, never the last opening's search", () => {
+    // Over the deferral threshold, so filtering trails the input by a render.
+    const items: Row[] = Array.from({ length: 400 }, (_, i) => {
+      const name = i === 5 ? "zebra" : `item ${String(i).padStart(3, "0")}`;
+      return { id: name, name };
+    });
+    const committedWhileOpen: string[] = [];
+    const { result } = renderHook(() => {
+      const palette = useSearchablePalette<Row>({
+        items,
+        fuseOptions: OPTIONS,
+        paletteId: "panel",
+        resetOnStoreOpen: true,
+      });
+      useLayoutEffect(() => {
+        if (palette.isOpen) committedWhileOpen.push(palette.results[0]?.id ?? "");
+      });
+      return palette;
+    });
+    openFromOutside("panel");
+    act(() => result.current.setQuery("zebra"));
+    expect(result.current.results.map((r) => r.id)).toEqual(["zebra"]);
+
+    openFromOutside("action");
+    committedWhileOpen.length = 0;
+    openFromOutside("panel");
+
+    expect(result.current.query).toBe("");
+    expect(committedWhileOpen.length).toBeGreaterThan(0);
+    expect(committedWhileOpen.every((id) => id === "item 000")).toBe(true);
     expect(result.current.selectedIndex).toBe(0);
   });
 

@@ -168,10 +168,19 @@ export function useSearchablePalette<T>(
   // The expensive Fuse/filterFn pass runs in a deferred render that yields to
   // input events; the input itself binds to the urgent `query` state.
   // Called unconditionally (hook order) even when deferral is opted out of.
-  const deferredValue = useDeferredValue(currentQuery);
+  // Tagged with the opening it was typed in: the deferred value trails a
+  // render behind, so the first renders of a store open would otherwise
+  // filter by the previous opening's query and the selection would anchor on
+  // its rows. Until a value from this opening arrives, filter synchronously.
+  const taggedQuery = useMemo(
+    () => ({ text: currentQuery, opening: handledOpenRequest }),
+    [currentQuery, handledOpenRequest]
+  );
+  const deferredValue = useDeferredValue(taggedQuery);
   const shouldDefer =
     deferFiltering === "auto" ? items.length > AUTO_DEFER_MIN_ITEMS : deferFiltering;
-  const deferredQuery = shouldDefer ? deferredValue : currentQuery;
+  const deferredIsCurrent = !isNewOpenRequest && deferredValue.opening === handledOpenRequest;
+  const deferredQuery = shouldDefer && deferredIsCurrent ? deferredValue.text : currentQuery;
   const isStale = currentQuery !== deferredQuery;
 
   const effectiveFuseOptions = useMemo(() => {
