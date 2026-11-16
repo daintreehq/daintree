@@ -121,29 +121,41 @@ export class PanelSuspectLedgerService {
    * The pending crash may be `null` (no marker, i.e., this is a clean boot
    * after a clean shutdown) — in that case we still load the ledger so the
    * in-memory state is correct, but make no mutations beyond TTL decay.
+   *
+   * The ledger is written back only when one of these steps changed it: the
+   * write is a durable atomic write (two fsyncs) on the boot critical path,
+   * and a clean boot has nothing to persist.
    */
   initialize(pendingCrash: PendingCrash | null): void {
     if (this.initialized) return;
     this.initialized = true;
 
-    this.sweepStaleTmpFiles();
-    this.pruneCorruptedSiblings();
+    const entries = this.listUserData();
+    if (entries) {
+      this.sweepStaleTmpFiles(entries);
+      this.pruneCorruptedSiblings(entries);
+    }
 
-    this.ledger = this.readLedger();
+    const { ledger, droppedRecords } = this.readLedger();
+    this.ledger = ledger;
 
     const now = Date.now();
     const panels = pendingCrash?.panels ?? null;
 
-    if (panels && panels.length > 0) {
-      this.foldPendingCrash(panels, now);
+    let changed = droppedRecords;
+    if (panels && panels.length > 0 && this.foldPendingCrash(panels, now)) {
+      changed = true;
+    }
+    if (this.applyDecay(now)) {
+      changed = true;
     }
 
-    this.applyDecay(now);
-
-    try {
-      this.writeLedger();
-    } catch (err) {
-      console.error("[PanelSuspectLedger] Failed to persist ledger during initialize:", err);
+    if (changed) {
+      try {
+        this.writeLedger();
+      } catch (err) {
+        console.error("[PanelSuspectLedger] Failed to persist ledger during initialize:", err);
+      }
     }
 
     const quarantinedCount = this.countQuarantined();
@@ -243,7 +255,9 @@ export class PanelSuspectLedgerService {
     // No resources held — kept for API stability.
   }
 
-  private foldPendingCrash(panels: PanelSummary[], now: number): void {
+  /** Returns true when any record was added or changed. */
+  private foldPendingCrash(panels: PanelSummary[], now: number): boolean {
+    let changed = false;
     for (const panel of panels) {
       if (!panel.id) continue;
       const existing = this.ledger.panels[panel.id];
@@ -258,6 +272,7 @@ export class PanelSuspectLedgerService {
           worktreeId: panel.worktreeId,
         };
         this.ledger.panels[panel.id] = next;
+        changed = true;
       } else if (existing) {
         // Crash recorded but this panel wasn't near the failure window —
         // treat it as a clean launch for that panel only. Don't reset the
@@ -272,18 +287,24 @@ export class PanelSuspectLedgerService {
         existing.kind = panel.kind;
         existing.cwd = panel.cwd;
         existing.worktreeId = panel.worktreeId;
+        changed = true;
       }
     }
+    return changed;
   }
 
-  private applyDecay(now: number): void {
+  /** Returns true when any record was removed. */
+  private applyDecay(now: number): boolean {
+    let removed = false;
     for (const [id, record] of Object.entries(this.ledger.panels)) {
       const ttlExpired = now - record.lastSuspectAt > PANEL_DECAY_TTL_MS;
       const decayed = record.cleanLaunchesSince >= PANEL_DECAY_CLEAN_LAUNCHES;
       if (ttlExpired || decayed) {
         delete this.ledger.panels[id];
+        removed = true;
       }
     }
+    return removed;
   }
 
   private countQuarantined(): number {
@@ -294,9 +315,14 @@ export class PanelSuspectLedgerService {
     return count;
   }
 
-  private readLedger(): PanelSuspectLedger {
+  /**
+   * `droppedRecords` is true when malformed entries were filtered out, so the
+   * caller persists the cleaned ledger. A quarantined or missing file needs no
+   * write: an absent ledger already reads as a fresh one.
+   */
+  private readLedger(): { ledger: PanelSuspectLedger; droppedRecords: boolean } {
     if (!fs.existsSync(this.ledgerPath)) {
-      return freshLedger();
+      return { ledger: freshLedger(), droppedRecords: false };
     }
     try {
       const raw = fs.readFileSync(this.ledgerPath, "utf8");
@@ -310,23 +336,26 @@ export class PanelSuspectLedgerService {
         // Per-entry validation — drop malformed records, keep the rest. A
         // single corrupt entry shouldn't wipe the whole ledger.
         const cleaned: Record<string, PanelSuspectRecord> = {};
+        let droppedRecords = false;
         for (const [id, record] of Object.entries(parsed.panels)) {
           if (typeof id === "string" && id.length > 0 && isValidRecord(record)) {
             cleaned[id] = record;
+          } else {
+            droppedRecords = true;
           }
         }
-        return { version: 1, panels: cleaned };
+        return { ledger: { version: 1, panels: cleaned }, droppedRecords };
       }
       console.warn("[PanelSuspectLedger] Invalid ledger structure — quarantining and resetting");
       this.quarantineLedgerFile();
-      return freshLedger();
+      return { ledger: freshLedger(), droppedRecords: false };
     } catch (err) {
       console.warn(
         "[PanelSuspectLedger] Failed to parse ledger file — quarantining and resetting",
         err
       );
       this.quarantineLedgerFile();
-      return freshLedger();
+      return { ledger: freshLedger(), droppedRecords: false };
     }
   }
 
@@ -345,13 +374,16 @@ export class PanelSuspectLedgerService {
     console.log(`[PanelSuspectLedger] Quarantined corrupt ledger to ${quarantinePath}`);
   }
 
-  private sweepStaleTmpFiles(): void {
-    let entries: string[];
+  /** One listing shared by both boot sweeps; null when userData can't be read. */
+  private listUserData(): string[] | null {
     try {
-      entries = fs.readdirSync(this.userData);
+      return fs.readdirSync(this.userData);
     } catch {
-      return;
+      return null;
     }
+  }
+
+  private sweepStaleTmpFiles(entries: string[]): void {
     const now = Date.now();
     for (const entry of entries) {
       const match = TMP_FILE_RE.exec(entry);
@@ -371,13 +403,7 @@ export class PanelSuspectLedgerService {
     }
   }
 
-  private pruneCorruptedSiblings(): void {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(this.userData);
-    } catch {
-      return;
-    }
+  private pruneCorruptedSiblings(entries: string[]): void {
     const corrupted: Array<{ entry: string; ts: number }> = [];
     for (const entry of entries) {
       const match = CORRUPTED_FILE_RE.exec(entry);

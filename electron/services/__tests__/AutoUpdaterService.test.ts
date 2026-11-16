@@ -3141,6 +3141,21 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.initialize();
 
       expect(trackEventMock).not.toHaveBeenCalled();
+      // A delete of an absent key still rewrites config.json, so a clean boot
+      // must not issue one for either marker.
+      expect(storeMock.delete).not.toHaveBeenCalled();
+    });
+
+    it("clears only the attempt marker when it is stored without a version", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "pendingUpdateInstallStage" ? "attempted" : undefined
+      );
+
+      autoUpdaterService.initialize();
+
+      expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateInstallStage");
+      expect(storeMock.delete).not.toHaveBeenCalledWith("pendingUpdateVersion");
+      expect(trackEventMock).not.toHaveBeenCalled();
     });
 
     it("clears but does not fire trackEvent on an invalid stored value", () => {
