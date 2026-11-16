@@ -2071,6 +2071,7 @@ describe("launch-time session id assignment (#11782)", () => {
 
 describe("resuming a conversation by its transcript's path (#17087)", () => {
   const sessionId = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+  afterEach(() => setAgentCommandDialectResolver(null));
   const transcript = `/Users/me/.claude-a/projects/-Users-me-work/${sessionId}.jsonl`;
 
   it("points the one exact resume at the transcript and keeps everything else", () => {
@@ -2080,12 +2081,19 @@ describe("resuming a conversation by its transcript's path (#17087)", () => {
     );
   });
 
-  it("quotes a path holding spaces or quotes as one shell word", () => {
-    const odd = `/Users/me/My Accounts/it's/projects/x/${sessionId}.jsonl`;
-    expect(resumeByTranscriptPath(`claude --resume ${sessionId}`, "claude", sessionId, odd)).toBe(
-      `claude --resume '/Users/me/My Accounts/it'\\''s/projects/x/${sessionId}.jsonl'`
-    );
-  });
+  it.each([
+    ["a POSIX shell", "posix", `'/Users/me/My Accounts/it'\\''s/projects/x/${sessionId}.jsonl'`],
+    ["PowerShell", "windows", `'/Users/me/My Accounts/it''s/projects/x/${sessionId}.jsonl'`],
+  ] as const)(
+    "quotes a path holding spaces or quotes as one word for %s",
+    (_shell, dialect, quoted) => {
+      setAgentCommandDialectResolver(() => dialect);
+      const odd = `/Users/me/My Accounts/it's/projects/x/${sessionId}.jsonl`;
+      expect(resumeByTranscriptPath(`claude --resume ${sessionId}`, "claude", sessionId, odd)).toBe(
+        `claude --resume ${quoted}`
+      );
+    }
+  );
 
   it("leaves a command that resumes another conversation, or none, alone", () => {
     const other = "1ad2578c-b710-4302-90c1-b222c4c29aa2";

@@ -128,7 +128,15 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
 
   it("reopens the held conversation from the account folder it is stored in (#17087)", () => {
     const store = { sessionId: "sess-1", configDir: "/home/me/.claude-company" };
-    const pane = heldPane({ conversationStore: store });
+    const pane = heldPane({
+      launchAgentId: "claude",
+      command: "claude",
+      agentLaunchFlags: undefined,
+      agentModelId: undefined,
+      env: { CLAUDE_CONFIG_DIR: "/home/me/.claude-personal" },
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot", sessionId: "sess-1" },
+      conversationStore: store,
+    });
 
     expect(
       buildRestoreRecoveryLaunchOptions(pane, { kind: "resume", sessionId: "sess-1" }, NO_INPUTS)

@@ -3134,10 +3134,6 @@ describe("accounts on restart and switch (#16040)", () => {
           .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
 
         expect(mockGetInfo).toHaveBeenCalledWith("test-1");
-        // Read while the launch still ran, before it was stopped.
-        expect(mockGetInfo.mock.invocationCallOrder[0]).toBeLessThan(
-          mockGracefulKill.mock.invocationCallOrder[0]!
-        );
         const payload = mockSpawn.mock.calls[0]![0];
         const store = { sessionId: "sess-captured", configDir: COMPANY };
         expect(payload.command).toBe("claude --resume sess-captured");
@@ -3145,6 +3141,33 @@ describe("accounts on restart and switch (#16040)", () => {
         expect(payload.conversationStore).toEqual(store);
         expect(pane().conversationStore).toEqual(store);
         expect(pane().presetSwitchResume?.prior.conversationStore).toBeUndefined();
+      });
+
+      it("reads the folder while the launch still runs, before stopping it", async () => {
+        seed();
+        await resumeBuilds();
+        let answer: (info: { claudeConfigDir?: string }) => void = () => {};
+        mockGetInfo.mockReturnValueOnce(
+          new Promise((resolve) => {
+            answer = resolve;
+          })
+        );
+        mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+        const switched = usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+        await vi.waitFor(() => expect(mockGetInfo).toHaveBeenCalled());
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(mockGracefulKill).not.toHaveBeenCalled();
+        expect(mockKill).not.toHaveBeenCalled();
+
+        answer({ claudeConfigDir: COMPANY });
+        await switched;
+        expect(mockSpawn.mock.calls[0]![0].conversationStore).toEqual({
+          sessionId: "sess-captured",
+          configDir: COMPANY,
+        });
       });
 
       it("keeps the folder an earlier switch carried the conversation from", async () => {
@@ -3204,22 +3227,44 @@ describe("accounts on restart and switch (#16040)", () => {
         expect(pane().conversationStore).toBeUndefined();
       });
 
-      it("puts the folder back with the account when the spawn fails", async () => {
+      it("takes the folder back off with the account when the spawn fails", async () => {
+        seed();
+        await resumeBuilds();
+        mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+        let written: PtyPanelData["conversationStore"];
+        mockSpawn.mockImplementationOnce(async () => {
+          written = pane().conversationStore;
+          throw new Error("spawn failed");
+        });
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+        expect(written).toEqual({ sessionId: "sess-1", configDir: COMPANY });
+        expect(pane().agentAccountId).toBe("company");
+        expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+        expect(pane().conversationStore).toBeUndefined();
+      });
+
+      it("puts back the folder an earlier switch carried it from when the spawn fails", async () => {
         const store = { sessionId: "sess-1", configDir: FIRST };
         seed({ conversationStore: store });
         await resumeBuilds();
         mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+        mockGracefulKill.mockResolvedValueOnce("sess-new");
         mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
 
         await usePanelStore
           .getState()
           .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
 
-        expect(pane().agentAccountId).toBe("company");
+        // The switch moved the pane onto the newer conversation's folder; the
+        // rollback restores the pane as it was saved.
         expect(pane().conversationStore).toEqual(store);
       });
 
-      it("reopens it from that folder on a restart, and drops it for a new conversation", async () => {
+      it("reopens it from that folder on a restart, and drops it for one the run moved on to", async () => {
         const store = { sessionId: "sess-1", configDir: FIRST };
         seed({ agentAccountId: "personal", conversationStore: store });
         await resumeBuilds();

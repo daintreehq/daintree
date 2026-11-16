@@ -711,11 +711,12 @@ describe("panel serializer field coverage", () => {
     >;
     expect(moved).not.toHaveProperty("conversationStore");
 
-    const held = serialize({
+    const heldFixture: PtySerializeInput = {
       ...terminalFixture,
       conversationStore: store,
       restoreRecovery: { reason: "sibling-owns-resume-latest-slot", sessionId: "session-held" },
-    }) as Record<string, unknown>;
+    };
+    const held = serialize(heldFixture) as Record<string, unknown>;
     expect(held.conversationStore).toEqual(store);
   });
 

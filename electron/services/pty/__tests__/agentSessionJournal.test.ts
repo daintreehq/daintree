@@ -126,6 +126,21 @@ describe("journalAgentSession", () => {
     expect(records.get("sess-2")).not.toHaveProperty("conversationStore");
   });
 
+  it("keeps the store the closing launch had when a respawn replaces it mid-check (#17087)", async () => {
+    const store = { sessionId: "sess-1", configDir: "/home/me/.claude-company" };
+    getClaudePaneConversationStoreMock.mockReturnValue(store);
+    // The respawn lands while the close is still asking whether a transcript exists.
+    isClaudeSessionWithoutTranscriptMock.mockImplementation(async () => {
+      getClaudePaneConversationStoreMock.mockReturnValue(undefined);
+      return false;
+    });
+
+    await journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation: null });
+
+    const [record] = await readSessionHistory(userDataDir);
+    expect(record?.conversationStore).toEqual(store);
+  });
+
   it("lands a close already out of Canopy's Trash when the user removed its run while it ended", async () => {
     resetCanopyTrashRemovalsForTests();
     const close = (sessionId: string, spawnedAt: number) =>

@@ -66,6 +66,11 @@ export async function journalAgentSessionRecord(
   // A throwaway host run (#14445) leaves nothing to resume, whichever close
   // path reached it; refused before the ledger, so it claims nothing either.
   if (isHostThrowawayWorkspaceId(record.projectId)) return null;
+  // Where a conversation its pane reopened from another account's folder is
+  // stored (#17087), read before anything awaits: only the spawn knew, and a
+  // respawn under the same terminal id replaces what it remembered.
+  const conversationStore =
+    record.conversationStore ?? getClaudePaneConversationStore(ctx.terminalId, record.sessionId);
   const ledger = getLifecycleLedger();
   // A null generation is an explicit "frozen but unknown" — fail open without
   // consulting the current (possibly respawned) generation. Omitted falls back
@@ -108,10 +113,6 @@ export async function journalAgentSessionRecord(
   // lands already out of the Trash, so no later read can bring the row back.
   // The note is not spent here: a write that fails and is retried lands the
   // same way.
-  // A conversation its pane reopened from another account's folder (#17087)
-  // is resumed from there again, and only the spawn knew where that was.
-  const conversationStore =
-    record.conversationStore ?? getClaudePaneConversationStore(ctx.terminalId, record.sessionId);
   const stamped = conversationStore ? { ...record, conversationStore } : record;
   const landing =
     stamped.trash && stamped.terminal && hasCanopyTrashRemoval(stamped.terminal)
