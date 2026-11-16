@@ -451,6 +451,16 @@ describe("initPerWindowServices plugin menu context (#13765)", () => {
       notifyProjectPresenceChanged();
       vi.advanceTimersByTime(60);
       expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([first.win]);
+
+      // Carried out, it is no longer owed: later signals only check the menu.
+      notifyProjectPresenceChanged();
+      vi.advanceTimersByTime(60);
+      getFocusedWindowMock.mockReturnValue(first.win);
+      rebuildMenuIfChangedMock.mockClear();
+      first.focus();
+      vi.advanceTimersByTime(60);
+      expect(createApplicationMenuMock).toHaveBeenCalledTimes(1);
+      expect(rebuildMenuIfChangedMock.mock.calls.map(([w]) => w)).toEqual([first.win]);
     } finally {
       vi.useRealTimers();
       first.close();

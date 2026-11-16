@@ -3628,7 +3628,18 @@ describe("a build that would install the menu already there (#17040)", () => {
       await handleDirectoryOpen(PROJECT.path, target);
       await handleDirectoryOpen(PROJECT.path, target);
 
+      expect(manager.switchTo).toHaveBeenCalledTimes(2);
+      expect(dialog.showMessageBox).not.toHaveBeenCalled();
       expect(builds()).toBe(1);
+
+      // The same open rebuilds once Open Recent has moved.
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { ...PROJECT, name: "alpha", emoji: "📁", lastOpened: 2 },
+        { id: "project-b", path: "/repos/beta", name: "beta", emoji: "📁", lastOpened: 3 },
+      ]);
+      await handleDirectoryOpen(PROJECT.path, target);
+      expect(manager.switchTo).toHaveBeenCalledTimes(3);
+      expect(builds()).toBe(2);
     } finally {
       disposeProjectHistory(7);
     }
