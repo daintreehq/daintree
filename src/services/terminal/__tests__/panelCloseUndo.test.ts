@@ -185,6 +185,30 @@ describe("panel close history", () => {
     expect(usePanelStore.getState().focusedId).toBe("older");
   });
 
+  it("tells subscribers when a close joins or leaves the history (#17108)", async () => {
+    seed("a");
+    seed("b");
+    const changed = vi.fn();
+    const unsubscribe = history.subscribePanelCloseHistory(changed);
+
+    userClose(["a"]);
+    userClose(["b"]);
+    expect(changed).toHaveBeenCalledTimes(2);
+
+    // Restored another way: it leaves the history.
+    usePanelStore.getState().restoreTerminal("b");
+    expect(changed).toHaveBeenCalledTimes(3);
+
+    await undoLastClose();
+    expect(changed).toHaveBeenCalledTimes(4);
+    expect(history.peekUndoCloseStep()).toBeNull();
+
+    // An empty history staying empty is no change.
+    history.resetPanelCloseHistoryForTests();
+    expect(changed).toHaveBeenCalledTimes(4);
+    unsubscribe();
+  });
+
   it("records only closes a person asked for", () => {
     seed("a");
     seed("b");

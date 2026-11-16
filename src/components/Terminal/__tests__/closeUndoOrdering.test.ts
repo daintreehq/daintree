@@ -19,6 +19,7 @@ import {
   hasEditsSinceClose,
   nextCloseSeq,
   resetCloseUndoOrderForTests,
+  subscribeCloseUndoEdits,
   trackNativeFieldEdits,
   undoFieldText,
 } from "@/services/terminal/closeUndoOrder";
@@ -231,6 +232,46 @@ describe("native text fields", () => {
     expect(hasEditsSinceClose(field, close)).toBe(true);
     undoField(field, "");
     expect(hasEditsSinceClose(field, close)).toBe(false);
+    field.remove();
+  });
+});
+
+describe("telling Edit > Undo a field's undo moved (#17108)", () => {
+  it("tells it of an editor's edits, undos and teardown, not its caret moving", () => {
+    const view = mount();
+    const moved = vi.fn();
+    const unsubscribe = subscribeCloseUndoEdits(moved);
+    nextCloseSeq();
+
+    type(view, "after the close");
+    expect(moved).toHaveBeenCalledTimes(1);
+
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(moved).toHaveBeenCalledTimes(1);
+
+    undo(view);
+    expect(moved).toHaveBeenCalledTimes(2);
+
+    views.splice(views.indexOf(view), 1);
+    view.destroy();
+    expect(moved).toHaveBeenCalledTimes(3);
+    unsubscribe();
+  });
+
+  it("tells it of typing in a native field once a close is in the history", () => {
+    nextCloseSeq();
+    trackNativeFieldEdits();
+    const moved = vi.fn();
+    const unsubscribe = subscribeCloseUndoEdits(moved);
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+
+    field.value = "typed";
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    unsubscribe();
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(moved).toHaveBeenCalledTimes(1);
     field.remove();
   });
 });
