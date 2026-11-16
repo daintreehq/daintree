@@ -903,18 +903,16 @@ describe("McpServerService", () => {
     });
 
     it("takes an external session's actions.list walk from the focused view in one round trip (#17036)", async () => {
-      const dispatchMock = vi.fn(
-        (request: DispatchRequest): ActionDispatchResult => ({
-          ok: true,
-          result: {
-            actions: manifestForAllAllowlistedTools(),
-            total: manifestForAllAllowlistedTools().length,
-            limit: request.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : 100,
-            offset: 0,
-            hasMore: false,
-          },
-        })
-      );
+      const dispatchMock = vi.fn((request: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: {
+          actions: manifestForAllAllowlistedTools(),
+          total: manifestForAllAllowlistedTools().length,
+          limit: request.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : 100,
+          offset: 0,
+          hasMore: false,
+        },
+      }));
       const { window } = createMockWindow({
         getManifest: manifestForAllAllowlistedTools,
         dispatchAction: dispatchMock,
