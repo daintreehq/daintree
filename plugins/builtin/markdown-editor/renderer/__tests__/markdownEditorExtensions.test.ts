@@ -7,6 +7,7 @@ import { ensureSyntaxTree } from "@codemirror/language";
 import {
   buildMarkdownEditorExtensions,
   docUtf8Bytes,
+  externalChange,
   linkTargetAt,
 } from "../markdownEditorExtensions";
 
@@ -51,12 +52,23 @@ afterEach(() => {
 });
 
 describe("markdownEditorExtensions (#12323)", () => {
-  it("labels the content for assistive tech and reports typing as whole-buffer text", () => {
+  it("labels the content for assistive tech and reports typing as the document itself", () => {
     mounted = mount("# Plan\n");
     const { view, callbacks } = mounted;
     expect(view.contentDOM.getAttribute("aria-label")).toBe("plan.md");
     view.dispatch({ changes: { from: view.state.doc.length, insert: "more" } });
-    expect(callbacks.onChange).toHaveBeenCalledWith("# Plan\nmore");
+    // The immutable document, never a string made per keystroke (#17071).
+    expect(callbacks.onChange).toHaveBeenCalledWith(view.state.doc);
+    expect(view.state.doc.toString()).toBe("# Plan\nmore");
+  });
+
+  it("does not report a change that catches the buffer up to the shared document", () => {
+    mounted = mount("# Plan\n");
+    const { view, callbacks } = mounted;
+    view.dispatch({ changes: { from: 0, insert: "x" }, annotations: externalChange.of(true) });
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+    view.dispatch({ changes: { from: 0, insert: "y" } });
+    expect(callbacks.onChange).toHaveBeenCalledTimes(1);
   });
 
   it("Mod-s saves and is consumed so nothing reaches the window", () => {
@@ -139,7 +151,8 @@ describe("markdownEditorExtensions (#12323)", () => {
     expect(callbacks.onChange).not.toHaveBeenCalled();
     Object.defineProperty(view, "composing", { value: false, configurable: true });
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    expect(callbacks.onChange).toHaveBeenCalledWith("か");
+    expect(callbacks.onChange).toHaveBeenCalledWith(view.state.doc);
+    expect(view.state.doc.toString()).toBe("か");
   });
 
   it("the editor is editable — a buffer that CodeMirror lets the user type into", () => {
@@ -166,7 +179,11 @@ describe("markdownEditorExtensions (#12323)", () => {
       const changes = [{ from, to, insert: pieces[random(pieces.length)]! }];
       // Two changes in one transaction, a single unchanged unit apart at times.
       if (second < length && random(2) === 0) {
-        changes.push({ from: second, to: second + random(2), insert: pieces[random(pieces.length)]! });
+        changes.push({
+          from: second,
+          to: second + random(2),
+          insert: pieces[random(pieces.length)]!,
+        });
       }
       state = state.update({ changes }).state;
       expect(state.field(docUtf8Bytes)).toBe(encoded(state));

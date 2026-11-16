@@ -989,7 +989,9 @@ describe("DocumentController (#12323)", () => {
     expect(
       main.calls.filter((c) => c.channel === CHANNELS.draftPut).map((c) => c.args)
     ).toContainEqual(
-      expect.objectContaining({ record: expect.objectContaining({ draftText: "# Plan\n\nkept late\n" }) })
+      expect.objectContaining({
+        record: expect.objectContaining({ draftText: "# Plan\n\nkept late\n" }),
+      })
     );
   });
 

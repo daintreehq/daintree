@@ -9,6 +9,7 @@ import {
   dropCursor,
 } from "@codemirror/view";
 import {
+  Annotation,
   Compartment,
   EditorState,
   Prec,
@@ -50,12 +51,19 @@ import {
  * then search, Markdown, history, and the defaults.
  */
 export interface MarkdownEditorCallbacks {
-  /** The buffer changed by typing (never during an IME composition). */
-  onChange: (text: string) => void;
+  /**
+   * The buffer changed by typing: never during an IME composition, never for
+   * a change {@link externalChange} marks. The document, not its text: making
+   * the string is the receiver's call (#17071).
+   */
+  onChange: (doc: Text) => void;
   onSave: () => void;
   /** Mod+click on a link's destination text. */
   onFollowLink: (href: string) => void;
 }
+
+/** Marks a change that brings the buffer up to the shared document, so it isn't reported back. */
+export const externalChange = Annotation.define<true>();
 
 export const wrapCompartment = new Compartment();
 export const themeCompartment = new Compartment();
@@ -63,7 +71,7 @@ export const themeCompartment = new Compartment();
 function rangeUtf8Bytes(doc: Text, from: number, to: number): number {
   let bytes = 0;
   // Chunks break only at line breaks, which never split a surrogate pair.
-  for (const iter = doc.iterRange(from, to); !iter.next().done; ) {
+  for (const iter = doc.iterRange(from, to); !iter.next().done;) {
     bytes += utf8ByteLength(iter.value);
   }
   return bytes;
@@ -194,13 +202,15 @@ export function buildMarkdownEditorExtensions(options: {
       // IME: the buffer is reported once composition ends, never mid-way,
       // so a half-composed sequence is neither persisted nor marked dirty.
       if (!update.docChanged || update.view.composing) return;
-      callbacks.onChange(update.state.doc.toString());
+      if (update.transactions.every((tr) => !tr.docChanged || tr.annotation(externalChange)))
+        return;
+      callbacks.onChange(update.state.doc);
     }),
     EditorView.domEventHandlers({
       compositionend: (_event, view) => {
         // The final composition transaction can land in the same update as
         // the composition ending; report the buffer as it now stands.
-        callbacks.onChange(view.state.doc.toString());
+        callbacks.onChange(view.state.doc);
         return false;
       },
       click: (event, view) => {

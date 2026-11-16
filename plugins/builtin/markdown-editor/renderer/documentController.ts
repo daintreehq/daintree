@@ -1,3 +1,4 @@
+import type { Text } from "@codemirror/state";
 import { usePanelStore } from "@/store/panelStore";
 import { isFilePanel } from "@shared/types/panel";
 import { join } from "@shared/utils/path";
@@ -60,6 +61,8 @@ export interface EditorViewState {
 }
 
 const PERSIST_DEBOUNCE_MS = 1000;
+/** How long typing may run ahead of the draft string (#17071); not reset by later keystrokes. */
+const COMMIT_THROTTLE_MS = 300;
 const REVALIDATE_COALESCE_MS = 100;
 const TOO_LARGE_MESSAGE = "This draft is over 2 MiB and can't be saved here";
 const CONFLICT_REASON = "The file changed on disk";
@@ -89,6 +92,17 @@ interface IdentityState {
   storedDraftText: string | null;
   /** Puts minted at or below this were overtaken by a delete, so their acknowledgement is void. */
   clearedAtGeneration: number;
+  /** Typing not yet turned into the draft string; one per document, whichever panel typed it. */
+  pending: PendingEdit | null;
+  /** Who produced the draft text last committed from an editor, so that editor skips its own echo. */
+  lastCommit: { text: string; controller: DocumentController } | null;
+}
+interface PendingEdit {
+  doc: Text;
+  /** The load the edit was typed into: a replacement since then voids it. */
+  loadGeneration: number;
+  controller: DocumentController;
+  timer: ReturnType<typeof setTimeout>;
 }
 const identities = new Map<string, IdentityState>();
 
@@ -101,6 +115,8 @@ function identityState(key: string): IdentityState {
       loadRequest: 0,
       storedDraftText: null,
       clearedAtGeneration: Number.NEGATIVE_INFINITY,
+      pending: null,
+      lastCommit: null,
     };
     identities.set(key, shared);
   }
@@ -120,6 +136,36 @@ function invalidateStored(key: string, generation: number): void {
   shared.storedDraftText = null;
   shared.clearedAtGeneration = Math.max(shared.clearedAtGeneration, generation);
   for (const controller of shared.controllers) controller.publishProjection();
+}
+
+/**
+ * Turn the document's pending typing into its draft string now. Every reader
+ * of the draft text calls this first; rendering and the projection never do.
+ */
+function commitPending(key: string): void {
+  const shared = identities.get(key);
+  const pending = shared?.pending;
+  if (!shared || !pending) return;
+  dropPending(key);
+  const before = useDocumentStateStore.getState().records[key];
+  if (before === undefined || before.loadGeneration !== pending.loadGeneration) return;
+  const text = pending.doc.toString();
+  // Recorded before the store hears of it: its subscribers run synchronously.
+  shared.lastCommit = { text, controller: pending.controller };
+  pending.controller.setText(text);
+  // An edit that landed back on the current text changes no record, but the
+  // projection still has to stop reporting it as pending.
+  if (useDocumentStateStore.getState().records[key] === before) {
+    for (const controller of shared.controllers) controller.publishProjection();
+  }
+}
+
+/** Forget pending typing: the buffer it was typed into is being replaced. */
+function dropPending(key: string): void {
+  const shared = identities.get(key);
+  if (!shared?.pending) return;
+  clearTimeout(shared.pending.timer);
+  shared.pending = null;
 }
 
 /** A controller still bound to this document, if any. */
@@ -175,6 +221,15 @@ function announceDiskTooLarge(outcome: "held" | "refused"): void {
       ? "File on disk is now over 2 MiB, draft kept"
       : "File is now over 2 MiB and can't be edited here"
   );
+}
+
+/** What a save writes for `text`: its ending re-applied to every `\n`, and the BOM. */
+function writtenBytes(text: string, meta: Pick<DocumentBase, "eol" | "hasBom">): number {
+  let breaks = 0;
+  if (meta.eol === "\r\n") {
+    for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) breaks++;
+  }
+  return utf8ByteLength(text) + breaks + (meta.hasBom ? 3 : 0);
 }
 
 function invoke<T>(channel: string, args: unknown): Promise<T> {
@@ -343,7 +398,9 @@ export class DocumentController {
       draftText: record.draft?.text ?? null,
       dirty: record.draft !== null,
       recoveryStored:
-        record.draft !== null && identityState(this.key).storedDraftText === record.draft.text,
+        record.draft !== null &&
+        identityState(this.key).pending === null &&
+        identityState(this.key).storedDraftText === record.draft.text,
       conflict: record.conflict !== null || record.status === "unavailable",
       save: () => this.save(),
       discard: () => this.discard(),
@@ -380,6 +437,8 @@ export class DocumentController {
     const request = this.beginLoad();
     const result = await this.read();
     if (!this.loadIsCurrent(request)) return false;
+    // Whatever this load decides, it decides about the buffer as typed.
+    commitPending(this.key);
     if (result === null || result.status === "unavailable") {
       // The file is not there, but a stored draft may be: surface it so the
       // panel shows the unsaved mark and the draft can be copied, rather than
@@ -390,12 +449,7 @@ export class DocumentController {
         if (!this.loadIsCurrent(request)) return false;
         if (stored) draft = { text: stored.draftText, baseRevision: stored.baseRevision };
       }
-      this.update((record) => ({
-        ...record,
-        status: "unavailable",
-        draft,
-        textVersion: draft === record.draft ? record.textVersion : record.textVersion + 1,
-      }));
+      this.update((record) => ({ ...record, status: "unavailable", draft }));
       return true;
     }
     if (result.status === "refused") {
@@ -451,7 +505,6 @@ export class DocumentController {
         conflict,
         error: null,
         loadGeneration: record.loadGeneration + 1,
-        textVersion: record.textVersion + 1,
       }));
       announce("Recovered draft, file changed on disk");
       return true;
@@ -465,15 +518,52 @@ export class DocumentController {
       conflict: null,
       error: null,
       loadGeneration: record.loadGeneration + 1,
-      textVersion: record.textVersion + 1,
     }));
     return true;
   }
 
   // ── Editing ────────────────────────────────────────────────────────
 
-  /** The editor buffer changed. `text` is the whole buffer, CodeMirror's `\n`-joined lines. */
+  /**
+   * The editor buffer changed (#17071). Holding CodeMirror's immutable
+   * document costs nothing per keystroke; the draft string is made from it at
+   * most every {@link COMMIT_THROTTLE_MS}, and at once wherever the text is
+   * read. The first edit on a clean document commits immediately, so the dirty
+   * mark and the close prompt never lag the buffer.
+   */
+  edit(doc: Text): void {
+    const record = this.record();
+    if (this.disposed || record.status !== "ready" || !record.base) return;
+    const shared = identityState(this.key);
+    if (record.draft === null) {
+      dropPending(this.key);
+      const text = doc.toString();
+      shared.lastCommit = { text, controller: this };
+      this.setText(text);
+      return;
+    }
+    const first = shared.pending === null;
+    const timer =
+      shared.pending?.timer ?? setTimeout(() => commitPending(this.key), COMMIT_THROTTLE_MS);
+    shared.pending = { doc, loadGeneration: record.loadGeneration, controller: this, timer };
+    // What recovery storage holds is no longer the whole draft.
+    if (first) for (const controller of shared.controllers) controller.publishProjection();
+  }
+
+  /** Commit typing still pending on this document. */
+  flushPending(): void {
+    commitPending(this.key);
+  }
+
+  /** Whether `text` is this panel's own typing coming back through the store. */
+  committedHere(text: string): boolean {
+    const last = identities.get(this.key)?.lastCommit;
+    return last?.controller === this && last.text === text;
+  }
+
+  /** Make `text` the buffer now. `text` is the whole buffer, CodeMirror's `\n`-joined lines. */
   setText(text: string): void {
+    dropPending(this.key);
     const record = this.record();
     if (record.status !== "ready" || !record.base) return;
     const base = record.base;
@@ -483,7 +573,6 @@ export class DocumentController {
         ...current,
         draft: null,
         error: current.error === TOO_LARGE_MESSAGE ? null : current.error,
-        textVersion: current.textVersion + 1,
       }));
       this.cancelPersist();
       void this.deleteStoredDraft();
@@ -498,7 +587,6 @@ export class DocumentController {
         : current.error === TOO_LARGE_MESSAGE
           ? null
           : current.error,
-      textVersion: current.textVersion + 1,
     }));
     if (!tooLarge) this.schedulePersist();
   }
@@ -506,6 +594,7 @@ export class DocumentController {
   // ── Saving ─────────────────────────────────────────────────────────
 
   async save(): Promise<FileDocumentSaveOutcome> {
+    commitPending(this.key);
     const record = this.record();
     // A known conflict is checked first: nothing is written over it, whatever
     // else the record says.
@@ -541,6 +630,8 @@ export class DocumentController {
     } catch (error) {
       result = { status: "error", message: formatErrorMessage(error, "Save failed") };
     }
+    // Typing during the write is part of what the settlement compares.
+    commitPending(this.key);
     // Settled on the shared record, not this controller: a sibling panel on
     // the same document must never be left in "Saving…" because the panel
     // that pressed Save closed first.
@@ -554,7 +645,7 @@ export class DocumentController {
             text: snapshot,
             revision: result.revision,
             mixedEol: result.wrote ? false : base.mixedEol,
-            size: utf8ByteLength(snapshot),
+            size: result.wrote ? writtenBytes(snapshot, base) : base.size,
           };
           // Whatever the buffer holds now — typing that landed during the
           // save, or an undo back to the old base — stays dirty against the
@@ -621,6 +712,7 @@ export class DocumentController {
   }
 
   async saveAs(targetPath: string): Promise<DocumentSaveAsResult> {
+    commitPending(this.key);
     const record = this.record();
     const text = currentText(record);
     if (text === null) return { status: "error", message: "Nothing to save" };
@@ -643,6 +735,7 @@ export class DocumentController {
    * asked to discard is cancelled rather than reported done.
    */
   async discard(): Promise<void> {
+    commitPending(this.key);
     const record = this.record();
     if (!record.draft && !record.conflict) return;
     this.cancelPersist();
@@ -654,6 +747,8 @@ export class DocumentController {
       }));
       throw new Error("markdown-editor: draft recovery record could not be removed");
     }
+    // Typing that landed while the record was removed goes with the draft.
+    dropPending(this.key);
     this.update((current) => ({
       ...current,
       draft: null,
@@ -661,7 +756,6 @@ export class DocumentController {
       error: null,
       storageWarning: null,
       loadGeneration: current.loadGeneration + 1,
-      textVersion: current.textVersion + 1,
     }));
     // The base may be stale if the discard resolved a conflict, or absent if
     // the file was never readable: take the disk version where there is one.
@@ -691,6 +785,7 @@ export class DocumentController {
       return;
     }
     this.cancelPersist();
+    dropPending(this.key);
     const base = this.baseFrom(result);
     this.update((current) => ({
       ...current,
@@ -701,7 +796,6 @@ export class DocumentController {
       conflict: null,
       error: null,
       loadGeneration: current.loadGeneration + 1,
-      textVersion: current.textVersion + 1,
     }));
     await this.deleteStoredDraft();
   }
@@ -736,6 +830,7 @@ export class DocumentController {
   }
 
   async revalidate(): Promise<void> {
+    commitPending(this.key);
     const record = this.record();
     // A file refused for its size is still checked: it can shrink back under the ceiling.
     if ((record.status === "refused" && record.refusal !== "TOO_LARGE") || record.saving) return;
@@ -749,6 +844,7 @@ export class DocumentController {
       return;
     }
     if (this.disposed) return;
+    commitPending(this.key);
     const current = this.record();
     if (current.saving) return;
     if (current.status === "refused" && current.refusal !== "TOO_LARGE") return;
@@ -871,6 +967,8 @@ export class DocumentController {
 
   /** Write the draft record now; a no-op when nothing is pending. */
   async flushPersist(): Promise<void> {
+    // Pending typing may not have reached the persist timer yet.
+    commitPending(this.key);
     if (this.persistTimer === null) return;
     this.cancelPersist();
     await this.persistNow();
@@ -890,6 +988,7 @@ export class DocumentController {
   }
 
   private async persistNow(): Promise<void> {
+    commitPending(this.key);
     const draft = this.draftRecord(this.record());
     if (this.disposed || !draft) return;
     let result: DraftPutResult;
@@ -933,6 +1032,7 @@ export class DocumentController {
   /** The panel is gone: flush, drop the binding, and release the document. */
   release(): void {
     if (this.disposed) return;
+    commitPending(this.key);
     this.disposed = true;
     if (this.persistTimer !== null) {
       // The draft outlives the panel in recovery storage: write it now, on
@@ -955,6 +1055,7 @@ export class DocumentController {
       // the stored draft's copy go when the last panel leaves.
       if (shared.controllers.size === 0) {
         shared.storedDraftText = null;
+        shared.lastCommit = null;
         useDocumentStateStore.getState().remove(this.key);
       } else if (useDocumentStateStore.getState().records[this.key]?.status === "loading") {
         // This panel was the one loading the document; a sibling that only
