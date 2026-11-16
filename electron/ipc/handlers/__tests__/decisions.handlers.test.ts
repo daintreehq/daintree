@@ -32,7 +32,7 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
-  DecisionQuestionImageResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
@@ -75,7 +75,7 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _projectId: string | null,
       _payload: GetDecisionQuestionImagePayload
-    ): Promise<DecisionQuestionImageResult> => ({ result: "not-found" })
+    ): Promise<DecisionQuestionImagePartResult> => ({ result: "not-found" })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -319,7 +319,7 @@ const cancelQuestion = decisionsNamespace.ops.cancelQuestion.handler as unknown 
 const getQuestionImage = decisionsNamespace.ops.getQuestionImage.handler as unknown as (
   ctx: { projectId: string | null },
   payload: GetDecisionQuestionImagePayload
-) => Promise<DecisionQuestionImageResult>;
+) => Promise<DecisionQuestionImagePartResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -579,6 +579,7 @@ describe("decisions IPC", () => {
           terminalId: "pane-a",
           questionId: QUESTION_ID,
           attachmentId: ATTACHMENT_ID,
+          offset: 0,
         })
       ).resolves.toEqual({ result: "off" });
 
@@ -634,6 +635,7 @@ describe("decisions IPC", () => {
         terminalId: "pane-a",
         questionId: QUESTION_ID,
         attachmentId: ATTACHMENT_ID,
+        offset: 0,
       })
     ).resolves.toEqual({ result: "not-running" });
 
@@ -1128,13 +1130,20 @@ describe("decisions IPC", () => {
 
   it("reads a question's image for the asking view's own project once the setting is on", async () => {
     saved.value = { enabled: true };
-    const payload = { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: ATTACHMENT_ID };
-    const image: DecisionQuestionImageResult = {
+    const payload = {
+      terminalId: "pane-a",
+      questionId: QUESTION_ID,
+      attachmentId: ATTACHMENT_ID,
+      offset: 0,
+    };
+    const image: DecisionQuestionImagePartResult = {
       result: "read",
-      image: {
+      part: {
         attachmentId: ATTACHMENT_ID,
         mime: "image/png",
         sha256: "b".repeat(64),
+        size: 3,
+        offset: 0,
         bytes: new Uint8Array([1, 2, 3]),
       },
     };
@@ -1148,24 +1157,21 @@ describe("decisions IPC", () => {
     );
   });
 
-  it("takes only a pane, a question id and an attachment id for an image, never a project", () => {
+  it("takes only a pane, a question, an attachment and an offset in it for an image, never a project", () => {
     const image = decisionsNamespace.ops.getQuestionImage.schema as SafeParse;
-    expect(
-      image.safeParse({ terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: ATTACHMENT_ID })
-        .success
-    ).toBe(true);
+    const ok = { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: ATTACHMENT_ID };
+    expect(image.safeParse({ ...ok, offset: 0 }).success).toBe(true);
+    expect(image.safeParse({ ...ok, offset: 20 * 1024 * 1024 }).success).toBe(true);
     for (const bad of [
-      { terminalId: "pane-a", questionId: QUESTION_ID },
-      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "short" },
-      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "../attach_0001" },
-      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "a".repeat(65) },
-      { terminalId: "pane-a", questionId: "../q", attachmentId: ATTACHMENT_ID },
-      {
-        terminalId: "pane-a",
-        questionId: QUESTION_ID,
-        attachmentId: ATTACHMENT_ID,
-        projectId: "project-2",
-      },
+      ok,
+      { ...ok, offset: -1 },
+      { ...ok, offset: 1.5 },
+      { ...ok, offset: 20 * 1024 * 1024 + 1 },
+      { ...ok, offset: 0, attachmentId: "short" },
+      { ...ok, offset: 0, attachmentId: "../attach_0001" },
+      { ...ok, offset: 0, attachmentId: "a".repeat(65) },
+      { ...ok, offset: 0, questionId: "../q" },
+      { ...ok, offset: 0, projectId: "project-2" },
     ]) {
       expect(image.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }

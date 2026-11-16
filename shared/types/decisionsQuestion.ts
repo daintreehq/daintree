@@ -6,11 +6,16 @@ export interface GetDecisionQuestionPayload {
   questionId: string;
 }
 
-/** One image of a pane's question, asked by its attachment id (#17100). */
+/**
+ * Part of one image of a pane's question, asked by its attachment id and
+ * where the part starts (#17100). An image comes in parts small enough to
+ * cross a Remote Host's link, which carries at most 16 MiB in one message.
+ */
 export interface GetDecisionQuestionImagePayload {
   terminalId: string;
   questionId: string;
   attachmentId: string;
+  offset: number;
 }
 
 /** The questions of a pane whose opening lines a list needs (#17097). */
@@ -201,14 +206,37 @@ export interface DecisionQuestionImage {
 }
 
 /**
+ * Part of one of a question's images: the whole image was opened and checked
+ * against its digest for this read, and `bytes` are the part of it that
+ * starts at `offset`, empty past its end.
+ */
+export interface DecisionQuestionImagePart extends DecisionQuestionImage {
+  /** Bytes of the whole image. */
+  size: number;
+  offset: number;
+}
+
+/**
  * Reading one of a question's images. `not-found`: the store holds no such
  * question for this pane, or the question names no such image.
  * `unreadable`: the question's content can't be opened here.
  */
-export type DecisionQuestionImageResult =
-  | { result: "read"; image: DecisionQuestionImage }
+type DecisionQuestionImageRead<Read> =
+  | Read
   | { result: "unavailable"; reason: DecisionQuestionImageUnavailable }
   | { result: "off" }
   | { result: "not-running" }
   | { result: "not-found" }
   | { result: "unreadable" };
+
+/** One part of an image, as one read over IPC answers. */
+export type DecisionQuestionImagePartResult = DecisionQuestionImageRead<{
+  result: "read";
+  part: DecisionQuestionImagePart;
+}>;
+
+/** A whole image, as the renderer's client assembles it from its parts. */
+export type DecisionQuestionImageResult = DecisionQuestionImageRead<{
+  result: "read";
+  image: DecisionQuestionImage;
+}>;

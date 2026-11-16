@@ -2149,21 +2149,23 @@ describe("AnswerDelivery question reads (#17097)", () => {
       { ...OWN, projectId: "project-2" },
       { ...OWN, projectId: null },
     ]) {
-      await expect(h.delivery.questionImage(scope, Q1, attachmentId)).resolves.toEqual({
+      await expect(h.delivery.questionImage(scope, Q1, attachmentId, 0)).resolves.toEqual({
         result: "not-found",
       });
     }
     // Scope is checked before anything is fetched.
     expect(h.reports.filter((r) => r.path.includes("/attachments/"))).toEqual([]);
 
-    const read = await h.delivery.questionImage(OWN, Q1, attachmentId);
+    const read = await h.delivery.questionImage(OWN, Q1, attachmentId, 0);
 
     expect(read).toEqual({
       result: "read",
-      image: {
+      part: {
         attachmentId,
         mime: "image/png",
         sha256: sealed.sha256Plaintext,
+        size: png.length,
+        offset: 0,
         bytes: new Uint8Array(png),
       },
     });

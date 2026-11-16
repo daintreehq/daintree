@@ -1001,18 +1001,23 @@ describe("Decisions entry", () => {
       await running({ questionImage });
 
       await expect(
-        getDecisionQuestionImage("project-1", { ...PAYLOAD, attachmentId: "attach_0001" })
+        getDecisionQuestionImage("project-1", {
+          ...PAYLOAD,
+          attachmentId: "attach_0001",
+          offset: 0,
+        })
       ).resolves.toBe(read);
 
       expect(questionImage).toHaveBeenCalledExactlyOnceWith(
         { projectId: "project-1", terminalId: "pane-1" },
         PAYLOAD.questionId,
-        "attach_0001"
+        "attach_0001",
+        0
       );
     });
 
     it("reads no image while not running, or when the delivery stops under the read", async () => {
-      const image = { ...PAYLOAD, attachmentId: "attach_0001" };
+      const image = { ...PAYLOAD, attachmentId: "attach_0001", offset: 0 };
       await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
         result: "not-running",
       });

@@ -81,7 +81,7 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
-  DecisionQuestionImageResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
@@ -289,12 +289,17 @@ const cancelQuestionSchema = z
   .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
   .strict();
 
-// An attachment id as the protocol shapes it.
+// An attachment id as the protocol shapes it, and where in the image (at most 20 MiB) a part starts.
 const getQuestionImageSchema = z
   .object({
     terminalId: questionTerminalIdSchema,
     questionId: questionIdSchema,
     attachmentId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .max(20 * 1024 * 1024),
   })
   .strict();
 
@@ -397,7 +402,7 @@ export const decisionsNamespace = defineIpcNamespace({
       async (
         ctx,
         payload: GetDecisionQuestionImagePayload
-      ): Promise<DecisionQuestionImageResult> => {
+      ): Promise<DecisionQuestionImagePartResult> => {
         if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
           return { result: "off" };
         }

@@ -92,7 +92,7 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
-  DecisionQuestionImageResult,
+  DecisionQuestionImagePartResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
@@ -818,17 +818,18 @@ export function getDecisionQuestionContent(
   );
 }
 
-/** One image of a pane's question, checked against its digest (#17100). Never makes or starts the service. */
+/** Part of one image of a pane's question, checked against its digest (#17100). Never makes or starts the service. */
 export function getDecisionQuestionImage(
   projectId: string | null,
   payload: GetDecisionQuestionImagePayload
-): Promise<DecisionQuestionImageResult> {
-  return whileReading<DecisionQuestionImageResult>(
+): Promise<DecisionQuestionImagePartResult> {
+  return whileReading<DecisionQuestionImagePartResult>(
     (delivery) =>
       delivery.questionImage(
         { projectId, terminalId: payload.terminalId },
         payload.questionId,
-        payload.attachmentId
+        payload.attachmentId,
+        payload.offset
       ),
     { result: "not-running" }
   );
