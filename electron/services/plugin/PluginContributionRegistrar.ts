@@ -491,6 +491,9 @@ export class PluginContributionRegistrar {
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
       registerFileDecorationProviders(pluginId, manifest.contributes.fileDecorationProviders);
+      this.deps.broadcaster.announceDecorationScopes(
+        manifest.contributes.fileDecorationProviders.flatMap((provider) => provider.scopes)
+      );
     }
 
     const worktreeSetupSteps = manifest.contributes.worktreeSetupSteps ?? [];

@@ -1316,6 +1316,32 @@ describe("PluginService integration — file decoration provider contributions",
     expect(getFileDecorationImpls("scope-a:/x")).toEqual([]);
   });
 
+  it("announces each declared scope as the plugin loads, before it ever activates", async () => {
+    // A plugin that only decorates files has no actions or panels to announce
+    // it, and path lists ask for decorations only once they know the scope.
+    await writePlugin("acme.load-decor", {
+      name: "acme.load-decor",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["scope-c:*", "scope-d:/x"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    vi.mocked(broadcastToRenderer).mockClear();
+    await service.initialize();
+
+    const decorationBroadcasts = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) =>
+          c[0] === "events:push" &&
+          (c[1] as { name?: string }).name === "plugin:decorations-changed"
+      )
+      .map((c) => (c[1] as { payload: { scope: string } }).payload.scope);
+    expect(decorationBroadcasts).toEqual(expect.arrayContaining(["scope-c:*", "scope-d:/x"]));
+  });
+
   it("invalidateFileDecorations is a silent no-op after the plugin unloads", async () => {
     const pluginDir = await writePlugin("acme.post-unload", {
       name: "acme.post-unload",

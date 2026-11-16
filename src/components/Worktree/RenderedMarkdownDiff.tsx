@@ -132,6 +132,12 @@ interface SettledBuild {
 const UNCHANGED_RUN_LIMIT = 5;
 const UNCHANGED_CONTEXT = 2;
 
+/** One shared empty list: a fresh `[]` per render would rebuild a block's plugins and re-parse it. */
+const NO_RANGES: readonly TextRange[] = [];
+
+/** How far past the visible edge a block counts as on screen and jumps the queue. */
+const VIEWPORT_STAGE_MARGIN = "200px";
+
 /** One change the reader can point at, or a run of blocks they can skip. */
 type Section =
   | { kind: "change"; index: number; change: MarkdownBlockChange }
@@ -379,6 +385,7 @@ function DiffBlock({
   expectedText,
   whole,
   pending,
+  stageKey,
   blockRef,
   tabIndex,
   components,
@@ -405,6 +412,8 @@ function DiffBlock({
    * a parse.
    */
   pending: boolean;
+  /** The stage unit this block is, when it is one on its own (an unchanged block). */
+  stageKey?: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
@@ -420,6 +429,26 @@ function DiffBlock({
     [ranges, expectedText, kind]
   );
 
+  // react-markdown parses on every render. The stage re-renders the blocks
+  // around a slice as it lands, so the parsed tree is held explicitly: a block
+  // already on screen never parses again unless its own inputs change.
+  const markdown = useMemo(
+    () => (
+      <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={rehypePlugins}
+          urlTransform={urlTransform}
+          components={components}
+          skipHtml
+        >
+          {content}
+        </ReactMarkdown>
+      </MarkdownTableLabelPrefix>
+    ),
+    [kind, rehypePlugins, urlTransform, components, content]
+  );
+
   return (
     <div
       ref={blockRef}
@@ -427,6 +456,7 @@ function DiffBlock({
       className={cn("rendered-markdown-diff__block", `rendered-markdown-diff__block--${kind}`)}
       data-block-kind={kind}
       data-whole={whole ? "true" : "false"}
+      data-stage-key={stageKey}
     >
       {kind !== "unchanged" && <span className="sr-only">{BLOCK_LABEL[kind]}</span>}
       {pending ? (
@@ -434,17 +464,7 @@ function DiffBlock({
           {source}
         </div>
       ) : (
-        <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={rehypePlugins}
-            urlTransform={urlTransform}
-            components={components}
-            skipHtml
-          >
-            {content}
-          </ReactMarkdown>
-        </MarkdownTableLabelPrefix>
+        markdown
       )}
     </div>
   );
@@ -564,7 +584,34 @@ export function RenderedMarkdownDiff({
         : [],
     [result, sections, expandedRuns]
   );
-  const admitted = useStagedMarkdownBlocks(units, result, stageFlush);
+  const { admitted, admit } = useStagedMarkdownBlocks(units, result, stageFlush);
+
+  // What the reader can see mounts first. The sweep works top-down, so a step
+  // to a distant change or a fling down the page would otherwise land on
+  // placeholders until it got there. Every unit's frame is in the DOM from the
+  // first commit, so the frames are observed rather than the content.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || units.length === 0 || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const keys: string[] = [];
+        for (const entry of entries) {
+          const key = entry.isIntersecting
+            ? (entry.target as HTMLElement).dataset.stageKey
+            : undefined;
+          if (key) keys.push(key);
+        }
+        if (keys.length > 0) admit(keys);
+      },
+      // `scrollMargin` grows the pane's own scroller too, not just the window.
+      { rootMargin: VIEWPORT_STAGE_MARGIN, scrollMargin: VIEWPORT_STAGE_MARGIN }
+    );
+    for (const element of root.querySelectorAll<HTMLElement>("[data-stage-key]")) {
+      observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [units, admit]);
 
   const fontStyle: MarkdownFontStyle | undefined =
     fontSize === undefined
@@ -607,6 +654,7 @@ export function RenderedMarkdownDiff({
             <div
               key={`change-${section.index}`}
               data-change-index={section.index}
+              data-stage-key={changeUnitKey(section.index)}
               className="rendered-markdown-diff__change"
             >
               <BlockChange
@@ -678,7 +726,13 @@ function UnchangedRun({
     wasExpanded.current = expanded;
   }, [expanded]);
 
-  const shared = { components, urlTransform, kind: "unchanged" as const, ranges: [], whole: false };
+  const shared = {
+    components,
+    urlTransform,
+    kind: "unchanged" as const,
+    ranges: NO_RANGES,
+    whole: false,
+  };
   const render = (index: number) => {
     const block = blocks[index]!;
     const reveal = expanded && index === UNCHANGED_CONTEXT;
@@ -690,6 +744,7 @@ function UnchangedRun({
         blockRef={reveal ? revealedRef : undefined}
         tabIndex={reveal ? -1 : undefined}
         pending={!admitted.has(runUnitKey(runId, index))}
+        stageKey={runUnitKey(runId, index)}
         source={block.source}
         // Every block renders on its own, so one citing `[docs][d]` needs the
         // definition appended or it renders the literal brackets and loses its
@@ -894,7 +949,7 @@ function BlockChange({
       kind={kind}
       source={change.block.source}
       definitions={definitions}
-      ranges={[]}
+      ranges={NO_RANGES}
       expectedText={change.block.text}
       whole={kind !== "unchanged"}
       {...shared}

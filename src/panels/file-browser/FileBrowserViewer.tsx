@@ -1036,7 +1036,7 @@ export function FileBrowserViewer({
           <FileEditorBanner
             key={`${panelId}:${filePath}`}
             filePath={filePath}
-            content={state.content}
+            contentBytes={contentBytes ?? 0}
             onEdit={() => setExplicitRenderMode("edit")}
           />
         )}

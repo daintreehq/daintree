@@ -43,107 +43,153 @@ function drain(): number {
   return ran;
 }
 
-function units(count: number, shape: Partial<StagedMarkdownUnit> = {}): StagedMarkdownUnit[] {
+function units(
+  count: number,
+  shape: Partial<StagedMarkdownUnit> = {},
+  prefix = "u"
+): StagedMarkdownUnit[] {
   return Array.from({ length: count }, (_, i) => ({
-    key: `u${i}`,
+    key: `${prefix}${i}`,
     pipelines: 1,
     chars: 10,
     ...shape,
   }));
 }
 
+/** Every admitted set any render returned, so an oversized commit can't hide behind a later fix-up. */
 function stage(initial: { units: StagedMarkdownUnit[]; owner: unknown; flush: number }) {
-  return renderHook((props) => useStagedMarkdownBlocks(props.units, props.owner, props.flush), {
-    initialProps: initial,
-  });
+  const sizes: number[] = [];
+  const hook = renderHook(
+    (props) => {
+      const staged = useStagedMarkdownBlocks(props.units, props.owner, props.flush);
+      sizes.push(staged.admitted.size);
+      return staged;
+    },
+    { initialProps: initial }
+  );
+  return { ...hook, sizes };
+}
+
+function keysOf(set: ReadonlySet<string>): string[] {
+  return [...set];
 }
 
 describe("useStagedMarkdownBlocks", () => {
   it("admits everything in its first commit when it fits one slice", () => {
     const all = units(3);
     const { result } = stage({ units: all, owner: {}, flush: 0 });
-    expect([...result.current]).toEqual(["u0", "u1", "u2"]);
+    expect(keysOf(result.current.admitted)).toEqual(["u0", "u1", "u2"]);
     expect(frames.size).toBe(0);
   });
 
-  it("admits a bounded slice per frame, in document order, until every unit is in", () => {
+  it("admits one bounded slice per frame, in document order, until every unit is in", () => {
     const all = units(MARKDOWN_STAGE_PIPELINES * 4);
-    const { result } = stage({ units: all, owner: {}, flush: 0 });
-    const first = result.current.size;
-    expect(first).toBeGreaterThan(0);
-    expect(first).toBeLessThan(all.length);
-    expect([...result.current]).toEqual(all.slice(0, first).map((unit) => unit.key));
+    const { result, sizes } = stage({ units: all, owner: {}, flush: 0 });
+    expect(result.current.admitted.size).toBe(MARKDOWN_STAGE_PIPELINES);
+    expect(keysOf(result.current.admitted)).toEqual(
+      all.slice(0, MARKDOWN_STAGE_PIPELINES).map((unit) => unit.key)
+    );
 
     runFrame();
-    expect(result.current.size).toBeGreaterThan(first);
-    expect(result.current.size).toBeLessThan(all.length);
+    expect(keysOf(result.current.admitted)).toEqual(
+      all.slice(0, MARKDOWN_STAGE_PIPELINES * 2).map((unit) => unit.key)
+    );
 
     drain();
-    expect(result.current.size).toBe(all.length);
+    expect(result.current.admitted.size).toBe(all.length);
+    // No render ever jumped by more than one slice.
+    for (let i = 1; i < sizes.length; i++) {
+      expect(sizes[i]! - sizes[i - 1]!).toBeLessThanOrEqual(MARKDOWN_STAGE_PIPELINES);
+    }
   });
 
-  it("counts a pair as two pipelines and bounds a slice by characters too", () => {
-    const pairs = units(MARKDOWN_STAGE_PIPELINES, { pipelines: 2 });
-    const pairStage = stage({ units: pairs, owner: {}, flush: 0 });
-    expect(pairStage.result.current.size).toBe(MARKDOWN_STAGE_PIPELINES / 2);
-    pairStage.unmount();
+  it("never lets a slice overrun either budget", () => {
+    // Eleven singles then a pair: the pair would make thirteen pipelines.
+    const mixed = [
+      ...units(MARKDOWN_STAGE_PIPELINES - 1),
+      { key: "pair", pipelines: 2, chars: 10 },
+      ...units(3, {}, "tail"),
+    ];
+    const pipelineStage = stage({ units: mixed, owner: {}, flush: 0 });
+    expect(pipelineStage.result.current.admitted.has("pair")).toBe(false);
+    expect(pipelineStage.result.current.admitted.size).toBe(MARKDOWN_STAGE_PIPELINES - 1);
+    pipelineStage.unmount();
 
-    const heavy = units(4, { chars: MARKDOWN_STAGE_CHARS / 2 });
-    const heavyStage = stage({ units: heavy, owner: {}, flush: 0 });
-    expect(heavyStage.result.current.size).toBe(2);
+    // Two units just over half the character budget each can't share a slice.
+    const heavy = units(3, { chars: MARKDOWN_STAGE_CHARS / 2 + 1 });
+    const charStage = stage({ units: heavy, owner: {}, flush: 0 });
+    expect(charStage.result.current.admitted.size).toBe(1);
   });
 
   it("still makes progress through a unit bigger than a whole slice", () => {
     const giant = units(3, { chars: MARKDOWN_STAGE_CHARS * 4 });
     const { result } = stage({ units: giant, owner: {}, flush: 0 });
-    expect(result.current.size).toBe(1);
+    expect(result.current.admitted.size).toBe(1);
     runFrame();
-    expect(result.current.size).toBe(2);
+    expect(result.current.admitted.size).toBe(2);
   });
 
-  it("stages units that appear later without dropping the ones already in", () => {
+  it("stages units that appear later a slice at a time, keeping the ones already in", () => {
     const owner = {};
     const first = units(2);
     const { result, rerender } = stage({ units: first, owner, flush: 0 });
-    expect(result.current.size).toBe(2);
+    expect(result.current.admitted.size).toBe(2);
 
-    const grown = [
-      first[0]!,
-      ...units(MARKDOWN_STAGE_PIPELINES * 3).map((unit) => ({
-        ...unit,
-        key: `new-${unit.key}`,
-      })),
-      first[1]!,
-    ];
+    const revealed = units(MARKDOWN_STAGE_PIPELINES * 3, {}, "new");
+    const grown = [first[0]!, ...revealed, first[1]!];
     rerender({ units: grown, owner, flush: 0 });
-    expect(result.current.has("u0")).toBe(true);
-    expect(result.current.has("u1")).toBe(true);
-    expect(result.current.size).toBe(2);
+    expect(keysOf(result.current.admitted)).toEqual(["u0", "u1"]);
+
+    runFrame();
+    expect(keysOf(result.current.admitted)).toEqual([
+      "u0",
+      "u1",
+      ...revealed.slice(0, MARKDOWN_STAGE_PIPELINES).map((unit) => unit.key),
+    ]);
 
     drain();
-    expect(result.current.size).toBe(grown.length);
+    expect(result.current.admitted.size).toBe(grown.length);
   });
 
-  it("starts over for a new owner during the same render", () => {
+  it("starts a new owner over in the render that brings it, never committing the old progress", () => {
     const all = units(MARKDOWN_STAGE_PIPELINES * 3);
-    const { result, rerender } = stage({ units: all, owner: "a", flush: 0 });
+    const { result, rerender, sizes } = stage({ units: all, owner: "a", flush: 0 });
     drain();
-    expect(result.current.size).toBe(all.length);
+    expect(result.current.admitted.size).toBe(all.length);
 
+    const before = sizes.length;
     rerender({ units: all, owner: "b", flush: 0 });
-    expect(result.current.size).toBeLessThan(all.length);
+    const after = sizes.slice(before);
+    expect(after.length).toBeGreaterThan(0);
+    for (const size of after) expect(size).toBe(MARKDOWN_STAGE_PIPELINES);
   });
 
-  it("mounts every current unit at once when flushed", () => {
+  it("mounts every current unit in the render a flush arrives in", () => {
     const owner = {};
     const all = units(MARKDOWN_STAGE_PIPELINES * 5);
-    const { result, rerender } = stage({ units: all, owner, flush: 0 });
-    expect(result.current.size).toBeLessThan(all.length);
+    const { result, rerender, sizes } = stage({ units: all, owner, flush: 0 });
+    expect(result.current.admitted.size).toBeLessThan(all.length);
 
+    const before = sizes.length;
     rerender({ units: all, owner, flush: 1 });
-    expect(result.current.size).toBe(all.length);
+    expect(sizes[before]).toBe(all.length);
     drain();
     expect(frames.size).toBe(0);
+  });
+
+  it("mounts requested units ahead of the sweep, and ignores a request for a replaced owner", () => {
+    const all = units(MARKDOWN_STAGE_PIPELINES * 5);
+    const { result, rerender } = stage({ units: all, owner: "a", flush: 0 });
+    const admitForA = result.current.admit;
+
+    act(() => result.current.admit(["u50", "u51"]));
+    expect(result.current.admitted.has("u50")).toBe(true);
+    expect(result.current.admitted.has("u51")).toBe(true);
+    expect(result.current.admitted.has("u49")).toBe(false);
+
+    rerender({ units: all, owner: "b", flush: 0 });
+    act(() => admitForA(["u55"]));
+    expect(result.current.admitted.has("u55")).toBe(false);
   });
 
   it("cancels its pending frame when it unmounts", () => {

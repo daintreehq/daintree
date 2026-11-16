@@ -101,6 +101,13 @@ interface PluginRuntimeState {
   refresh: () => void;
 }
 
+/** The registry's match rule (`fileDecorationRegistry.scopeMatchesPattern`). */
+function decorationScopeMatches(scope: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith("*")) return scope.startsWith(pattern.slice(0, -1));
+  return scope === pattern;
+}
+
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
 // Monotonic pull sequence: rapid provenance events can interleave list()
@@ -272,10 +279,23 @@ function ensureSubscribed(
           void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
+  // A plugin that only decorates files declares its scopes with no provenance
+  // or action change (a dev attach, a project instance loading late), but main
+  // announces them as it registers. Pull only for a scope nothing known covers:
+  // plugins also invalidate their own scopes here, often, and those are known.
+  const offDecorations =
+    typeof plugin.onDecorationsChanged === "function"
+      ? plugin.onDecorationsChanged(({ scope }) => {
+          const known = get().fileDecorationScopes;
+          if (known.some((pattern) => decorationScopeMatches(scope, pattern))) return;
+          void pullPluginRuntimeSnapshot(set, get);
+        })
+      : undefined;
   unsubscribe = () => {
     offProvenance();
     offProjectPlugins?.();
     offActions?.();
+    offDecorations?.();
   };
   return true;
 }
@@ -313,13 +333,6 @@ export function _resetPluginRuntimeStoreForTest(): void {
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });
-}
-
-/** The registry's match rule (`fileDecorationRegistry.scopeMatchesPattern`). */
-function decorationScopeMatches(scope: string, pattern: string): boolean {
-  if (pattern === "*") return true;
-  if (pattern.endsWith("*")) return scope.startsWith(pattern.slice(0, -1));
-  return scope === pattern;
 }
 
 /**

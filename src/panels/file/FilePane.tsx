@@ -723,13 +723,14 @@ export function FilePane({
             : null
         }
         onDefaultAnswered={handleDefaultAnswered}
-        editorBannerContent={
+        editorBannerBytes={
           location !== "dialog" &&
           isInsideGovernedRoot &&
           editLockedBy === null &&
           viewMode !== "edit" &&
-          loadState === "loaded"
-            ? content
+          loadState === "loaded" &&
+          content !== null
+            ? contentBytes
             : null
         }
         showDiffStale={viewMode === "diff" && diffStale && diffContent !== undefined}

@@ -68,8 +68,8 @@ export interface FilePaneToolbarProps {
   /** The default editor slot still waiting on the user's answer, if one is on offer here. */
   defaultNoticeSlot: FileEditorSlot | null;
   onDefaultAnswered: (choice: ProjectSurfaceChoice) => void;
-  /** The text the "Edit" invitation banner offers to edit, or null when it isn't offered. */
-  editorBannerContent: string | null;
+  /** The size of the file the "Edit" invitation banner offers to edit, or null when it isn't offered. */
+  editorBannerBytes: number | null;
   showDiffStale: boolean;
   onRetryDiff: () => void;
 }
@@ -104,7 +104,7 @@ export function FilePaneToolbar({
   externalOpen,
   defaultNoticeSlot,
   onDefaultAnswered,
-  editorBannerContent,
+  editorBannerBytes,
   showDiffStale,
   onRetryDiff,
 }: FilePaneToolbarProps) {
@@ -320,11 +320,11 @@ export function FilePaneToolbar({
       {defaultNoticeSlot !== null && (
         <FileEditorDefaultNotice slot={defaultNoticeSlot} onAnswered={onDefaultAnswered} />
       )}
-      {editorBannerContent !== null && (
+      {editorBannerBytes !== null && (
         <FileEditorBanner
           key={`${panelId}:${filePath}`}
           filePath={filePath}
-          content={editorBannerContent}
+          contentBytes={editorBannerBytes}
           onEdit={() => onViewModeChange("edit")}
         />
       )}

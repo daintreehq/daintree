@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /** One thing the rendered diff mounts as a whole: a change, or an unchanged block. */
 export interface StagedMarkdownUnit {
@@ -27,8 +27,8 @@ interface Stage {
 }
 
 /**
- * The next slice: units in document order that aren't mounted yet, until the
- * budget is spent. Always at least one, so a single oversized block still
+ * The next slice: units in document order that aren't mounted yet, as many as
+ * fit the budget. Always at least one, so a single oversized block still
  * makes progress. Returns `admitted` itself when nothing is left.
  */
 function admitBatch(
@@ -40,7 +40,11 @@ function admitBatch(
   let chars = 0;
   for (const unit of units) {
     if (admitted.has(unit.key)) continue;
-    if (next !== null && (pipelines >= MARKDOWN_STAGE_PIPELINES || chars >= MARKDOWN_STAGE_CHARS)) {
+    if (
+      next !== null &&
+      (pipelines + unit.pipelines > MARKDOWN_STAGE_PIPELINES ||
+        chars + unit.chars > MARKDOWN_STAGE_CHARS)
+    ) {
       break;
     }
     next ??= new Set(admitted);
@@ -65,6 +69,16 @@ function freshStage(owner: unknown, flush: number, units: readonly StagedMarkdow
   return { owner, flush, admitted: admitBatch(new Set(), units) };
 }
 
+export interface StagedMarkdownBlocks {
+  /** Keys of the units that render for real; the rest show their placeholder. */
+  admitted: ReadonlySet<string>;
+  /**
+   * Mount these now, ahead of the sweep — the units the reader has scrolled or
+   * stepped to. Ignored once the model they belong to has been replaced.
+   */
+  admit: (keys: readonly string[]) => void;
+}
+
 /**
  * Bounded commits for the rendered Markdown diff.
  *
@@ -85,14 +99,17 @@ export function useStagedMarkdownBlocks(
   units: readonly StagedMarkdownUnit[],
   owner: unknown,
   flush: number
-): ReadonlySet<string> {
+): StagedMarkdownBlocks {
   const [stage, setStage] = useState<Stage>(() => freshStage(owner, flush, units));
-  const current =
-    stage.owner !== owner
-      ? freshStage(owner, flush, units)
-      : stage.flush !== flush
-        ? { ...stage, flush, admitted: admitAll(stage.admitted, units) }
-        : stage;
+  const current = useMemo(
+    () =>
+      stage.owner !== owner
+        ? freshStage(owner, flush, units)
+        : stage.flush !== flush
+          ? { ...stage, flush, admitted: admitAll(stage.admitted, units) }
+          : stage,
+    [stage, owner, flush, units]
+  );
 
   useEffect(() => {
     if (stage !== current) {
@@ -108,5 +125,17 @@ export function useStagedMarkdownBlocks(
     return () => cancelAnimationFrame(frame);
   }, [stage, current, units]);
 
-  return current.admitted;
+  const admit = useCallback(
+    (keys: readonly string[]) => {
+      setStage((previous) => {
+        if (previous.owner !== owner || keys.every((key) => previous.admitted.has(key))) {
+          return previous;
+        }
+        return { ...previous, admitted: new Set([...previous.admitted, ...keys]) };
+      });
+    },
+    [owner]
+  );
+
+  return { admitted: current.admitted, admit };
 }
