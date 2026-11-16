@@ -4,17 +4,15 @@ import type { ProjectPortalLink } from "@shared/types";
 import type { NotifyPayload } from "@/lib/notify";
 import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
-const { changeMock, getSettingsMock, notifyMock, dispatchMock } = vi.hoisted(() => ({
+const { changeMock, getSettingsMock, notifyMock } = vi.hoisted(() => ({
   changeMock: vi.fn(),
   getSettingsMock: vi.fn(),
   notifyMock: vi.fn<(payload: NotifyPayload) => string>(),
-  dispatchMock: vi.fn(),
 }));
 
 vi.mock("@/store/projectSettingsStore", () => ({ changeProjectPortalLinks: changeMock }));
 vi.mock("@/clients", () => ({ projectClient: { getSettings: getSettingsMock } }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { registerProjectPortalLinkActions } from "../projectPortalLinkActions";
@@ -46,8 +44,8 @@ function notice(index: number): NotifyPayload {
 }
 
 function noticeAction(index: number, label: string) {
-  const action = notice(index).actions?.find((candidate) => candidate.label === label);
-  if (!action) throw new Error(`no ${label} action`);
+  const action = notice(index).action;
+  if (action?.label !== label) throw new Error(`no ${label} action`);
   return action;
 }
 
@@ -84,9 +82,10 @@ describe("portal.projectLinks (#17091)", () => {
     expect(result).toEqual({ link: staging });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notice(0).message).toContain("staging.example.com");
-    // Kept in the inbox, so an add made while the window is blurred isn't lost.
+    // Kept in the inbox, named for its project, so an add made while the
+    // window is blurred isn't lost.
     expect(notice(0).transient).not.toBe(true);
-    expect(noticeAction(0, "Manage links").actionId).toBe("app.settings.openTab");
+    expect(notice(0).context?.projectId).toBe("proj-1");
   });
 
   it("undoes the Assistant's add only while the link is still the Assistant's", async () => {

@@ -8,7 +8,6 @@ import {
 } from "@shared/utils/projectPortalLinks";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
-import { actionService } from "@/services/ActionService";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { changeProjectPortalLinks } from "@/store/projectSettingsStore";
 import { logError } from "@/utils/logger";
@@ -90,7 +89,7 @@ async function undoAssistantAdd(projectId: string, link: ProjectPortalLink): Pro
         message: `${link.title} was edited after the Assistant added it.`,
         priority: "high",
         transient: true,
-        context: { eventKind: "settings" },
+        context: { eventKind: "settings", projectId },
       });
     }
   } catch (error) {
@@ -100,18 +99,16 @@ async function undoAssistantAdd(projectId: string, link: ProjectPortalLink): Pro
       title: "Couldn't remove the link",
       message: formatErrorMessage(error, "The link is still in the launchpad."),
       priority: "high",
-      context: { eventKind: "settings" },
+      context: { eventKind: "settings", projectId },
       action: { label: "Retry", onClick: () => void undoAssistantAdd(projectId, link) },
     });
   }
 }
 
-const MANAGE_LINKS_TARGET = { tab: "project:general", sectionId: "project-portal-links" };
-
 /**
  * Every link the Assistant adds is shown to the person, with a way straight
- * back. Kept in the inbox too: an add made while the window is blurred raises
- * no toast, and the inbox row keeps the way to the project's links.
+ * back. Kept in the inbox too, named for its project: an add made while the
+ * window is blurred raises no toast, and the row says what was added where.
  */
 function offerUndo(projectId: string, link: ProjectPortalLink): void {
   notify({
@@ -119,23 +116,12 @@ function offerUndo(projectId: string, link: ProjectPortalLink): void {
     title: "Assistant added a Portal link",
     message: `${link.title} · ${portalLinkHost(link.url)}`,
     priority: "high",
-    context: { eventKind: "agent" },
+    context: { eventKind: "agent", projectId },
     duration: UNDO_TOAST_DURATION_MS,
-    actions: [
-      {
-        label: "Undo",
-        onClick: () => void undoAssistantAdd(projectId, link),
-      },
-      {
-        label: "Manage links",
-        actionId: "app.settings.openTab",
-        actionArgs: MANAGE_LINKS_TARGET,
-        onClick: () =>
-          void actionService.dispatch("app.settings.openTab", MANAGE_LINKS_TARGET, {
-            source: "user",
-          }),
-      },
-    ],
+    action: {
+      label: "Undo",
+      onClick: () => void undoAssistantAdd(projectId, link),
+    },
   });
 }
 

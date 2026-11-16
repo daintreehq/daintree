@@ -72,6 +72,9 @@ const settingsSnapshotCache = new Map<string, SettingsSnapshot>();
 // save made while one was in flight must survive its older settings read.
 let latestLoadRequest = 0;
 let settingsRevision = 0;
+// Bumped only when the cached Portal links change, so a links read can tell
+// a links change apart from any other settings write landing meanwhile.
+let portalLinksRevision = 0;
 
 // Patches made while a project's settings were still loading. The load in
 // flight may have read the settings before the write a patch records, so it
@@ -128,6 +131,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
 
     const request = ++latestLoadRequest;
     const revisionAtStart = settingsRevision;
+    const linksRevisionAtStart = portalLinksRevision;
 
     try {
       const [data, detected] = await Promise.all([
@@ -141,11 +145,15 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       }
 
       const current = get().settings;
-      const settings = applyPatchesAwaitingLoad(
+      let settings = applyPatchesAwaitingLoad(
         projectId,
         settingsRevision !== revisionAtStart && current ? current : data,
         revisionAtStart
       );
+      // Links main returned while this read was out are at least as new as it.
+      if (portalLinksRevision !== linksRevisionAtStart && current) {
+        settings = withPortalLinks(settings, current.portalLinks);
+      }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
 
@@ -311,13 +319,16 @@ export function patchCachedProjectPortalLinks(
 ): void {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId) return;
-  settingsRevision++;
+  portalLinksRevision++;
   if (!state.settings) {
+    settingsRevision++;
     const queued = patchesAwaitingLoad.get(projectId) ?? [];
     queued.push({ patch: { portalLinks }, revision: settingsRevision });
     patchesAwaitingLoad.set(projectId, queued);
     return;
   }
+  // Not a whole-settings write: a revalidation in flight keeps the rest of
+  // what it read, and takes these links in place of its own.
   useProjectSettingsStore.setState({
     settings: withPortalLinks(state.settings, portalLinks),
   });
@@ -339,16 +350,16 @@ export async function changeProjectPortalLinks(
  * Re-read the project's Portal links from main into the cached settings. A
  * change made from another view of the same project, or from that project's
  * other window, reaches only its own renderer, so a launchpad shown here reads
- * main's list first. Dropped when the cached settings changed while the read
- * was out: whatever changed them is at least as new.
+ * main's list first. Dropped when the cached links changed while the read was
+ * out: whatever changed them is at least as new.
  */
 export async function refreshCachedProjectPortalLinks(projectId: string): Promise<void> {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId || !state.settings) return;
-  const revision = settingsRevision;
+  const revision = portalLinksRevision;
   invalidateProjectSettingsCache(projectId);
   const settings = await projectClient.getSettings(projectId);
-  if (settingsRevision !== revision) return;
+  if (portalLinksRevision !== revision) return;
   const current = useProjectSettingsStore.getState();
   if (current.projectId !== projectId || !current.settings) return;
   const links = settings.portalLinks ?? [];

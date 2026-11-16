@@ -405,6 +405,47 @@ describe("projectSettingsStore", () => {
       expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([]);
     });
 
+    it("keeps a links read through an unrelated settings write landing meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+
+      const refresh = refreshCachedProjectPortalLinks("project-a");
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [], portalLinks: [staging] });
+      await refresh;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        portalLinks: [staging],
+      });
+    });
+
+    it("lets a revalidation keep what it read while taking links patched meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "old", portalLinks: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      read.resolve({ runCommands: [], devServerCommand: "new", portalLinks: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "new",
+        portalLinks: [staging],
+      });
+    });
+
     it("applies links saved during the initial load once that load lands", async () => {
       const settingsRead = createDeferred<ProjectSettings>();
       getSettingsMock.mockReturnValueOnce(settingsRead.promise);
