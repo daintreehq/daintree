@@ -570,6 +570,9 @@ export class WorkspaceService {
     string,
     import("../../shared/types/forge.js").Credentials | null
   >();
+  // A forge-settings change held back the same way. Owed as a full refresh:
+  // only that re-detects worktrees resolved against the previous provider.
+  private settingsRefreshOwed = false;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -2775,7 +2778,11 @@ export class WorkspaceService {
             }
             await Promise.allSettled([
               this.refreshAll(reason === "focus"),
-              pullRequestService.refresh(),
+              // Discovery can outlast a lock or a pause; a focus pass then
+              // leaves PRs to the poller's restart.
+              reason === "focus" && !this.appliedPermissions.status
+                ? undefined
+                : pullRequestService.refresh(),
             ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
@@ -5522,6 +5529,10 @@ export class WorkspaceService {
     for (const [providerId, credentials] of deferred) {
       this.updateForgeCredentials(providerId, credentials);
     }
+    if (this.settingsRefreshOwed) {
+      this.settingsRefreshOwed = false;
+      void pullRequestService.refresh();
+    }
     this.prService.resume();
   }
 
@@ -5547,6 +5558,7 @@ export class WorkspaceService {
     // refreshing now would query the forge for a project nothing is showing
     // (#12519).
     if (this.appliedPermissions.status) void pullRequestService.refresh();
+    else this.settingsRefreshOwed = true;
     this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 
@@ -5651,6 +5663,7 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5820,6 +5833,7 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
     this.resourceActionExecutor.dispose();
     this.attachmentService.dispose();
     this.setupCoordinator.dispose();

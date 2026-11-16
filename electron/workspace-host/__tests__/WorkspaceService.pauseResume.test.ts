@@ -365,16 +365,51 @@ describe("WorkspaceService PR polling under the power policy (#17060)", () => {
     expect(mockPullRequestService.start).not.toHaveBeenCalled();
   });
 
-  it("a forge-settings change while nothing is on screen queries nothing until a window returns", () => {
+  it("a forge-settings change while nothing is on screen is owed as a full refresh when a window returns", () => {
     service.setWorkspacePowerPolicy(DEEP);
     vi.clearAllMocks();
 
     service.updateForgeSettings({
       forgeProviderOverride: null,
       forgeDefaultProviderId: null,
-      forgeRemote: null,
+      forgeRemote: "upstream",
+    });
+    expect(mockPullRequestService.setForgeSettings).toHaveBeenCalled();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+
+    // Owed once, not on every return.
+    service.setWorkspacePowerPolicy(DEEP);
+    service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds credential changes while off screen and replays the latest per provider", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.updateForgeCredentials("acme.a", null);
+    service.updateForgeCredentials("acme.a", { kind: "bearer", value: "token" });
+    service.updateForgeCredentials("acme.b", null);
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+    expect(mockPullRequestService.reset).not.toHaveBeenCalled();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+    // acme.a's latest is a token (one refresh); acme.b's is a sign-out (one reset).
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    expect(mockPullRequestService.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("a focus refresh whose discovery outlasts a screen lock skips the PR pass", async () => {
+    vi.spyOn(service as any, "discoverAndSyncWorktrees").mockImplementation(async () => {
+      service.setWorkspacePowerPolicy(DEEP);
     });
 
+    await service.refresh("req-focus", undefined, "focus");
+
+    expect(service["discoverAndSyncWorktrees"]).toHaveBeenCalled();
     expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
   });
 

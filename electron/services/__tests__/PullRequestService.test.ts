@@ -2848,6 +2848,7 @@ describe("PullRequestService", () => {
 
   describe("revalidation cadence while blurred (#17060)", () => {
     const WINDOW_MS = 30 * 60 * 1000;
+    const STEP_MS = 1000;
 
     async function pollingService() {
       mockForgeProviderResolved();
@@ -2855,8 +2856,9 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo", "test-project-id");
       const svc = pullRequestService as unknown as {
         isPolling: boolean;
+        boostExpiresAt: number | null;
         revalidateResolvedPRs: () => Promise<void>;
-        scheduleRevalidation: () => void;
+        scheduleRevalidation: (delayMs?: number) => void;
       };
       svc.isPolling = true;
       const revalidate = vi.spyOn(svc, "revalidateResolvedPRs").mockResolvedValue(undefined);
@@ -2865,7 +2867,17 @@ describe("PullRequestService", () => {
         await vi.advanceTimersByTimeAsync(ms);
         return revalidate.mock.calls.length;
       };
-      return { pullRequestService, svc, ticksOver };
+      // Time from now until the next tick runs, to the step.
+      const msUntilNextTick = async () => {
+        revalidate.mockClear();
+        let elapsed = 0;
+        while (revalidate.mock.calls.length === 0 && elapsed < WINDOW_MS) {
+          await vi.advanceTimersByTimeAsync(STEP_MS);
+          elapsed += STEP_MS;
+        }
+        return elapsed;
+      };
+      return { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick };
     }
 
     it("revalidates resolved PRs less often while no window has focus", async () => {
@@ -2882,33 +2894,80 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("returns to the focused cadence as soon as focus comes back", async () => {
-      const { pullRequestService, svc, ticksOver } = await pollingService();
+    it("re-arms at the focused cadence the moment focus comes back", async () => {
+      const { pullRequestService, svc, ticksOver, msUntilNextTick } = await pollingService();
       svc.scheduleRevalidation();
-      const focusedTicks = await ticksOver(WINDOW_MS);
+      const focusedMs = await msUntilNextTick();
 
       pullRequestService.setFocusCadence(false);
-      await ticksOver(60 * 1000);
+      // Whatever ran next re-armed at the blurred cadence.
+      await msUntilNextTick();
+      await ticksOver(STEP_MS);
       pullRequestService.setFocusCadence(true);
 
-      expect(await ticksOver(WINDOW_MS)).toBe(focusedTicks);
+      expect(await msUntilNextTick()).toBeLessThanOrEqual(focusedMs);
 
       pullRequestService.destroy();
     });
 
-    it("holds a local push's early revalidation until focus comes back", async () => {
-      const { pullRequestService, svc, ticksOver } = await pollingService();
-      const early = svc as unknown as { scheduleRevalidation: (delayMs?: number) => void };
+    it("ignores an armed CI boost while blurred", async () => {
+      const { pullRequestService, svc, msUntilNextTick } = await pollingService();
       pullRequestService.setFocusCadence(false);
       svc.scheduleRevalidation();
-      await ticksOver(60 * 1000);
+      const blurredMs = await msUntilNextTick();
 
-      early.scheduleRevalidation(3 * 1000);
-      expect(await ticksOver(60 * 1000)).toBe(0);
+      svc.boostExpiresAt = Date.now() + 2 * WINDOW_MS;
+      svc.scheduleRevalidation();
+      expect(await msUntilNextTick()).toBe(blurredMs);
 
+      // The same boost does speed up a focused host.
       pullRequestService.setFocusCadence(true);
-      expect(await ticksOver(0)).toBe(1);
+      expect(await msUntilNextTick()).toBeLessThan(blurredMs);
 
+      pullRequestService.destroy();
+    });
+
+    it("holds a local push's early revalidation until focus without postponing the blurred tick", async () => {
+      const { pullRequestService, svc, ticksOver, msUntilNextTick } = await pollingService();
+      pullRequestService.setFocusCadence(false);
+      svc.scheduleRevalidation();
+      const blurredMs = await msUntilNextTick();
+
+      await ticksOver(blurredMs / 2);
+      svc.scheduleRevalidation(3 * 1000);
+      expect(await ticksOver(10 * 1000)).toBe(0);
+      svc.scheduleRevalidation(3 * 1000);
+      // The armed tick keeps its time through repeated pushes.
+      expect(await ticksOver(blurredMs / 2 - 10 * 1000)).toBe(1);
+
+      svc.scheduleRevalidation(3 * 1000);
+      await ticksOver(10 * 1000);
+      pullRequestService.setFocusCadence(true);
+      expect(await ticksOver(STEP_MS)).toBe(1);
+
+      pullRequestService.destroy();
+    });
+
+    it("a blur during a slow pass leaves no focused-cadence tick to run alongside it", async () => {
+      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
+        await pollingService();
+      let release: () => void = () => {};
+      revalidate.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+      );
+      svc.scheduleRevalidation();
+      const focusedMs = await msUntilNextTick();
+
+      // The order main sends them in: the enrichment sweep reschedules first.
+      pullRequestService.setCIEnrichmentEnabled(false);
+      pullRequestService.setFocusCadence(false);
+
+      expect(await ticksOver(2 * focusedMs)).toBe(0);
+
+      release();
       pullRequestService.destroy();
     });
 

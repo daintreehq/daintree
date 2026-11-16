@@ -1024,8 +1024,9 @@ class PullRequestService {
     this.updatePollInterval(targetInterval);
     const focusChanged = focused !== this.focused;
     this.focused = focused;
-    // A pass under way reschedules against the new cadence when it settles.
-    if (focusChanged && this.isPolling && this.revalidationsRunning === 0) {
+    // Also mid-pass: blur's enrichment sweep just armed a focused-cadence tick
+    // that would otherwise fire alongside a slow pass. The pass re-arms anyway.
+    if (focusChanged && this.isPolling) {
       this.scheduleRevalidation();
     }
 
