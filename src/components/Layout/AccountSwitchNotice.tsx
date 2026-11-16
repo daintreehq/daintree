@@ -10,6 +10,7 @@ import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
 import { restartPanesOnPreset } from "@/components/Terminal/restartPanesOnPreset";
@@ -170,6 +171,17 @@ export function buildAccountSwitchRequest(
   };
 }
 
+function keepDescription(count: number, keep: boolean): string {
+  if (count === 1) {
+    return keep
+      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the panel offers a new one or the way back."
+      : "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.";
+  }
+  return keep
+    ? "Each keeps its preset and reopens its conversation on that account, and its scrollback is discarded. If the account can't find a conversation, that panel offers a new one or the way back."
+    : "Each keeps its preset and starts a new conversation on that account, and its scrollback is discarded.";
+}
+
 /**
  * One confirm naming every pane, each with its own box so the switch takes
  * one, some or all of them; then one account switch per checked pane, through
@@ -195,6 +207,11 @@ function OpenAccountSwitchDialog({
   onClose: () => void;
 }) {
   const labelIdPrefix = useId();
+  const keepId = useId();
+  const [keepConversation, setKeepConversation] = useState(false);
+  // One answer for the batch: every pane here is launched by the notice's agent.
+  const canKeep = supportsConversationKeepingSwitch(request.agentId);
+  const keep = canKeep && keepConversation;
   const [selected, setSelected] = useState<ReadonlySet<string>>(
     () => new Set(request.panes.map((pane) => pane.id))
   );
@@ -236,7 +253,12 @@ function OpenAccountSwitchDialog({
         (pane) =>
           actionService.dispatch(
             "terminal.restartOnAccount",
-            { terminalId: pane.id, accountId: request.account.id, confirmed: true },
+            {
+              terminalId: pane.id,
+              accountId: request.account.id,
+              confirmed: true,
+              ...(keep ? { keepConversation: true } : {}),
+            },
             { source: "user" }
           ),
         (restarted) => `Restarting ${pluralize(restarted, "terminal")} on ${accountName}`
@@ -258,9 +280,7 @@ function OpenAccountSwitchDialog({
             </span>
           )}
           <span className={working > 0 ? "mt-1 block" : undefined}>
-            {count === 1
-              ? "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded."
-              : "Each keeps its preset and starts a new conversation on that account, and its scrollback is discarded."}
+            {keepDescription(count, keep)}
           </span>
         </>
       }
@@ -294,6 +314,16 @@ function OpenAccountSwitchDialog({
           );
         })}
       </ul>
+      {canKeep && (
+        <label htmlFor={keepId} className="mt-3 flex items-center gap-2 text-sm text-text-primary">
+          <Checkbox
+            id={keepId}
+            checked={keepConversation}
+            onCheckedChange={(checked) => setKeepConversation(checked === true)}
+          />
+          {request.panes.length === 1 ? "Keep this conversation" : "Keep their conversations"}
+        </label>
+      )}
     </ConfirmDialog>
   );
 }

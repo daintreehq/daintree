@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({
@@ -119,6 +119,9 @@ describe("AccountSwitchDialog (#16136)", () => {
 
   let seeded: PtyPanelData[] = [];
 
+  const paneBoxes = () =>
+    within(screen.getByTestId("account-switch-panes")).getAllByRole("checkbox");
+
   /** Changes one seeded pane in place, with the dialog already open. */
   function reseed(id: string, overrides: PaneOverrides) {
     seeded = seeded.map((p) => (p.id === id ? { ...p, ...overrides } : p));
@@ -146,7 +149,7 @@ describe("AccountSwitchDialog (#16136)", () => {
   it("names every pane, checked, and switches all of them on one confirm", async () => {
     const onClose = renderDialog();
 
-    const boxes = screen.getAllByRole("checkbox");
+    const boxes = paneBoxes();
     expect(boxes.map((box) => box.getAttribute("aria-checked"))).toEqual(["true", "true", "true"]);
     expect(screen.getByText("Restart 3 terminals on 'Company'?")).toBeTruthy();
 
@@ -242,7 +245,7 @@ describe("AccountSwitchDialog (#16136)", () => {
     renderDialog();
 
     act(() => {
-      for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
+      for (const box of paneBoxes()) fireEvent.click(box);
     });
     const confirm = screen.getByRole("button", { name: "Restart 0 terminals" });
     expect(
@@ -252,6 +255,116 @@ describe("AccountSwitchDialog (#16136)", () => {
       fireEvent.click(confirm);
     });
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps every chosen pane's conversation with the one box checked (#17088)", async () => {
+    renderDialog();
+
+    const keep = screen.getByRole("checkbox", { name: "Keep their conversations" });
+    expect(keep.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(/starts a new conversation/)).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(keep);
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    expect(screen.queryByText(/starts a new conversation/)).toBeNull();
+    expect(screen.getByText(/reopens its conversation/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 2 terminals" }));
+    });
+
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    expect(dispatchMock.mock.calls.map((call) => call[1])).toEqual(
+      ["a", "c"].map((terminalId) => ({
+        terminalId,
+        accountId: "company",
+        confirmed: true,
+        keepConversation: true,
+      }))
+    );
+  });
+
+  it("still keeps the conversations once the dialog has closed and the host answered", async () => {
+    seeded = [pane({ id: "a", title: "Parser" }), pane({ id: "b", title: "Docs" })];
+    seed(seeded);
+    let answer: () => void = () => {};
+    getInfoMock.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          const previous = answer;
+          answer = () => {
+            previous();
+            resolve({ id, hasPty: true, usageLimitObservedAt: 1 });
+          };
+        })
+    );
+    const request = buildAccountSwitchRequest(notice, ["a", "b"]);
+    const view = render(<AccountSwitchDialog request={request} onClose={() => {}} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Keep their conversations" }));
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 2 terminals" }));
+    });
+    view.rerender(<AccountSwitchDialog request={null} onClose={() => {}} />);
+
+    await act(async () => answer());
+
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    expect(dispatchMock.mock.calls.every((call) => call[1].keepConversation === true)).toBe(true);
+  });
+
+  it("uses the single-pane keep wording when only one pane is left checked", () => {
+    renderDialog();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Keep their conversations" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Parser" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    expect(screen.getByText(/reopens this conversation/)).toBeTruthy();
+    // The box names the list it was offered for, not the panes still checked.
+    expect(screen.getByRole("checkbox", { name: "Keep their conversations" })).toBeTruthy();
+  });
+
+  it("names one pane's conversation when the list holds one pane", () => {
+    seed([pane({ id: "a", title: "Parser" })]);
+    render(
+      <AccountSwitchDialog request={buildAccountSwitchRequest(notice, ["a"])} onClose={() => {}} />
+    );
+    const keep = screen.getByRole("checkbox", { name: "Keep this conversation" });
+    expect(screen.getByText(/starts a new conversation/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(keep);
+    });
+    expect(screen.getByText(/reopens this conversation/)).toBeTruthy();
+    act(() => {
+      fireEvent.click(keep);
+    });
+    expect(screen.getByText(/starts a new conversation/)).toBeTruthy();
+  });
+
+  it("offers no keep box for an agent whose refusal isn't recognised", async () => {
+    seed([pane({ id: "a", title: "Parser", launchAgentId: "goose" })]);
+    getInfoMock.mockResolvedValue({ id: "a", hasPty: true, usageLimitObservedAt: 1 });
+    const request = buildAccountSwitchRequest({ ...notice, agentId: "goose", paneIds: ["a"] }, [
+      "a",
+    ]);
+    render(<AccountSwitchDialog request={request} onClose={() => {}} />);
+
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart terminal" }));
+    });
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { terminalId: "a", accountId: "company", confirmed: true },
+        { source: "user" }
+      )
+    );
   });
 
   it("moves panes to the default login with a null account", async () => {
