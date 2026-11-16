@@ -203,7 +203,15 @@ export function isCancellable(item: DecisionItem): boolean {
  * or already being cancelled.
  */
 export function cancelNote(items: readonly DecisionItem[]): string | null {
-  const answered = items.some((item) => item.kind === "answer" || isAttention(item));
+  // A held follow-up puts a question still waiting under attention too; its waiting row offers the cancel.
+  const waiting = new Set(
+    items
+      .filter((item) => isCancellable(item) || item.kind === "cancelling")
+      .map((item) => item.questionId)
+  );
+  const answered = items.some(
+    (item) => (item.kind === "answer" || isAttention(item)) && !waiting.has(item.questionId)
+  );
   const expired = items.some((item) => item.kind === "expired");
   if (answered && expired) return "Answered and expired questions can't be cancelled";
   if (answered) return "Answered questions can't be cancelled";

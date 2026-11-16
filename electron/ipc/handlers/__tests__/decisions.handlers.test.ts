@@ -1037,21 +1037,30 @@ describe("decisions IPC", () => {
     );
   });
 
-  it("cancels a question for the asking view's own project once the setting is on", async () => {
+  it("cancels a question for the asking view's own project once the setting is on, passing on what main says", async () => {
     saved.value = { enabled: true };
     const payload = { terminalId: "pane-a", questionId: QUESTION_ID };
+    decisionsEntry.cancelDecisionQuestion.mockResolvedValueOnce({
+      result: "refused",
+      reason: "answered",
+    });
 
     await expect(cancelQuestion({ projectId: "project-1" }, payload)).resolves.toEqual({
+      result: "refused",
+      reason: "answered",
+    });
+    await expect(cancelQuestion({ projectId: null }, payload)).resolves.toEqual({
       result: "cancelling",
     });
 
-    expect(decisionsEntry.cancelDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
-      "project-1",
-      payload
-    );
+    expect(decisionsEntry.cancelDecisionQuestion.mock.calls).toEqual([
+      ["project-1", payload],
+      [null, payload],
+    ]);
   });
 
-  it("cancels a question on an enrolled Host whose owner's switch it doesn't read", async () => {
+  it("cancels a question on an enrolled Host, whatever the owner's switch says there", async () => {
+    saved.value = { enabled: false };
     saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null };
     const payload = { terminalId: "pane-a", questionId: QUESTION_ID };
 
@@ -1063,10 +1072,12 @@ describe("decisions IPC", () => {
       payload
     );
 
+    // A revoked Host serves no panes, so nothing more reaches Decisions.
     saved.host = { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 };
     await expect(cancelQuestion({ projectId: "project-1" }, payload)).resolves.toEqual({
       result: "off",
     });
+    expect(decisionsEntry.cancelDecisionQuestion).toHaveBeenCalledTimes(1);
   });
 
   it("takes only a pane and a question id to cancel, never a project", () => {
@@ -1075,7 +1086,10 @@ describe("decisions IPC", () => {
     for (const bad of [
       {},
       { terminalId: "pane-a" },
+      { questionId: QUESTION_ID },
       { terminalId: "", questionId: QUESTION_ID },
+      { terminalId: "x".repeat(257), questionId: QUESTION_ID },
+      { terminalId: "pane-a", questionId: "q_short" },
       { terminalId: "pane-a", questionId: "../q" },
       { terminalId: "pane-a", questionId: QUESTION_ID, projectId: "project-2" },
     ]) {

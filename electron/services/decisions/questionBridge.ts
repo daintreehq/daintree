@@ -151,15 +151,17 @@ export class QuestionBridge extends DecisionsBridge {
         await this.keepCreate(questionId);
         await live.cancelQuestion(questionId);
       }
-      const dropped = (await store.getQuestion(questionId))?.local_status === "cancelled";
+      // What the store records once the request is in: dropped here, or a
+      // relay's confirmation that already landed, reads as cancelled.
+      const status = (await store.getQuestion(questionId))?.local_status ?? null;
       await this.ctx.audit.log({
         event: "question.cancel-requested",
         question_id: questionId,
         requirement: row.requirement,
         result: "person",
-        detail: { outcome: dropped ? "never-published" : "queued" },
+        detail: { status },
       });
-      return { result: dropped ? "cancelled" : "cancelling" };
+      return { result: status === "cancelled" ? "cancelled" : "cancelling" };
     };
     const run = this.posts.then(cancel);
     this.posts = run.catch(() => {});

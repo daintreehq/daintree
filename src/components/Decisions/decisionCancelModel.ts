@@ -6,10 +6,8 @@ export interface DecisionCancelTarget {
   questionId: string;
   /** `q-42`. */
   label: string;
-  /** The opening line, when it could be read. */
+  /** The opening line, when the row had read it. */
   line: string | null;
-  /** Not yet sent to the relay when the row was read. */
-  queued: boolean;
 }
 
 /**
@@ -27,8 +25,9 @@ export function cancelTitle(target: DecisionCancelTarget): string {
   return `Cancel question ${target.label}?`;
 }
 
-export function cancelBody(target: DecisionCancelTarget): string {
-  const where = target.queued
+/** `queued`: the pane's state still lists it as not yet sent to the relay. */
+export function cancelBody(queued: boolean): string {
+  const where = queued
     ? "It hasn't been sent to your phones yet."
     : "It's withdrawn on every paired phone and leaves Needs you once the relay confirms.";
   return `${where} Nothing is typed into this terminal, and the agent sees the question cancelled when it checks.`;

@@ -254,5 +254,16 @@ describe("a person's cancel", () => {
     expect(note(pane({ waiting: [waiting(2, "expired")], attention: [stopped(3)] }))).toBe(
       "Answered and expired questions can't be cancelled"
     );
+    // A follow-up held on a question still waiting lists it under attention too, but it isn't answered.
+    expect(note(pane({ open: [open(1)], attention: [stopped(1)] }))).toBeNull();
+    expect(note(pane({ open: [open(1)], attention: [stopped(1), stopped(2)] }))).toBe(
+      "Answered questions can't be cancelled"
+    );
+    const withdrawn = decisionItems(
+      pane({ open: [open(1)], attention: [stopped(1)] }),
+      "composer",
+      new Set(["q1"])
+    );
+    expect(cancelNote(withdrawn)).toBeNull();
   });
 });

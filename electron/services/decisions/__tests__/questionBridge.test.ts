@@ -625,9 +625,12 @@ describe("QuestionBridge", () => {
     }
 
     async function requests(): Promise<Array<{ result?: string; detail?: unknown }>> {
-      return (await store.listAudit(100)).filter(
+      const entries = (await store.listAudit(100)).filter(
         (entry) => entry.event === "question.cancel-requested"
       );
+      // Ids, levels and statuses only: the question's words never reach the audit.
+      expect(JSON.stringify(entries)).not.toContain("Ship");
+      return entries;
     }
 
     it("withdraws through the live attempt even after the run that asked was relaunched", async () => {
@@ -644,7 +647,9 @@ describe("QuestionBridge", () => {
       expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId);
       const [create] = await store.outboxFor(asked.questionId);
       expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBe(true);
-      expect(await requests()).toMatchObject([{ result: "person", detail: { outcome: "queued" } }]);
+      expect(await requests()).toMatchObject([
+        { question_id: asked.questionId, result: "person", detail: { status: "queued" } },
+      ]);
       // An agent's cancel from that run is still refused.
       await expect(
         b.cancelQuestion(asked.questionId, paneIdentityOf(ORIGIN))
@@ -662,7 +667,9 @@ describe("QuestionBridge", () => {
       expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
       expect(await store.outboxFor(asked.questionId)).toEqual([]);
       expect(fetches).toBe(0);
-      expect(await requests()).toMatchObject([{ detail: { outcome: "never-published" } }]);
+      expect(await requests()).toMatchObject([
+        { result: "person", detail: { status: "cancelled" } },
+      ]);
     });
 
     it("commits a cancel for the next attempt to send when the question is already on the relay", async () => {
@@ -680,6 +687,7 @@ describe("QuestionBridge", () => {
       // Open until the relay's event says otherwise.
       expect((await store.getQuestion(asked.questionId))?.local_status).toBe("open");
       expect(fetches).toBe(0);
+      expect(await requests()).toMatchObject([{ detail: { status: "open" } }]);
     });
 
     it("refuses another pane's, project's or host's question exactly like an unknown one, touching nothing", async () => {
@@ -700,6 +708,12 @@ describe("QuestionBridge", () => {
         });
       }
       await expect(b.cancelForPerson("q_unknown_123", SCOPE)).resolves.toEqual({
+        result: "refused",
+        reason: "not-found",
+      });
+      // Imported history is never one of the pane's questions, however it matches.
+      await store.updateQuestion(asked.questionId, { history_only: true });
+      await expect(b.cancelForPerson(asked.questionId, SCOPE)).resolves.toEqual({
         result: "refused",
         reason: "not-found",
       });

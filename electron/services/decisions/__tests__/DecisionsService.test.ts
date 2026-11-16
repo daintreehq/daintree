@@ -27,6 +27,7 @@ import { outstandingRows, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
+import type { DecisionQuestionCancelResult } from "../../../../shared/types/decisionsQuestion.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
@@ -1003,9 +1004,14 @@ describe("DecisionsService relay connection", () => {
       events.push(`questions opened ${opened.length}`);
       return {
         listenerPort: async () => (record.closed > 0 ? null : 4100),
-        cancelForPerson: async (questionId: string, scope: QuestionReadScope) => {
-          cancels.push({ route: opened.indexOf(record) + 1, questionId, scope });
-          return { result: "cancelling" as const };
+        cancelForPerson: async (
+          questionId: string,
+          scope: QuestionReadScope
+        ): Promise<DecisionQuestionCancelResult> => {
+          const route = opened.indexOf(record) + 1;
+          cancels.push({ route, questionId, scope });
+          // Each route answers differently, so a result can be traced to the route that gave it.
+          return route === 1 ? { result: "cancelling" } : { result: "refused", reason: "answered" };
         },
         close: () => {
           record.closed += 1;
@@ -1060,21 +1066,29 @@ describe("DecisionsService relay connection", () => {
     await expect(service.cancelQuestion("project-1", payload)).resolves.toEqual({
       result: "cancelling",
     });
+
+    // A replaced connection's route answers from then on, never the one it replaced.
+    await service.updateSettings(
+      on({ ...RELAY, hostId: "host_aaaaaaaa", deviceId: "dev_another1" })
+    );
+    made[1]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.cancelQuestion(null, payload)).resolves.toEqual({
+      result: "refused",
+      reason: "answered",
+    });
+    const scope = { hostId: "host_aaaaaaaa", terminalId: "pane-a" };
     expect(routes.cancels).toEqual([
-      {
-        route: 1,
-        questionId: "q_0123456789",
-        scope: { hostId: "host_aaaaaaaa", projectId: "project-1", terminalId: "pane-a" },
-      },
+      { route: 1, questionId: "q_0123456789", scope: { ...scope, projectId: "project-1" } },
+      { route: 2, questionId: "q_0123456789", scope: { ...scope, projectId: null } },
     ]);
 
     // Stopped, the route is gone and nothing is asked of it.
-    routes.opened[0]!.release();
+    for (const route of routes.opened) route.release();
     await service.stop();
     await expect(service.cancelQuestion("project-1", payload)).resolves.toEqual({
       result: "not-running",
     });
-    expect(routes.cancels).toHaveLength(1);
+    expect(routes.cancels).toHaveLength(2);
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {
