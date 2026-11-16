@@ -2,25 +2,10 @@ import { join as pathJoin } from "path";
 import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { getGitDir } from "../utils/gitUtils.js";
-import { resolveBaseCompareRef } from "../../shared/utils/baseRemoteSelection.js";
-import {
-  gatherBaseCompareRefInputsWithRemoteStatus,
-  readSymbolicRef,
-} from "../utils/baseCompareRef.js";
+import { readSymbolicRef } from "../utils/baseCompareRef.js";
+import { RESOLUTION_MAX_AGE_MS, SharedBaseRefResolver } from "./SharedBaseRefResolver.js";
 import type { StatPrecheck } from "./StatPrecheck.js";
 
-/**
- * Ceiling on how long a cached remote resolution may be reused while its stat
- * stamp looks unchanged. The stamp covers the mutations that matter (config
- * writes, packed-refs, the candidate refs themselves), but a stat set is a
- * fixed set — anything outside it changes invisibly, exactly the failure class
- * #10956 fixed for the status pre-check. `git remote add upstream` followed by
- * a fetch that only touches a nested `refs/remotes/upstream/release/` directory
- * is the concrete case. The ceiling bounds every such miss to one interval
- * instead of forever, for the cost of a handful of local git spawns per
- * worktree per interval.
- */
-const RESOLUTION_MAX_AGE_MS = 5 * 60_000;
 // A configured upstream whose ref didn't resolve (not fetched yet, or deleted
 // on the remote) comes back by writing only that ref, which the stamp doesn't
 // cover, so it is asked again on a clock instead: soon at first, backing off to
@@ -57,7 +42,7 @@ interface BaseDivergenceResult {
   upstreamHeadSha: string | null;
 }
 
-/** Cached output of the (spawning) remote-resolution step. */
+/** The remote-resolution step's answer: the shared base selection plus this worktree's `@{u}`. */
 interface RemoteResolution {
   /** Short ref to diff against (`upstream/main`), or null to use the fallback chain. */
   compareRef: string | null;
@@ -93,14 +78,23 @@ export class BaseDivergence {
   private lastKey: string | null = null;
   private lastResult: BaseDivergenceResult | null = null;
 
-  private resolutionStamp: string | null = null;
   private resolution: RemoteResolution | null = null;
-  private resolutionAt = 0;
+
+  private upstreamRead = false;
+  private upstream: string | null = null;
+  private upstreamStamp: string | null = null;
+  private upstreamAt = 0;
   private unresolvedUpstreamRetryMs = UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
 
+  /**
+   * `sharedBase` is the workspace service's, so linked worktrees of one
+   * repository resolve the base ref once between them. The default keeps a
+   * standalone instance to itself.
+   */
   constructor(
     private readonly host: BaseDivergenceHost,
-    private readonly statPrecheck: StatPrecheck
+    private readonly statPrecheck: StatPrecheck,
+    private readonly sharedBase: SharedBaseRefResolver = new SharedBaseRefResolver()
   ) {}
 
   /**
@@ -266,10 +260,10 @@ export class BaseDivergence {
   }
 
   /**
-   * Resolve (and cache) which remote ref the base branch should be compared
-   * against. Spawns git, so it runs only when the stat stamp moves or the
-   * cached answer ages past {@link RESOLUTION_MAX_AGE_MS} — on a steady poll
-   * loop it never spawns at all.
+   * Which remote ref the base branch should be compared against, and where
+   * `@{u}` points. The base half is a repository question answered by the
+   * shared resolver; only `@{u}` is this worktree's own, and it is cached here
+   * behind its own stamp — on a steady poll loop neither spawns at all.
    */
   private async resolveRemotes(
     branch: string,
@@ -278,90 +272,111 @@ export class BaseDivergence {
     dirs: GitDirs,
     signal: AbortSignal
   ): Promise<RemoteResolution | null> {
-    const stamp = await this.buildResolutionStamp(branch, baseBranch, hasUpstream, dirs);
-    // The age ceiling only earns its spawns where the answer is genuinely
-    // ambiguous. With at most one remote there is nothing to choose between,
-    // and anything that could introduce a second one writes `.git/config`,
-    // which the stamp already covers — so the overwhelmingly common repo
-    // re-resolves on real events only, never on a timer.
-    const ambiguous = (this.resolution?.availableRemotes.length ?? 0) > 1;
-    const age = Date.now() - this.resolutionAt;
-    const aged =
-      (ambiguous && age >= RESOLUTION_MAX_AGE_MS) ||
-      (hasUpstream &&
-        this.resolution?.upstreamRef === null &&
-        age >= this.unresolvedUpstreamRetryMs);
-    // A null stamp means a stat failed unexpectedly. Re-resolving on every such
-    // poll would turn a flaky filesystem into a spawn storm, so the cached
-    // answer is held until it ages out on its own.
-    if (this.resolution !== null && !aged && (stamp === null || stamp === this.resolutionStamp)) {
-      return this.resolution;
-    }
-
-    const git = await this.createGit(signal);
-    // Shared with the rebase/merge handlers (#12092) so the ref an operation
-    // acts on is the ref the behind count was measured against.
-    const { inputs, remotesReadSucceeded } = await gatherBaseCompareRefInputsWithRemoteStatus(
-      git,
-      baseBranch
-    );
-    const { availableRemotes } = inputs;
-    const upstreamRef = hasUpstream ? await readSymbolicRef(git, "@{u}") : null;
+    const selection = await this.sharedBase.resolve({
+      gitDir: dirs.gitDir,
+      commonDir: dirs.commonDir,
+      branch,
+      baseBranch,
+      wslInvocation: this.host.wslInvocation,
+      signal,
+      statMtime: (path) => this.statPrecheck.statMtime(path),
+      createGit: (gitSignal) => this.createGit(gitSignal),
+    });
     // Cancelled reads come back as "no remotes" and "no upstream"; keep the
-    // last real answer instead of caching those.
-    if (signal.aborted) return this.resolution;
+    // last real answer instead of adopting those.
+    if (selection === null || signal.aborted) return this.resolution;
 
-    const { compareRef, remote } = resolveBaseCompareRef(inputs);
+    const upstreamRef = await this.resolveUpstream(
+      branch,
+      hasUpstream,
+      selection.availableRemotes.length > 1,
+      dirs,
+      signal
+    );
+    if (upstreamRef === undefined) return this.resolution;
 
-    const stillUnresolved = hasUpstream && upstreamRef === null;
-    this.unresolvedUpstreamRetryMs =
-      stillUnresolved && this.resolution?.upstreamRef === null
-        ? Math.min(this.unresolvedUpstreamRetryMs * 2, RESOLUTION_MAX_AGE_MS)
-        : UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
+    const previous = this.resolution;
+    if (
+      previous !== null &&
+      previous.compareRef === selection.compareRef &&
+      previous.remote === selection.remote &&
+      previous.availableRemotes === selection.availableRemotes &&
+      previous.remotesReadSucceeded === selection.remotesReadSucceeded &&
+      previous.upstreamRef === upstreamRef
+    ) {
+      return previous;
+    }
     this.resolution = {
-      compareRef,
-      remote,
+      compareRef: selection.compareRef,
+      remote: selection.remote,
       upstreamRef,
-      availableRemotes,
-      remotesReadSucceeded,
+      availableRemotes: selection.availableRemotes,
+      remotesReadSucceeded: selection.remotesReadSucceeded,
     };
-    this.resolutionAt = Date.now();
-    // Re-derive the stamp: the first resolution discovers the remote names the
-    // stamp's candidate-ref stats are built from, so the stamp computed before
-    // resolving covered fewer paths than the one that must match next poll.
-    this.resolutionStamp = await this.buildResolutionStamp(branch, baseBranch, hasUpstream, dirs);
     return this.resolution;
   }
 
   /**
-   * Stat stamp gating the (spawning) remote resolution. Covers the effective
-   * config files — `commonDir/config` is the shared one, and
-   * `gitDir/config.worktree` carries per-worktree overrides when
-   * `extensions.worktreeConfig` is on, so `branch.<base>.remote` can differ
-   * per worktree — plus packed-refs and each known remote's candidate ref, so
-   * a newly fetched base ref re-opens the question. `branch`/`baseBranch` are
-   * part of the identity: a PR relink changes `linkedPrBaseRef` without
-   * touching any file, and reusing the previous base's remote would compare
-   * against the wrong ref entirely.
+   * Full ref `@{u}` resolves to, or null without one; `undefined` when the
+   * read was cancelled. Re-read when the branch or its config moved, on the
+   * retry clock while a configured upstream has no ref, and — with more than
+   * one remote to track — at the same age ceiling as the base selection, since
+   * an included config file can repoint it without touching anything stamped.
    */
-  private async buildResolutionStamp(
+  private async resolveUpstream(
     branch: string,
-    baseBranch: string,
     hasUpstream: boolean,
-    dirs: GitDirs
-  ): Promise<string | null> {
+    ambiguous: boolean,
+    dirs: GitDirs,
+    signal: AbortSignal
+  ): Promise<string | null | undefined> {
+    if (!hasUpstream) {
+      // An upstream that comes back later must be read afresh, not served
+      // from before it went away.
+      this.upstreamRead = false;
+      this.unresolvedUpstreamRetryMs = UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
+      return null;
+    }
+
+    const stamp = await this.buildUpstreamStamp(branch, dirs);
+    const age = Date.now() - this.upstreamAt;
+    const retryDue =
+      (this.upstream === null && age >= this.unresolvedUpstreamRetryMs) ||
+      (ambiguous && age >= RESOLUTION_MAX_AGE_MS);
+    if (this.upstreamRead && !retryDue && (stamp === null || stamp === this.upstreamStamp)) {
+      return this.upstream;
+    }
+
+    const git = await this.createGit(signal);
+    const upstreamRef = await readSymbolicRef(git, "@{u}");
+    if (signal.aborted) return undefined;
+
+    this.unresolvedUpstreamRetryMs =
+      upstreamRef === null && this.upstreamRead && this.upstream === null
+        ? Math.min(this.unresolvedUpstreamRetryMs * 2, RESOLUTION_MAX_AGE_MS)
+        : UNRESOLVED_UPSTREAM_RETRY_MIN_MS;
+    this.upstreamRead = true;
+    this.upstream = upstreamRef;
+    this.upstreamAt = Date.now();
+    this.upstreamStamp = stamp;
+    return upstreamRef;
+  }
+
+  /**
+   * Stat stamp gating the `@{u}` read: the effective config files — the
+   * shared one and `gitDir/config.worktree`, which carries per-worktree
+   * overrides when `extensions.worktreeConfig` is on — plus packed-refs, under
+   * the branch whose upstream it is.
+   */
+  private async buildUpstreamStamp(branch: string, dirs: GitDirs): Promise<string | null> {
     const { gitDir, commonDir } = dirs;
     try {
-      const candidatePaths = (this.resolution?.availableRemotes ?? []).map((remote) =>
-        pathJoin(commonDir, "refs", "remotes", ...remote.split("/"), ...baseBranch.split("/"))
-      );
       const stats = await Promise.all([
         this.statPrecheck.statMtime(pathJoin(commonDir, "config")),
         this.statPrecheck.statMtime(pathJoin(gitDir, "config.worktree")),
         this.statPrecheck.statMtime(pathJoin(commonDir, "packed-refs")),
-        ...candidatePaths.map((path) => this.statPrecheck.statMtime(path)),
       ]);
-      return [branch, baseBranch, hasUpstream, ...stats].join(" ");
+      return [branch, ...stats].join(" ");
     } catch {
       return null;
     }

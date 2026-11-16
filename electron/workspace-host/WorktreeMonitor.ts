@@ -28,6 +28,7 @@ import { WatcherController, type WatcherControllerHost } from "./WatcherControll
 import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js";
 import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
 import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
+import type { SharedBaseRefResolver } from "./SharedBaseRefResolver.js";
 import {
   GitStatusPass,
   type GitStatusPassHost,
@@ -426,7 +427,8 @@ export class WorktreeMonitor {
     private mainBranch: string,
     pollQueue?: PQueue,
     generation: number = 0,
-    statusAdmission?: StatusAdmissionController
+    statusAdmission?: StatusAdmissionController,
+    sharedBaseRefs?: SharedBaseRefResolver
   ) {
     this.statusAdmission = statusAdmission;
     this.id = worktree.id;
@@ -871,7 +873,7 @@ export class WorktreeMonitor {
         return monitor._pollAbortController.signal;
       },
     };
-    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck);
+    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck, sharedBaseRefs);
 
     const gitStatusPassHost: GitStatusPassHost = {
       get id() {
