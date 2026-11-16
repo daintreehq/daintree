@@ -112,13 +112,7 @@ describe("survivingBytesLowerBound", () => {
   });
 
   it("never exceeds what the filters leave of arbitrary escape-heavy text", () => {
-    const alphabet = [
-      ..."\x1b[]\x07\\()B012;?mHKJaz _G=d7MP~Rnhl38",
-      "é",
-      "⠁",
-      "😀",
-      "\ud83d",
-    ];
+    const alphabet = [..."\x1b[]\x07\\()B012;?mHKJaz _G=d7MP~Rnhl38", "é", "⠁", "😀", "\ud83d"];
     const random = makeRandom(9);
     for (let run = 0; run < 20000; run++) {
       let data = "";
@@ -126,7 +120,9 @@ describe("survivingBytesLowerBound", () => {
       for (let i = 0; i < length; i++) data += alphabet[Math.floor(random() * alphabet.length)];
       const bound = survivingBytesLowerBound(stripCosmeticParticles(data), Infinity);
       if (bound > exactBytes(data)) {
-        throw new Error(`lower bound ${bound} > exact ${exactBytes(data)} for ${JSON.stringify(data)}`);
+        throw new Error(
+          `lower bound ${bound} > exact ${exactBytes(data)} for ${JSON.stringify(data)}`
+        );
       }
     }
   });

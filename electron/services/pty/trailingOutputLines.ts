@@ -190,7 +190,7 @@ function stripFrom(
   let unstripped = from;
   let nextCr = -2;
   let nextLf = -2;
-  for (let lineStart = from; lineStart < text.length; ) {
+  for (let lineStart = from; lineStart < text.length;) {
     if (nextCr !== -1 && nextCr < lineStart) nextCr = text.indexOf("\r", lineStart);
     if (nextLf !== -1 && nextLf < lineStart) nextLf = text.indexOf("\n", lineStart);
     const lineEnd = Math.min(
