@@ -428,6 +428,10 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     const modelCatalogSvc = new AgentModelCatalogService({
       getCliDetail: async (agentId) =>
         (await cliAvailabilityService.getSettledDetails())?.[agentId],
+      // Looked up per call: each window replaces the version service, and this
+      // one outlives the window that built it.
+      getCliVersion: async (agentId, command) =>
+        (await getAgentVersionService()?.readVersionAt(agentId, command)) ?? null,
     });
     setAgentModelCatalogService(modelCatalogSvc);
     // Warm the cache in the background so the first renderer request hits

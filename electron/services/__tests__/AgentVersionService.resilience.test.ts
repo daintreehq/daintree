@@ -1170,6 +1170,73 @@ describe("AgentVersionService resilience", () => {
     });
   });
 
+  it("checks a bounded number of agents at once, answering each in registry order", async () => {
+    // Probes are released newest first, so results kept in completion order
+    // would come back reversed.
+    const agentIds = Array.from({ length: 10 }, (_, i) => `agent-${i}`);
+    (registryMock.getEffectiveAgentIds as Mock).mockReturnValue(agentIds);
+    (registryMock.getEffectiveAgentConfig as Mock).mockImplementation((agentId: string) => ({
+      id: agentId,
+      name: agentId,
+      command: agentId,
+      version: { args: ["--version"] },
+    }));
+    spawnMock.mockReset();
+    let running = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    spawnMock.mockImplementation(((command: string) => {
+      const child = makeFakeChild();
+      running += 1;
+      peak = Math.max(peak, running);
+      pending.push(() => {
+        running -= 1;
+        child.stdout.emit("data", Buffer.from(`${command} 1.${command.slice(6)}.0\n`));
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+      });
+      return child;
+    }) as never);
+
+    const { service } = createService(async () =>
+      Object.fromEntries(agentIds.map((id) => [id, "ready"]))
+    );
+    const results = service.getVersions();
+    let answered = 0;
+    while (answered < agentIds.length) {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      pending.pop()!();
+      answered += 1;
+    }
+
+    const versions = await results;
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThan(agentIds.length);
+    expect(spawnMock).toHaveBeenCalledTimes(agentIds.length);
+    expect(versions.map((v) => [v.agentId, v.installedVersion])).toEqual(
+      agentIds.map((id, i) => [id, `1.${i}.0`])
+    );
+  });
+
+  it("reads the version of the exact copy asked for, past any cached reading", async () => {
+    (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+      id: "codex",
+      command: "codex",
+      version: { args: ["--version"] },
+    });
+    spawnMock.mockReset();
+    setSpawnSuccess("codex-cli 0.163.0\n");
+    const { service } = createService(async () => ({ codex: "ready" }));
+
+    await expect(service.readVersionAt("codex", "/opt/codex/bin/codex")).resolves.toBe("0.163.0");
+    setSpawnSuccess("codex-cli 0.170.0\n");
+    await expect(service.readVersionAt("codex", "/opt/codex/bin/codex")).resolves.toBe("0.170.0");
+    expect(spawnMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["/opt/codex/bin/codex", ["--version"]],
+      ["/opt/codex/bin/codex", ["--version"]],
+    ]);
+  });
+
   describe("checkVersion parallelism", () => {
     function setExecFileSuccess(): void {
       setSpawnSuccess("1.9.5\n");

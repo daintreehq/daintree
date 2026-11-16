@@ -26,6 +26,12 @@ interface CachedVersionInfo {
 const REPORTED_LINE_MAX_LENGTH = 80;
 /** Version probes running at once for copies, across every agent. */
 const MAX_CONCURRENT_COPY_PROBES = 2;
+/**
+ * Agents checked at once by {@link AgentVersionService.getVersions}. Each check
+ * forks its CLI through a shell and PATH lookup, so asking every registered
+ * agent together is a cold burst of processes for one settings read.
+ */
+const MAX_CONCURRENT_VERSION_CHECKS = 4;
 
 export class AgentVersionService {
   private cache = new Map<AgentId, CachedVersionInfo>();
@@ -81,8 +87,10 @@ export class AgentVersionService {
 
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
     const agentIds = getEffectiveAgentIds();
-    const results = await Promise.allSettled(
-      agentIds.map((agentId) => this.getVersion(agentId as AgentId, refresh))
+    const results = await settleWithConcurrency(
+      agentIds,
+      MAX_CONCURRENT_VERSION_CHECKS,
+      (agentId) => this.getVersion(agentId as AgentId, refresh)
     );
 
     return results.map((result, index) => {
@@ -174,6 +182,23 @@ export class AgentVersionService {
         launches: path === launchPath,
       }))
     );
+  }
+
+  /**
+   * The version one copy of an agent's CLI reports, asked now and by its path,
+   * or null when it prints none. For callers keying something on the exact
+   * binary they run, which a cached or PATH-resolved reading can't promise.
+   */
+  async readVersionAt(agentId: string, path: string): Promise<string | null> {
+    const args = getEffectiveAgentConfig(agentId)?.version?.args;
+    if (!args) return null;
+    try {
+      return this.parseVersion(
+        await this.withCopyProbeSlot(() => this.withCopyProbeDeadline(path, args))
+      );
+    } catch {
+      return null;
+    }
   }
 
   private async readCopyVersion(path: string, args: string[]): Promise<string | null> {
@@ -772,4 +797,26 @@ export class AgentVersionService {
       return false;
     }
   }
+}
+
+/** `Promise.allSettled` over `items`, with at most `limit` tasks running at once. */
+async function settleWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = { status: "fulfilled", value: await task(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
