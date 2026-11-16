@@ -421,7 +421,7 @@ describe("MoveTerminalsToAccountDialog (#17089)", () => {
             ],
           },
         },
-      } as unknown as AgentSettings,
+      } satisfies AgentSettings,
     });
     worktreeNames.set("wt-1", { name: "main" });
     worktreeNames.set("wt-2", { name: "feat/parser" });
@@ -505,7 +505,7 @@ describe("MoveTerminalsToAccountDialog (#17089)", () => {
               accounts: [{ ...PERSONAL, configDir: "/Users/me/.claude-personal" }],
             },
           },
-        } as unknown as AgentSettings,
+        } satisfies AgentSettings,
       });
     });
 

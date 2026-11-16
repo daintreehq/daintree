@@ -29,7 +29,7 @@ function saveAccounts(accounts: { id: string; name: string }[]): void {
           })),
         },
       },
-    } as unknown as AgentSettings,
+    } satisfies AgentSettings,
   });
 }
 
