@@ -377,6 +377,71 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(after).toMatchObject({ ok: true, result: "ok" });
   });
 
+  it("backs the live database up into a verified copy that stands on its own", async () => {
+    mainDb
+      .prepare("INSERT INTO audit_rings (ring, record, created_at) VALUES (?, ?, ?)")
+      .run("testRing", JSON.stringify({ v: "committed" }), 1);
+    const destPath = path.join(tmpDir, "backup.tmp");
+
+    const w = spawn();
+    const response = await request(w, { op: "backup", destPath });
+    expect(response).toMatchObject({ ok: true, result: "ok" });
+
+    // Main's write is still in its WAL; the copy holds it in its own pages,
+    // so it reads back from wherever the rename puts it.
+    const promoted = path.join(tmpDir, "promoted.db");
+    fs.renameSync(destPath, promoted);
+    const copy = new Database(promoted, { readonly: true, fileMustExist: true });
+    try {
+      const rows = copy.prepare("SELECT record FROM audit_rings").all() as { record: string }[];
+      expect(rows.map((r) => (JSON.parse(r.record) as { v: string }).v)).toEqual(["committed"]);
+    } finally {
+      copy.close();
+    }
+  });
+
+  it("answers requests queued behind a backup in the order they were sent", async () => {
+    // Enough pages that the copy spans more than one turn of the worker's loop.
+    const insert = mainDb.prepare(
+      "INSERT INTO audit_rings (ring, record, created_at) VALUES (?, ?, ?)"
+    );
+    mainDb.transaction(() => {
+      for (let i = 0; i < 2000; i++) insert.run("bulk", "x".repeat(500), i);
+    })();
+
+    const w = spawn();
+    const order: number[] = [];
+    w.on("message", (response: DbWorkerResponse) => order.push(response.id));
+    const backupId = nextRequestId;
+    const backup = request(w, { op: "backup", destPath: path.join(tmpDir, "backup.tmp") });
+    const ringWrite = request(w, {
+      op: "ringWriteAll",
+      ring: "testRing",
+      rows: [{ recordId: null, record: JSON.stringify({ v: "after" }) }],
+      maxRecords: 3,
+    });
+    const check = request(w, { op: "quickCheck" });
+
+    await expect(Promise.all([backup, ringWrite, check])).resolves.toEqual([
+      expect.objectContaining({ ok: true, result: "ok" }),
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true, result: "ok" }),
+    ]);
+    expect(order).toEqual([backupId, backupId + 1, backupId + 2]);
+  });
+
+  it("fails a backup it can't write without stalling the requests behind it", async () => {
+    const w = spawn();
+    const failed = request(w, {
+      op: "backup",
+      destPath: path.join(tmpDir, "no-such-dir", "backup.tmp"),
+    });
+    const after = request(w, { op: "quickCheck" });
+
+    expect(await failed).toMatchObject({ ok: false });
+    expect(await after).toMatchObject({ ok: true, result: "ok" });
+  });
+
   it("responds to close and exits without terminate()", async () => {
     const w = spawn();
     const exited = new Promise<number>((resolve) => w.once("exit", resolve));

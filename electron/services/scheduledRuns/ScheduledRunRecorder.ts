@@ -704,6 +704,15 @@ export class ScheduledRunRecorder {
     return this.store.listBySchedule(scheduleId);
   }
 
+  findIdByOccurrence(scheduleId: string, occurrenceKey: string): string | null {
+    return this.store.findIdByOccurrence(scheduleId, occurrenceKey);
+  }
+
+  /** The schedule's open runs, newest first. */
+  listOpenBySchedule(scheduleId: string): ScheduledRun[] {
+    return this.store.listOpenBySchedule(scheduleId);
+  }
+
   /** Runs that settled with no window open and aren't in the notification inbox yet, oldest first. */
   listInboxPending(): ScheduledRun[] {
     return this.store.listInboxPending();

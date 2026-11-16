@@ -39,11 +39,24 @@ const mockDbModule = vi.hoisted(() => ({
   clearRecoveryPending: vi.fn(),
 }));
 
-// Worker unavailable in unit tests — runDbWork executes the fallback
-// synchronously, matching the client's disabled/degraded behavior.
-const mockRunDbWork = vi.hoisted(() =>
-  vi.fn((_op: unknown, fallback: () => unknown) => Promise.resolve(fallback()))
+// The DB worker as the service sees it: a periodic backup copies and probes
+// there (through the mocked handle and probe, so the final backup on main and
+// the worker's read the same), and every other op runs its main-thread
+// fallback, as the client does when the worker is disabled or degraded.
+const runOnWorker = vi.hoisted(
+  () =>
+    (op: unknown, fallback: () => unknown): Promise<unknown> => {
+      const request = op as { op: string; destPath?: string };
+      if (request.op === "backup") {
+        return Promise.resolve(mockSqlite.backup(request.destPath)).then(() =>
+          mockDbModule.probeDbFile(request.destPath)
+        );
+      }
+      return Promise.resolve(fallback());
+    }
 );
+
+const mockRunDbWork = vi.hoisted(() => vi.fn(runOnWorker));
 
 vi.mock("electron", () => ({
   powerMonitor: mockPowerMonitor,
@@ -124,9 +137,7 @@ describe("DatabaseMaintenanceService", () => {
     mockDbModule.clearRecoveryPending.mockImplementation(() => undefined);
     mockSqlite.backup.mockResolvedValue(undefined);
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
-    mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
-      Promise.resolve(fallback())
-    );
+    mockRunDbWork.mockImplementation(runOnWorker);
     // restoreAllMocks strips the mock factory's implementations, so re-arm them.
     vi.mocked(fs.existsSync).mockReset().mockReturnValue(false);
     vi.mocked(fs.unlinkSync)
@@ -401,7 +412,7 @@ describe("DatabaseMaintenanceService", () => {
   it("holds the first backup until the deferred quick_check passes", async () => {
     const quickCheck = createDeferred<string>();
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
-      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : Promise.resolve(fallback())
+      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -425,7 +436,7 @@ describe("DatabaseMaintenanceService", () => {
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
       (op as { op: string }).op === "quickCheck"
         ? Promise.resolve("ok")
-        : Promise.resolve(fallback())
+        : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -536,7 +547,7 @@ describe("DatabaseMaintenanceService", () => {
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
       (op as { op: string }).op === "quickCheck"
         ? Promise.resolve("*** in database main *** Page 4 is never used")
-        : Promise.resolve(fallback())
+        : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -595,7 +606,7 @@ describe("DatabaseMaintenanceService", () => {
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
       (op as { op: string }).op === "quickCheck"
         ? Promise.resolve("*** in database main *** Page 4 is never used")
-        : Promise.resolve(fallback())
+        : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -630,7 +641,7 @@ describe("DatabaseMaintenanceService", () => {
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
       (op as { op: string }).op === "quickCheck"
         ? Promise.resolve("ok")
-        : Promise.resolve(fallback())
+        : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -679,10 +690,10 @@ describe("DatabaseMaintenanceService", () => {
     await service.dispose();
   });
 
-  it("does not rename until the candidate probe has actually returned", async () => {
-    const probe = createDeferred<string>();
+  it("does not rename until the worker's copy and its probe have actually returned", async () => {
+    const workerBackup = createDeferred<string>();
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
-      (op as { op: string }).op === "probePath" ? probe.promise : Promise.resolve(fallback())
+      (op as { op: string }).op === "backup" ? workerBackup.promise : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -692,16 +703,16 @@ describe("DatabaseMaintenanceService", () => {
     vi.advanceTimersByTime(TICK);
     await drainMicrotasks();
 
-    // The candidate is written but its verdict is still outstanding. Renaming it
-    // over the good backup now is exactly the bug — the probe must gate it.
-    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    // The periodic copy is the worker's: nothing copies on main, and renaming
+    // the candidate over the good backup before its verdict is exactly the bug.
     expect(mockRunDbWork).toHaveBeenCalledWith(
-      { op: "probePath", dbPath: "/fake/daintree.db.backup.tmp" },
+      { op: "backup", destPath: "/fake/daintree.db.backup.tmp" },
       expect.any(Function)
     );
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
     expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
 
-    probe.resolve("ok");
+    workerBackup.resolve("ok");
     await drainMicrotasks();
 
     expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
@@ -711,10 +722,74 @@ describe("DatabaseMaintenanceService", () => {
     await service.dispose();
   });
 
+  it("skips a periodic backup the worker can't take rather than copying on main", async () => {
+    mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
+      Promise.resolve(fallback())
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    // A timed-out worker may still be writing the candidate: never touch it.
+    expect(vi.mocked(fs.unlinkSync)).not.toHaveBeenCalled();
+    // Not a verification failure, however many ticks it happens on.
+    const warnings = vi.mocked(console.warn).mock.calls.map(([message]) => String(message));
+    expect(warnings.filter((message) => message.includes("Periodic backup skipped"))).toHaveLength(
+      1
+    );
+
+    await service.dispose();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
+      "/fake/daintree.db.backup.final.tmp",
+      "/fake/daintree.db.backup"
+    );
+  });
+
+  it("never promotes a worker copy that finishes after shutdown started", async () => {
+    const workerBackup = createDeferred<string>();
+    mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+      (op as { op: string }).op === "backup" ? workerBackup.promise : runOnWorker(op, fallback)
+    );
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(TICK);
+    await drainMicrotasks();
+
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    // The worker outlives the shutdown drain: dispose() waits a bounded time,
+    // then writes its own candidate on main.
+    const disposePromise = service.dispose();
+    await vi.advanceTimersByTimeAsync(2000);
+    await disposePromise;
+
+    expect(mockSqlite.backup).toHaveBeenCalledWith("/fake/daintree.db.backup.final.tmp");
+    expect(vi.mocked(fs.renameSync).mock.calls).toEqual([
+      ["/fake/daintree.db.backup.final.tmp", "/fake/daintree.db.backup"],
+    ]);
+
+    // The late copy is older than the final backup now in place.
+    workerBackup.resolve("ok");
+    await drainMicrotasks();
+    expect(vi.mocked(fs.renameSync)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+  });
+
   it("waits for an in-flight quick_check before running the final backup", async () => {
     const quickCheck = createDeferred<string>();
     mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
-      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : Promise.resolve(fallback())
+      (op as { op: string }).op === "quickCheck" ? quickCheck.promise : runOnWorker(op, fallback)
     );
 
     const service = new DatabaseMaintenanceService();
@@ -745,12 +820,11 @@ describe("DatabaseMaintenanceService", () => {
 
     // shutdown.ts drains the DB worker before disposing us, so routing this probe
     // through runDbWork would spawn a fresh worker purely to tear it down.
-    expect(mockDbModule.probeDbFile).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
-    expect(
-      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "probePath")
-    ).toHaveLength(0);
+    expect(mockSqlite.backup).toHaveBeenCalledWith("/fake/daintree.db.backup.final.tmp");
+    expect(mockDbModule.probeDbFile).toHaveBeenCalledWith("/fake/daintree.db.backup.final.tmp");
+    expect(mockRunDbWork).not.toHaveBeenCalled();
     expect(vi.mocked(fs.renameSync)).toHaveBeenCalledWith(
-      "/fake/daintree.db.backup.tmp",
+      "/fake/daintree.db.backup.final.tmp",
       "/fake/daintree.db.backup"
     );
   });
@@ -969,7 +1043,7 @@ describe("DatabaseMaintenanceService", () => {
       mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
         (op as { op: string }).op === "quickCheck"
           ? Promise.resolve(result)
-          : Promise.resolve(fallback())
+          : runOnWorker(op, fallback)
       );
     }
 
@@ -983,9 +1057,7 @@ describe("DatabaseMaintenanceService", () => {
       await session.dispose();
       expect(mockSqlite.backup).not.toHaveBeenCalled();
       expect(markerOnDisk()).toBe(true);
-      mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
-        Promise.resolve(fallback())
-      );
+      mockRunDbWork.mockImplementation(runOnWorker);
       vi.clearAllMocks();
     }
 

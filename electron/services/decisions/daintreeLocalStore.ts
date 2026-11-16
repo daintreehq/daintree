@@ -594,12 +594,27 @@ export class DaintreeLocalStore implements LocalStore {
   ): Promise<QuestionRow[]> {
     const status = filter.status ? [...filter.status] : undefined;
     const paneId = filter.paneId;
-    return this.enqueue("read", () =>
-      (this.st("SELECT * FROM decisions_questions ORDER BY alias ASC").all() as QuestionRecord[])
-        .map(fromRecord)
-        .filter((q) => !status || status.includes(q.local_status))
-        .filter((q) => !paneId || q.origin.pane_id === paneId)
-    );
+    return this.enqueue("read", () => {
+      if (status?.length === 0) return [];
+      // Filtered in SQL so settled history is never decoded; a status list
+      // reads decisions_questions_status_idx.
+      const where: string[] = [];
+      const params: string[] = [];
+      if (status) {
+        where.push(`local_status IN (${status.map(() => "?").join(", ")})`);
+        params.push(...status);
+      }
+      if (paneId) {
+        where.push("pane_id = ?");
+        params.push(paneId);
+      }
+      const clause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
+      return (
+        this.st(`SELECT * FROM decisions_questions${clause} ORDER BY alias ASC`).all(
+          ...params
+        ) as QuestionRecord[]
+      ).map(fromRecord);
+    });
   }
 
   /**
