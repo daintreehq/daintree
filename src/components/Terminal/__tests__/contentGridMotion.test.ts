@@ -88,6 +88,17 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     expect(content).not.toContain("startBatchFit");
   });
 
+  it("resizes a split-mode switch through the batch scheduler, never a raw per-pane fit", async () => {
+    const content = await readFile(CONTEXT_PATH, "utf-8");
+    // Entering or leaving the split joins the coalesced, chunked pass that the
+    // split controller and any add/close in the same burst also feed, rather
+    // than fitting every grid pane synchronously in one task.
+    expect(content).not.toMatch(/\.fit\(/);
+    expect(content).toMatch(
+      /prevModeRef\.current = useTwoPaneSplitMode;\s*runGridBatchFit\(false\);/
+    );
+  });
+
   it("wraps fleet panels in AnimatePresence with initial={false}", async () => {
     const content = await readFile(FLEET_SCOPE_PATH, "utf-8");
     expect(content).toContain("<AnimatePresence initial={false}>");

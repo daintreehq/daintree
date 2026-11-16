@@ -353,9 +353,13 @@ export function TwoPaneSplitLayout({
   // Track previous drag state to detect drag end
   const wasDraggingRef = useRef(false);
 
-  // Resize terminals after non-drag layout changes. Drag end owns its final
-  // pass in handleDragStateChange so pending ownership starts synchronously
-  // with the unlock and the watchdog cannot race the settled geometry.
+  // Resize terminals after non-drag layout changes: entering the split and a
+  // ratio step or reset. Drag end owns its final pass in handleDragStateChange
+  // so pending ownership starts synchronously with the unlock and the watchdog
+  // cannot race the settled geometry. A container resize (window, sidebar)
+  // reaches each pane through its own ResizeObserver in XtermAdapter, so
+  // `containerWidth` is deliberately not a dependency: it changes on every
+  // frame of a drag and only fed a second, duplicate pass.
   useEffect(() => {
     const wasDragging = wasDraggingRef.current;
     wasDraggingRef.current = isDraggingDivider;
@@ -364,11 +368,7 @@ export function TwoPaneSplitLayout({
 
     withTerminalService((service) => service.scheduleBatchResize(panelIds));
     return undefined;
-    // `leftWidth`/`rightWidth` are now ratio-derived calc() strings, so they no
-    // longer change on container resize — depend on `clampedRatio` (ratio drags,
-    // double-click reset) and `containerWidth` (container/sidebar reflow) so
-    // terminals still re-fit on both.
-  }, [clampedRatio, containerWidth, panelIds, isDraggingDivider]);
+  }, [clampedRatio, panelIds, isDraggingDivider]);
 
   return (
     <>

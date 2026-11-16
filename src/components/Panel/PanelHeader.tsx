@@ -55,6 +55,7 @@ import {
 import { useNestedDragGuard } from "@/components/DragDrop/useNestedDragGuard";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
+import { useReadoutClearance, useWholeItemFit } from "./panelHeaderFit";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
@@ -180,135 +181,6 @@ const PanelEmojiDialog = lazyWithPreload(
   () => import("./PanelEmojiDialog"),
   (mod) => mod.PanelEmojiDialog
 );
-
-/** Space kept between the maximized readout and anything it might meet. */
-const READOUT_CLEARANCE_PX = 12;
-
-/**
- * Whether the maximized readout, centred over the whole bar, clears everything
- * the bar lays out around it: the identity group, the metadata, the tab strip,
- * a plugin toolbar, the status box and the controls, each marked
- * `data-readout-obstacle`. The readout is absolute, so hiding it never moves
- * what it is measured against. The status box counts even when empty: it is
- * reserved space a status can appear in.
- */
-function useReadoutClearance(
-  readoutRef: React.RefObject<HTMLDivElement | null>,
-  active: boolean
-): boolean {
-  const [clear, setClear] = useState(true);
-  useLayoutEffect(() => {
-    const readout = readoutRef.current;
-    const bar = readout?.parentElement;
-    if (!active || !readout || !bar || typeof ResizeObserver === "undefined") {
-      setClear(true);
-      return;
-    }
-    const measure = () => {
-      const r = readout.getBoundingClientRect();
-      const blocked = Array.from(bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")).some(
-        (el) => {
-          const o = el.getBoundingClientRect();
-          return (
-            o.width > 0 &&
-            o.right + READOUT_CLEARANCE_PX > r.left &&
-            o.left - READOUT_CLEARANCE_PX < r.right
-          );
-        }
-      );
-      setClear(!blocked);
-    };
-    const resizes = new ResizeObserver(measure);
-    // Obstacles come and go (a chip, a tab strip), so the set is re-observed
-    // whenever the bar's tree changes rather than once at mount.
-    const observeAll = () => {
-      resizes.disconnect();
-      resizes.observe(bar);
-      resizes.observe(readout);
-      bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
-      measure();
-    };
-    observeAll();
-    const mutations = new MutationObserver(observeAll);
-    mutations.observe(bar, { childList: true, subtree: true });
-    return () => {
-      mutations.disconnect();
-      resizes.disconnect();
-    };
-  }, [active, readoutRef]);
-  return clear;
-}
-
-/**
- * Priority+ for the metadata row: whatever cannot fit leaves whole rather than
- * being clipped mid-number by the row's edge. Items leave in attention order,
- * not position: lowest `data-fit-priority` first (unmarked items, the ambient
- * readings, count as 0), and among equals the later one first, so a waiting
- * decision outlasts a queue count and the telemetry goes before either. Items
- * are hidden with the `hidden` attribute, which takes them out of the tab order
- * too, and all are tried again whenever the bar, the row or the status beside
- * it changes, so a widening bar or a status clearing brings them back.
- */
-function useWholeItemFit(rowRef: React.RefObject<HTMLDivElement | null>): void {
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    const region = row?.parentElement?.parentElement;
-    if (!row || !region || typeof ResizeObserver === "undefined") return;
-    const overflows = () => row.scrollWidth > row.clientWidth + 0.5;
-    const fit = () => {
-      const items = Array.from(row.children).filter(
-        (child): child is HTMLElement => child instanceof HTMLElement
-      );
-      for (const item of items) item.removeAttribute("hidden");
-      if (!overflows()) return;
-      const leaving = items
-        .map((item, index) => ({ item, index, priority: Number(item.dataset.fitPriority ?? 0) }))
-        .sort((a, b) => a.priority - b.priority || b.index - a.index);
-      for (const { item } of leaving) {
-        if (!overflows()) break;
-        // Never pulled out from under the keyboard: a reading or chip being
-        // read stays until focus leaves it, and the clip covers the rest.
-        if (item.contains(document.activeElement)) continue;
-        item.setAttribute("hidden", "");
-      }
-    };
-    const resizes = new ResizeObserver(fit);
-    // The row's room depends on its siblings too: a title renamed shorter or a
-    // mark leaving the identity group frees width without the bar resizing.
-    const observeAll = () => {
-      resizes.disconnect();
-      resizes.observe(region);
-      resizes.observe(row);
-      for (const child of Array.from(region.children)) resizes.observe(child);
-    };
-    observeAll();
-    const regionChildren = new MutationObserver(observeAll);
-    regionChildren.observe(region, { childList: true });
-    // Chips arrive and leave with the pane's state, text inside them changes,
-    // and the status beside the row takes and gives back room. The `hidden`
-    // the fit itself sets is an attribute, which is not observed.
-    // A chip whose priority rises (a subagent now waiting) is re-weighed too.
-    const mutations = new MutationObserver(fit);
-    mutations.observe(row.parentElement!, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributeFilter: ["data-fit-priority"],
-    });
-    // An item kept because it held focus is weighed again once focus leaves.
-    const onFocusOut = (event: FocusEvent) => {
-      const next = event.relatedTarget;
-      if (!(next instanceof Node) || !row.contains(next)) queueMicrotask(fit);
-    };
-    row.addEventListener("focusout", onFocusOut);
-    return () => {
-      resizes.disconnect();
-      mutations.disconnect();
-      regionChildren.disconnect();
-      row.removeEventListener("focusout", onFocusOut);
-    };
-  }, [rowRef]);
-}
 
 export interface PanelHeaderProps {
   id: string;
@@ -495,10 +367,12 @@ function PanelHeaderComponent({
 
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
-  const readoutRef = useRef<HTMLDivElement | null>(null);
-  const metadataRowRef = useRef<HTMLDivElement | null>(null);
-  useWholeItemFit(metadataRowRef);
-  const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
+  // Nodes rather than refs: both mount conditionally, and the fit has to
+  // attach to whichever node is there now, not the one present at mount.
+  const [readout, setReadout] = useState<HTMLDivElement | null>(null);
+  const [metadataRow, setMetadataRow] = useState<HTMLDivElement | null>(null);
+  useWholeItemFit(metadataRow);
+  const readoutClear = useReadoutClearance(readout, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   // Watch state — only relevant for agent panels
@@ -1727,7 +1601,7 @@ function PanelHeaderComponent({
               // items' focus rings inside it; -mr-1 gives that padding back so
               // the spacing to what follows is unchanged.
               <div
-                ref={metadataRowRef}
+                ref={setMetadataRow}
                 data-testid="panel-header-content"
                 className="-mr-1 flex min-w-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1 empty:hidden"
               >
@@ -1747,7 +1621,7 @@ function PanelHeaderComponent({
           the pane's own header outranks a summary of the others. */}
       {isMaximized && activeCount > 0 && (
         <div
-          ref={readoutRef}
+          ref={setReadout}
           className={cn(
             "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 whitespace-nowrap text-xs text-text-secondary select-none pointer-events-none @max-[720px]/header:hidden",
             !readoutClear && "invisible"
