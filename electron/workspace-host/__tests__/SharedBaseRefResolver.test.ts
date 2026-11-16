@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  MAX_ENTRIES,
   RESOLUTION_MAX_AGE_MS,
   SharedBaseRefResolver,
   type SharedBaseRequest,
@@ -315,6 +316,33 @@ describe("SharedBaseRefResolver", () => {
 
     expect(probes(ambiguous)).toBe(2);
     expect(probes(single)).toBe(1);
+  });
+
+  it("trims back under its cap after a burst of held entries overflowed it", async () => {
+    // No config file, so scoping resolves without a read and callers reach
+    // the map in the order they asked.
+    mtimes.set(join(commonDir, "config"), -1);
+    const repo = makeRepo();
+    const gate = deferred();
+    repo.gate = gate.promise;
+    const resolver = new SharedBaseRefResolver();
+    const base = (i: number) => `base-${i}`;
+    const burst = MAX_ENTRIES + 44;
+
+    const pending = Array.from({ length: burst }, (_, i) =>
+      resolver.resolve(request(repo, "a", { baseBranch: base(i) }))
+    );
+    await vi.waitFor(() => expect(probes(repo)).toBe(burst));
+    repo.gate = null;
+    gate.resolve();
+    await Promise.all(pending);
+
+    await resolver.resolve(request(repo, "a", { baseBranch: "one-more" }));
+    const before = probes(repo);
+    await resolver.resolve(request(repo, "a", { baseBranch: base(burst - 1) }));
+    expect(probes(repo)).toBe(before);
+    await resolver.resolve(request(repo, "a", { baseBranch: base(44) }));
+    expect(probes(repo)).toBe(before + 1);
   });
 
   it("holds the cached answer while a stat fails unexpectedly", async () => {

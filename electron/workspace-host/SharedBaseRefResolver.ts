@@ -24,7 +24,7 @@ export const RESOLUTION_MAX_AGE_MS = 5 * 60_000;
 const CONFIG_READ_TIMEOUT_MS = 5_000;
 // Entries hold a few short strings each; the cap only stops a long session of
 // branch switches in privately-scoped repos from growing the map forever.
-const MAX_ENTRIES = 256;
+export const MAX_ENTRIES = 256;
 
 /** The repository-wide half of base-ref resolution. */
 export interface SharedBaseSelection {
@@ -149,12 +149,12 @@ export class SharedBaseRefResolver {
   private entryFor(key: string): Entry {
     const existing = this.entries.get(key);
     if (existing) return existing;
-    if (this.entries.size >= MAX_ENTRIES) {
-      for (const [oldKey, old] of this.entries) {
-        if (old.probe || old.holders > 0) continue;
-        this.entries.delete(oldKey);
-        break;
-      }
+    // A burst of held entries can carry the map past the cap; the next insert
+    // trims every idle overflow, oldest first, so it settles back under it.
+    for (const [oldKey, old] of this.entries) {
+      if (this.entries.size < MAX_ENTRIES) break;
+      if (old.probe || old.holders > 0) continue;
+      this.entries.delete(oldKey);
     }
     const entry: Entry = { selection: null, stamp: null, resolvedAt: 0, probe: null, holders: 0 };
     this.entries.set(key, entry);

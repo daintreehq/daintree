@@ -495,29 +495,40 @@ describe("BaseDivergence", () => {
   describe("upstream resolution", () => {
     it.each([
       [
-        "re-reads a resolved upstream at the age ceiling when several remotes could own it",
+        "picks up a repointed upstream at the age ceiling when several remotes could own it",
         ["origin", "upstream"],
-        2,
+        "refs/remotes/upstream/feature/x",
       ],
-      ["never re-reads a resolved upstream on a clock with a single remote", ["origin"], 1],
-    ])("%s", async (_, remotes, expectedReads) => {
+      [
+        "never re-reads a resolved upstream on a clock with a single remote",
+        ["origin"],
+        "refs/remotes/origin/feature/x",
+      ],
+    ])("%s", async (_, remotes, upstreamAfterCeiling) => {
       let now = 1_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      try {
+      const repo = (upstream: string) =>
         installRepo({
           remotes,
           remoteBaseRefs: remotes.map((remote) => `refs/remotes/${remote}/main`),
-          symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+          symbolicRefs: { "@{u}": upstream },
           revList: { "upstream/main...HEAD": "0\t1\n", "origin/main...HEAD": "0\t1\n" },
           revParsePair: "abc\nabc\n",
         });
+      try {
+        repo("refs/remotes/origin/feature/x");
         const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
         await divergence.compute(true);
 
-        now += RESOLUTION_MAX_AGE_MS;
+        // An included config file repoints the upstream; nothing stamped moves.
+        repo("refs/remotes/upstream/feature/x");
+        now += RESOLUTION_MAX_AGE_MS - 1;
         await divergence.compute(true);
+        expect(divergence.upstreamRef).toBe("refs/remotes/origin/feature/x");
 
-        expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(expectedReads);
+        now += 1;
+        await divergence.compute(true);
+        expect(divergence.upstreamRef).toBe(upstreamAfterCeiling);
       } finally {
         clock.mockRestore();
       }
