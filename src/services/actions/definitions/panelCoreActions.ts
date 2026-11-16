@@ -400,8 +400,9 @@ export function registerPanelCoreActions(
     // Undo takes back a person's own close; a plugin closed nothing of theirs.
     denyPluginDispatch: true,
     run: async (_args: unknown, ctx) => {
-      // Read before any await: it belongs to this press.
+      // Read before any await: both belong to this press.
       const viaTextUndo = takeUndoCloseKeyPress();
+      const pressedIn = document.activeElement;
       // Undo takes back what the person did, so only the person can ask.
       if (!isForegroundDispatch(ctx.dispatchSource)) return;
       // A close still waiting to commit isn't in the history yet.
@@ -413,8 +414,11 @@ export function registerPanelCoreActions(
       await undoLastClose(
         viaTextUndo
           ? {
-              yieldsTo: (step) => fieldOutranksClose(document.activeElement, step.seq),
-              onYield: () => undoEditorText(document.activeElement),
+              yieldsTo: (step) => fieldOutranksClose(pressedIn, step.seq),
+              // Only while the keyboard is still where the key was pressed.
+              onYield: () => {
+                if (document.activeElement === pressedIn) undoEditorText(pressedIn);
+              },
             }
           : {}
       );

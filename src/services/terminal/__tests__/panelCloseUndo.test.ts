@@ -417,6 +417,25 @@ describe("panel close history", () => {
     expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("older");
   });
 
+  it("hands a press past a dead close with nothing older to the field", async () => {
+    seed("agent", { agent: true });
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + CAPTURE_WAIT_MS + 1);
+    const onYield = vi.fn();
+
+    await expect(undoLastClose({ yieldsTo: () => true, onYield })).resolves.toBe(false);
+
+    expect(onYield).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes nothing from the field when there was no close to begin with", async () => {
+    const onYield = vi.fn();
+    await expect(undoLastClose({ yieldsTo: () => true, onYield })).resolves.toBe(false);
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
   it("skips a shell the trash has let go and reopens the next older close", async () => {
     seed("older");
     seed("shell");
@@ -592,6 +611,7 @@ describe("after the trash lets an agent go", () => {
     });
     seed("first", { agent: true });
     seed("second", { agent: true });
+    usePanelStore.getState().createTabGroup("grid", "wt-1", ["first", "second"], "first");
     userClose(["first", "second"]);
     usePanelStore.getState().removePanel("first");
     usePanelStore.getState().removePanel("second");
@@ -612,7 +632,26 @@ describe("after the trash lets an agent go", () => {
     await expect(pending).resolves.toBe(true);
     hidden.mockRestore();
     expect(resumeSessionForPerson).toHaveBeenCalledTimes(1);
-    expect(history.peekUndoCloseStep()?.panels.map((panel) => panel.id)).toEqual(["second"]);
+    const kept = history.peekUndoCloseStep();
+    expect(kept?.panels.map((panel) => panel.id)).toEqual(["second"]);
+    // The group it shares with the one already back names that one's new panel.
+    expect(kept?.groups[0]?.panelIds).toEqual(["resumed-1", "second"]);
+  });
+
+  it("notices the view left and came back while it waited", async () => {
+    seed("agent", { agent: true });
+    userClose(["agent"]);
+    usePanelStore.getState().removePanel("agent");
+
+    const pending = undoLastClose();
+    await vi.waitFor(() => expect(listSessions).toHaveBeenCalled());
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden.mockRestore();
+
+    await expect(pending).resolves.toBe(false);
+    expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(history.peekUndoCloseStep()?.panels[0]?.id).toBe("agent");
   });
 
   it("waits for a capture still on its way", async () => {

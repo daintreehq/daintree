@@ -59,9 +59,10 @@ export function undoLastClose(options: UndoCloseOptions = {}): Promise<boolean> 
 async function restoreNewestClose({ yieldsTo, onYield }: UndoCloseOptions): Promise<boolean> {
   for (let first = true; ; first = false) {
     const next = peekUndoCloseStep();
-    if (next === null) return false;
-    if (!first && yieldsTo?.(next) === true) {
-      onYield?.();
+    // Past a close with nothing left, the field's own typing is the newest
+    // thing in reach: with no older close, or one older than that typing.
+    if (next === null || (!first && yieldsTo?.(next) === true)) {
+      if (!first) onYield?.();
       return false;
     }
     const step = takeUndoCloseStep();
@@ -92,7 +93,18 @@ async function restoreStep(step: CloseStep): Promise<"restored" | "nothing" | "d
     // so whatever hasn't come back yet waits in the history for their return.
     if (id === "hidden") {
       if (restored.size === 0) return "deferred";
-      returnUndoCloseStep({ ...step, panels: expired.slice(index) });
+      // What came back already answers under its new id, so the rest can
+      // still rejoin it.
+      const renamed = (id: string) => restored.get(id) ?? id;
+      returnUndoCloseStep({
+        ...step,
+        panels: expired.slice(index),
+        groups: step.groups.map((group) => ({
+          ...group,
+          panelIds: group.panelIds.map(renamed),
+          activeTabId: group.activeTabId === null ? null : renamed(group.activeTabId),
+        })),
+      });
       break;
     }
     if (id !== null) restored.set(closed.id, id);
@@ -252,17 +264,26 @@ async function listSessions(projectId: string | null): Promise<AgentSessionRecor
   }
 }
 
-function waitForRecordedSession(ms: number): Promise<void> {
+/**
+ * Waits for the next journaled session, the deadline, or the view going out
+ * of sight, and resolves whether it went out of sight: a return before either
+ * of the others would hide that it ever left.
+ */
+function waitForRecordedSession(ms: number): Promise<boolean> {
   return new Promise((resolve) => {
-    // Both are bound before either can fire: the timer and the event only
-    // call back on a later task.
-    const done = () => {
+    // All are bound before any can fire: each only calls back on a later task.
+    const done = (hidden: boolean) => {
       clearTimeout(timer);
       unsubscribe?.();
-      resolve();
+      document.removeEventListener("visibilitychange", onVisibility);
+      resolve(hidden);
     };
-    const timer = setTimeout(done, Math.max(0, ms));
-    const unsubscribe = window.electron?.events?.on("agent-session:recorded", done);
+    const onVisibility = () => {
+      if (document.hidden) done(true);
+    };
+    const timer = setTimeout(() => done(false), Math.max(0, ms));
+    const unsubscribe = window.electron?.events?.on("agent-session:recorded", () => done(false));
+    document.addEventListener("visibilitychange", onVisibility);
   });
 }
 
@@ -278,9 +299,8 @@ async function findCapturedSession(
   for (;;) {
     const found = pickCapture(await listSessions(step.projectId), step, closed);
     if (found !== null || Date.now() >= deadline) return found;
-    await waitForRecordedSession(deadline - Date.now());
     // Out of sight, the wait stops: the close waits for the person instead.
-    if (isViewHidden()) return "hidden";
+    if ((await waitForRecordedSession(deadline - Date.now())) || isViewHidden()) return "hidden";
   }
 }
 
