@@ -87,6 +87,9 @@ export class IssueLookupCoalescer {
       })
       .finally(() => {
         if (entry.inflight === inflight) entry.inflight = null;
+        // Entries in flight can't be evicted, so a burst can leave the map over
+        // its bound until they settle.
+        this.trim();
       });
     entry.inflight = inflight;
     this.remember(key, entry);
@@ -140,6 +143,10 @@ export class IssueLookupCoalescer {
   private remember(key: string, entry: Entry): void {
     this.entries.delete(key);
     this.entries.set(key, entry);
+    this.trim();
+  }
+
+  private trim(): void {
     if (this.entries.size <= MAX_ENTRIES) return;
     for (const [oldestKey, oldest] of this.entries) {
       if (this.entries.size <= MAX_ENTRIES) break;

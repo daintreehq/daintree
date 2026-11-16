@@ -2863,6 +2863,131 @@ describe("PullRequestService", () => {
       t.cleanup();
     });
 
+    it("asks separately about different issues and different claims", async () => {
+      const getIssue = vi.fn(async (_repo: RepoRef, n: number) => ({ ...issue88, number: n }));
+      const t = await startWithSiblings(getIssue);
+      const bridge = lastMockBridge!;
+      bridge.getIssueForLink.mockImplementation(async (link) => ({
+        ...issue88,
+        title: `Claimed ${link.issueKey}`,
+      }));
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-3", branch: "feature/issue-89-c", issueNumber: 89 })
+      );
+      for (const [worktreeId, issueKey] of [
+        ["wt-4", "ENG-88"],
+        ["wt-5", "OPS-88"],
+      ] as const) {
+        t.events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({
+            worktreeId,
+            branch: `${issueKey.toLowerCase()}-${worktreeId}`,
+            issueNumber: 88,
+            issueProviderId: "acme.linear.linear",
+            issueKey,
+          })
+        );
+      }
+
+      await t.pullRequestService.refresh();
+
+      // wt-1 and wt-2 share #88; #89 and each claim are their own lookups, and
+      // a claim never shares the code forge's #88.
+      expect(getIssue.mock.calls.map(([, n]) => n).sort()).toEqual([88, 89]);
+      expect(bridge.getIssueForLink).toHaveBeenCalledTimes(2);
+      const titles = Object.fromEntries(t.detected.map((d) => [d.worktreeId, d.issueTitle]));
+      expect(titles).toEqual({
+        "wt-1": "Shared issue",
+        "wt-2": "Shared issue",
+        "wt-3": "Shared issue",
+        "wt-4": "Claimed ENG-88",
+        "wt-5": "Claimed OPS-88",
+      });
+      t.cleanup();
+    });
+
+    it("re-announces a remembered not-found when a worktree moves to another branch", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-1")).toHaveLength(1);
+
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/issue-88-z", issueNumber: 88 })
+      );
+      await t.poll();
+
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-1")).toHaveLength(2);
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-2")).toHaveLength(1);
+      t.cleanup();
+    });
+
+    it("re-asks on an explicit refresh that arrives while a focus pass is running", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      // Hold the focus pass on its PR lookups, after it has already read the
+      // remembered not-found for its issue lookups.
+      const bridge = lastMockBridge!;
+      let releasePRs!: () => void;
+      const prsHeld = new Promise<void>((resolve) => (releasePRs = resolve));
+      bridge.findPRByBranch.mockImplementation(async () => {
+        await prsHeld;
+        return makeMockForgePR();
+      });
+      getIssue.mockResolvedValue(issue88);
+      const focus = t.pullRequestService.refresh({ preserveIssueBackoff: true });
+      await flushLoaders();
+      expect(bridge.findPRByBranch).toHaveBeenCalled();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      const manual = t.pullRequestService.refresh();
+      expect(manual).not.toBe(focus);
+      releasePRs();
+      await Promise.all([focus, manual]);
+
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      expect(t.detected.map((d) => d.worktreeId).sort()).toEqual(["wt-1", "wt-2"]);
+      t.cleanup();
+    });
+
+    it("lets a focus pass join an explicit one, and explicit refreshes join each other", async () => {
+      const getIssue = vi.fn().mockResolvedValue(issue88);
+      const t = await startWithSiblings(getIssue);
+      const manual = t.pullRequestService.refresh();
+      expect(t.pullRequestService.refresh()).toBe(manual);
+      expect(t.pullRequestService.refresh({ preserveIssueBackoff: true })).toBe(manual);
+      await manual;
+      t.cleanup();
+    });
+
+    it("drops a title looked up for a provider invalidated before the lookup started", async () => {
+      const getIssue = vi.fn().mockResolvedValue(issue88);
+      const t = await startWithSiblings(getIssue);
+      const bridge = lastMockBridge!;
+      let releaseGate!: () => void;
+      bridge.getRateLimit.mockImplementationOnce(
+        () => new Promise((resolve) => (releaseGate = () => resolve(null)))
+      );
+
+      const pass = t.poll();
+      await flushLoaders();
+      expect(bridge.getRateLimit).toHaveBeenCalledTimes(1);
+      // Settings or remotes changed while the pass waited on the rate-limit gate.
+      t.pullRequestService.notifyForgeProviderRegistryUpdated();
+      releaseGate();
+      await pass;
+
+      expect(t.detected).toHaveLength(0);
+      t.cleanup();
+    });
+
     it("delivers a shared answer only to worktrees still on the branch it was asked for", async () => {
       let answer!: (value: typeof issue88) => void;
       const getIssue = vi.fn(() => new Promise<typeof issue88>((resolve) => (answer = resolve)));

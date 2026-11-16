@@ -34,10 +34,14 @@ function projectPath(repo: RepoRef): string {
   return `/projects/${encodeProjectId(repo)}`;
 }
 
+// Fresh: these reads are a write's preconditions (a merge's pins, a
+// read-modify-write), so an answer from a read already in flight could predate
+// the very change the write must see.
 async function fetchIssueRaw(repo: RepoRef, issueNumber: number): Promise<GitLabIssue> {
   const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
     path: `${projectPath(repo)}/issues/${issueNumber}`,
+    fresh: true,
   });
   return data;
 }
@@ -46,6 +50,7 @@ async function fetchMRRaw(repo: RepoRef, prNumber: number): Promise<GitLabMergeR
   const { data } = await gitlabRest<GitLabMergeRequest>({
     host: repo.host,
     path: `${projectPath(repo)}/merge_requests/${prNumber}`,
+    fresh: true,
   });
   return data;
 }

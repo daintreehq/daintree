@@ -155,6 +155,10 @@ class PullRequestService {
   // change must not be handed its result.
   private refreshEpoch = 0;
   private refreshInFlightEpoch = -1;
+  // Whether the pass in flight keeps issue backoff. An explicit refresh can't
+  // be answered by such a pass: it may already have read the verdicts the
+  // explicit refresh just dropped.
+  private refreshInFlightPreservesIssueBackoff = false;
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
@@ -929,16 +933,24 @@ class PullRequestService {
    * they keep a not-found issue number's retry delay, which an explicit refresh
    * drops so the number is looked up again now. Lookups already in flight are
    * left to finish either way, so joining a pass that started them still
-   * delivers their titles.
+   * delivers their titles; an explicit refresh never joins a pass that kept
+   * the delays, and runs after it instead.
    */
   public refresh(options?: { preserveIssueBackoff?: boolean }): Promise<void> {
-    if (!options?.preserveIssueBackoff) this.issueLookups.forgetVerdicts();
+    const preserveIssueBackoff = options?.preserveIssueBackoff === true;
+    if (!preserveIssueBackoff) this.issueLookups.forgetVerdicts();
     const existing = this.refreshInFlight;
     // Join only a pass that still reflects the current configuration. Without
     // the epoch check, `updateForgeSettings()`'s follow-up refresh would be
     // handed a pass that resolved the PREVIOUS provider, and the new one would
     // never get a detection cycle.
-    if (existing && this.refreshInFlightEpoch === this.refreshEpoch) return existing;
+    if (
+      existing &&
+      this.refreshInFlightEpoch === this.refreshEpoch &&
+      (preserveIssueBackoff || !this.refreshInFlightPreservesIssueBackoff)
+    ) {
+      return existing;
+    }
     const epoch = this.refreshEpoch;
     // A superseded pass is chained after, not run alongside: two overlapping
     // passes are exactly the disposal race this single-flight exists to remove.
@@ -951,6 +963,7 @@ class PullRequestService {
       });
     this.refreshInFlight = run;
     this.refreshInFlightEpoch = epoch;
+    this.refreshInFlightPreservesIssueBackoff = preserveIssueBackoff;
     return run;
   }
 
@@ -1733,8 +1746,18 @@ class PullRequestService {
           : bridge.getIssue(providerId, repo, issueNumber);
       })
       .then((result) => {
-        // The provider, repo or credential changed while the lookup ran.
+        // The provider or repo changed while the lookup ran, or before it
+        // started: the caller's snapshot can predate an invalidation that
+        // landed during one of its own awaits.
         if (generation !== this.issueLookups.generation) return;
+        if (
+          this.providerNamespacedId !== providerId ||
+          this.repoRef?.host !== repo.host ||
+          this.repoRef?.owner !== repo.owner ||
+          this.repoRef?.repo !== repo.repo
+        ) {
+          return;
+        }
         // Branch-token check (lesson #2243): if the worktree's branch changed
         // during the fetch, the result is stale — don't write the fetched
         // marker, let the next pass retry against the new branch's issue.

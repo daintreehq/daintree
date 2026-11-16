@@ -136,8 +136,11 @@ describe("GitLab cache residency", () => {
     await getPRTooltipImpl(REPO, 1_500);
     await resolveAuthorAvatarImpl("gitlab.com", "user1500@example.com");
     expect((await getRepoStatsImpl(repo("r99"))).source).toBe("memory-cache");
+    const queries = graphqlMock.mock.calls.length;
+    expect((await findPRsByNumbersImpl(REPO, [1_500])).get(1_500)?.number).toBe(1_500);
     expect(restMock.mock.calls.length).toBe(rest);
     expect(restPageMock.mock.calls.length).toBe(pages);
+    expect(graphqlMock.mock.calls.length).toBe(queries);
   });
 
   it("keeps serving hits and negative entries", async () => {

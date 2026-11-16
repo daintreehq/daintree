@@ -117,7 +117,7 @@ describe("IssueLookupCoalescer", () => {
     expect(await coalescer.lookup("missing", retry)).toEqual({ kind: "missing", cached: false });
   });
 
-  it("detaches a pending lookup on clear and never records its verdict", async () => {
+  it("detaches a pending lookup on clear and never lets it touch later verdicts", async () => {
     const { coalescer } = setup();
     const stale = deferred<Issue | null>();
     const before = coalescer.lookup("k", () => stale.promise);
@@ -126,17 +126,32 @@ describe("IssueLookupCoalescer", () => {
     coalescer.clear();
     expect(coalescer.generation).not.toBe(startedAt);
 
-    const fresh = vi.fn(async () => ISSUE);
-    const after = coalescer.lookup("k", fresh);
-    stale.resolve(null);
-    expect(await before).toEqual({ kind: "missing", cached: false });
-    expect(await after).toEqual({ kind: "found", issue: ISSUE });
+    const fresh = vi.fn(async () => null);
+    expect(await coalescer.lookup("k", fresh)).toEqual({ kind: "missing", cached: false });
     expect(fresh).toHaveBeenCalledTimes(1);
 
-    // The stale miss was not remembered: the next lookup asks again.
+    // The detached lookup lands as "found" after the fresh miss. Recording it
+    // would delete the fresh verdict and send the next poll to the provider.
+    stale.resolve(ISSUE);
+    expect(await before).toEqual({ kind: "found", issue: ISSUE });
     const next = vi.fn(async () => ISSUE);
-    await coalescer.lookup("k", next);
-    expect(next).toHaveBeenCalledTimes(1);
+    expect(await coalescer.lookup("k", next)).toEqual({ kind: "missing", cached: true });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("returns to its bound once a burst of pending lookups settles", async () => {
+    const { coalescer } = setup();
+    const pending = Array.from({ length: 300 }, (_, i) => {
+      const answer = deferred<Issue | null>();
+      return { answer, result: coalescer.lookup(`k${i}`, () => answer.promise) };
+    });
+    // Nothing in flight can be evicted.
+    expect(coalescer.size).toBe(300);
+
+    for (const { answer } of pending) answer.resolve(null);
+    await Promise.all(pending.map(({ result }) => result));
+
+    expect(coalescer.size).toBeLessThanOrEqual(256);
   });
 
   it("bounds how many identities it remembers", async () => {

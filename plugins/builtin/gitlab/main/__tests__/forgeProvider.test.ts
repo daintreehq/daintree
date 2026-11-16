@@ -963,17 +963,37 @@ describe("batchLookups", () => {
     }
   });
 
-  it("splits large sets into chunks", async () => {
-    fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
-      const { variables } = JSON.parse(String(init.body)) as { variables: { iids: string[] } };
-      return graphqlMRs(variables.iids.map((iid) => mrNode(Number(iid))));
-    });
+  it("sends every chunk of a large set at once", async () => {
+    const held: Array<() => void> = [];
+    fetchMock().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          const { variables } = JSON.parse(String(init.body)) as { variables: { iids: string[] } };
+          held.push(() => resolve(graphqlMRs(variables.iids.map((iid) => mrNode(Number(iid))))));
+        })
+    );
     const numbers = Array.from({ length: 45 }, (_, i) => i + 1);
 
-    const result = await batch.findPRsByNumbers!(REPO, numbers);
+    const pending = batch.findPRsByNumbers!(REPO, numbers);
+    // All three chunks are on the wire before any of them answers.
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(3));
+    for (const release of held) release();
 
-    expect(fetchMock()).toHaveBeenCalledTimes(3);
-    expect(result.size).toBe(45);
+    expect((await pending).size).toBe(45);
+  });
+
+  it("maps mergeability and comment counts the REST read would have given", async () => {
+    fetchMock().mockResolvedValue(
+      graphqlMRs([
+        { ...mrNode(3), detailedMergeStatus: "MERGEABLE", userNotesCount: 4 },
+        { ...mrNode(4), detailedMergeStatus: "CHECKING" },
+        { ...mrNode(5), detailedMergeStatus: "NOT_APPROVED" },
+      ])
+    );
+    const result = await batch.findPRsByNumbers!(REPO, [3, 4, 5]);
+    expect(result.get(3)).toMatchObject({ mergeable: true, commentCount: 4 });
+    expect(result.get(4)?.mergeable).toBeNull();
+    expect(result.get(5)?.mergeable).toBe(false);
   });
 
   it("omits MRs a throttled or failed query didn't answer", async () => {
@@ -983,6 +1003,13 @@ describe("batchLookups", () => {
     expect((await batch.getCIStatuses!(REPO, [3])).size).toBe(0);
     fetchMock().mockResolvedValue(jsonResponse({ data: { project: null } }));
     expect((await batch.findPRsByNumbers!(REPO, [3])).size).toBe(0);
+    // A GraphQL error that isn't about the schema is a failed attempt too, and
+    // must not turn into a read per MR.
+    fetchMock().mockResolvedValue(jsonResponse({ errors: [{ message: "Request timed out" }] }));
+    expect((await batch.findPRsByNumbers!(REPO, [3, 4])).size).toBe(0);
+    expect(fetchMock().mock.calls.every((call) => requestUrl(call).endsWith("/api/graphql"))).toBe(
+      true
+    );
   });
 
   it("omits MRs a truncated window didn't return", async () => {
@@ -992,16 +1019,50 @@ describe("batchLookups", () => {
     expect(result.has(4)).toBe(false);
   });
 
-  // An instance whose schema rejects the query would otherwise never answer:
-  // throwing hands the numbers to the host's per-MR REST reads.
-  it("throws when the server can't serve the query at all", async () => {
-    fetchMock().mockImplementation(async () =>
-      jsonResponse({
-        errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
-      })
-    );
-    await expect(batch.findPRsByNumbers!(REPO, [3])).rejects.toThrow(/detailedMergeStatus/);
-    await expect(batch.getCIStatuses!(REPO, [3])).rejects.toThrow(/detailedMergeStatus/);
+  // An instance whose schema predates the query would otherwise never answer,
+  // and every caller of the batch (the poller, `forge.getPRs`) needs one.
+  it("answers over REST, one read per MR, when the schema can't serve the query", async () => {
+    fetchMock().mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/graphql")) {
+        return jsonResponse({
+          errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+        });
+      }
+      if (url.endsWith("/merge_requests/4")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/merge_requests/5")) return jsonResponse({}, { status: 503 });
+      return jsonResponse({ iid: 3, state: "opened", head_pipeline: { status: "failed" } });
+    });
+
+    const prs = await batch.findPRsByNumbers!(REPO, [3, 4, 5]);
+    expect(prs.get(3)?.number).toBe(3);
+    expect(prs.has(4)).toBe(true);
+    expect(prs.get(4)).toBeNull();
+    expect(prs.has(5)).toBe(false);
+
+    // The same read carried the pipeline, so the CI answer needs no request.
+    fetchMock().mockClear();
+    expect((await batch.getCIStatuses!(REPO, [3])).get(3)?.state).toBe("failure");
+    expect(fetchMock()).not.toHaveBeenCalled();
+
+    // Later batches skip the query the instance already rejected.
+    await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+    expect(fetchMock().mock.calls.map(requestUrl)).toEqual([
+      "https://gitlab.com/api/v4/projects/group%2Fproject/merge_requests/3",
+    ]);
+  });
+
+  it("doesn't let a fresh batch join one already in flight", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = batch.findPRsByNumbers!(REPO, [3]);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock().mockResolvedValue(graphqlMRs([{ ...mrNode(3), state: "merged" }]));
+    const fresh = await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    expect(fresh.get(3)?.state).toBe("merged");
+    pending.resolve(graphqlMRs([mrNode(3)]));
+    await older;
   });
 
   it("drops a batch answer that lands after an invalidation", async () => {
@@ -1057,6 +1118,61 @@ describe("in-flight read sharing", () => {
       gitlabForgeProvider.listIssues(REPO, { state: "open", search: "bug" }),
     ]);
     expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends a fresh single read on its own", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "merged" }));
+    expect((await gitlabForgeProvider.getPR(REPO, 3, { fresh: true }))?.state).toBe("merged");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await older;
+  });
+
+  it("re-reads a merge's pins instead of joining a read already in flight", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const background = gitlabForgeProvider.getPR(REPO, 5);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock()
+      .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "release" }))
+      .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "merged", merge_commit_sha: "mc1" }));
+    // The background read saw `main`; the target has since moved.
+    await expect(
+      gitlabForgeProvider.mergePR(REPO, 5, { expectedBaseRef: "main" })
+    ).rejects.toThrow();
+    expect(fetchMock().mock.calls.some((call) => requestUrl(call).endsWith("/merge"))).toBe(false);
+    pending.resolve(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }));
+    await background;
+  });
+
+  it("doesn't register a read whose auth resolved across an invalidation", async () => {
+    let releaseSettings!: () => void;
+    const settingsHeld = new Promise<void>((resolve) => (releaseSettings = resolve));
+    setInstanceUrlReader(async () => {
+      await settingsHeld;
+      return "https://gitlab.com";
+    });
+    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "opened" }));
+    const before = gitlabForgeProvider.getPR(REPO, 3);
+    await Promise.resolve();
+
+    clearGitLabCaches();
+    releaseSettings();
+    await before;
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const after = gitlabForgeProvider.getPR(REPO, 3);
+    const later = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await Promise.all([after, later]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
 
   it("sends a bypassCache list on its own", async () => {

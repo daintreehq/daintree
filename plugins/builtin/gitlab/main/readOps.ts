@@ -117,6 +117,12 @@ const mergeRequestCache = new BoundedCache<MergeRequestLookup | null>({
 });
 /** Pending number→MR chunks, so overlapping batch reads share one query. */
 const mergeRequestFlights = new Map<string, Promise<Map<number, MergeRequestLookup | null>>>();
+/**
+ * Hosts whose GraphQL schema can't serve the number query, so their batches go
+ * straight to REST instead of failing the query first on every poll. Cleared
+ * with the caches, so an upgraded instance is tried again.
+ */
+const restOnlyBatchHosts = new Set<string>();
 const allCaches: ReadonlyArray<BoundedCache<unknown>> = [
   issueTooltipCache,
   prTooltipCache,
@@ -155,6 +161,7 @@ export function clearGitLabCaches(): void {
   for (const cache of allCaches) cache.clear();
   avatarInflight.clear();
   mergeRequestFlights.clear();
+  restOnlyBatchHosts.clear();
   resetReadFlights();
   if (sweepTimer !== null) {
     clearTimeout(sweepTimer);
@@ -261,11 +268,16 @@ function nullOn404<T>(err: unknown): T | null {
   throw err;
 }
 
-export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
+export async function getIssueImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<Issue | null> {
   try {
     const { data } = await gitlabRest<GitLabIssue>({
       host: repo.host,
       path: `/projects/${encodeProjectId(repo)}/issues/${number}`,
+      ...(options?.fresh ? { fresh: true } : {}),
     });
     return gitlabIssueToForgeIssue(data, repo.host);
   } catch (err) {
@@ -273,11 +285,16 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
   }
 }
 
-export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
+export async function getPRImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<PR | null> {
   try {
     const { data } = await gitlabRest<GitLabMergeRequest>({
       host: repo.host,
       path: `/projects/${encodeProjectId(repo)}/merge_requests/${number}`,
+      ...(options?.fresh ? { fresh: true } : {}),
     });
     return mergeRequestToForgePR(data, repo.host);
   } catch (err) {
@@ -326,6 +343,7 @@ query DaintreeMRsForBranches($fullPath: ID!, $branches: [String!]) {
         author { username avatarUrl }
         headPipeline { status }
         detailedMergeStatus
+        userNotesCount
       }
     }
   }
@@ -485,29 +503,66 @@ query DaintreeMRsByIids($fullPath: ID!, $iids: [String!], $first: Int) {
         author { username avatarUrl }
         headPipeline { status }
         detailedMergeStatus
+        userNotesCount
       }
     }
   }
 }`;
 
 /**
- * A failure that says the query itself can't be served here (a schema that
- * rejects it, an instance without the GraphQL endpoint) rather than that this
- * attempt didn't land. The host answers a thrown batch with its per-number REST
- * reads, which is what such an instance needs; a throttle or an outage is
- * omitted instead, so it isn't multiplied into one request per MR.
+ * A failure that says this instance can't serve the query at all, rather than
+ * that this attempt didn't land: no GraphQL endpoint, or a schema older than a
+ * field or argument the query uses. Other GraphQL errors (a resolver timeout,
+ * a gateway page) are transient and only omit the chunk.
  */
 function isUnservableBatchQuery(err: unknown): boolean {
   if (!(err instanceof GitLabApiError)) return false;
-  if (err.status === 200) return true;
-  return err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 429;
+  if (err.status === 404) return true;
+  return (
+    err.status === 200 &&
+    /doesn't exist on type|doesn't accept argument|isn't a defined input type/i.test(err.message)
+  );
+}
+
+/**
+ * The same answers from one REST read per MR, for an instance whose GraphQL
+ * can't serve the batch. One read still carries both the MR and its pipeline.
+ */
+async function fetchMergeRequestsOverRest(
+  repo: RepoRef,
+  chunk: number[],
+  fresh: boolean
+): Promise<Map<number, MergeRequestLookup | null>> {
+  const result = new Map<number, MergeRequestLookup | null>();
+  await Promise.all(
+    chunk.map(async (iid) => {
+      try {
+        const { data } = await gitlabRest<GitLabMergeRequest>({
+          host: repo.host,
+          path: `/projects/${encodeProjectId(repo)}/merge_requests/${iid}`,
+          ...(fresh ? { fresh: true } : {}),
+        });
+        result.set(iid, {
+          pr: mergeRequestToForgePR(data, repo.host),
+          ciStatus: ciStatusFromPipeline(data.head_pipeline?.status, data.head_pipeline) ?? null,
+        });
+      } catch (err) {
+        if (err instanceof GitLabApiError && err.status === 404) result.set(iid, null);
+      }
+    })
+  );
+  return result;
 }
 
 async function fetchMergeRequestChunk(
   repo: RepoRef,
-  chunk: number[]
+  chunk: number[],
+  fresh: boolean
 ): Promise<Map<number, MergeRequestLookup | null>> {
+  const host = repo.host.toLowerCase();
+  if (restOnlyBatchHosts.has(host)) return fetchMergeRequestsOverRest(repo, chunk, fresh);
   const result = new Map<number, MergeRequestLookup | null>();
+  const epoch = cacheEpoch();
   let response: MergeRequestsResponse;
   try {
     response = await gitlabGraphQL<MergeRequestsResponse>(repo.host, IID_BATCH_QUERY, {
@@ -516,8 +571,9 @@ async function fetchMergeRequestChunk(
       first: chunk.length,
     });
   } catch (err) {
-    if (isUnservableBatchQuery(err)) throw err;
-    return result;
+    if (!isUnservableBatchQuery(err)) return result;
+    if (epoch === cacheGeneration) restOnlyBatchHosts.add(host);
+    return fetchMergeRequestsOverRest(repo, chunk, fresh);
   }
   const connection = response.project?.mergeRequests;
   const nodes = connection?.nodes;
@@ -538,8 +594,9 @@ async function fetchMergeRequestChunk(
  * {@link GRAPHQL_IID_CHUNK_SIZE} rather than one REST read per MR — and the
  * same read answers both the PR and its CI, which REST fetched separately. A
  * present key is authoritative; an omitted one didn't get an answer this time.
- * `fresh` skips the short cache (never an in-flight read: one already running
- * started after whatever the caller last saw).
+ * `fresh` skips both the short cache and any read already in flight, which may
+ * have started before the caller's last observation. Chunks run together so a
+ * large set answers within one request's time.
  */
 async function lookupMergeRequests(
   repo: RepoRef,
@@ -560,21 +617,26 @@ async function lookupMergeRequests(
     else result.set(iid, cached);
   }
 
+  const flights: Array<Promise<Map<number, MergeRequestLookup | null>>> = [];
   for (let start = 0; start < missing.length; start += GRAPHQL_IID_CHUNK_SIZE) {
     const chunk = missing.slice(start, start + GRAPHQL_IID_CHUNK_SIZE);
     const flightKey = `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${chunk.join(",")}`;
-    let flight = mergeRequestFlights.get(flightKey);
-    if (!flight) {
-      const started: Promise<Map<number, MergeRequestLookup | null>> = fetchMergeRequestChunk(
-        repo,
-        chunk
-      ).finally(() => {
-        if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
-      });
-      mergeRequestFlights.set(flightKey, started);
-      flight = started;
+    const pending = fresh ? undefined : mergeRequestFlights.get(flightKey);
+    if (pending) {
+      flights.push(pending);
+      continue;
     }
-    const answered = await flight;
+    const started: Promise<Map<number, MergeRequestLookup | null>> = fetchMergeRequestChunk(
+      repo,
+      chunk,
+      fresh
+    ).finally(() => {
+      if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
+    });
+    mergeRequestFlights.set(flightKey, started);
+    flights.push(started);
+  }
+  for (const answered of await Promise.all(flights)) {
     for (const [iid, lookup] of answered) {
       result.set(iid, lookup);
       cacheSet(mergeRequestCache, mergeRequestKey(repo, iid), lookup, epoch);
