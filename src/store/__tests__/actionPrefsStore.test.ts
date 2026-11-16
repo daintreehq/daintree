@@ -166,16 +166,26 @@ describe("actionPrefsStore persistence (#17026)", () => {
 
   it("follows a pin still being written at hydration with the restored list", async () => {
     const { store, setState } = await freshStore();
-    let release!: () => void;
-    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const pending: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => pending.push(resolve));
+    setState.mockImplementationOnce(hold).mockImplementationOnce(hold);
 
-    // A pin made before hydration landed is still being written.
+    try {
+      // A pin made before hydration landed is still being written.
+      store.getState().pinAction("early");
+      await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+      store.getState().hydrateActionPrefs({ pinnedIds: ["a.one"], hiddenIds: ["x.one"] });
+
+      await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+      expect(setState).toHaveBeenLastCalledWith({ actionPinnedIds: ["a.one"] });
+    } finally {
+      // Main acknowledges in the order it received them.
+      for (const settle of pending.splice(0)) settle();
+    }
+
+    // The baseline settled on the restored list, so re-pinning the earlier id sends.
     store.getState().pinAction("early");
-    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
-    store.getState().hydrateActionPrefs({ pinnedIds: ["a.one"], hiddenIds: ["x.one"] });
-
-    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
-    expect(setState).toHaveBeenLastCalledWith({ actionPinnedIds: ["a.one"] });
-    release();
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(3));
+    expect(setState).toHaveBeenLastCalledWith({ actionPinnedIds: ["a.one", "early"] });
   });
 });

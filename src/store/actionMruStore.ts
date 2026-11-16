@@ -32,17 +32,14 @@ export const useActionMruStore = create<ActionMruSlice>()((set, get, store) => {
         hydrating = false;
       }
       const hydrated = toUsageList(get());
-      if (inFlight) {
-        // A use recorded before hydration landed is still being written, and
-        // would otherwise leave disk holding that instead of what was restored.
-        queued = hydrated;
-      } else if (list.every(hasUsesArray)) {
-        // A current-shape list hydrates to itself minus aged-out uses; writing
-        // that pruning back would bring the per-mount rewrite straight back.
+      // A current-shape list hydrates to itself minus aged-out uses; writing
+      // that pruning back would bring the per-mount rewrite straight back. It is
+      // still written when a use recorded before hydration landed is mid-write
+      // (that write would leave disk behind), or when it held legacy entries,
+      // whose synthetic timestamps are rebuilt every load and never decay.
+      if (!inFlight && list.every(hasUsesArray)) {
         lastPersisted = JSON.stringify(hydrated);
       } else {
-        // Legacy entries get synthetic timestamps rebuilt on every load and
-        // never decay until written once in the current shape.
         persist(hydrated);
       }
     },
@@ -62,18 +59,20 @@ function flush(list: ActionUsageEntry[]): void {
       if (queued !== null) {
         const next = queued;
         queued = null;
-        flush(next);
+        persist(next);
       }
     });
 }
 
 function persist(list: ActionUsageEntry[]): void {
-  if (JSON.stringify(list) === lastPersisted) return;
-
+  // Queued before comparing: the settled value isn't where disk is heading, so
+  // a list matching it must still replace an older queued snapshot.
   if (inFlight) {
     queued = list;
     return;
   }
+
+  if (JSON.stringify(list) === lastPersisted) return;
 
   flush(list);
 }

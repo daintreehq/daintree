@@ -219,4 +219,21 @@ describe("actionMruStore persistence (#17026)", () => {
       actionMruList: [{ id: "kept", uses: [NOW - DAY] }],
     });
   });
+
+  it("lets a change back to the settled list replace an older queued snapshot", async () => {
+    const { store, setState } = await freshStore();
+    let release!: () => void;
+    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+
+    store.getState().hydrateActionMru([]);
+    store.getState().recordActionMru("early");
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+    store.getState().hydrateActionMru([{ id: "kept", uses: [NOW - DAY] }]);
+    // Back to what disk held before the pending write: still has to land last.
+    store.getState().clearActionMru();
+    release();
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+    expect(setState).toHaveBeenLastCalledWith({ actionMruList: [] });
+  });
 });
