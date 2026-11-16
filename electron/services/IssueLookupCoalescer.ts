@@ -46,7 +46,7 @@ export class IssueLookupCoalescer {
   private readonly entries = new Map<string, Entry>();
   private epoch = 0;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   /**
    * Bumped by {@link clear}. A lookup that started before it is never joined

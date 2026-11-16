@@ -885,6 +885,245 @@ describe("getCIStatus", () => {
   });
 });
 
+function mrNode(iid: number, pipeline: { status: string } | null = { status: "SUCCESS" }) {
+  return {
+    iid: String(iid),
+    title: `MR ${iid}`,
+    state: "opened",
+    sourceBranch: `feature/${iid}`,
+    targetBranch: "main",
+    webUrl: `https://gitlab.com/group/project/-/merge_requests/${iid}`,
+    createdAt: "2026-07-02T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    headPipeline: pipeline,
+  };
+}
+
+function graphqlMRs(nodes: unknown[], hasNextPage = false) {
+  return jsonResponse({
+    data: { project: { mergeRequests: { pageInfo: { hasNextPage }, nodes } } },
+  });
+}
+
+function deferredFetch() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((res) => (resolve = res));
+  return { promise, resolve };
+}
+
+describe("batchLookups", () => {
+  const batch = gitlabForgeProvider.batchLookups!;
+
+  it("reads many MRs in one query and confirms the missing ones as null", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3), mrNode(9)]));
+
+    const result = await batch.findPRsByNumbers!(REPO, [9, 3, 3, 4, -1]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    const body = requestBody(fetchMock().mock.calls[0]) as { variables: { iids: string[] } };
+    expect(body.variables.iids).toEqual(["3", "4", "9"]);
+    expect(result.get(3)?.title).toBe("MR 3");
+    expect(result.get(9)?.headRef).toBe("feature/9");
+    expect(result.has(4)).toBe(true);
+    expect(result.get(4)).toBeNull();
+    expect(result.has(-1)).toBe(false);
+  });
+
+  it("answers the CI read that follows from the same query", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3, { status: "RUNNING" }), mrNode(5, null)]));
+
+    await batch.findPRsByNumbers!(REPO, [3, 5, 6], { fresh: true });
+    const statuses = await batch.getCIStatuses!(REPO, [3, 5, 6]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    expect(statuses.get(3)).toMatchObject({ state: "pending", total: 1, pending: 1 });
+    // No head pipeline and no such MR are both confirmed "no CI".
+    expect(statuses.has(5)).toBe(true);
+    expect(statuses.get(5)).toBeNull();
+    expect(statuses.get(6)).toBeNull();
+  });
+
+  it("re-reads on a fresh request and once the short cache lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock().mockImplementation(async () => graphqlMRs([mrNode(3)]));
+      await batch.getCIStatuses!(REPO, [3]);
+      await batch.findPRsByNumbers!(REPO, [3]);
+      expect(fetchMock()).toHaveBeenCalledTimes(1);
+
+      await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      await batch.getCIStatuses!(REPO, [3]);
+      expect(fetchMock()).toHaveBeenCalledTimes(3);
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
+  it("splits large sets into chunks", async () => {
+    fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
+      const { variables } = JSON.parse(String(init.body)) as { variables: { iids: string[] } };
+      return graphqlMRs(variables.iids.map((iid) => mrNode(Number(iid))));
+    });
+    const numbers = Array.from({ length: 45 }, (_, i) => i + 1);
+
+    const result = await batch.findPRsByNumbers!(REPO, numbers);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+    expect(result.size).toBe(45);
+  });
+
+  it("omits MRs a throttled or failed query didn't answer", async () => {
+    fetchMock().mockResolvedValue(jsonResponse({ message: "slow down" }, { status: 429 }));
+    expect((await batch.findPRsByNumbers!(REPO, [3])).size).toBe(0);
+    fetchMock().mockRejectedValue(new TypeError("fetch failed"));
+    expect((await batch.getCIStatuses!(REPO, [3])).size).toBe(0);
+    fetchMock().mockResolvedValue(jsonResponse({ data: { project: null } }));
+    expect((await batch.findPRsByNumbers!(REPO, [3])).size).toBe(0);
+  });
+
+  it("omits MRs a truncated window didn't return", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3)], true));
+    const result = await batch.findPRsByNumbers!(REPO, [3, 4]);
+    expect(result.get(3)?.number).toBe(3);
+    expect(result.has(4)).toBe(false);
+  });
+
+  // An instance whose schema rejects the query would otherwise never answer:
+  // throwing hands the numbers to the host's per-MR REST reads.
+  it("throws when the server can't serve the query at all", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({
+        errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+      })
+    );
+    await expect(batch.findPRsByNumbers!(REPO, [3])).rejects.toThrow(/detailedMergeStatus/);
+    await expect(batch.getCIStatuses!(REPO, [3])).rejects.toThrow(/detailedMergeStatus/);
+  });
+
+  it("drops a batch answer that lands after an invalidation", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const stale = batch.findPRsByNumbers!(REPO, [3]);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    clearGitLabCaches();
+    pending.resolve(graphqlMRs([mrNode(3)]));
+    await stale;
+
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3)]));
+    await batch.getCIStatuses!(REPO, [3]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("in-flight read sharing", () => {
+  it("sends one request for an MR read and a CI read of the same MR", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValue(pending.promise);
+
+    const pr = gitlabForgeProvider.getPR(REPO, 3);
+    const ci = gitlabForgeProvider.getCIStatus(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    pending.resolve(jsonResponse({ iid: 3, state: "opened", head_pipeline: { status: "failed" } }));
+
+    expect((await pr)?.number).toBe(3);
+    expect((await ci)?.state).toBe("failure");
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the toolbar's stats and an open first-page list share their reads", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse([], { headers: { "x-total": "0", "x-next-page": "" } })
+    );
+
+    await Promise.all([
+      gitlabForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: false }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listPRs(REPO, { state: "open" }),
+    ]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps differently filtered reads apart", async () => {
+    fetchMock().mockImplementation(async () => jsonResponse([]));
+    await Promise.all([
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "closed" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open", search: "bug" }),
+    ]);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends a bypassCache list on its own", async () => {
+    fetchMock().mockImplementation(async () => jsonResponse([]));
+    await Promise.all([
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open", bypassCache: true }),
+    ]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts a new read once the shared one settles, including after a failure", async () => {
+    fetchMock().mockResolvedValueOnce(jsonResponse({ message: "boom" }, { status: 500 }));
+    await expect(gitlabForgeProvider.getPR(REPO, 3)).rejects.toThrow();
+    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "opened" }));
+    await gitlabForgeProvider.getPR(REPO, 3);
+    await gitlabForgeProvider.getPR(REPO, 3);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("never shares a write", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({ iid: 3, state: "opened", notes: [], body: "hi", id: 1 })
+    );
+    await Promise.all([
+      gitlabForgeProvider.commentOnPR(REPO, 3, "hi"),
+      gitlabForgeProvider.commentOnPR(REPO, 3, "hi"),
+    ]);
+    const posts = fetchMock().mock.calls.filter(
+      (call) => (call[1] as RequestInit | undefined)?.method === "POST"
+    );
+    expect(posts).toHaveLength(2);
+  });
+
+  it("doesn't let a read that started before an invalidation answer a later caller", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const before = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    clearGitLabCaches();
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "opened", title: "after" }));
+    const after = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    pending.resolve(jsonResponse({ iid: 3, state: "opened", title: "before" }));
+
+    expect((await before)?.title).toBe("before");
+    expect((await after)?.title).toBe("after");
+  });
+
+  it("doesn't share a read across a credential change", async () => {
+    await connectAs("https://gitlab.com", "glpat-first");
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const first = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    await connectAs("https://gitlab.com", "glpat-second");
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "opened" }));
+    const second = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    expect(requestHeaders(fetchMock().mock.calls[1]).Authorization).toBe("Bearer glpat-second");
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await Promise.all([first, second]);
+  });
+});
+
 describe("mutations", () => {
   it("creates an MR with a Draft: prefix for draft input", async () => {
     fetchMock().mockResolvedValue(
