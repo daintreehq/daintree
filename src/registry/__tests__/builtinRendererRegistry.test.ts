@@ -262,12 +262,13 @@ describe("builtinRendererRegistry", () => {
       expect(preload).not.toHaveBeenCalled();
     });
 
-    it("is a no-op for an eager view and for an empty slot ref", () => {
+    it("is a quiet no-op for an eager view and for an empty slot ref", () => {
       registerBuiltinView("github.providerIcon", StubComponent);
-      expect(() => {
-        preloadBuiltinView("github.providerIcon");
-        preloadBuiltinView("");
-      }).not.toThrow();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      preloadBuiltinView("github.providerIcon");
+      // The documented "no slot" sentinel: a provider with no stats dropdown.
+      preloadBuiltinView("");
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it("swallows a failed load, leaving it to the render that needs the view", async () => {

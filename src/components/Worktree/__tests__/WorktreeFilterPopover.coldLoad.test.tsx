@@ -1,36 +1,47 @@
 // @vitest-environment jsdom
-// Its own file so its module cache starts cold: the popover's body loads on the
-// trigger's hover or first open and no sooner (#17034).
+// Its own file so its module cache starts cold: the popover's sections load on
+// the trigger's hover, focus or open and no sooner (#17034).
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
+// Every import of the sections waits on the next deferred the test queues.
 const h = vi.hoisted(() => {
-  let release: () => void = () => {};
-  const chunk = new Promise<void>((resolve) => (release = resolve));
-  return { chunk, release: () => release(), imported: vi.fn(), failNext: false };
+  const queue: Array<{ promise: Promise<void>; resolve: () => void; reject: () => void }> = [];
+  return {
+    imported: vi.fn(),
+    queue,
+    next() {
+      let resolve!: () => void;
+      let reject!: () => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = () => rej(new Error("chunk 404"));
+      });
+      const deferred = { promise, resolve, reject };
+      queue.push(deferred);
+      return deferred;
+    },
+  };
 });
 
-// Held back until the test lets the chunk land; `failNext` rejects one import.
 vi.mock("../WorktreeFilterPopoverContent", async () => {
   h.imported();
-  if (h.failNext) {
-    h.failNext = false;
-    throw new Error("chunk 404");
-  }
-  await h.chunk;
-  const { PopoverContent } = await import("@/components/ui/popover");
+  const deferred = h.queue.shift();
+  if (!deferred) throw new Error("unexpected import");
+  await deferred.promise;
   return {
     WorktreeFilterPopoverContent: ({ filterCount }: { filterCount: number }) => (
-      <PopoverContent data-testid="filter-body">
-        <button type="button">{`${filterCount} in body`}</button>
-      </PopoverContent>
+      <button type="button">{`${filterCount} in body`}</button>
     ),
   };
 });
 
 const { WorktreeFilterPopover } = await import("../WorktreeFilterPopover");
+
+const popover = () =>
+  document.querySelector<HTMLElement>('[data-testid="worktree-filter-popover"]');
 
 async function flush() {
   await act(async () => {
@@ -48,7 +59,7 @@ afterEach(() => {
 });
 
 describe("worktree filter popover, cold (#17034)", () => {
-  it("counts from the trigger alone, loads on hover and open, and retries a failed load", async () => {
+  it("counts from the trigger alone, stays dismissable while loading, and retries a failed load", async () => {
     useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
     useWorktreeFilterStore.getState().toggleStatusFilter("stale");
 
@@ -57,38 +68,73 @@ describe("worktree filter popover, cold (#17034)", () => {
     // A sidebar that has only been drawn loads nothing.
     expect(h.imported).not.toHaveBeenCalled();
 
-    // A hover warms the chunk; its failure is the open's to report, not the hover's.
-    h.failNext = true;
+    // A hover starts the load; opening joins it, and the content is up at once.
+    const first = h.next();
     await act(async () => {
       fireEvent.pointerEnter(trigger);
     });
-    await flush();
     expect(h.imported).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("worktree-filter-popover")).toBeNull();
-
-    h.failNext = true;
     await act(async () => {
       fireEvent.click(trigger);
     });
-    await flush();
-    expect(h.imported).toHaveBeenCalledTimes(2);
-    const failure = screen.getByTestId("worktree-filter-popover");
-    expect(failure.textContent).toContain("Couldn't load filters");
+    expect(h.imported).toHaveBeenCalledTimes(1);
+    expect(popover()?.querySelector('[aria-busy="true"]')).not.toBeNull();
 
-    // Retry mounts a fresh loader, which issues the import again.
+    // The loading content is a real dismissable layer.
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+    await flush();
+    expect(popover()).toBeNull();
+    // A load that settles after the dismissal draws nothing.
+    await act(async () => {
+      first.reject();
+    });
+    await flush();
+    expect(popover()).toBeNull();
+
+    // The next open asks again, and reports the failure inside the popover.
+    const second = h.next();
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    expect(h.imported).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      second.reject();
+    });
+    await flush();
+    expect(popover()?.textContent).toContain("Couldn't load filters");
+
+    // Retry issues the import again, in the same content.
+    const content = popover();
+    const third = h.next();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
     expect(h.imported).toHaveBeenCalledTimes(3);
-    expect(screen.queryByTestId("filter-body")).toBeNull();
+    expect(popover()).toBe(content);
+    expect(content?.querySelector('[aria-busy="true"]')).not.toBeNull();
 
     await act(async () => {
-      h.release();
+      third.resolve();
     });
     await flush();
-    const body = screen.getByTestId("filter-body");
+    const body = screen.getByRole("button", { name: "2 in body" });
     // The trigger's count is the body's count: one number from one snapshot.
-    expect(body.textContent).toBe("2 in body");
-    expect(body.contains(document.activeElement)).toBe(true);
+    expect(popover()).toBe(content);
+    // Sections that land late take the focus a warm open would have given them.
+    expect(document.activeElement).toBe(body);
+
+    // Warm: a reopen draws the sections in the content's first commit.
+    await act(async () => {
+      fireEvent.keyDown(body, { key: "Escape" });
+    });
+    await flush();
+    expect(popover()).toBeNull();
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    expect(screen.getByRole("button", { name: "2 in body" })).toBeTruthy();
+    expect(h.imported).toHaveBeenCalledTimes(3);
   });
 });

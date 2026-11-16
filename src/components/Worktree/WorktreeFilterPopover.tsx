@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { lazyWithPreload, usePreloadedComponent } from "@/lib/lazyWithPreload";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
@@ -42,9 +42,11 @@ interface WorktreeFilterPopoverProps {
 }
 
 /**
- * The trigger and its count. The body — every section, chip and sort control —
- * is its own chunk, loaded on the trigger's first hover, focus or open, and
- * kept mounted from then on (#17034).
+ * The trigger, its count and the popover's content shell. The sections inside
+ * — every chip and sort control — are their own chunk, loaded on the trigger's
+ * first hover, focus or open (#17034). The content is one element across the
+ * load, so a dismissal while it loads works, and nothing swaps it out from
+ * under Radix's focus handling.
  */
 export function WorktreeFilterPopover({
   hideSearchInput = false,
@@ -68,16 +70,73 @@ export function WorktreeFilterPopover({
       state.activityFilters.size +
       state.devServerFilters.size
   );
-  const hasQuery = useWorktreeFilterStore((state) => state.query.trim().length > 0);
+  const query = useWorktreeFilterStore((state) => state.query);
+  const setQuery = useWorktreeFilterStore((state) => state.setQuery);
+  const clearFacetFilters = useWorktreeFilterStore((state) => state.clearFacetFilters);
+  const clearAll = useWorktreeFilterStore((state) => state.clearAll);
+  const hasQuery = query.trim().length > 0;
   // Beside an external search field the query is that field's filter, not this
   // popover's, so it stays out of the count.
   const filterCount = hideSearchInput ? facetFilterCount : facetFilterCount + (hasQuery ? 1 : 0);
   const showBadge = filterCount > 0;
   const isField = appearance === "field";
 
-  // Latched rather than tied to `isOpen`: Radix keeps the content through its
-  // exit animation, and the body holds the popover's own typed query.
-  const bodyMounted = useKeepMounted(isOpen);
+  const [localQuery, setLocalQuery] = useState("");
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLocalQuery(query);
+  }, [query]);
+
+  const handleQueryChange = useCallback(
+    (value: string) => {
+      setLocalQuery(value);
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+      debounceRef.current = setTimeout(() => {
+        setQuery(value);
+      }, 200);
+    },
+    [setQuery]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const clearQuery = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    setLocalQuery("");
+    setQuery("");
+  }, [setQuery]);
+
+  const handleClearAll = useCallback(() => {
+    // The footer (and this button) unmount the moment the last filter clears,
+    // so move focus onto the still-mounted popover content first — else
+    // it drops to document.body inside the open popover (issue #10315).
+    contentRef.current?.focus();
+    if (hideSearchInput) {
+      // The text belongs to the field beside the trigger, which has its own X
+      // and its own pending commit. Wiping it here, or cancelling that commit,
+      // would reach into a field this popover does not own.
+      clearFacetFilters();
+      return;
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    setLocalQuery("");
+    clearAll();
+  }, [hideSearchInput, clearFacetFilters, clearAll]);
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
@@ -125,34 +184,79 @@ export function WorktreeFilterPopover({
           )}
         </button>
       </PopoverTrigger>
-      {bodyMounted && (
+      {/* The footer is a sibling of the scroll container, not the last thing
+          inside it: with several sections open the only bulk escape from a
+          filtered list used to scroll out of sight. */}
+      <PopoverContent
+        ref={contentRef}
+        align="start"
+        className="flex w-72 max-h-[70vh] flex-col p-0"
+        data-testid="worktree-filter-popover"
+        onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}
+      >
         <FilterContentLoader
+          contentRef={contentRef}
           hideSearchInput={hideSearchInput}
           chipCounts={chipCounts}
           filterCount={filterCount}
+          localQuery={localQuery}
+          onQueryChange={handleQueryChange}
+          onClearQuery={clearQuery}
+          searchInputRef={searchInputRef}
+          onClearAll={handleClearAll}
         />
-      )}
+      </PopoverContent>
     </Popover>
   );
 }
 
-function FilterContentLoader(props: WorktreeFilterPopoverContentProps) {
-  // Bumped by Retry: a fresh loader mounts and issues the import again.
+/** What a warm open focuses first: the search box, or the first chip without it. */
+const FIRST_CONTROL = 'input:not([disabled]), button:not([disabled]), [tabindex="0"]';
+
+interface FilterContentLoaderProps extends WorktreeFilterPopoverContentProps {
+  contentRef: React.RefObject<HTMLDivElement | null>;
+}
+
+function FilterContentLoader({ contentRef, ...props }: FilterContentLoaderProps) {
+  // Bumped by Retry: a fresh attempt mounts and issues the import again.
   const [attempt, setAttempt] = useState(0);
-  return <FilterContentAttempt key={attempt} {...props} onRetry={() => setAttempt((n) => n + 1)} />;
+  return (
+    <FilterContentAttempt
+      key={attempt}
+      contentRef={contentRef}
+      {...props}
+      onRetry={() => {
+        // Retry unmounts with the failure it answers; park focus on the content
+        // rather than let it drop to the document.
+        contentRef.current?.focus();
+        setAttempt((n) => n + 1);
+      }}
+    />
+  );
 }
 
 function FilterContentAttempt({
+  contentRef,
   onRetry,
   ...props
-}: WorktreeFilterPopoverContentProps & { onRetry: () => void }) {
+}: FilterContentLoaderProps & { onRetry: () => void }) {
+  // Decided as this attempt mounts: sections that land after the content opened
+  // find Radix's open focus parked on the content itself.
+  const [arrivedLate] = useState(() => !PreloadableFilterContent.isLoaded());
   const load = usePreloadedComponent(PreloadableFilterContent);
-  if (load.status === "ready") return <PreloadableFilterContent {...props} />;
-  // A local chunk read, well inside the 400ms gate: nothing opens until it
-  // lands, and Radix focuses the content when it mounts.
-  if (load.status === "loading") return null;
+  const ready = load.status === "ready";
+  useLayoutEffect(() => {
+    if (!ready || !arrivedLate) return;
+    const content = contentRef.current;
+    if (!content || document.activeElement !== content) return;
+    content.querySelector<HTMLElement>(FIRST_CONTROL)?.focus({ preventScroll: true });
+  }, [ready, arrivedLate, contentRef]);
+
+  if (ready) return <PreloadableFilterContent {...props} />;
+  // A local chunk read, well inside the 400ms gate: the content's box, empty.
+  if (load.status === "loading") return <div aria-busy="true" className="h-24" />;
   return (
-    <PopoverContent align="start" className="w-72 p-3" data-testid="worktree-filter-popover">
+    <div className="p-3">
       <Callout
         severity="error"
         size="compact"
@@ -163,6 +267,6 @@ function FilterContentAttempt({
           </Button>
         }
       />
-    </PopoverContent>
+    </div>
   );
 }

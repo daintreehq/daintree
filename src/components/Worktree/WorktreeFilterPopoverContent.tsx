@@ -4,8 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { PopoverContent } from "@/components/ui/popover";
-import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
+import { SearchField } from "@/components/ui/SearchField";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { FilterChip } from "@/components/ui/FilterChip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -327,20 +326,33 @@ export interface WorktreeFilterPopoverContentProps {
    * trigger showing 3.
    */
   filterCount: number;
+  /**
+   * The popover's own search text and its debounced commit live with the
+   * trigger, which outlives this body: Radix unmounts the body with the
+   * content on every close, and a commit still pending then must not be lost.
+   */
+  localQuery: string;
+  onQueryChange: (value: string) => void;
+  onClearQuery: () => void;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
+  onClearAll: () => void;
 }
 
 /**
- * The filter popover's body, loaded on the trigger's first hover, focus or open
- * so the sidebar's first render carries only the trigger (#17034).
+ * The filter popover's sections, loaded on the trigger's first hover, focus or
+ * open so the sidebar's first render carries only the trigger (#17034). Drawn
+ * inside the trigger's own popover content, which outlives the load.
  */
 export function WorktreeFilterPopoverContent({
   hideSearchInput,
   chipCounts,
   filterCount,
+  localQuery,
+  onQueryChange,
+  onClearQuery,
+  searchInputRef,
+  onClearAll,
 }: WorktreeFilterPopoverContentProps) {
-  const [localQuery, setLocalQuery] = useState("");
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const groupByTypeId = useId();
 
   const {
@@ -354,7 +366,6 @@ export function WorktreeFilterPopoverContent({
     hasAgentFilter,
     activityFilters,
     devServerFilters,
-    setQuery,
     setOrderBy,
     setGroupByType,
     toggleStatusFilter,
@@ -370,8 +381,6 @@ export function WorktreeFilterPopoverContent({
     clearSessionFilters,
     clearActivityFilters,
     clearDevServerFilters,
-    clearFacetFilters,
-    clearAll,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -384,7 +393,6 @@ export function WorktreeFilterPopoverContent({
       hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
-      setQuery: state.setQuery,
       setOrderBy: state.setOrderBy,
       setGroupByType: state.setGroupByType,
       toggleStatusFilter: state.toggleStatusFilter,
@@ -400,65 +408,10 @@ export function WorktreeFilterPopoverContent({
       clearSessionFilters: state.clearSessionFilters,
       clearActivityFilters: state.clearActivityFilters,
       clearDevServerFilters: state.clearDevServerFilters,
-      clearFacetFilters: state.clearFacetFilters,
-      clearAll: state.clearAll,
     }))
   );
 
   const hasQuery = query.trim().length > 0;
-
-  useEffect(() => {
-    setLocalQuery(query);
-  }, [query]);
-
-  const handleQueryChange = useCallback(
-    (value: string) => {
-      setLocalQuery(value);
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-      debounceRef.current = setTimeout(() => {
-        setQuery(value);
-      }, 200);
-    },
-    [setQuery]
-  );
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const clearQuery = useCallback(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    setLocalQuery("");
-    setQuery("");
-  }, [setQuery]);
-
-  const handleClearAll = useCallback(() => {
-    // The footer (and this button) unmount the moment the last filter clears,
-    // so move focus onto the still-mounted popover content first — else
-    // it drops to document.body inside the open popover (issue #10315).
-    contentRef.current?.focus();
-    if (hideSearchInput) {
-      // The text belongs to the field beside the trigger, which has its own X
-      // and its own pending commit. Wiping it here, or cancelling that commit,
-      // would reach into a field this popover does not own.
-      clearFacetFilters();
-      return;
-    }
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    setLocalQuery("");
-    clearAll();
-  }, [hideSearchInput, clearFacetFilters, clearAll]);
 
   // Sort options are a real radio group, so they take one tab stop and the
   // arrows move (and select) within it — ARIA APG. Exposing `role="radio"`
@@ -517,13 +470,7 @@ export function WorktreeFilterPopoverContent({
   // it: with several sections open the only bulk escape from a filtered list
   // used to scroll out of sight.
   return (
-    <PopoverContent
-      ref={contentRef}
-      align="start"
-      className="flex w-72 max-h-[70vh] flex-col p-0"
-      data-testid="worktree-filter-popover"
-      onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}
-    >
+    <>
       {/* Search */}
       {!hideSearchInput && (
         <div className="shrink-0 border-b border-divider p-3">
@@ -531,8 +478,8 @@ export function WorktreeFilterPopoverContent({
             size="compact"
             inputRef={searchInputRef}
             value={localQuery}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            onClear={clearQuery}
+            onChange={(e) => onQueryChange(e.target.value)}
+            onClear={onClearQuery}
             placeholder="Search worktrees…"
             aria-label="Search worktrees"
           />
@@ -703,11 +650,11 @@ export function WorktreeFilterPopoverContent({
       {/* Clear All */}
       {hasAnyFilter && (
         <div className="shrink-0 border-t border-divider p-3">
-          <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
+          <Button variant="subtle" size="xs" onClick={onClearAll} className="w-full">
             Clear all filters
           </Button>
         </div>
       )}
-    </PopoverContent>
+    </>
   );
 }

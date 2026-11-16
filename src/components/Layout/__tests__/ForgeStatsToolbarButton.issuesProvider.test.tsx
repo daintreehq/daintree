@@ -70,9 +70,10 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
 });
 
 // Only the code forge contributes a stats dropdown; the issues provider has none.
+const preloadBuiltinViewMock = vi.hoisted(() => vi.fn());
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? () => null : null),
-  preloadBuiltinView: () => {},
+  preloadBuiltinView: preloadBuiltinViewMock,
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
@@ -148,6 +149,7 @@ beforeEach(() => {
   mockListIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
   mockListPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
   vi.mocked(actionService.dispatch).mockClear();
+  preloadBuiltinViewMock.mockClear();
 });
 
 afterEach(() => {
@@ -181,6 +183,15 @@ describe("ForgeStatsToolbarButton — slotless issues provider", () => {
     fireEvent.pointerEnter(issuesButton(container), { pointerType: "mouse" });
     await settle();
     expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("warms each segment's own provider view: none for the slotless issues, the forge's for PRs", () => {
+    const { container } = render(<ForgeStatsToolbarButton currentProject={PROJECT} />);
+    fireEvent.pointerEnter(issuesButton(container), { pointerType: "mouse" });
+    fireEvent.focus(issuesButton(container));
+    expect(preloadBuiltinViewMock).not.toHaveBeenCalled();
+    fireEvent.pointerEnter(prsButton(container), { pointerType: "mouse" });
+    expect(preloadBuiltinViewMock.mock.calls).toEqual([["github.statsDropdown"]]);
   });
 
   it("keeps the code forge's PR dropdown and its prefetch", async () => {
