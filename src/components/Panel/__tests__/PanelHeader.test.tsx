@@ -1110,7 +1110,13 @@ describe("PanelHeader", () => {
         expect(finishMenuClose()).toBe(false);
         expect(picker()).toBeNull();
       };
-      const settle = () => act(async () => land());
+      // The chunk lands, and the task the opener waits on for the menu's focus
+      // return has run.
+      const settle = () =>
+        act(async () => {
+          land();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
 
       it("opens the picker once the chunk lands", async () => {
         pickCold();
@@ -1127,10 +1133,21 @@ describe("PanelHeader", () => {
 
       it("drops the pick when focus has gone elsewhere by then", async () => {
         pickCold();
+        await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
         const elsewhere = document.createElement("input");
         document.body.appendChild(elsewhere);
         onTestFinished(() => elsewhere.remove());
         elsewhere.focus();
+        await settle();
+        expect(picker()).toBeNull();
+      });
+
+      it("drops the pick when the header goes to another panel and back", async () => {
+        const { rerender } = render(<PanelHeader {...makeProps()} />);
+        fireEvent.click(findMenuButton("Move to worktree…")!);
+        expect(finishMenuClose()).toBe(false);
+        rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
+        rerender(<PanelHeader {...makeProps()} />);
         await settle();
         expect(picker()).toBeNull();
       });

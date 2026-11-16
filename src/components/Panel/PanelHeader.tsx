@@ -109,6 +109,7 @@ import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
+import { createDeferredOverlayOpener } from "@/lib/deferredOverlayOpen";
 import { LazyMoveToWorktreePicker as MoveToWorktreePicker } from "./lazyMoveToWorktreePicker";
 import {
   getRegisteredTourIdsSnapshot,
@@ -696,8 +697,10 @@ function PanelHeaderComponent({
   const handleMoveToWorktreeSelect = useCallback(() => {
     pendingMovePickerRef.current = id;
   }, [id]);
-  // Bumped by every menu opening, which cancels an overlay still loading.
-  const deferredOpenRef = useRef(0);
+  // A pick whose overlay is still loading; a menu opening or a different panel
+  // drops it.
+  const [deferredOpener] = useState(createDeferredOverlayOpener);
+  useEffect(() => deferredOpener.cancel, [deferredOpener, id]);
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
@@ -711,33 +714,7 @@ function PanelHeaderComponent({
     pendingMovePickerRef.current = null;
     pendingEmojiDialogRef.current = null;
     pendingMenuDispatchRef.current = null;
-    deferredOpenRef.current += 1;
-  };
-  // Opens a picked overlay whose chunk is still loading once it lands. The
-  // menu hands focus back to the button meanwhile; a later menu opening, or
-  // focus gone elsewhere by then, means the moment has passed.
-  const openWhenLoaded = (
-    component: { isLoaded: () => boolean; preload: () => Promise<unknown> },
-    event: Event,
-    open: () => void
-  ) => {
-    if (component.isLoaded()) {
-      event.preventDefault();
-      open();
-      return;
-    }
-    const token = ++deferredOpenRef.current;
-    component.preload().then(
-      () => {
-        if (deferredOpenRef.current !== token) return;
-        const active = document.activeElement;
-        if (active !== null && active !== document.body && active !== overflowButtonRef.current) {
-          return;
-        }
-        open();
-      },
-      () => {}
-    );
+    deferredOpener.cancel();
   };
   const handleOverflowMenuCloseAutoFocus = (event: Event) => {
     const pendingDispatch = pendingMenuDispatchRef.current;
@@ -758,7 +735,7 @@ function PanelHeaderComponent({
       if (pendingEmojiPanelId !== id) return;
       // The dialog focuses its own search field and hands focus back to the
       // button when it closes.
-      openWhenLoaded(PanelEmojiDialog, event, () => {
+      deferredOpener.open(PanelEmojiDialog, event, () => {
         setHasOpenedEmojiDialog(true);
         setEmojiDialogPanelId(id);
       });
@@ -769,7 +746,7 @@ function PanelHeaderComponent({
     if (pendingPanelId === null || pendingPanelId !== id) return;
     // The picker takes focus into its search field; returning it to the
     // button first would only flash a ring on the way.
-    openWhenLoaded(MoveToWorktreePicker, event, () => {
+    deferredOpener.open(MoveToWorktreePicker, event, () => {
       setHasOpenedMovePicker(true);
       setMovePickerPanelId(id);
     });

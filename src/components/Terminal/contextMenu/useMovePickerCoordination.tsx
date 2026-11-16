@@ -1,8 +1,9 @@
-import { Suspense, useCallback, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { LazyMoveToWorktreePicker } from "@/components/Panel/lazyMoveToWorktreePicker";
+import { createDeferredOverlayOpener } from "@/lib/deferredOverlayOpen";
 
 /** A zero-size point the picker hangs off, tracking the pane it sits in. */
 export interface MovePickerAnchor {
@@ -56,14 +57,15 @@ export function useMovePickerCoordination(
     pendingMovePickerRef.current = terminalId;
   }, [terminalId]);
 
-  // Bumped by every menu opening, so a picker still waiting on its chunk from
-  // an earlier pick never opens over a later one.
-  const deferredOpenRef = useRef(0);
+  // A pick whose picker is still loading; a menu opening or a different
+  // terminal drops it.
+  const [deferredOpener] = useState(createDeferredOverlayOpener);
+  useEffect(() => deferredOpener.cancel, [deferredOpener, terminalId]);
 
   const clearPendingMovePicker = useCallback(() => {
     pendingMovePickerRef.current = null;
-    deferredOpenRef.current += 1;
-  }, []);
+    deferredOpener.cancel();
+  }, [deferredOpener]);
 
   const captureMovePickerAnchor = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
@@ -122,41 +124,16 @@ export function useMovePickerCoordination(
       if (pendingPanelId === null || pendingPanelId !== terminalId) return false;
       const anchor = capturedMovePickerAnchorRef.current;
       if (!anchor?.contextElement.isConnected) return false;
-      const open = () => {
+      // The picker takes focus into its search field; handing it back to the
+      // pane first would only flash a ring on the way.
+      deferredOpener.open(LazyMoveToWorktreePicker, event, () => {
         setMovePickerAnchor(anchor);
         setHasOpenedMovePicker(true);
         setMovePickerPanelId(terminalId);
-      };
-      if (LazyMoveToWorktreePicker.isLoaded()) {
-        // The picker takes focus into its search field; handing it back to the
-        // pane first would only flash a ring on the way.
-        event.preventDefault();
-        open();
-        return true;
-      }
-      // Still loading: the menu hands focus back to the pane, and the picker
-      // opens once its chunk lands, unless focus has left the pane by then.
-      const token = ++deferredOpenRef.current;
-      LazyMoveToWorktreePicker.preload().then(
-        () => {
-          if (deferredOpenRef.current !== token || !anchor.contextElement.isConnected) return;
-          const active = document.activeElement;
-          const returnTarget = movePickerReturnFocusRef.current;
-          if (
-            active !== null &&
-            active !== document.body &&
-            active !== returnTarget &&
-            !anchor.contextElement.contains(active)
-          ) {
-            return;
-          }
-          open();
-        },
-        () => {}
-      );
+      });
       return true;
     },
-    [terminalId]
+    [deferredOpener, terminalId]
   );
 
   return {
