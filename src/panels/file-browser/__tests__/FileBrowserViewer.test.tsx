@@ -2032,6 +2032,31 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(enable).not.toHaveBeenCalled();
   });
 
+  it("judges the editor's byte ceiling by the bytes the read reported", async () => {
+    enabled = true;
+    __resetFileEditorRegistryForTests();
+    registerFileEditor({
+      id: "markdown",
+      pluginId,
+      slot: "test.editor",
+      extensions: ["md"],
+      maxBytes: 4,
+    });
+    // Three characters, but more bytes on disk than the editor takes.
+    readMock.mockResolvedValue({ content: "abc", byteLength: 5 });
+    const over = renderViewer("/repo/notes.md", { editorContext: context });
+    await waitFor(() =>
+      expect(usePluginRuntimeStore.getState().pluginMetaById.has(pluginId)).toBe(true)
+    );
+    expect(await screen.findByRole("radio", { name: "Source" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Edit" })).toBeNull();
+    over.unmount();
+
+    readMock.mockResolvedValue({ content: "# long decoded text\n", byteLength: 4 });
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
+  });
+
   it("removes the hint when the plugin is enabled from Preferences", async () => {
     renderViewer("/repo/notes.md", { editorContext: context });
     expect(await screen.findByTestId("file-editor-hint")).toBeTruthy();

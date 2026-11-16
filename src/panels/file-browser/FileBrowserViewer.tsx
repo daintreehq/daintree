@@ -113,6 +113,7 @@ import { FileContentContextMenu } from "@/components/FileViewer/FileContentConte
 import type { FileRowMenuController } from "@/hooks/useFileRowMenuItems";
 import { getFileTypeIcon } from "./fileTypeIcons";
 import { basename, join } from "@shared/utils/path";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 
 export interface FileBrowserViewerProps {
@@ -282,7 +283,7 @@ const EXTERNAL_ACTIONS = {
 type ViewerState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "text"; content: string }
+  | { status: "text"; content: string; byteLength: number | undefined }
   | { status: "html"; content: string; previewUrl: string | null }
   | { status: "svg"; markup: string | null }
   | { status: "image" }
@@ -398,8 +399,9 @@ export function FileBrowserViewer({
   const draftText = useFileDocumentDraftText(panelId);
   const wrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
+  // The read's own byte count, not a re-encoding of the whole text: see FilePane.
   const contentBytes = useMemo(
-    () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
+    () => (state.status === "text" ? (state.byteLength ?? utf8ByteLength(state.content)) : null),
     [state]
   );
   const editable =
@@ -723,7 +725,7 @@ export function FileBrowserViewer({
           });
           return;
         }
-        setState({ status: "text", content: result.content });
+        setState({ status: "text", content: result.content, byteLength: result.byteLength });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -1034,7 +1036,7 @@ export function FileBrowserViewer({
           <FileEditorBanner
             key={`${panelId}:${filePath}`}
             filePath={filePath}
-            content={state.content}
+            contentBytes={contentBytes ?? 0}
             onEdit={() => setExplicitRenderMode("edit")}
           />
         )}

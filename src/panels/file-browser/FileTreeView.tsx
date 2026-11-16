@@ -32,6 +32,7 @@ import {
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import { useHasFileDecorationProvider } from "@/store/pluginRuntimeStore";
 import {
   FileDecorationBadge,
   resolveFileDecoration,
@@ -155,6 +156,7 @@ const ROW_HEIGHT_PX = 24;
 // so a scroll frame doesn't change the requested set on every row it passes.
 const DECORATION_OVERSCAN_ROWS = 20;
 const DECORATION_CHUNK_ROWS = 20;
+const NO_PATHS: string[] = [];
 
 /**
  * Virtualized directory tree.
@@ -236,8 +238,15 @@ export function FileTreeView({
     end: -1,
   });
 
+  // The scope names the root the rows are relative to, the same contract the
+  // worktree file list uses, so one provider decorates both surfaces. Which
+  // plugins answer is decided in main from this view's project; whether to ask
+  // at all is decided here, so a tree no plugin decorates does no per-scroll
+  // path work and sends no pull.
+  const decorationScope = basePath === "" ? "" : `worktree-files:${basePath}`;
+  const decorationsEnabled = useHasFileDecorationProvider(decorationScope);
   const decorationPaths = useMemo(() => {
-    if (renderedRange.end < renderedRange.start) return [];
+    if (!decorationsEnabled || renderedRange.end < renderedRange.start) return NO_PATHS;
     const first =
       Math.floor(
         Math.max(0, renderedRange.start - DECORATION_OVERSCAN_ROWS) / DECORATION_CHUNK_ROWS
@@ -246,15 +255,8 @@ export function FileTreeView({
       Math.ceil((renderedRange.end + DECORATION_OVERSCAN_ROWS + 1) / DECORATION_CHUNK_ROWS) *
       DECORATION_CHUNK_ROWS;
     return rows.slice(first, last).map((row) => row.path);
-  }, [rows, renderedRange]);
-  // The scope names the root the rows are relative to, the same contract the
-  // worktree file list uses, so one provider decorates both surfaces. Which
-  // plugins answer is decided in main from this view's project.
-  const decorations = useFileTreeDecorations(
-    `worktree-files:${basePath}`,
-    decorationPaths,
-    basePath !== ""
-  );
+  }, [decorationsEnabled, rows, renderedRange]);
+  const decorations = useFileTreeDecorations(decorationScope, decorationPaths, decorationsEnabled);
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),

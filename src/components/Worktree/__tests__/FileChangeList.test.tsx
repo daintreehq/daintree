@@ -103,12 +103,22 @@ const { decorationsRef, scopeRef, pathsRef } = vi.hoisted(() => ({
   scopeRef: { current: "" },
   pathsRef: { current: [] as string[] },
 }));
+const { enabledRef, hasProviderRef } = vi.hoisted(() => ({
+  enabledRef: { current: undefined as boolean | undefined },
+  hasProviderRef: { current: true },
+}));
 vi.mock("@/hooks/useFileTreeDecorations", () => ({
-  useFileTreeDecorations: (scope: string, paths: string[]) => {
+  useFileTreeDecorations: (scope: string, paths: string[], enabled?: boolean) => {
     scopeRef.current = scope;
     pathsRef.current = paths;
+    enabledRef.current = enabled;
     return decorationsRef.current;
   },
+}));
+vi.mock("@/store/pluginRuntimeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/pluginRuntimeStore")>()),
+  useHasFileDecorationProvider: (scope: string) =>
+    hasProviderRef.current && scope.startsWith("worktree-files:"),
 }));
 
 import { FileChangeList, type FileChangeListHandle } from "../FileChangeList";
@@ -715,6 +725,8 @@ describe("FileChangeList — plugin file decorations", () => {
     decorationsRef.current = {};
     scopeRef.current = "";
     pathsRef.current = [];
+    enabledRef.current = undefined;
+    hasProviderRef.current = true;
   });
 
   afterEach(() => {
@@ -727,6 +739,16 @@ describe("FileChangeList — plugin file decorations", () => {
     );
     expect(scopeRef.current).toBe("worktree-files:/repo");
     expect(new Set(pathsRef.current)).toEqual(new Set(["/repo/src/a.ts", "/repo/src/b.ts"]));
+    expect(enabledRef.current).toBe(true);
+  });
+
+  it("asks for nothing while no plugin declares a provider for the scope", () => {
+    hasProviderRef.current = false;
+    render(
+      <FileChangeList changes={[file("/repo/src/a.ts"), file("/repo/src/b.ts")]} rootPath={ROOT} />
+    );
+    expect(enabledRef.current).toBe(false);
+    expect(pathsRef.current).toEqual([]);
   });
 
   it("renders a badge for a decorated path and nothing for an undecorated one", () => {

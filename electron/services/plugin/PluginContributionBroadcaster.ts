@@ -342,6 +342,8 @@ export class PluginContributionBroadcaster {
    */
   private heldDrains: Array<() => void> | null = null;
   private holdDepth = 0;
+  private decorationScopesAnnouncementPending = false;
+  private readonly pendingDecorationScopes = new Set<string>();
 
   constructor(deps: PluginContributionBroadcasterDeps) {
     this.deps = deps;
@@ -433,10 +435,36 @@ export class PluginContributionBroadcaster {
     // Decorations are pulled, not pushed, so each view re-pulls with its own
     // sender context. Every declared scope rather than only bound ones: a
     // plugin shown again may not have activated in this session yet.
-    const scopes = new Set(
+    this.announceDecorationScopes(
       getRegisteredFileDecorationProviders().flatMap(({ contribution }) => contribution.scopes)
     );
-    for (const scope of scopes) {
+  }
+
+  /**
+   * Announce a loaded plugin's declared decoration scopes. A path list asks for
+   * decorations only while a provider for its scope is known, and a plugin that
+   * contributes nothing else (no actions, no panels) would otherwise load
+   * without any signal the renderer listens to. Coalesced per tick and parked
+   * while broadcasts are held, so a startup scan announces each scope once.
+   */
+  scheduleDecorationScopesAnnouncement(scopes: Iterable<string>): void {
+    if (this.deps.isDisposed()) return;
+    const pending = this.pendingDecorationScopes;
+    for (const scope of scopes) pending.add(scope);
+    if (this.decorationScopesAnnouncementPending || pending.size === 0) return;
+    this.decorationScopesAnnouncementPending = true;
+    this.defer(() => {
+      this.decorationScopesAnnouncementPending = false;
+      const announced = [...pending];
+      pending.clear();
+      this.announceDecorationScopes(announced);
+    });
+  }
+
+  /** Invalidate `scopes` in every view, now. */
+  announceDecorationScopes(scopes: Iterable<string>): void {
+    if (this.deps.isDisposed()) return;
+    for (const scope of new Set(scopes)) {
       broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
         name: "plugin:decorations-changed",
         payload: { scope },

@@ -4345,9 +4345,13 @@ describe("FilePane edit mode (#12323)", () => {
     worktreeId?: string | undefined;
     fileViewMode?: string;
     content?: string;
+    byteLength?: number;
     location?: "grid" | "dialog";
   }) {
-    readMock.mockResolvedValue({ content: options.content ?? "# Plan\n" });
+    readMock.mockResolvedValue({
+      content: options.content ?? "# Plan\n",
+      ...(options.byteLength === undefined ? {} : { byteLength: options.byteLength }),
+    });
     panelsById["file-1"] = {
       id: "file-1",
       kind: "file",
@@ -4406,6 +4410,27 @@ describe("FilePane edit mode (#12323)", () => {
     seedWorktree();
     fileEditorState.resolved = { maxBytes: 4 };
     await renderPane({ content: "# a long enough file\n" });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+  });
+
+  it("judges the byte ceiling by the bytes the read reported, not the decoded text", async () => {
+    seedWorktree();
+    fileEditorState.resolved = { maxBytes: 4 };
+    // Three characters, but the read counted more bytes on disk than the
+    // editor takes (a BOM, invalid sequences): the read is the authority.
+    const over = await renderPane({ content: "abc", byteLength: 5 });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    over.unmount();
+
+    await renderPane({ content: "# long decoded text\n", byteLength: 4 });
+    expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+  });
+
+  it("counts the text's UTF-8 bytes when the read reports none", async () => {
+    seedWorktree();
+    fileEditorState.resolved = { maxBytes: 4 };
+    // Two characters, six bytes.
+    await renderPane({ content: "€€" });
     expect(toggleLabels()).toEqual(["Source", "Rendered"]);
   });
 

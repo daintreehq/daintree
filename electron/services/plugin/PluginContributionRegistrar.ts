@@ -727,6 +727,13 @@ export class PluginContributionRegistrar {
       registerPluginCustomIcons(pluginId, customIconAssets);
       this.deps.broadcaster.schedulePluginIconsBroadcast();
     }
+    // After the commit, so the pull an announcement triggers finds the plugin
+    // listed and routable.
+    if (manifest.contributes.fileDecorationProviders.length > 0) {
+      this.deps.broadcaster.scheduleDecorationScopesAnnouncement(
+        manifest.contributes.fileDecorationProviders.flatMap((provider) => provider.scopes)
+      );
+    }
     if (themeLoad) {
       registerPluginThemes(pluginId, themeLoad.accepted);
       for (const { themeId, reason } of themeLoad.refused) {

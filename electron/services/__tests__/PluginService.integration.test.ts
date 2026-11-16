@@ -1197,13 +1197,16 @@ describe("PluginService integration — file decoration provider contributions",
     const service = new PluginService(tmpDir, "0.0.0");
     await initializeAndActivate(service);
 
+    // The last one: loading announced the declared scope before activation
+    // invalidated its own.
     const call = vi
       .mocked(broadcastToRenderer)
-      .mock.calls.find(
+      .mock.calls.filter(
         ([channel, evt]) =>
           channel === "events:push" &&
           (evt as { name?: string }).name === "plugin:decorations-changed"
-      );
+      )
+      .at(-1);
     expect(call).toBeDefined();
     const payload = (call![1] as { payload: { scope: string; paths?: string[] } }).payload;
     // Over-cap drops `paths` entirely — a scope-wide invalidation — so the
@@ -1314,6 +1317,48 @@ describe("PluginService integration — file decoration provider contributions",
       .map((c) => (c[1] as { payload: { scope: string } }).payload.scope);
     expect(new Set(decorationBroadcasts)).toEqual(new Set(["scope-a:*", "scope-b:*"]));
     expect(getFileDecorationImpls("scope-a:/x")).toEqual([]);
+  });
+
+  it("announces each declared scope as the plugin loads, before it ever activates", async () => {
+    // A plugin that only decorates files has no actions or panels to announce
+    // it, and path lists ask for decorations only once they know the scope.
+    await writePlugin("acme.load-decor", {
+      name: "acme.load-decor",
+      version: "1.0.0",
+      contributes: {
+        fileDecorationProviders: [{ id: "d", scopes: ["scope-c:*", "scope-d:/x"] }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    vi.mocked(broadcastToRenderer).mockClear();
+    // The renderer answers an announcement with a `plugin.list()` pull, so the
+    // plugin must already be listed when it goes out.
+    const listedAtAnnouncement: boolean[] = [];
+    vi.mocked(broadcastToRenderer).mockImplementation((_channel, event) => {
+      if ((event as { name?: string }).name === "plugin:decorations-changed") {
+        listedAtAnnouncement.push(
+          service.listPlugins().some((p) => p.instanceId === "acme.load-decor")
+        );
+      }
+    });
+    try {
+      await service.initialize();
+    } finally {
+      vi.mocked(broadcastToRenderer).mockImplementation(() => {});
+    }
+    expect(listedAtAnnouncement.length).toBeGreaterThan(0);
+    expect(listedAtAnnouncement.every(Boolean)).toBe(true);
+
+    const decorationBroadcasts = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) =>
+          c[0] === "events:push" &&
+          (c[1] as { name?: string }).name === "plugin:decorations-changed"
+      )
+      .map((c) => (c[1] as { payload: { scope: string } }).payload.scope);
+    expect(decorationBroadcasts).toEqual(expect.arrayContaining(["scope-c:*", "scope-d:/x"]));
   });
 
   it("invalidateFileDecorations is a silent no-op after the plugin unloads", async () => {

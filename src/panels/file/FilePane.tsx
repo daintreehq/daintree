@@ -4,6 +4,7 @@ import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import { normalize, resolveWorktreePathScope, toWorktreeRelative } from "@shared/utils/path";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FolderTree } from "@/components/icons";
@@ -346,9 +347,12 @@ export function FilePane({
     failPreview,
   } = useFileLoad(filePath, effectiveRootPath);
 
+  // The read already counted the bytes it returned. Re-encoding a multi-MB
+  // string to learn the same number allocates a second copy of the file on
+  // every load; the count is only for a response that predates the field.
   const contentBytes = useMemo(
-    () => (content === null ? 0 : new TextEncoder().encode(content).byteLength),
-    [content]
+    () => (content === null ? 0 : (byteFacts.byteLength ?? utf8ByteLength(content))),
+    [content, byteFacts.byteLength]
   );
   // The editor plugin's projection of this panel's document (#12323): the
   // draft Rendered previews, the dirty flag the chrome shows in every mode,
@@ -719,13 +723,14 @@ export function FilePane({
             : null
         }
         onDefaultAnswered={handleDefaultAnswered}
-        editorBannerContent={
+        editorBannerBytes={
           location !== "dialog" &&
           isInsideGovernedRoot &&
           editLockedBy === null &&
           viewMode !== "edit" &&
-          loadState === "loaded"
-            ? content
+          loadState === "loaded" &&
+          content !== null
+            ? contentBytes
             : null
         }
         showDiffStale={viewMode === "diff" && diffStale && diffContent !== undefined}

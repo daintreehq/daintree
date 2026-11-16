@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
 import type { PromptTemplateContribution, TerminalLinkContribution } from "@shared/types/plugin";
@@ -60,6 +61,18 @@ export interface PluginTerminalLink {
 interface PluginRuntimeState {
   promptTemplates: readonly PluginPromptTemplate[];
   terminalLinks: readonly PluginTerminalLink[];
+  /**
+   * Every scope pattern a running plugin declares a file-decoration provider
+   * for (`contributes.fileDecorationProviders[].scopes`), deduplicated and
+   * sorted. A path list asks for decorations only when one of these matches its
+   * scope, so a surface no plugin decorates sends nothing while it scrolls.
+   *
+   * Declared, not bound: main activates a matching plugin on its first pull, so
+   * waiting for a bound implementation would never let that pull happen. It
+   * over-approximates per project (main still filters by the asking view's
+   * project), which only costs the pull the surface used to make anyway.
+   */
+  fileDecorationScopes: readonly string[];
   disabledPluginIds: ReadonlySet<string>;
   /**
    * Keyed by plugin *instance* id — the host-side key every contribution
@@ -88,8 +101,19 @@ interface PluginRuntimeState {
   refresh: () => void;
 }
 
+/** The registry's match rule (`fileDecorationRegistry.scopeMatchesPattern`). */
+function decorationScopeMatches(scope: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith("*")) return scope.startsWith(pattern.slice(0, -1));
+  return scope === pattern;
+}
+
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
+// Announcements arrive in bursts (several plugins loading at once), each
+// before the snapshot that would make the next one known. One pull at a time,
+// with a single trailing pull for whatever arrived while it was out.
+let announcementPull: "idle" | "running" | "queued" = "idle";
 // Monotonic pull sequence: rapid provenance events can interleave list()
 // round-trips, and a slow older response must not overwrite a newer set.
 let pullSeq = 0;
@@ -136,6 +160,7 @@ async function pullPluginRuntimeSnapshot(
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
     const promptTemplates: PluginPromptTemplate[] = [];
     const terminalLinks: PluginTerminalLink[] = [];
+    const decorationScopes = new Set<string>();
     for (const p of list) {
       // Both maps key on the instance id for the same reason: every consumer
       // holds a contribution's `pluginId`, which is this key, never the bare
@@ -173,6 +198,9 @@ async function pullPluginRuntimeSnapshot(
             link,
           });
         }
+        for (const provider of p.manifest.contributes?.fileDecorationProviders ?? []) {
+          for (const scope of provider.scopes) decorationScopes.add(scope);
+        }
       }
       pluginMetaById.set(id, {
         devMode: p.devMode,
@@ -201,10 +229,30 @@ async function pullPluginRuntimeSnapshot(
     if (JSON.stringify(terminalLinks) !== JSON.stringify(current.terminalLinks)) {
       next.terminalLinks = terminalLinks;
     }
+    const fileDecorationScopes = [...decorationScopes].sort();
+    if (fileDecorationScopes.join("\0") !== current.fileDecorationScopes.join("\0")) {
+      next.fileDecorationScopes = fileDecorationScopes;
+    }
     if (Object.keys(next).length > 0) set(next);
   } catch (err) {
     logError("Failed to load plugin runtime state", err);
   }
+}
+
+function pullForAnnouncement(
+  set: (state: Partial<PluginRuntimeState>) => void,
+  get: () => PluginRuntimeState
+): void {
+  if (announcementPull !== "idle") {
+    announcementPull = "queued";
+    return;
+  }
+  announcementPull = "running";
+  void pullPluginRuntimeSnapshot(set, get).finally(() => {
+    const again = announcementPull === "queued";
+    announcementPull = "idle";
+    if (again && initialized) pullForAnnouncement(set, get);
+  });
 }
 
 /**
@@ -251,10 +299,23 @@ function ensureSubscribed(
           void pullPluginRuntimeSnapshot(set, get);
         })
       : undefined;
+  // A plugin that only decorates files declares its scopes with no provenance
+  // or action change (a dev attach, a project instance loading late), but main
+  // announces them as it registers. Pull only for a scope nothing known covers:
+  // plugins also invalidate their own scopes here, often, and those are known.
+  const offDecorations =
+    typeof plugin.onDecorationsChanged === "function"
+      ? plugin.onDecorationsChanged(({ scope }) => {
+          const known = get().fileDecorationScopes;
+          if (known.some((pattern) => decorationScopeMatches(scope, pattern))) return;
+          pullForAnnouncement(set, get);
+        })
+      : undefined;
   unsubscribe = () => {
     offProvenance();
     offProjectPlugins?.();
     offActions?.();
+    offDecorations?.();
   };
   return true;
 }
@@ -262,6 +323,7 @@ function ensureSubscribed(
 export const usePluginRuntimeStore = create<PluginRuntimeState>((set, get) => ({
   promptTemplates: [],
   terminalLinks: [],
+  fileDecorationScopes: [],
   disabledPluginIds: new Set<string>(),
   pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   init: () => {
@@ -282,12 +344,31 @@ export function _resetPluginRuntimeStoreForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   initialized = false;
+  announcementPull = "idle";
   pullSeq = 0;
   committedSeq = 0;
   usePluginRuntimeStore.setState({
     promptTemplates: [],
     terminalLinks: [],
+    fileDecorationScopes: [],
     disabledPluginIds: new Set<string>(),
     pluginMetaById: new Map<string, PluginRuntimeMeta>(),
   });
+}
+
+/**
+ * Whether any running plugin declares a file-decoration provider for `scope`.
+ * Subscribes the store on first use; false until the first snapshot lands, and
+ * for an empty scope.
+ */
+export function useHasFileDecorationProvider(scope: string): boolean {
+  const init = usePluginRuntimeStore((state) => state.init);
+  useEffect(() => {
+    init();
+  }, [init]);
+  return usePluginRuntimeStore(
+    (state) =>
+      scope.length > 0 &&
+      state.fileDecorationScopes.some((pattern) => decorationScopeMatches(scope, pattern))
+  );
 }

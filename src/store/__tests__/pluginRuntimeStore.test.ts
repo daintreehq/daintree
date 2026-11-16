@@ -5,7 +5,12 @@ import type {
   PromptTemplateContribution,
   TerminalLinkContribution,
 } from "@shared/types/plugin";
-import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { renderHook } from "@testing-library/react";
+import {
+  _resetPluginRuntimeStoreForTest,
+  useHasFileDecorationProvider,
+  usePluginRuntimeStore,
+} from "@/store/pluginRuntimeStore";
 
 const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/logger", () => ({
@@ -24,6 +29,7 @@ function makePlugin(opts: {
   projectId?: string;
   promptTemplates?: PromptTemplateContribution[];
   terminalLinks?: TerminalLinkContribution[];
+  decorationScopes?: string[];
   blocklisted?: boolean;
   instanceMode?: "project";
 }): LoadedPluginInfo {
@@ -48,7 +54,9 @@ function makePlugin(opts: {
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
-        fileDecorationProviders: [],
+        fileDecorationProviders: opts.decorationScopes
+          ? [{ id: "badges", scopes: opts.decorationScopes }]
+          : [],
         fileEditors: [],
         agents: [],
         processTools: [],
@@ -433,6 +441,149 @@ describe("usePluginRuntimeStore", () => {
       ["acme.a::t", "Acme A", null],
       ["project__p1__acme.a::t", "acme.a", "p1"],
     ]);
+  });
+
+  it("collects the decoration scopes running plugins declare, and nothing from the rest", async () => {
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.a", decorationScopes: ["worktree-files:*", "lint:*"] }),
+      makePlugin({ id: "acme.b", projectId: "p1", decorationScopes: ["lint:*", "project-only:*"] }),
+      makePlugin({ id: "acme.off", disabled: true, decorationScopes: ["off:*"] }),
+      makePlugin({ id: "acme.blocked", blocklisted: true, decorationScopes: ["blocked:*"] }),
+      makePlugin({ id: "acme.pkg", instanceMode: "project", decorationScopes: ["pkg:*"] }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual([
+        "lint:*",
+        "project-only:*",
+        "worktree-files:*",
+      ])
+    );
+  });
+
+  it("answers whether a scope has a declared provider, live as plugins come and go", async () => {
+    let provenance: (() => void) | undefined;
+    onProvenanceChangedMock.mockImplementation((cb) => {
+      provenance = cb;
+      return () => {};
+    });
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.diff", decorationScopes: ["worktree-diff:*"] }),
+    ]);
+
+    const tree = renderHook(({ scope }) => useHasFileDecorationProvider(scope), {
+      initialProps: { scope: "worktree-files:/repo" },
+    });
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual(["worktree-diff:*"])
+    );
+    expect(tree.result.current).toBe(false);
+
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.diff", decorationScopes: ["worktree-diff:*"] }),
+      makePlugin({ id: "acme.tree", decorationScopes: ["worktree-files:*"] }),
+    ]);
+    provenance?.();
+    await vi.waitFor(() => expect(tree.result.current).toBe(true));
+
+    tree.rerender({ scope: "worktree-files:/other" });
+    expect(tree.result.current).toBe(true);
+    tree.rerender({ scope: "worktree-diff-ish" });
+    expect(tree.result.current).toBe(false);
+    tree.rerender({ scope: "" });
+    expect(tree.result.current).toBe(false);
+  });
+
+  it("matches a scope exactly, by prefix wildcard, and by the bare wildcard", async () => {
+    listMock.mockResolvedValue([makePlugin({ id: "acme.exact", decorationScopes: ["tree:/a"] })]);
+    const hook = renderHook(({ scope }) => useHasFileDecorationProvider(scope), {
+      initialProps: { scope: "tree:/a" },
+    });
+    await vi.waitFor(() => expect(hook.result.current).toBe(true));
+    hook.rerender({ scope: "tree:/ab" });
+    expect(hook.result.current).toBe(false);
+
+    usePluginRuntimeStore.setState({ fileDecorationScopes: ["*"] });
+    hook.rerender({ scope: "anything:/at-all" });
+    expect(hook.result.current).toBe(true);
+  });
+
+  it("learns a provider-only plugin from main's announcement, without pulling for known scopes", async () => {
+    let announce: ((payload: { scope: string }) => void) | undefined;
+    installBridge({
+      list: listMock,
+      onProvenanceChanged: onProvenanceChangedMock,
+      onDecorationsChanged: (cb: (payload: { scope: string }) => void) => {
+        announce = cb;
+        return () => {};
+      },
+    });
+    listMock.mockResolvedValue([makePlugin({ id: "acme.lint", decorationScopes: ["lint:*"] })]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual(["lint:*"])
+    );
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    // A plugin invalidating its own known scope costs no pull.
+    announce?.({ scope: "lint:/repo" });
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    // A dev-attached plugin that only decorates files announces a new scope.
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.lint", decorationScopes: ["lint:*"] }),
+      makePlugin({ id: "acme.dev", decorationScopes: ["worktree-files:*"] }),
+    ]);
+    announce?.({ scope: "worktree-files:*" });
+    expect(listMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual([
+        "lint:*",
+        "worktree-files:*",
+      ])
+    );
+  });
+
+  it("answers a burst of announcements with one pull and one trailing pull", async () => {
+    let announce: ((payload: { scope: string }) => void) | undefined;
+    installBridge({
+      list: listMock,
+      onProvenanceChanged: onProvenanceChangedMock,
+      onDecorationsChanged: (cb: (payload: { scope: string }) => void) => {
+        announce = cb;
+        return () => {};
+      },
+    });
+    listMock.mockResolvedValue([]);
+    usePluginRuntimeStore.getState().init();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+
+    let resolveFirst: ((plugins: LoadedPluginInfo[]) => void) | undefined;
+    listMock.mockImplementationOnce(
+      () =>
+        new Promise<LoadedPluginInfo[]>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    const loaded = [
+      makePlugin({ id: "acme.a", decorationScopes: ["a:*"] }),
+      makePlugin({ id: "acme.b", decorationScopes: ["b:*"] }),
+      makePlugin({ id: "acme.c", decorationScopes: ["c:*"] }),
+    ];
+    listMock.mockResolvedValue(loaded);
+
+    announce?.({ scope: "a:*" });
+    announce?.({ scope: "b:*" });
+    announce?.({ scope: "c:*" });
+    expect(listMock).toHaveBeenCalledTimes(2);
+
+    resolveFirst?.(loaded.slice(0, 1));
+    await vi.waitFor(() =>
+      expect(usePluginRuntimeStore.getState().fileDecorationScopes).toEqual(["a:*", "b:*", "c:*"])
+    );
+    expect(listMock).toHaveBeenCalledTimes(3);
   });
 
   it("offers nothing from a per-project package's own row, only from its instances", async () => {
