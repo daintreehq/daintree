@@ -59,7 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   builtIn.tool = undefined;
   useDevPreviewToolStore.setState({ activeByPanel: {} });
-  usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
+  usePanelStore.setState({ panelIds: [], panelsById: {}, focusedId: null } as never);
 });
 
 describe("devPreview.toggleTool availability", () => {
@@ -67,6 +67,21 @@ describe("devPreview.toggleTool availability", () => {
     register(() => false);
     await expect(runToggleTool({ toolId: TOOL })).rejects.toThrow(REASON);
     expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+  });
+
+  it("toggles the preview that was focused when it was asked for, not one focused while the chunk loads", async () => {
+    register(() => true);
+    usePanelStore.setState({
+      panelIds: [PANEL, "preview-2"],
+      focusedId: "preview-2",
+      panelsById: {
+        [PANEL]: { id: PANEL, kind: "dev-preview", location: "grid" },
+        "preview-2": { id: "preview-2", kind: "dev-preview", location: "grid" },
+      },
+    } as never);
+    const pending = runToggleTool({ toolId: TOOL });
+    usePanelStore.setState({ focusedId: PANEL } as never);
+    await expect(pending).resolves.toEqual({ panelId: "preview-2", active: true });
   });
 
   it("switches on a tool that applies", async () => {
