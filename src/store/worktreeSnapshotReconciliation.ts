@@ -436,8 +436,12 @@ function lifecycleStatusEqual(
     a.commandIndex === b.commandIndex &&
     a.totalCommands === b.totalCommands &&
     a.startedAt === b.startedAt &&
+    a.commandStartedAt === b.commandStartedAt &&
     a.completedAt === b.completedAt &&
-    a.error === b.error
+    a.error === b.error &&
+    // A running phase's output changes on its own while it prints.
+    a.output === b.output &&
+    a.logPath === b.logPath
   );
 }
 

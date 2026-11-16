@@ -442,6 +442,15 @@ export class WorktreeSetupCoordinator {
     };
     if (!isLive()) return { outcome: cancelledOutcome };
 
+    // The steps take over the slot the setup script's result is read from, and
+    // they are part of the same setup: its output stays with them. Only a setup
+    // result's, never an unrelated phase's that has since taken the slot.
+    const settledSlot = monitor.lifecycleStatus;
+    const scriptOutput =
+      settledSlot?.phase === "setup" && settledSlot.state !== "running"
+        ? settledSlot.output
+        : undefined;
+
     // Registered before the first await, so a delete that starts while the
     // steps are still being listed cancels them too.
     const controller = new AbortController();
@@ -521,11 +530,14 @@ export class WorktreeSetupCoordinator {
           }
           ranAny = true;
           steps[index] = { ...steps[index], state: "running" };
+          const stepStartedAt = Date.now();
           monitor.setLifecycleStatus({
             phase: "setup",
             state: "running",
             currentCommand: `${step.label} (${step.pluginName})`,
-            startedAt: Date.now(),
+            startedAt: stepStartedAt,
+            commandStartedAt: stepStartedAt,
+            ...(scriptOutput !== undefined ? { output: scriptOutput } : {}),
           });
           publish();
           let result: WorktreeSetupStepRunOutcome;
@@ -635,6 +647,7 @@ export class WorktreeSetupCoordinator {
               : "failed",
         startedAt,
         completedAt: Date.now(),
+        ...(scriptOutput !== undefined ? { output: scriptOutput } : {}),
         ...(!outcome.ok && "error" in outcome ? { error: outcome.error } : {}),
       });
       this.host.emitUpdate(monitor);

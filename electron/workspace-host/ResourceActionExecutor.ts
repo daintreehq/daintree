@@ -8,6 +8,8 @@ import {
   LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
   WorktreeLifecycleService,
   ownResource,
+  publishRunningOutput,
+  runningOutput,
   type ResolvedResourceEnvironments,
 } from "./WorktreeLifecycleService.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
@@ -392,17 +394,17 @@ export class ResourceActionExecutor {
         ? configTimeoutSec * 1000
         : (DEFAULT_TIMEOUT_MS[effectiveAction] ?? 120_000);
 
+    const startedAt = Date.now();
     monitor.setLifecycleStatus({
       phase,
       state: "running",
       commandIndex: 0,
       totalCommands: commands.length,
       currentCommand: commands[0],
-      startedAt: Date.now(),
+      startedAt,
+      commandStartedAt: startedAt,
     });
     this.ctx.emitUpdate(monitor);
-
-    const startedAt = monitor.lifecycleStatus?.startedAt ?? Date.now();
 
     const result = await this.ctx.lifecycleService.runCommands(commands, {
       cwd: monitor.path,
@@ -419,9 +421,15 @@ export class ResourceActionExecutor {
             totalCommands,
             currentCommand: command,
             startedAt: m.lifecycleStatus?.startedAt ?? startedAt,
+            commandStartedAt: Date.now(),
+            output: runningOutput(m.lifecycleStatus, phase),
           });
           this.ctx.emitUpdate(m);
         }
+      },
+      onOutput: (output) => {
+        const m = monitorInEnvironment();
+        if (m && publishRunningOutput(m, phase, output)) this.ctx.emitUpdate(m);
       },
     });
 
