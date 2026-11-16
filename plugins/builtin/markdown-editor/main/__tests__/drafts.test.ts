@@ -60,7 +60,6 @@ function record(overrides: Partial<DraftRecord> = {}): DraftRecord {
     stateVersion: 1,
     identity,
     baseRevision: "a".repeat(64),
-    baseText: "# Plan\n",
     draftText: "# Plan\n\nMore\n",
     hasBom: false,
     eol: "\n",
@@ -93,6 +92,16 @@ describe("DraftStore (#12323)", () => {
     const listed = await store.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]?.identity).toEqual(identity);
+  });
+
+  it("still reads a record an earlier build wrote with its base text (#17071)", async () => {
+    await store.put(record(), 1);
+    const [file] = await fs.readdir(store.directory);
+    const target = path.join(store.directory, file!);
+    const legacy = { ...record(), baseText: "# Plan\n" };
+    await fs.writeFile(target, JSON.stringify(legacy));
+    await expect(store.get(identity)).resolves.toEqual(legacy);
+    await expect(store.list()).resolves.toHaveLength(1);
   });
 
   it("returns null for a missing or corrupt record", async () => {

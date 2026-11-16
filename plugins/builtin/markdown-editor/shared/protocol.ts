@@ -142,7 +142,11 @@ export const DraftRecordSchema = z
     stateVersion: z.literal(1),
     identity: DocumentIdentitySchema,
     baseRevision: z.string(),
-    baseText: z.string(),
+    /**
+     * Written by earlier builds and never read: restore compares the draft
+     * against the file on disk. Accepted so their records still parse.
+     */
+    baseText: z.string().optional(),
     draftText: z.string(),
     hasBom: z.boolean(),
     eol: EolSchema,

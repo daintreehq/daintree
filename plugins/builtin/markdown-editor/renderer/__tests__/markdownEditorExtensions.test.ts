@@ -4,7 +4,12 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
-import { buildMarkdownEditorExtensions, linkTargetAt } from "../markdownEditorExtensions";
+import {
+  buildMarkdownEditorExtensions,
+  docUtf8Bytes,
+  externalChange,
+  linkTargetAt,
+} from "../markdownEditorExtensions";
 
 const language = markdown({ base: markdownLanguage });
 
@@ -47,12 +52,24 @@ afterEach(() => {
 });
 
 describe("markdownEditorExtensions (#12323)", () => {
-  it("labels the content for assistive tech and reports typing as whole-buffer text", () => {
+  it("labels the content for assistive tech and reports typing as the document itself", () => {
     mounted = mount("# Plan\n");
     const { view, callbacks } = mounted;
     expect(view.contentDOM.getAttribute("aria-label")).toBe("plan.md");
     view.dispatch({ changes: { from: view.state.doc.length, insert: "more" } });
-    expect(callbacks.onChange).toHaveBeenCalledWith("# Plan\nmore");
+    // The immutable document, never a string made per keystroke (#17071).
+    expect(callbacks.onChange).toHaveBeenCalledTimes(1);
+    expect(callbacks.onChange.mock.calls[0]![0]).toBe(view.state.doc);
+    expect(view.state.doc.toString()).toBe("# Plan\nmore");
+  });
+
+  it("does not report a change that catches the buffer up to the shared document", () => {
+    mounted = mount("# Plan\n");
+    const { view, callbacks } = mounted;
+    view.dispatch({ changes: { from: 0, insert: "x" }, annotations: externalChange.of(true) });
+    expect(callbacks.onChange).not.toHaveBeenCalled();
+    view.dispatch({ changes: { from: 0, insert: "y" } });
+    expect(callbacks.onChange).toHaveBeenCalledTimes(1);
   });
 
   it("Mod-s saves and is consumed so nothing reaches the window", () => {
@@ -135,12 +152,58 @@ describe("markdownEditorExtensions (#12323)", () => {
     expect(callbacks.onChange).not.toHaveBeenCalled();
     Object.defineProperty(view, "composing", { value: false, configurable: true });
     view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    expect(callbacks.onChange).toHaveBeenCalledWith("か");
+    expect(callbacks.onChange).toHaveBeenCalledWith(view.state.doc);
+    expect(view.state.doc.toString()).toBe("か");
   });
 
   it("the editor is editable — a buffer that CodeMirror lets the user type into", () => {
     mounted = mount("x");
     expect(mounted.view.state.readOnly).toBe(false);
     expect(mounted.view.contentDOM.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it("keeps the buffer's UTF-8 size from its changes, surrogate pairs split and joined included (#17071)", () => {
+    const encoded = (state: EditorState) => new TextEncoder().encode(state.doc.toString()).length;
+    let state = EditorState.create({ doc: "# Plan\n😀 é\r\nend", extensions: [docUtf8Bytes] });
+    expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    const apply = (changes: Array<{ from: number; to?: number; insert?: string }>) => {
+      state = state.update({ changes }).state;
+      expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    };
+    const emoji = state.doc.toString().indexOf("😀");
+    // Split a pair, rejoin it, then two changes either side of one kept unit.
+    apply([{ from: emoji + 1, to: emoji + 2 }]);
+    apply([{ from: emoji + 1, insert: "\ude00" }]);
+    apply([
+      { from: emoji, to: emoji + 1, insert: "\ud83d" },
+      { from: emoji + 2, insert: "\ud83d" },
+    ]);
+    apply([
+      { from: emoji + 1, to: emoji + 2 },
+      { from: emoji + 3, insert: "\ude00" },
+    ]);
+    const pieces = ["a", "é", "€", "😀", "\n", "\ud83d", "\ude00", "", "xy\nz"];
+    let seed = 17071;
+    const random = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    for (let step = 0; step < 400; step++) {
+      const length = state.doc.length;
+      const from = random(length + 1);
+      const to = Math.min(length, from + random(4));
+      const second = Math.min(length, to + 1 + random(3));
+      const changes = [{ from, to, insert: pieces[random(pieces.length)]! }];
+      // Two changes in one transaction, a single unchanged unit apart at times.
+      if (second < length && random(2) === 0) {
+        changes.push({
+          from: second,
+          to: second + random(2),
+          insert: pieces[random(pieces.length)]!,
+        });
+      }
+      state = state.update({ changes }).state;
+      expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    }
   });
 });

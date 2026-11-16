@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
+import { Text } from "@codemirror/state";
 
 const { announceMock } = vi.hoisted(() => ({ announceMock: vi.fn() }));
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
@@ -24,8 +25,12 @@ vi.mock("@/store/panelStore", async () => {
   return { usePanelStore: store };
 });
 
-import { DocumentController, __resetDocumentControllersForTests } from "../documentController";
-import { useDocumentStateStore } from "../documentStateStore";
+import {
+  DocumentController,
+  __resetDocumentControllersForTests,
+  __storedDraftTextForTests,
+} from "../documentController";
+import { currentText, useDocumentStateStore } from "../documentStateStore";
 import { getFileDocumentProjection, useFileDocumentStore } from "@/store/fileDocumentStore";
 import { CHANNELS, PUSH_CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, sha, type FakeMain } from "./testHost";
@@ -105,6 +110,8 @@ describe("DocumentController (#12323)", () => {
       generation: expect.any(Number),
       record: { draftText: "# Plan\n\nedit\n", baseRevision: sha("# Plan\n") },
     });
+    // Restore compares against the disk, so the base never rides along (#17071).
+    expect((put?.args as { record: object }).record).not.toHaveProperty("baseText");
   });
 
   it("typing back to the base text clears the draft and its record", async () => {
@@ -965,6 +972,58 @@ describe("DocumentController (#12323)", () => {
     expect(recoverable()).toBe(false);
   });
 
+  it("lets go of the stored draft's text once the last panel on the document closes (#17071)", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.setText("# Plan\n\nkept\n");
+    await flush(1000);
+    expect(__storedDraftTextForTests(KEY)).toBe("# Plan\n\nkept\n");
+    // Typing just before the close leaves the final put to land after it.
+    first.setText("# Plan\n\nkept late\n");
+    first.release();
+    expect(__storedDraftTextForTests(KEY)).toBe("# Plan\n\nkept\n");
+    second.release();
+    expect(__storedDraftTextForTests(KEY)).toBeNull();
+    await flush();
+    expect(__storedDraftTextForTests(KEY)).toBeNull();
+    expect(
+      main.calls.filter((c) => c.channel === CHANNELS.draftPut).map((c) => c.args)
+    ).toContainEqual(
+      expect.objectContaining({
+        record: expect.objectContaining({ draftText: "# Plan\n\nkept late\n" }),
+      })
+    );
+  });
+
+  it("a stored draft read that lands after the panel closed isn't kept (#17071)", async () => {
+    main.files.set(PROPS.filePath, "# Plan\n");
+    const read: { done: (value: unknown) => void } = { done: () => {} };
+    main.overrides.set(
+      CHANNELS.draftGet,
+      () =>
+        new Promise((resolve) => {
+          read.done = resolve;
+        })
+    );
+    const controller = DocumentController.acquire(PROPS);
+    await flush();
+    controller.release();
+    read.done({
+      record: {
+        stateVersion: 1,
+        identity: IDENTITY,
+        baseRevision: sha("# Plan\n"),
+        draftText: "# Plan\n\nlate\n",
+        hasBom: false,
+        eol: "\n",
+        updatedAt: 1,
+      },
+    });
+    await flush();
+    expect(__storedDraftTextForTests(KEY)).toBeNull();
+  });
+
   it("republishes every panel on the document once recovery storage acknowledges the draft", async () => {
     const first = await open();
     const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
@@ -985,6 +1044,254 @@ describe("DocumentController (#12323)", () => {
       reason: expect.stringMatching(/over 2 MiB/),
     });
     expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
+  });
+});
+
+describe("typing held as the editor's document (#17071)", () => {
+  const doc = (text: string) => Text.of(text.split("\n"));
+  const deferSave = () => {
+    const pending: { release: (value: unknown) => void } = { release: () => {} };
+    main.overrides.set(
+      CHANNELS.save,
+      () =>
+        new Promise((resolve) => {
+          pending.release = resolve;
+        })
+    );
+    return pending;
+  };
+
+  it("commits the first edit at once and later ones at a deadline typing can't push back", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    expect(controller.record().draft?.text).toBe("# Plan\n\na");
+    expect(getFileDocumentProjection("panel-1")?.dirty).toBe(true);
+    const latest = doc("# Plan\n\nabc");
+    const toString = vi.spyOn(latest, "toString");
+    controller.edit(doc("# Plan\n\nab"));
+    await flush(200);
+    controller.edit(latest);
+    expect(controller.record().draft?.text).toBe("# Plan\n\na");
+    expect(toString).not.toHaveBeenCalled();
+    await flush(100);
+    expect(controller.record().draft?.text).toBe("# Plan\n\nabc");
+    expect(toString).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops vouching for the stored draft the moment newer typing is pending", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\none"));
+    await flush(1000);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(true);
+    controller.edit(doc("# Plan\n\none more"));
+    expect(controller.record().draft?.text).toBe("# Plan\n\none");
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(false);
+    await flush(300 + 1000);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(true);
+  });
+
+  it("an edit that lands back on the committed text clears the pending mark", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\none"));
+    await flush(1000);
+    controller.edit(doc("# Plan\n\none"));
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(false);
+    await flush(300);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(true);
+  });
+
+  it("saves the typing still pending, and keeps typing that lands during the write", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    controller.edit(doc("# Plan\n\nab"));
+    const write = deferSave();
+    const saving = controller.save();
+    await flush();
+    expect(main.calls.find((c) => c.channel === CHANNELS.save)?.args).toMatchObject({
+      text: "# Plan\n\nab",
+    });
+    controller.edit(doc("# Plan\n\nabc"));
+    write.release({ status: "saved", revision: sha("# Plan\n\nab"), wrote: true });
+    await expect(saving).resolves.toMatchObject({ status: "refused" });
+    expect(controller.record().base?.text).toBe("# Plan\n\nab");
+    expect(controller.record().draft).toEqual({
+      text: "# Plan\n\nabc",
+      baseRevision: sha("# Plan\n\nab"),
+    });
+  });
+
+  it("a save through a sibling panel's close prompt writes the other panel's pending typing", async () => {
+    const first = await open();
+    DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    first.edit(doc("# Plan\n\na"));
+    first.edit(doc("# Plan\n\nab"));
+    await expect(getFileDocumentProjection("panel-2")!.save()).resolves.toEqual({
+      status: "saved",
+    });
+    expect(main.files.get(PROPS.filePath)).toBe("# Plan\n\nab");
+  });
+
+  it("discard takes typing that lands during the removal with it; no timer is left to revive it", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    controller.edit(doc("# Plan\n\nab"));
+    const removal: { done: (value: unknown) => void } = { done: () => {} };
+    main.overrides.set(
+      CHANNELS.draftDelete,
+      () =>
+        new Promise((resolve) => {
+          removal.done = resolve;
+        })
+    );
+    const discarding = controller.discard();
+    await flush();
+    controller.edit(doc("# Plan\n\nabc"));
+    removal.done({ deleted: true });
+    await discarding;
+    expect(controller.record().draft).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getFileDocumentProjection("panel-1")?.dirty).toBe(false);
+  });
+
+  it("a discard that can't remove the recovery copy keeps the latest typing as the draft", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    controller.edit(doc("# Plan\n\nab"));
+    main.overrides.set(CHANNELS.draftDelete, () => {
+      throw new Error("disk full");
+    });
+    await expect(controller.discard()).rejects.toThrow();
+    expect(controller.record().draft?.text).toBe("# Plan\n\nab");
+  });
+
+  it("taking the disk version over a conflict drops pending typing", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\nmine"));
+    main.files.set(PROPS.filePath, "# Plan\n\ntheirs\n");
+    await controller.revalidate();
+    expect(controller.record().conflict).not.toBeNull();
+    controller.edit(doc("# Plan\n\nmine more"));
+    await controller.loadDiskVersion();
+    expect(vi.getTimerCount()).toBe(0);
+    await flush(1000);
+    expect(controller.record().draft).toBeNull();
+    expect(controller.record().base?.text).toBe("# Plan\n\ntheirs\n");
+  });
+
+  it("closing the panel commits and persists the typing still pending", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    await flush(1000);
+    controller.edit(doc("# Plan\n\nab"));
+    controller.release();
+    await flush();
+    const puts = main.calls.filter((c) => c.channel === CHANNELS.draftPut);
+    expect(puts.at(-1)?.args).toMatchObject({ record: { draftText: "# Plan\n\nab" } });
+  });
+
+  it("a page going hidden persists typing that hadn't reached the persist timer", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    await flush(1000);
+    controller.edit(doc("# Plan\n\nab"));
+    await controller.flushPersist();
+    const puts = main.calls.filter((c) => c.channel === CHANNELS.draftPut);
+    expect(puts.at(-1)?.args).toMatchObject({ record: { draftText: "# Plan\n\nab" } });
+  });
+
+  it("knows its own commits from a sibling's by the time the store announces them", async () => {
+    const first = await open();
+    const second = DocumentController.acquire({ ...PROPS, panelId: "panel-2" });
+    await flush();
+    const seen: Array<[boolean, boolean]> = [];
+    const unsubscribe = useDocumentStateStore.subscribe((state) => {
+      const text = currentText(state.records[KEY]!);
+      if (text !== "# Plan\n") seen.push([first.committedHere(text!), second.committedHere(text!)]);
+    });
+    first.edit(doc("# Plan\n\na"));
+    first.edit(doc("# Plan\n\nab"));
+    await flush(300);
+    unsubscribe();
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.every(([own, sibling]) => own && !sibling)).toBe(true);
+    expect(first.committedHere("# Plan\n\nzz")).toBe(false);
+    // Nothing outlives the document's last panel.
+    second.release();
+    first.release();
+    expect(first.committedHere("# Plan\n\nab")).toBe(false);
+  });
+
+  it("checks for a disk change against the typing pending before and during the check", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\nmine"));
+    controller.edit(doc("# Plan\n\nmine more"));
+    main.files.set(PROPS.filePath, "# Plan\n\ntheirs\n");
+    const check: { done: (value: unknown) => void } = { done: () => {} };
+    main.overrides.set(
+      CHANNELS.revalidate,
+      () =>
+        new Promise((resolve) => {
+          check.done = resolve;
+        })
+    );
+    const checking = controller.revalidate();
+    await flush();
+    expect(controller.record().draft?.text).toBe("# Plan\n\nmine more");
+    controller.edit(doc("# Plan\n\nmine more still"));
+    check.done({ status: "ok", revision: sha("# Plan\n\ntheirs\n") });
+    await checking;
+    expect(controller.record().conflict).not.toBeNull();
+    expect(controller.record().draft?.text).toBe("# Plan\n\nmine more still");
+  });
+
+  it("Save as writes the typing still pending", async () => {
+    const controller = await open();
+    controller.edit(doc("# Plan\n\na"));
+    controller.edit(doc("# Plan\n\nab"));
+    await expect(controller.saveAs("/repo/docs/copy.md")).resolves.toMatchObject({
+      status: "saved",
+    });
+    expect(main.files.get("/repo/docs/copy.md")).toBe("# Plan\n\nab");
+  });
+
+  it("an unedited save keeps the disk's own size, mixed endings and all", async () => {
+    main.files.set(PROPS.filePath, "a\nb\n");
+    main.overrides.set(CHANNELS.read, () => ({
+      status: "ok",
+      text: "a\nb\n",
+      revision: sha("a\nb\n"),
+      hasBom: false,
+      eol: "\r\n",
+      mixedEol: true,
+      // "a\r\nb\n" on disk: re-encoding the buffer would say 6.
+      size: 5,
+    }));
+    const controller = DocumentController.acquire(PROPS);
+    await flush();
+    await controller.save();
+    expect(controller.record().base?.size).toBe(5);
+  });
+
+  it("records the bytes a save wrote, BOM and CRLF included, and keeps them on an unedited save", async () => {
+    main.files.set(PROPS.filePath, "# Plan\n");
+    const disk = (text: string) => Buffer.byteLength("\uFEFF" + text.replace(/\n/g, "\r\n"));
+    main.overrides.set(CHANNELS.read, () => ({
+      status: "ok",
+      text: "# Plan\n",
+      revision: sha("# Plan\n"),
+      hasBom: true,
+      eol: "\r\n",
+      mixedEol: false,
+      size: disk("# Plan\n"),
+    }));
+    const controller = DocumentController.acquire(PROPS);
+    await flush();
+    await controller.save();
+    expect(controller.record().base?.size).toBe(disk("# Plan\n"));
+    controller.setText("# Plan\n\né\n");
+    await controller.save();
+    expect(controller.record().base?.size).toBe(disk("# Plan\n\né\n"));
   });
 });
 

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
+import { Text } from "@codemirror/state";
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(async () => ({ ok: true, result: undefined })),
@@ -18,6 +19,16 @@ type PanelStoreShape = { panelsById: Record<string, { id: string }> };
 const panelStoreHolder = vi.hoisted(() => ({
   store: null as UseBoundStore<StoreApi<PanelStoreShape>> | null,
 }));
+// Counted: the view calls the store hook once per render, and nothing else on
+// screen does, so its calls are the editor shell's renders.
+vi.mock("../documentStateStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../documentStateStore")>();
+  const hook = Object.assign(
+    vi.fn(actual.useDocumentStateStore),
+    actual.useDocumentStateStore
+  ) as unknown as typeof actual.useDocumentStateStore;
+  return { ...actual, useDocumentStateStore: hook };
+});
 vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
   const store = create<PanelStoreShape>(() => ({ panelsById: { "panel-1": { id: "panel-1" } } }));
@@ -26,7 +37,7 @@ vi.mock("@/store/panelStore", async () => {
 });
 
 import { MarkdownEditorView } from "../MarkdownEditorView";
-import { __resetDocumentControllersForTests } from "../documentController";
+import { DocumentController, __resetDocumentControllersForTests } from "../documentController";
 import { useDocumentStateStore } from "../documentStateStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -35,6 +46,7 @@ import { CHANNELS, PUSH_CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+import { formatBytes } from "@/lib/formatBytes";
 
 // The app's own kit host, so the kit reaches the app services mocked here.
 installAppPluginKitHost();
@@ -414,12 +426,81 @@ describe("MarkdownEditorView (#12323)", () => {
   it("unmounting the view keeps the draft — it is document state", async () => {
     const { unmount } = await renderReady();
     await type("\nkept");
-    unmount();
+    // Still pending when the view goes: leaving Edit commits it at once. One
+    // synchronous step, so the commit timer can't land in between.
+    act(() => {
+      const cm = editorView();
+      cm.dispatch({ changes: { from: cm.state.doc.length, insert: " too" } });
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
+        "# Plan\n\nBody\n\nkept"
+      );
+      unmount();
+    });
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
-      "# Plan\n\nBody\n\nkept"
+      "# Plan\n\nBody\n\nkept too"
     );
     await renderReady();
-    expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nkept");
+    expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nkept too");
+  });
+
+  it("typing after the first edit re-renders only the status line and never strings the buffer (#17071)", async () => {
+    await renderReady();
+    await type("\nfirst");
+    const shellRenders = vi.mocked(useDocumentStateStore);
+    shellRenders.mockClear();
+    const toString = vi.spyOn(Text.prototype, "toString");
+    try {
+      for (const key of "abcde") await type(key);
+      expect(toString).not.toHaveBeenCalled();
+    } finally {
+      toString.mockRestore();
+    }
+    const typed = "# Plan\n\nBody\n\nfirstabcde";
+    expect(screen.getByTestId("markdown-editor-status").textContent).toContain(
+      formatBytes(Buffer.byteLength(typed))
+    );
+    // The draft string follows within the commit interval, and its arrival
+    // changes nothing the shell shows either.
+    await waitFor(() =>
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(typed)
+    );
+    expect(shellRenders).not.toHaveBeenCalled();
+  });
+
+  it("a second panel on the document follows committed typing and catches up when focused", async () => {
+    panelStoreHolder.store!.setState({
+      panelsById: { "panel-1": { id: "panel-1" }, "panel-2": { id: "panel-2" } },
+    });
+    render(
+      <>
+        {view()}
+        {view({ panelId: "panel-2" })}
+      </>
+    );
+    await waitFor(() => expect(document.querySelectorAll(".cm-content")).toHaveLength(2));
+    const [first, second] = [...document.querySelectorAll<HTMLElement>(".cm-content")].map(
+      (content) => EditorView.findFromDOM(content)!
+    );
+    const insert = (cm: EditorView, text: string) =>
+      act(async () => {
+        cm.dispatch({ changes: { from: cm.state.doc.length, insert: text } });
+      });
+    // Catching up is not typing: the receiving panel never reports it back.
+    const secondEdits = vi.spyOn(DocumentController.get("panel-2")!, "edit");
+    await insert(first!, "\na");
+    expect(second!.state.doc.toString()).toBe("# Plan\n\nBody\n\na");
+    await insert(first!, "b");
+    expect(second!.state.doc.toString()).toBe("# Plan\n\nBody\n\na");
+    await act(async () => {
+      second!.contentDOM.dispatchEvent(new FocusEvent("focus"));
+    });
+    expect(second!.state.doc.toString()).toBe("# Plan\n\nBody\n\nab");
+    expect(secondEdits).not.toHaveBeenCalled();
+    await insert(second!, "c");
+    await waitFor(() => expect(first!.state.doc.toString()).toBe("# Plan\n\nBody\n\nabc"));
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
+      "# Plan\n\nBody\n\nabc"
+    );
   });
 
   describe("Copy draft", () => {
