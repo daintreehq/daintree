@@ -11,13 +11,14 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import type { PanelComponentProps } from "@/registry";
 
-const spy = vi.hoisted(() => ({ pane: [] as Record<string, unknown>[], cell: 0 }));
+const spy = vi.hoisted(() => ({ pane: [] as PanelComponentProps[], cell: 0 }));
 
 vi.mock("@/registry", async () => {
   const { memo } = await import("react");
-  const Panel = memo(function PanelSpy(props: Record<string, unknown>) {
+  const Panel = memo(function PanelSpy(props: PanelComponentProps) {
     spy.pane.push(props);
     return null;
   });
@@ -83,13 +84,15 @@ function pty(fields: Partial<PtyPanelData> = {}): PtyPanelData {
 }
 
 function current(): PtyPanelData {
-  return usePanelStore.getState().panelsById[ID] as PtyPanelData;
+  const panel = usePanelStore.getState().panelsById[ID];
+  if (!panel || !isPtyPanel(panel)) throw new Error(`no terminal ${ID}`);
+  return panel;
 }
 
 function patch(fields: Partial<PtyPanelData>) {
   act(() => {
     usePanelStore.setState((state) => ({
-      panelsById: { ...state.panelsById, [ID]: { ...current(), ...fields } as PanelInstance },
+      panelsById: { ...state.panelsById, [ID]: { ...current(), ...fields } },
     }));
   });
 }
@@ -105,7 +108,7 @@ describe.each([
     spy.pane.length = 0;
     spy.cell = 0;
     usePanelStore.setState({
-      panelsById: { [ID]: pty() as PanelInstance },
+      panelsById: { [ID]: pty() },
       panelIds: [ID],
       focusedId: ID,
     });
@@ -175,11 +178,15 @@ describe.each([
     expect(lastPane().title).toBe("Renamed");
   });
 
-  it.each<[string, Partial<PtyPanelData>, Record<string, unknown>]>([
+  it.each<[string, Partial<PtyPanelData>, Partial<PanelComponentProps>]>([
     ["agent state", { agentState: "waiting" }, { agentState: "waiting" }],
     ["cwd", { cwd: "/elsewhere" }, { cwd: "/elsewhere" }],
-    ["flow status", { flowStatus: "paused-backpressure" }, {}],
-    ["activity", { activityHeadline: "Editing files" }, {}],
+    ["flow status", { flowStatus: "paused-backpressure" }, { flowStatus: "paused-backpressure" }],
+    [
+      "activity",
+      { activityHeadline: "Editing files" },
+      { activity: { headline: "Editing files", status: "working", type: "interactive" } },
+    ],
     [
       "extension state",
       { extensionState: { k: 1 }, extensionStateVersion: 2 },
@@ -193,8 +200,18 @@ describe.each([
     expect(lastPane()).toMatchObject(expected);
   });
 
+  it("renders an extension-state version bump on the same state", () => {
+    const extensionState = { k: 1 };
+    patch({ extensionState, extensionStateVersion: 1 });
+    const before = counts();
+    patch({ extensionState, extensionStateVersion: 2 });
+    expect(counts().pane).toBeGreaterThan(before.pane);
+    expect(lastPane()).toMatchObject({ extensionStateVersion: 2 });
+    expect(lastPane().extensionState).toBe(extensionState);
+  });
+
   it("renders the exit in the pane's chrome", () => {
     patch({ runtimeStatus: "exited", exitCode: 1 });
-    expect((lastPane().chrome as { hasExited: boolean }).hasExited).toBe(true);
+    expect(lastPane()).toMatchObject({ chrome: { hasExited: true } });
   });
 });

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
@@ -26,19 +26,17 @@ const BOOKKEEPING_FIELDS: ReadonlySet<string> = new Set([
  * is present in both and `Object.is`-equal. A field added to panels later
  * counts by default, so this costs renders, never staleness.
  */
-export function isSameRenderedPanel(a: PanelInstance, b: PanelInstance): boolean {
+export function isSameRenderedPanel<T extends object>(a: T, b: T): boolean {
   if (a === b) return true;
-  const aRecord = a as unknown as Record<string, unknown>;
-  const bRecord = b as unknown as Record<string, unknown>;
   let aCount = 0;
-  for (const key in aRecord) {
-    if (!Object.hasOwn(aRecord, key) || BOOKKEEPING_FIELDS.has(key)) continue;
-    if (!Object.hasOwn(bRecord, key) || !Object.is(aRecord[key], bRecord[key])) return false;
+  for (const key in a) {
+    if (!Object.hasOwn(a, key) || BOOKKEEPING_FIELDS.has(key)) continue;
+    if (!Object.hasOwn(b, key) || !Object.is(a[key], b[key])) return false;
     aCount++;
   }
   let bCount = 0;
-  for (const key in bRecord) {
-    if (Object.hasOwn(bRecord, key) && !BOOKKEEPING_FIELDS.has(key)) bCount++;
+  for (const key in b) {
+    if (Object.hasOwn(b, key) && !BOOKKEEPING_FIELDS.has(key)) bCount++;
   }
   return aCount === bCount;
 }
@@ -97,15 +95,18 @@ export function useGridPanel(id: string): PanelInstance | undefined {
   return usePanelStore(selector);
 }
 
+function isSameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
 /** A tab group's panels, steady through bookkeeping-only writes. */
 export function useGridGroupPanels(panelIds: readonly string[]): PanelInstance[] {
   // Keyed on the ids, not the array: the group object, and with it the array,
   // is rebuilt on every active-tab switch, and a new selector starts with no
-  // previous result to hold on to.
-  const key = panelIds.join("\0");
-  const selector = useMemo(
-    () => createGridGroupPanelsSelector(key === "" ? [] : key.split("\0")),
-    [key]
-  );
+  // previous result to hold on to. Adjusted during render, as `useStableGridTabs`
+  // does, so React owns the kept ids.
+  const [ids, setIds] = useState(panelIds);
+  if (ids !== panelIds && !isSameIds(ids, panelIds)) setIds(panelIds);
+  const selector = useMemo(() => createGridGroupPanelsSelector(ids), [ids]);
   return usePanelStore(selector);
 }

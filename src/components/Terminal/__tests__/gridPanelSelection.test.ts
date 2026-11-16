@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+
+vi.mock("@/store", async () => {
+  const { usePanelStore } = await import("@/store/panelStore");
+  return { usePanelStore };
+});
+
 import {
   createGridGroupPanelsSelector,
   createGridPanelSelector,
   isSameRenderedPanel,
+  useGridGroupPanels,
+  useGridPanel,
 } from "../gridPanelSelection";
+import { usePanelStore } from "@/store/panelStore";
 
-function pty(id: string, fields: Partial<PtyPanelData> = {}): PanelInstance {
+function pty(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     kind: "terminal",
@@ -18,12 +29,14 @@ function pty(id: string, fields: Partial<PtyPanelData> = {}): PanelInstance {
     flowStatus: "running",
     flowStatusTimestamp: 1,
     ...fields,
-  } as PanelInstance;
+  };
 }
 
 function state(...panels: PanelInstance[]) {
   return { panelsById: Object.fromEntries(panels.map((p) => [p.id, p])) };
 }
+
+const ids = (panels: PanelInstance[]) => panels.map((p) => p.id);
 
 describe("isSameRenderedPanel", () => {
   const base = pty("a", { agentState: "working" });
@@ -31,7 +44,6 @@ describe("isSameRenderedPanel", () => {
   it.each<[string, Partial<PtyPanelData>]>([
     ["the flow ordering timestamp", { flowStatusTimestamp: 9 }],
     ["the held-duration gauge", { heldDurationMs: 4_000 }],
-    ["a cleared held-duration gauge", { heldDurationMs: undefined }],
     ["the last agent observation", { lastAgentObservation: { agentState: "working", at: 7 } }],
     [
       "all bookkeeping at once",
@@ -42,7 +54,15 @@ describe("isSameRenderedPanel", () => {
       },
     ],
   ])("ignores %s", (_name, fields) => {
-    expect(isSameRenderedPanel(base, { ...base, ...fields } as PanelInstance)).toBe(true);
+    expect(isSameRenderedPanel(base, { ...base, ...fields })).toBe(true);
+  });
+
+  it("ignores the held-duration gauge being cleared, either way round", () => {
+    const held = pty("a", { heldDurationMs: 2_000 });
+    const { heldDurationMs: _gauge, ...cleared } = held;
+    expect(isSameRenderedPanel(held, cleared)).toBe(true);
+    expect(isSameRenderedPanel(cleared, held)).toBe(true);
+    expect(isSameRenderedPanel(held, { ...held, heldDurationMs: undefined })).toBe(true);
   });
 
   it.each<[string, Partial<PtyPanelData>]>([
@@ -51,20 +71,18 @@ describe("isSameRenderedPanel", () => {
     ["a visible field added", { exitCode: 0 }],
     ["a visible field added as undefined", { exitCode: undefined }],
   ])("tells apart %s", (_name, fields) => {
-    expect(isSameRenderedPanel(base, { ...base, ...fields } as PanelInstance)).toBe(false);
+    expect(isSameRenderedPanel(base, { ...base, ...fields })).toBe(false);
   });
 
   it("tells apart a nested object replaced with an equal one", () => {
     const withState = pty("a", { extensionState: {} });
-    expect(
-      isSameRenderedPanel(withState, { ...withState, extensionState: {} } as PanelInstance)
-    ).toBe(false);
+    expect(isSameRenderedPanel(withState, { ...withState, extensionState: {} })).toBe(false);
   });
 
   it("tells apart a visible field removed", () => {
-    const { agentState: _removed, ...rest } = base as PtyPanelData;
-    expect(isSameRenderedPanel(base, rest as PanelInstance)).toBe(false);
-    expect(isSameRenderedPanel(rest as PanelInstance, base)).toBe(false);
+    const { agentState: _removed, ...rest } = base;
+    expect(isSameRenderedPanel(base, rest)).toBe(false);
+    expect(isSameRenderedPanel(rest, base)).toBe(false);
   });
 });
 
@@ -108,7 +126,7 @@ describe("createGridGroupPanelsSelector", () => {
   it("keeps the array it returned through bookkeeping-only writes", () => {
     const select = createGridGroupPanelsSelector(["a", "b"]);
     const first = select(state(pty("a"), pty("b")));
-    expect(first.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(ids(first)).toEqual(["a", "b"]);
     expect(
       select(state(pty("a", { heldDurationMs: 2_000 }), pty("b", { flowStatusTimestamp: 3 })))
     ).toBe(first);
@@ -123,26 +141,75 @@ describe("createGridGroupPanelsSelector", () => {
     expect(next[1]).toBe(renamed);
   });
 
-  it("follows panels leaving the group's renderable set", () => {
+  it("follows panels leaving and rejoining the group's renderable set", () => {
     const select = createGridGroupPanelsSelector(["a", "b"]);
-    select(state(pty("a"), pty("b")));
-    expect(select(state(pty("b"))).map((p) => p.id)).toEqual(["b"]);
-    expect(select(state(pty("a"), pty("b"))).map((p) => p.id)).toEqual(["a", "b"]);
+    const both = select(state(pty("a"), pty("b")));
+    expect(ids(select(state(pty("b"))))).toEqual(["b"]);
+    expect(ids(select(state(pty("a"), pty("b"))))).toEqual(["a", "b"]);
+    const leading = select(state(pty("a")));
+    expect(ids(leading)).toEqual(["a"]);
+    expect(leading).not.toBe(both);
+    const none = select(state());
+    expect(none).toEqual([]);
+    expect(none).not.toBe(leading);
   });
 
   it("keeps a plugin-contributed panel in the group", () => {
     const select = createGridGroupPanelsSelector(["a", "p"]);
-    const plugin = {
-      id: "p",
-      kind: "acme.board",
-      title: "Board",
-      location: "grid",
-    } as PanelInstance;
-    expect(select(state(pty("a"), plugin)).map((p) => p.id)).toEqual(["a", "p"]);
+    // A dotted plugin kind the carrier's types don't name.
+    const plugin: PanelInstance = Object.assign(pty("p"), { kind: "acme.board", pluginId: "acme" });
+    expect(ids(select(state(pty("a"), plugin)))).toEqual(["a", "p"]);
   });
 
   it("returns the group's order", () => {
     const select = createGridGroupPanelsSelector(["b", "a"]);
-    expect(select(state(pty("a"), pty("b"))).map((p) => p.id)).toEqual(["b", "a"]);
+    expect(ids(select(state(pty("a"), pty("b"))))).toEqual(["b", "a"]);
+  });
+});
+
+describe("the hooks", () => {
+  const initial = usePanelStore.getState();
+
+  function seed(...panels: PanelInstance[]) {
+    act(() => {
+      usePanelStore.setState({ ...state(...panels), panelIds: ids(panels) });
+    });
+  }
+
+  afterEach(() => {
+    usePanelStore.setState(initial, true);
+  });
+
+  it("follows the cell to another panel", () => {
+    seed(pty("a"), pty("b"));
+    const { result, rerender } = renderHook(({ id }) => useGridPanel(id), {
+      initialProps: { id: "a" },
+    });
+    expect(result.current?.id).toBe("a");
+    rerender({ id: "b" });
+    expect(result.current?.id).toBe("b");
+  });
+
+  it("keeps the group's panels through a fresh array of the same ids", () => {
+    seed(pty("a"), pty("b"));
+    const { result, rerender } = renderHook(({ panelIds }) => useGridGroupPanels(panelIds), {
+      initialProps: { panelIds: ["a", "b"] },
+    });
+    const first = result.current;
+    rerender({ panelIds: ["a", "b"] });
+    expect(result.current).toBe(first);
+    seed(pty("a", { flowStatusTimestamp: 7 }), pty("b"));
+    expect(result.current).toBe(first);
+  });
+
+  it("follows the group's new order and membership", () => {
+    seed(pty("a"), pty("b"), pty("c"));
+    const { result, rerender } = renderHook(({ panelIds }) => useGridGroupPanels(panelIds), {
+      initialProps: { panelIds: ["a", "b"] },
+    });
+    rerender({ panelIds: ["b", "a"] });
+    expect(ids(result.current)).toEqual(["b", "a"]);
+    rerender({ panelIds: ["b", "a", "c"] });
+    expect(ids(result.current)).toEqual(["b", "a", "c"]);
   });
 });

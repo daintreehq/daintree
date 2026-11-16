@@ -68,6 +68,7 @@ import {
   flushPanelStatusBuffer,
 } from "@/store/panelStatusBuffer";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { addTabForPanel } from "../useContentGridContext";
 
 function AttentionProbe() {
   gridPanel.ambient.push(useContext(GridGroupAttentionContext)?.ambientAgentState);
@@ -263,6 +264,18 @@ describe("GridTabGroup render isolation", () => {
         lastAgentObservation: { agentState: "working", at: 5_000 },
       });
       expect({ group: gridPanel.groupRenders, pane: renderCount() }).toEqual(before);
+    });
+
+    it("duplicates the live shown panel after its bookkeeping moved", () => {
+      const before = renderCount();
+      flush(() => enqueueHeldDurationUpdate(SHOWN, 2_000));
+      expect(renderCount()).toBe(before);
+      vi.mocked(addTabForPanel).mockClear();
+      void lastProps().onAddTab?.();
+      expect(vi.mocked(addTabForPanel)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(addTabForPanel).mock.calls[0]![0]).toBe(
+        usePanelStore.getState().panelsById[SHOWN]
+      );
     });
 
     it("leaves the shown pane alone when a background tab's fields are replaced with equal ones", () => {
