@@ -361,10 +361,7 @@ export const decisionsNamespace = defineIpcNamespace({
     getQuestionContent: opValidated(
       CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
       getQuestionContentSchema,
-      async (
-        ctx,
-        payload: GetDecisionQuestionPayload
-      ): Promise<DecisionQuestionContentResult> => {
+      async (ctx, payload: GetDecisionQuestionPayload): Promise<DecisionQuestionContentResult> => {
         if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
           return { result: "off" };
         }
