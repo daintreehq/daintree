@@ -27,6 +27,22 @@ const ipcMainMock = vi.hoisted(() => {
     _reset: () => listeners.clear(),
   };
 });
+// PluginService loads ajv through createRequire, which esbuild's graph and
+// vi.mock's module map never see, so the require itself is what is watched.
+const requiredIds = vi.hoisted(() => [] as string[]);
+vi.mock("node:module", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:module")>();
+  return {
+    ...actual,
+    createRequire: (from: string | URL) => {
+      const real = actual.createRequire(from);
+      return Object.assign((id: string) => {
+        requiredIds.push(id);
+        return real(id);
+      }, real);
+    },
+  };
+});
 const windowRefMock = vi.hoisted(() => ({
   getWindowRegistry: vi.fn(() => null),
   getProjectViewManager: vi.fn(() => null),
@@ -1120,5 +1136,62 @@ describe("per-plugin metrics", () => {
     service.unloadPlugin("acme.test-plugin");
     expect(service.metrics.getSnapshot("acme.test-plugin")).toBeNull();
     expect(service.metrics.getAll()).toEqual([]);
+  });
+});
+
+describe("ajv loading (#17024)", () => {
+  function registerSchemaAction(service: PluginService, id: string): ReturnType<typeof vi.fn> {
+    service.registerPluginAction("acme.test-plugin", {
+      id,
+      title: id,
+      description: "Schema action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      inputSchema: {
+        type: "object",
+        properties: { email: { type: "string", format: "email" } },
+        required: ["email"],
+      },
+    });
+    const handler = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", id, handler);
+    return handler;
+  }
+
+  const ajvRequires = () => requiredIds.filter((id) => id === "ajv" || id === "ajv-formats");
+
+  it("requires ajv and its formats only for the first action input schema validated", async () => {
+    requiredIds.length = 0;
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const plain = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", "raw-channel", plain);
+    await service.dispatchHandler("acme.test-plugin", "raw-channel", makeCtx("acme.test-plugin"), [
+      {},
+    ]);
+    expect(ajvRequires()).toEqual([]);
+
+    registerSchemaAction(service, "acme.test-plugin.first");
+    await expect(
+      service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.first",
+        makeCtx("acme.test-plugin"),
+        [{ email: "not-an-email" }]
+      )
+    ).rejects.toThrow("Invalid arguments for plugin action");
+    expect(ajvRequires()).toEqual(["ajv", "ajv-formats"]);
+
+    const second = registerSchemaAction(service, "acme.test-plugin.second");
+    await service.dispatchHandler(
+      "acme.test-plugin",
+      "acme.test-plugin.second",
+      makeCtx("acme.test-plugin"),
+      [{ email: "a@example.com" }]
+    );
+    expect(second).toHaveBeenCalledWith(expect.anything(), { email: "a@example.com" });
+    expect(ajvRequires()).toEqual(["ajv", "ajv-formats"]);
   });
 });

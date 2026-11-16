@@ -185,7 +185,7 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 }
 
 /** An Assistant's pane, by its binding; none is bound before the service loads. */
-function isHelpTerminal(terminalId: string): boolean {
+function isBoundHelpTerminal(terminalId: string): boolean {
   return loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false;
 }
 
@@ -1132,7 +1132,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // none of the session's own wiring either. Plugin servers reach the
         // Assistant only through its own launch, checked against its session
         // and its answer, so this one gets none.
-        const isHelpTerminal = isHelpTerminal(id);
+        const isHelpTerminal = isBoundHelpTerminal(id);
         const pluginReport = isHelpTerminal
           ? null
           : await resolveLaunchPluginsReport(
@@ -1289,7 +1289,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (requiredPluginTools.length > 0 && requiredPluginToolStatuses.length === 0) {
         requiredPluginToolStatuses = requiredPluginToolsAll(
           requiredPluginTools,
-          isHelpTerminal(id) ? "unavailable" : "config-failed"
+          isBoundHelpTerminal(id) ? "unavailable" : "config-failed"
         );
       }
       if (requiredPluginToolStatuses.length > 0) {
@@ -1309,7 +1309,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (preparedForThisLaunch) {
           await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         }
-      } else if (!isHelpTerminal(id)) {
+      } else if (!isBoundHelpTerminal(id)) {
         pluginToolsLaunchProjectId = resolvedProject.id;
       }
     } else if (requiredPluginTools.length > 0) {
@@ -1488,7 +1488,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         typeof launchAgentId === "string" &&
         safeCommand.length > 0 &&
         !isHelpLaunch &&
-        !isHelpTerminal(id) &&
+        !isBoundHelpTerminal(id) &&
         validatedOptions.scheduledRun === undefined &&
         validatedOptions.restore !== true &&
         getLifecycleLedger().currentGeneration(id) === undefined &&
@@ -1536,7 +1536,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
         // unbinds the session on a restart's kill. Without it, Restart All
         // Terminals would quietly strip the assistant's identity.
-        isAssistantTerminal: isHelpLaunch || isHelpTerminal(id),
+        isAssistantTerminal: isHelpLaunch || isBoundHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         scheduledRun: validatedOptions.scheduledRun,

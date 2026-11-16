@@ -75,6 +75,18 @@ import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
 } from "./helpers/assistantProjectionParity.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 type FakePtyClient = {
   getAllTerminalsAsync: ReturnType<typeof vi.fn>;
@@ -1346,6 +1358,25 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     expect(p1).not.toHaveProperty("assistantStateSince");
     // The PTY is still the host's to account for, hidden or not.
     expect(p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("reports no assistant while the help-session service has not loaded, without loading it", async () => {
+    // Its panel can't be open before it loads; the panel answer stays "shown"
+    // here so only the unloaded service can account for the silence.
+    resetHelpSessionRuntimeForTests();
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(helpSessionMock.isPanelVisible).not.toHaveBeenCalled();
     svc.stop();
   });
 

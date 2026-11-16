@@ -5,8 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // task-ordering assertions below.
 const registeredTaskNames: string[] = [];
 const registeredTaskRuns = new Map<string, () => unknown>();
-// Hoisted: the HelpSessionService mock factory now runs at import time
-// (globalServicesInit value-imports the singleton statically).
+// Hoisted: referenced from the HelpSessionService mock factory.
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 const dbMaintenanceCalls = vi.hoisted(() => [] as string[]);
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
@@ -496,6 +495,18 @@ import { store } from "../../store.js";
 import { releaseDeferredQueueOnWindowClosed } from "../lastWindowClosed.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
 import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -1263,6 +1274,24 @@ describe("initGlobalServices task ordering", () => {
     const setIdx = registeredTaskNames.indexOf("__setProjectMetadataReader__");
     expect(setIdx).toBeGreaterThanOrEqual(0);
     expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
+  });
+
+  it("wires a help-session service that loads after init the moment it loads", async () => {
+    resetHelpSessionRuntimeForTests();
+    const { helpSessionService } = await import("../../services/HelpSessionService.js");
+    const startOrphanSweep = vi.mocked(helpSessionService.startOrphanSweep);
+    startOrphanSweep.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+    expect(setMcpRegistry).not.toHaveBeenCalled();
+    expect(setProjectMetadataReader).not.toHaveBeenCalled();
+    expect(startOrphanSweep).not.toHaveBeenCalled();
+
+    publishHelpSessionService(helpSessionService);
+    expect(setMcpRegistry).toHaveBeenCalledWith(fakeRegistry);
+    expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
+    expect(startOrphanSweep).toHaveBeenCalledTimes(1);
   });
 
   it("skips MCP-related tasks when no windowRegistry is supplied", async () => {

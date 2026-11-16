@@ -366,6 +366,18 @@ import {
   getLifecycleLedger,
   ledgerFactsFromSpawnOptions,
 } from "../../../../services/pty/lifecycleLedger.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 function getSpawnHandler() {
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
@@ -2135,6 +2147,38 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
     expect(ptyClient.spawn).not.toHaveBeenCalled();
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("refuses a help token while the help-session service has not loaded, without asking it", async () => {
+    // Only the service mints help tokens, so one arriving before it loads is
+    // stale or spoofed. A token the mock would accept proves the handler
+    // decided without consulting it.
+    resetHelpSessionRuntimeForTests();
+    mockValidateToken.mockReturnValue("core");
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "claude",
+          launchAgentId: "claude",
+          env: { DAINTREE_MCP_TOKEN: "minted-before-load" },
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Daintree Assistant session token is invalid/);
+
+    expect(mockValidateToken).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
   it("refuses a help token on a stable agent excluded for its injection mode (#12262)", async () => {
