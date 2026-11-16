@@ -1264,6 +1264,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "monitor":
+      case "active-worktree-id":
       case "delete-preview-result":
         this.handleRequestResult(this.toResult(event, true));
         break;

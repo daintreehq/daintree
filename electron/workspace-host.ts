@@ -599,6 +599,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.getMonitor(request.requestId, request.worktreeId);
         break;
 
+      case "get-active-worktree-id":
+        workspaceService.getActiveWorktreeId(request.requestId);
+        break;
+
       case "get-delete-preview": {
         const unreadable = () => "unreadable" as const;
         const [changes, risk, teardown] = await Promise.all([

@@ -285,6 +285,7 @@ vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
 import { registerPluginHandlers } from "../plugin.js";
 import { notifyIpcEnvelopeRejected } from "../../envelopeRejections.js";
 import { PluginPayloadTooLargeError } from "../../../services/plugin/pluginPayloadLimits.js";
+import { PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES } from "../../../services/plugin/pluginAuditArgsHash.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
@@ -1364,6 +1365,27 @@ describe("registerPluginHandlers", () => {
       argsHash: "",
       errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
+    expect(mockStableArgsSha256).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits a large accepted invoke without hashing its args on main (#17069)", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("boom"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    // Well inside the invoke cap, so it is dispatched, but large enough that
+    // sorting, serializing and digesting it would stall main on every record.
+    const large = "x".repeat(PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES + 1);
+    await expect(invokeHandler(trustedEvent, "x", "y", large)).rejects.toThrow("boom");
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error", argsHash: "" });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
   });
 

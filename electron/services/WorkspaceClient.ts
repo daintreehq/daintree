@@ -834,6 +834,44 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
+   * The current worktree's id for the host serving `windowId`, read as a
+   * single id rather than by cloning every snapshot across the port to find
+   * the one marked `isCurrent`. `null` when no host serves the window, the
+   * host never became ready, or no worktree is current.
+   */
+  getActiveWorktreeIdForWindowAsync(windowId: number): Promise<string | null> {
+    if (this.isDisposed) return Promise.resolve(null);
+    const entry = this.pool.resolveEntryForWindow(windowId);
+    return entry ? this._readActiveWorktreeIdWhenReady(entry) : Promise.resolve(null);
+  }
+
+  /**
+   * {@link getActiveWorktreeIdForWindowAsync} for one project's host, with the
+   * same `expectedProjectId` guard as {@link getAllStatesForProjectAsync}: a
+   * mismatch answers `null`, never another project's worktree.
+   */
+  getActiveWorktreeIdForProjectAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<string | null> {
+    if (this.isDisposed) return Promise.resolve(null);
+    const entry = this.pool.entries.get(this.pool.normalizeProjectPath(projectPath));
+    if (entry === undefined || entry.projectId !== expectedProjectId) return Promise.resolve(null);
+    return this._readActiveWorktreeIdWhenReady(entry);
+  }
+
+  /** Readiness-gated like the state reads, so a mid-populate map never answers. */
+  private async _readActiveWorktreeIdWhenReady(entry: ProcessEntry): Promise<string | null> {
+    if (!(await this._awaitHostReady(entry))) return null;
+    const requestId = entry.host.generateRequestId();
+    const result = await entry.host.sendWithResponse<{ worktreeId: string | null }>({
+      type: "get-active-worktree-id",
+      requestId,
+    });
+    return result.worktreeId ?? null;
+  }
+
+  /**
    * Shared coalescing for the result-shaped reads, mirroring the array-shaped
    * methods: a resolved entry lingers for the short overlap window so a burst
    * of equivalent calls shares one host round trip, a rejected one is evicted
