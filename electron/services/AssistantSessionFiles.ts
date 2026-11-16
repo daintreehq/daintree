@@ -261,7 +261,12 @@ function spliceManagedBlock(
 /** Atomically writes `text` unless a regular file there already holds exactly that. */
 async function writeFileIfChanged(filePath: string, text: string): Promise<void> {
   try {
-    if ((await fs.lstat(filePath)).isFile() && (await fs.readFile(filePath, "utf-8")) === text) {
+    const stats = await fs.lstat(filePath);
+    if (stats.isFile() && (await fs.readFile(filePath, "utf-8")) === text) {
+      // The mode a write would have given it.
+      if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
+        await fs.chmod(filePath, 0o600);
+      }
       return;
     }
   } catch {
@@ -306,9 +311,16 @@ class PromptFiles {
     return (await this.file(name)).text;
   }
 
-  /** Replaces the file's whole text, creating it if it is absent. */
+  /**
+   * Replaces the file's whole text, creating it if it is absent. The old text
+   * is only compared against, so one that can't be read is simply rewritten.
+   */
   async replace(name: string, text: string): Promise<void> {
-    (await this.file(name)).text = text;
+    const onDisk = await this.file(name).then(
+      (file) => file.onDisk,
+      () => null
+    );
+    this.files.set(name, Promise.resolve({ onDisk, text }));
   }
 
   /**
@@ -336,9 +348,13 @@ class PromptFiles {
     file.text = spliceManagedBlock(file.text, markers, body);
   }
 
-  /** Writes every file whose composed text differs from what is on disk. */
+  /**
+   * Writes every file whose composed text differs from what is on disk. Every
+   * write settles before a failure is thrown, so none lands after the caller
+   * has released the directory to the next provision.
+   */
   async flush(): Promise<void> {
-    await Promise.all(
+    const results = await Promise.allSettled(
       [...this.files].map(async ([name, pending]) => {
         const file = await pending;
         if (file.text === null || file.text === file.onDisk) return;
@@ -348,6 +364,8 @@ class PromptFiles {
         file.onDisk = file.text;
       })
     );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
   }
 }
 
@@ -493,10 +511,14 @@ function buildUserInstructionsPointer(
 async function computeTemplateHash(helpFolder: string): Promise<string> {
   const files = await listTemplateFiles(helpFolder);
   // The bundled template only changes with the app, so a launch hashes it
-  // again only when a file's size or mtime says it might have (a dev build).
+  // again only when a file's size or times say it might have (a dev build).
+  // ctime too: an edit can put mtime back, but nothing can set ctime.
   const stats = await Promise.all(files.map((file) => fs.stat(file.absolute)));
   const fingerprint = files
-    .map((file, i) => `${file.relative}\0${stats[i]!.size}\0${stats[i]!.mtimeMs}`)
+    .map((file, i) => {
+      const { size, mtimeMs, ctimeMs } = stats[i]!;
+      return `${file.relative}\0${size}\0${mtimeMs}\0${ctimeMs}`;
+    })
     .join("\n");
   const cached = templateHashCache.get(helpFolder);
   if (cached?.fingerprint === fingerprint) return cached.hash;
@@ -512,7 +534,7 @@ async function computeTemplateHash(helpFolder: string): Promise<string> {
   return digest;
 }
 
-/** Template folder → its last hash and the file sizes and mtimes it was taken at. */
+/** Template folder → its last hash and the file sizes and times it was taken at. */
 const templateHashCache = new Map<string, { fingerprint: string; hash: string }>();
 
 async function listTemplateFiles(

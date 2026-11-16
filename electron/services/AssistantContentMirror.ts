@@ -397,7 +397,7 @@ async function writeManifest(
  */
 async function destAlreadyHolds(
   destAbs: string,
-  expected: { text: string } | { source: string; size: number; mode: number }
+  expected: { text: string } | { source: string }
 ): Promise<boolean> {
   try {
     const dest = await fs.lstat(destAbs);
@@ -406,7 +406,8 @@ async function destAlreadyHolds(
       if (dest.size !== Buffer.byteLength(expected.text, "utf8")) return false;
       return (await fs.readFile(destAbs, "utf-8")) === expected.text;
     }
-    if (dest.size !== expected.size || (dest.mode & 0o7777) !== (expected.mode & 0o7777)) {
+    const source = await fs.stat(expected.source);
+    if (dest.size !== source.size || (dest.mode & 0o7777) !== (source.mode & 0o7777)) {
       return false;
     }
     const [current, wanted] = await Promise.all([
@@ -796,7 +797,6 @@ export async function syncAssistantContent(
   // grown past the cap becomes stale below and its old copy is removed. Only
   // a proven-absent source may retire its copy — an unreadable one means the
   // desired state is unprovable.
-  const sourceStats = new Map<string, { size: number; mode: number }>();
   for (const [destRel, sourceAbs] of desired) {
     try {
       const stat = await fs.stat(sourceAbs);
@@ -805,8 +805,6 @@ export async function syncAssistantContent(
           `[AssistantContentMirror] Skipping oversized file (${stat.size} bytes): ${sourceAbs}`
         );
         desired.delete(destRel);
-      } else {
-        sourceStats.set(destRel, { size: stat.size, mode: stat.mode });
       }
     } catch (err) {
       if (!isAbsentError(err)) {
@@ -929,10 +927,8 @@ export async function syncAssistantContent(
       if (text === undefined && sanitizeRels.has(destRel)) {
         text = stripExecutableFrontmatter(await fs.readFile(sourceAbs, "utf-8"));
       }
-      const sourceStat = sourceStats.get(destRel);
-      const expected =
-        text !== undefined ? { text } : sourceStat ? { source: sourceAbs, ...sourceStat } : null;
-      if (expected && (await destAlreadyHolds(destAbs, expected))) {
+      const expected = text !== undefined ? { text } : { source: sourceAbs };
+      if (await destAlreadyHolds(destAbs, expected)) {
         unchanged += 1;
         continue;
       }

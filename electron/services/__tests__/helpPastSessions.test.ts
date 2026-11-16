@@ -16,6 +16,30 @@ import {
 } from "../../../shared/config/helpAssistantGreeting.js";
 import { HELP_PAST_SESSIONS_LIMIT } from "../../../shared/types/ipc/help.js";
 
+// Pass-through, so a test can fix the order a folder lists in and see which
+// transcripts were opened.
+const fsHooks = vi.hoisted(() => ({
+  reorder: null as ((names: string[]) => string[]) | null,
+  opened: [] as string[],
+}));
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  const readdir = async (...args: unknown[]): Promise<unknown> => {
+    const names = await (actual.readdir as (...a: unknown[]) => Promise<unknown>)(...args);
+    return fsHooks.reorder && Array.isArray(names) ? fsHooks.reorder(names as string[]) : names;
+  };
+  const open = (...args: Parameters<typeof actual.open>) => {
+    fsHooks.opened.push(String(args[0]));
+    return actual.open(...args);
+  };
+  return { ...actual, readdir, open };
+});
+
+beforeEach(() => {
+  fsHooks.reorder = null;
+  fsHooks.opened.length = 0;
+});
+
 const A = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
 const B = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
 const C = "2bd2578c-b710-4302-90c1-b222c4c29aa3";
@@ -301,6 +325,8 @@ describe("listClaudeHelpSessions", () => {
     await writeTranscriptAt(C, transcript(prompt("Third id")), 5);
     await writeTranscriptAt(A, transcript(prompt("First id")), 5);
     await writeTranscriptAt(B, transcript(prompt("Second id")), 5);
+    // Listed in the opposite order, so only the id can put A first.
+    fsHooks.reorder = (names) => [...names].sort().reverse();
 
     const read = await listClaudeHelpSessions(sessionPath, projectsRoot, 2);
     expect(read.sessions.map((s) => s.sessionId)).toEqual([A, B]);
@@ -338,6 +364,8 @@ describe("listClaudeHelpSessions", () => {
     it("falls back to the other spelling when the first holds only the greeting", async () => {
       await writeTranscriptAt(A, transcript(prompt(HELP_ASSISTANT_GREETING)), 1, linkSlugDir);
       await writeTranscriptAt(A, transcript(prompt("Resolved")), 9, resolvedSlugDir);
+      // Newer than A's first copy, older than the one that becomes its row.
+      await writeTranscriptAt(B, transcript(prompt("Between")), 5, resolvedSlugDir);
 
       const read = await listClaudeHelpSessions(linkPath, projectsRoot, 1);
       expect(read.sessions).toEqual([
@@ -524,15 +552,16 @@ describe("listHelpPastSessions", () => {
     }
   });
 
-  it("caps a long Claude history and still knows whether it was cut", async () => {
+  it("opens only the newest transcripts a long Claude history needs, and knows it was cut", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "help-past-claude-cap-"));
     try {
       const sessionPath = path.join(root, "s");
       await mkdir(sessionPath);
       const slugDir = path.join(root, "projects", claudeProjectSlug(sessionPath));
       await mkdir(slugDir, { recursive: true });
+      const extra = 6;
       const ids = Array.from(
-        { length: HELP_PAST_SESSIONS_LIMIT + 1 },
+        { length: HELP_PAST_SESSIONS_LIMIT + extra },
         (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
       );
       for (const [i, id] of ids.entries()) {
@@ -551,11 +580,15 @@ describe("listHelpPastSessions", () => {
 
       const cut = await list();
       expect(cut.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
-      expect(cut.sessions[0]?.title).toBe(`Question ${HELP_PAST_SESSIONS_LIMIT}`);
-      expect(cut.sessions.at(-1)?.title).toBe("Question 1");
+      expect(cut.sessions[0]?.title).toBe(`Question ${ids.length - 1}`);
+      expect(cut.sessions.at(-1)?.title).toBe(`Question ${extra}`);
       expect(cut.truncated).toBe(true);
+      // The cap's rows and one more to prove the cut; none of the older ones.
+      expect([...fsHooks.opened].sort()).toEqual(
+        ids.slice(extra - 1).map((id) => path.join(slugDir, `${id}.jsonl`))
+      );
 
-      await rm(path.join(slugDir, `${ids[0]}.jsonl`));
+      for (const id of ids.slice(0, extra)) await rm(path.join(slugDir, `${id}.jsonl`));
       const whole = await list();
       expect(whole.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
       expect(whole.truncated).toBe(false);

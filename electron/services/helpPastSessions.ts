@@ -169,11 +169,13 @@ export function summarizeClaudeTranscript(
 }
 
 async function readEdges(
-  filePath: string,
-  size: number
+  filePath: string
 ): Promise<{ head: string; tail: string; complete: boolean }> {
   const handle = await open(filePath, "r");
   try {
+    // Sized now, not when the folder was listed: the live conversation's
+    // transcript grows in between, and its newest title is in the tail.
+    const { size } = await handle.stat();
     const readAt = async (position: number, length: number): Promise<string> => {
       const buffer = Buffer.alloc(length);
       const { bytesRead } = await handle.read(buffer, 0, length, position);
@@ -240,7 +242,6 @@ function newerFirst(a: { at: number; id: string }, b: { at: number; id: string }
 
 interface TranscriptFile {
   filePath: string;
-  size: number;
   mtimeMs: number;
 }
 
@@ -299,7 +300,7 @@ export async function listClaudeHelpSessions(
         // lstat: a symlink planted in the store is not a transcript we follow.
         const stats = await lstat(filePath);
         if (!stats.isFile() || stats.size === 0) return;
-        found[index] = { sessionId, file: { filePath, size: stats.size, mtimeMs: stats.mtimeMs } };
+        found[index] = { sessionId, file: { filePath, mtimeMs: stats.mtimeMs } };
       } catch (error) {
         // Removed mid-scan is one fewer conversation; unreadable is one hidden.
         if (!isAbsent(error)) complete = false;
@@ -324,7 +325,7 @@ export async function listClaudeHelpSessions(
   const summarize = async (group: TranscriptGroup): Promise<HelpPastSession | null> => {
     for (const file of group.files) {
       try {
-        const { head, tail, complete: whole } = await readEdges(file.filePath, file.size);
+        const { head, tail, complete: whole } = await readEdges(file.filePath);
         const summary = summarizeClaudeTranscript(head, tail, whole);
         if (!summary) continue;
         return {

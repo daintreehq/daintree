@@ -1181,36 +1181,57 @@ describe("a relaunch with nothing changed (#17076)", () => {
     expect(await mtimeOf(".daintree-user-content.json")).not.toBe(LONG_AGO);
   });
 
-  it("rewrites generated plugin text when the plugin's text changes", async () => {
+  it("rewrites generated and sanitized text when it changes, even at the same length", async () => {
     await syncAll();
     await backdate();
+    await writeSource(
+      getProjectAssistantContentDir(projectPath),
+      ".claude/skills/project-skill/SKILL.md",
+      "---\nname: project-skill\nallowed-tools: Bash(*)\n---\nBodx.\n"
+    );
 
     const again = await syncAssistantContent({
       sessionPath,
       projectPath,
       agentId: "claude",
       globalContentDir: globalDir,
-      pluginContent: [{ ...plugin, references: new Map([["schema.md", "Columns."]]) }],
+      pluginContent: [{ ...plugin, references: new Map([["schema.md", "Fields."]]) }],
     });
 
-    expect(again).toMatchObject({ copied: 1, unchanged: 5 });
-    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBe("Columns.");
+    expect(again).toMatchObject({ copied: 2, unchanged: 4 });
+    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBe("Fields.");
+    expect(await readSession(".claude/skills/project-skill/SKILL.md")).toContain("Bodx.");
   });
 
-  it("replaces a symlink planted where a mirrored file belongs, even with the same bytes", async () => {
-    await syncAll();
-    const dest = path.join(sessionPath, ".claude", "commands", "review.md");
-    const outside = path.join(tmpDir, "outside.md");
-    await fs.writeFile(outside, "do a review", "utf-8");
-    await fs.rm(dest);
-    await fs.symlink(outside, dest);
+  it.skipIf(process.platform === "win32")(
+    "replaces a symlink planted where a mirrored file belongs, even one reading the same text",
+    async () => {
+      // The link's own size is its target's path length, so with that path as
+      // the expected text only the regular-file check tells the link apart.
+      const outside = path.join(tmpDir, "outside.md");
+      const linked = { ...plugin, references: new Map([["schema.md", outside]]) };
+      const syncLinked = () =>
+        syncAssistantContent({
+          sessionPath,
+          projectPath,
+          agentId: "claude",
+          globalContentDir: globalDir,
+          pluginContent: [linked],
+        });
+      await syncLinked();
+      const dest = path.join(sessionPath, "reference", "plugins", "daintree-ledger", "schema.md");
+      await fs.writeFile(outside, outside, "utf-8");
+      await fs.rm(dest);
+      await fs.symlink(outside, dest);
+      expect((await fs.lstat(dest)).size).toBe(Buffer.byteLength(outside));
 
-    const again = await syncAll();
+      const again = await syncLinked();
 
-    expect(again).toMatchObject({ copied: 1, staleFailures: [] });
-    expect((await fs.lstat(dest)).isSymbolicLink()).toBe(false);
-    expect(await fs.readFile(outside, "utf-8")).toBe("do a review");
-  });
+      expect(again).toMatchObject({ copied: 1, staleFailures: [] });
+      expect((await fs.lstat(dest)).isSymbolicLink()).toBe(false);
+      expect(await fs.readFile(dest, "utf-8")).toBe(outside);
+    }
+  );
 
   it.skipIf(process.platform === "win32")(
     "re-copies a file whose source only changed permission bits",

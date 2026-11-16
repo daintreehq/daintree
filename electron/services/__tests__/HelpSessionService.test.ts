@@ -908,6 +908,25 @@ describe("HelpSessionService", () => {
         expect(after.startsWith("# Global Help")).toBe(true);
       });
 
+      it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+        "replaces a prompt file it can't read with the global assistant's own",
+        async () => {
+          snapshot = withProjects(["alpha"]);
+          install();
+          const first = await service.provisionSession(globalInput());
+          if (!first) throw new Error("expected result");
+          const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+          await fs.chmod(claudePath, 0o000);
+
+          const second = await service.provisionSession(globalInput());
+          if (!second) throw new Error("expected result");
+
+          const claude = await fs.readFile(claudePath, "utf-8");
+          expect(claude.startsWith("# Global Help")).toBe(true);
+          expect(claude).toContain("`id-alpha`");
+        }
+      );
+
       it("gives a Codex run the block and the sidecar it is told to read when reopened", async () => {
         snapshot = withProjects(["alpha"]);
         install();
@@ -5796,7 +5815,7 @@ describe("HelpSessionService", () => {
       }
     });
 
-    it("writes a prompt file whose blocks changed once, with every block current", async () => {
+    it("brings a stale prompt file's blocks current and leaves the other alone", async () => {
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected first provision");
       const claudePath = path.join(first.sessionPath, "CLAUDE.md");
@@ -5822,21 +5841,42 @@ describe("HelpSessionService", () => {
       ).toBe(LONG_AGO_S * 1000);
     });
 
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "puts back a settings file's mode without rewriting it",
+      async () => {
+        const first = await service.provisionSession(provisionInput());
+        if (!first) throw new Error("expected first provision");
+        const settings = path.join(first.sessionPath, ".claude", "settings.json");
+        await fs.chmod(settings, 0o644);
+        await backdate(first.sessionPath, [path.join(".claude", "settings.json")]);
+
+        await service.provisionSession(provisionInput());
+
+        const stats = await fs.stat(settings);
+        expect(stats.mode & 0o777).toBe(0o600);
+        expect(stats.mtimeMs).toBe(LONG_AGO_S * 1000);
+      }
+    );
+
     it("hashes the bundled template again only when one of its files changes", async () => {
       await service.provisionSession(provisionInput());
       const readFile = vi.spyOn(fs, "readFile");
+      const templateClaude = path.join(helpFolder, "CLAUDE.md");
       const templateReads = () =>
-        readFile.mock.calls.filter(([file]) => file === path.join(helpFolder, "CLAUDE.md")).length;
+        readFile.mock.calls.filter(([file]) => file === templateClaude).length;
 
       await service.provisionSession(provisionInput());
       expect(templateReads()).toBe(0);
 
-      await fs.writeFile(path.join(helpFolder, "CLAUDE.md"), "# Help v2", "utf-8");
+      // Same length, and its mtime put back: only the change time shows it.
+      const { atime, mtime } = await fs.stat(templateClaude);
+      await fs.writeFile(templateClaude, "# Hel!", "utf-8");
+      await fs.utimes(templateClaude, atime, mtime);
       const third = await service.provisionSession(provisionInput());
       if (!third) throw new Error("expected third provision");
       expect(templateReads()).toBeGreaterThan(0);
       const claude = await fs.readFile(path.join(third.sessionPath, "CLAUDE.md"), "utf-8");
-      expect(stripManagedAddenda(claude)).toBe("# Help v2");
+      expect(stripManagedAddenda(claude)).toBe("# Hel!");
     });
   });
 
