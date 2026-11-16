@@ -27,6 +27,7 @@ function parseComboLite(combo: string) {
 const mocks = vi.hoisted(() => ({
   noteVoiceShortcutKeydown: vi.fn(),
   panelState: { focusedId: null as string | null },
+  undoCloseTakesKey: vi.fn<(target: Element, inTerminal: boolean) => boolean>(() => true),
   keybindingService: {
     resolveKeybinding: vi.fn(),
     getPendingChord: vi.fn<() => string | null>(() => null),
@@ -114,6 +115,11 @@ vi.mock("../../store", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
+}));
+
+vi.mock("@/services/terminal/undoCloseKey", () => ({
+  UNDO_CLOSE_ACTION_ID: "panel.undoClose",
+  undoCloseTakesKey: mocks.undoCloseTakesKey,
 }));
 
 // The when-context builder reads real Zustand stores; the hook only needs the
@@ -2707,4 +2713,87 @@ describe("useGlobalKeybindings — a voice key's press for the voice service (#1
       expect(mocks.noteVoiceShortcutKeydown).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("useGlobalKeybindings — Cmd+Z between text undo and reopening a panel", () => {
+  function pressCmdZ(target: HTMLElement = document.body, repeat = false): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      code: "KeyZ",
+      metaKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    mocks.undoCloseTakesKey.mockReturnValue(true);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "panel.undoClose" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it("reopens the last close when nothing newer holds the key", () => {
+    render(<Host />);
+    const event = pressCmdZ();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("panel.undoClose", undefined, {
+      source: "keybinding",
+    });
+  });
+
+  it("leaves the key untouched for the field's own undo or the Edit menu", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+
+    const event = pressCmdZ(field);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(field, false);
+    field.remove();
+  });
+
+  it("asks with the terminal flag from inside a terminal", () => {
+    render(<Host />);
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+
+    pressCmdZ(helper);
+
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(helper, true);
+    xterm.remove();
+  });
+
+  it("reopens once while the key is held, swallowing its repeats", () => {
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves repeats alone when the press went to text undo", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
 });

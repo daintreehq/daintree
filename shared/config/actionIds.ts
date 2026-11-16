@@ -33,6 +33,7 @@ export const BUILT_IN_ACTION_IDS = [
   "panel.focusIndex",
   "panel.openPluginPanel",
   "panel.palette",
+  "panel.undoClose",
   "panel.gridLayout.setStrategy",
   "panel.gridLayout.setValue",
 

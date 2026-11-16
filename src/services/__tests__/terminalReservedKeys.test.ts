@@ -39,7 +39,8 @@ describe("isTuiReservedKey", () => {
   it("reserves the readline Ctrl keys without other modifiers", () => {
     // Independent list — not derived from the exported set — so an
     // accidentally emptied or narrowed TUI_KEYBINDS fails here.
-    const readline = "abdefhjklnprtuwy".split("");
+    // z is the shell's suspend, which Cmd+Z (panel.undoClose) would take off the Mac.
+    const readline = "abdefhjklnprtuwyz".split("");
     for (const key of readline) {
       expect(isTuiReservedKey(keyEvent({ key, ctrlKey: true }))).toBe(true);
     }

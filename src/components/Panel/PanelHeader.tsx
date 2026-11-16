@@ -85,6 +85,7 @@ import {
 } from "@/hooks";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
+import { TerminalResumedChip } from "@/components/Terminal/TerminalResumedChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -1379,6 +1380,8 @@ function PanelHeaderComponent({
             {hasPty && <TerminalHostSuffix />}
 
             {hasPty && <TerminalScheduleChip terminalId={id} />}
+
+            {hasPty && <TerminalResumedChip terminalId={id} />}
 
             {/* Primary ink on any pane: its job is to be found on one that has
                 lost focus while dictation still goes into it. */}

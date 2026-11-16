@@ -71,6 +71,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "panel.undoClose",
+    combo: "Cmd+Z",
+    scope: "global",
+    priority: 0,
+    description: "Undo closing a panel",
+    category: "Panels",
+  },
+  {
     actionId: "terminal.resumeSessions",
     combo: "Cmd+K Cmd+R",
     scope: "global",

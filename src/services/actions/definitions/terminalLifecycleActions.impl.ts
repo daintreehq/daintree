@@ -10,6 +10,7 @@ import {
 import { terminalClient } from "@/clients";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
@@ -135,17 +136,17 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       const target = state.panelsById[targetId];
+      const commit = userCloseCommit(ctx.dispatchSource, [targetId], () =>
+        usePanelStore.getState().trashPanel(targetId)
+      );
       if (target?.location === "grid" || target?.location === undefined) {
-        requestPanelClose({
-          hideIds: [targetId],
-          commit: () => usePanelStore.getState().trashPanel(targetId),
-        });
+        requestPanelClose({ hideIds: [targetId], commit });
       } else if (hasPanelCloseGuard(targetId)) {
         // A docked panel with unsaved work still asks before it is trashed.
         const proceed = await consultPanelCloseGuards([targetId]);
-        if (proceed) usePanelStore.getState().trashPanel(targetId);
+        if (proceed) commit();
       } else {
-        state.trashPanel(targetId);
+        commit();
       }
     }
   },

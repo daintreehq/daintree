@@ -37,8 +37,28 @@ import {
 import { openPopoverContent, useDockFocusLandmark, useFocusOwner } from "./dockFocusHandoff";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { pluralize } from "@/lib/pluralize";
+import { keybindingService } from "@/services/KeybindingService";
+import { peekUndoCloseStep } from "@/services/terminal/panelCloseHistory";
 
 const MOVED_HINT_MAX_SHOWS = 3;
+
+/**
+ * The key that brings back the close just made. On the Mac the person's own
+ * close comes back with the undo-close key (#17107); a close by anything else,
+ * and every close off the Mac, with reopen-last.
+ */
+function reopenShortcut(userClose: boolean): { spoken: string; shown: string } {
+  const mac = isMac();
+  const undoCombo =
+    mac && userClose ? keybindingService.getEffectiveCombo("panel.undoClose") : undefined;
+  if (undoCombo) {
+    return { spoken: undoCombo, shown: keybindingService.formatComboForDisplay(undoCombo) };
+  }
+  return {
+    spoken: mac ? "Cmd+Shift+T" : "Ctrl+Shift+T",
+    shown: keybindingService.formatComboForDisplay("Cmd+Shift+T"),
+  };
+}
 
 interface TrashContainerProps {
   trashedTerminals: Array<{
@@ -77,6 +97,10 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const [showMovedHint, setShowMovedHint] = useState(false);
+  const [movedHintShortcut, setMovedHintShortcut] = useState("");
+  // The newest of the person's closes already announced, so the next one is
+  // told apart from a close an agent or plugin made.
+  const announcedCloseSeqRef = useRef(peekUndoCloseStep()?.seq ?? 0);
   // Hover and focus open the scope tooltip; the moved hint borrows the same one.
   const [scopeTooltipOpen, setScopeTooltipOpen] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
@@ -211,18 +235,23 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       return;
     }
     setIsTrashPulsing(true);
+    const newestCloseSeq = peekUndoCloseStep()?.seq ?? 0;
+    const shortcut = reopenShortcut(newestCloseSeq > announcedCloseSeqRef.current);
+    announcedCloseSeqRef.current = Math.max(announcedCloseSeqRef.current, newestCloseSeq);
     // Cap the visual coachmark; aria-live still fires below on every close.
     // Session-scoped — restart gives a fresh teaching window without persistence.
     if (hintShowCountRef.current < MOVED_HINT_MAX_SHOWS) {
       hintShowCountRef.current += 1;
+      setMovedHintShortcut(shortcut.shown);
       setShowMovedHint(true);
     }
-    const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
     // The window is the whole point of the announcement: "press this to
     // restore" without it invites someone to come back to a pane that is gone.
     useAnnouncerStore
       .getState()
-      .announce(`Panel closed — press ${shortcut} to restore within ${TRASH_TTL_SECONDS} seconds`);
+      .announce(
+        `Panel closed — press ${shortcut.spoken} to restore within ${TRASH_TTL_SECONDS} seconds`
+      );
   }, [trashedTerminals.length]);
 
   const handleTrashAnimationEnd = useCallback(() => {
@@ -547,7 +576,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           </TooltipTrigger>
           <TooltipContent side="top" align="center">
             {hintOpen
-              ? "Moved to trash"
+              ? `Moved to trash — ${movedHintShortcut} to reopen`
               : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}
           </TooltipContent>
         </Tooltip>

@@ -3,6 +3,7 @@
 // Nothing here may import fleetActions.ts at runtime.
 import type { ActionContext } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import {
   useFleetArmingStore,
   isFleetArmEligible,
@@ -200,7 +201,7 @@ export const fleetActionRuns = {
     usePanelStore.getState().bulkKillSet(ids);
     useFleetArmingStore.getState().clear();
   },
-  "fleet.trash": async (args: unknown, _ctx: ActionContext) => {
+  "fleet.trash": async (args: unknown, ctx: ActionContext) => {
     const snap = snapshotArmed();
     const targets = snap.terminalTargets;
     if (targets.length === 0) return;
@@ -211,7 +212,9 @@ export const fleetActionRuns = {
     }
     clearPendingIf("trash");
     const ids = new Set(targets.map((t) => t.id));
-    usePanelStore.getState().bulkTrashSet(ids);
+    userCloseCommit(ctx.dispatchSource, [...ids], () =>
+      usePanelStore.getState().bulkTrashSet(ids)
+    )();
     useFleetArmingStore.getState().clear();
   },
   "fleet.scope.enter": async (_args: unknown, _ctx: ActionContext) => {

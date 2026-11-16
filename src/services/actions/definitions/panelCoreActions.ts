@@ -8,6 +8,8 @@ import { usePanelDialogStore, findPanelDialogsOfKind } from "@/store/panelDialog
 import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestStore";
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
+import { isForegroundDispatch } from "./dispatchSource";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
   getPanelKindConfig,
@@ -379,6 +381,27 @@ export function registerPanelCoreActions(
     suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenPanelPalette();
+    },
+  }));
+
+  actions.set("panel.undoClose", () => ({
+    id: "panel.undoClose",
+    title: "Undo close",
+    description:
+      "Reopen the panels the person last closed in this project, newest first: in place with their process while the trash holds them, or an agent's own conversation resumed once it has let them go. Closes made by an agent, MCP client or plugin aren't included.",
+    paletteDescription: "Reopen the panels last closed, newest first",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["reopen", "restore", "trash", "closed", "undo"],
+    run: async (_args: unknown, ctx) => {
+      // Undo takes back what the person did, so only the person can ask.
+      if (!isForegroundDispatch(ctx.dispatchSource)) return;
+      // A close still waiting to commit isn't in the history yet.
+      flushOptimisticCloses();
+      const { undoLastClose } = await import("@/services/terminal/panelCloseUndo");
+      await undoLastClose();
     },
   }));
 
