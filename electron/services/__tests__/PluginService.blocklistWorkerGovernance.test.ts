@@ -908,6 +908,24 @@ describe("Worker governance (idle dispose + snapshots)", () => {
     }
   });
 
+  it("records a fresh session's panel replay without redelivering it to the plugin", async () => {
+    const { service } = await startPanelPlugin();
+    const heard = vi.fn();
+    (
+      service as unknown as {
+        panelLifecycleBroker: { subscribe(id: string, cb: (e: unknown) => void): () => void };
+      }
+    ).panelLifecycleBroker.subscribe("acme.panelly", heard);
+
+    service.ingestPanelLifecycleEvents(9, [panelEvent("mounted")], undefined, { replay: true });
+    expect(heard).not.toHaveBeenCalled();
+    // Recorded all the same: the panel still holds the worker.
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+
+    service.ingestPanelLifecycleEvents(9, [panelEvent("hidden")]);
+    expect(heard).toHaveBeenCalledWith(expect.objectContaining({ phase: "hidden" }));
+  });
+
   it("counts a panel kind drawn outside the grid, as a project surface does, as its plugin's view", async () => {
     const { service } = await startPanelPlugin();
     const watch = () => () => {};

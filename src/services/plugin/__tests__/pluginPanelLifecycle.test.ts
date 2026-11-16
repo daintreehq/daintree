@@ -248,9 +248,11 @@ describe("reporting", () => {
       panel({ panelId: "unmounted" }),
       panel({ panelId: "away", location: "background" }),
       panel({ panelId: "binned", location: "trash" }),
+      panel({ panelId: "broken" }),
       panel({ panelId: "gone" }),
     ]);
     reportViewMounted("shown", IDENTITY);
+    reportViewRenderFailed("broken", IDENTITY);
     await drainPhases();
     // Closed just before the replay: its removal is a transition, not a resting phase.
     syncPluginPanels([
@@ -258,6 +260,7 @@ describe("reporting", () => {
       panel({ panelId: "unmounted" }),
       panel({ panelId: "away", location: "background" }),
       panel({ panelId: "binned", location: "trash" }),
+      panel({ panelId: "broken" }),
     ]);
     report.mockClear();
 
@@ -270,6 +273,7 @@ describe("reporting", () => {
       ["unmounted", "hidden"],
       ["away", "backgrounded"],
       ["binned", "trashed"],
+      ["broken", "render-failed"],
     ]);
 
     // The transition queue is untouched: the removal still ships as itself.

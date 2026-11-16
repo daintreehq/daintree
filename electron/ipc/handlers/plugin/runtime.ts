@@ -355,10 +355,8 @@ export async function handleReportPanelInventory(
  * never leaves a worker held open for views no longer on screen.
  */
 export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string[]): Promise<void> {
-  const service = await getPluginService();
   const sender = ctx.event?.sender;
-  // Checked after the await: once `destroyed` has fired, a watch attached now
-  // would never forget this report.
+  // A document that already ended would never fire the events that forget its report.
   if (sender?.isDestroyed()) return;
   const source = sender ? undefined : panelLifecycleSourceFor(ctx);
   const watch = sender
@@ -367,6 +365,14 @@ export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string
       ? watchSourceHandle(source)
       : undefined;
   if (!watch) return;
+  // Watched across the await too, for the same reason.
+  let ended = false;
+  const stopWatching = watch(() => {
+    ended = true;
+  });
+  const service = await getPluginService();
+  stopWatching();
+  if (ended) return;
   service.ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
 }
 

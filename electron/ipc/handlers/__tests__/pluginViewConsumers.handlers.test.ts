@@ -86,7 +86,29 @@ describe("plugin view consumer handler (#17068)", () => {
     expect(service.ingestHostedViewConsumers).not.toHaveBeenCalled();
   });
 
-  it("drops a report whose view was destroyed while the service was still loading", async () => {
+  it.each(["destroyed", "did-navigate", "render-process-gone"])(
+    "drops a report whose document ended (%s) while the service was still loading",
+    async (ending) => {
+      let resolveService: (value: typeof service) => void = () => {};
+      vi.mocked(getPluginService).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveService = resolve;
+          }) as unknown as ReturnType<typeof getPluginService>
+      );
+      const wc = new FakeContents();
+      const pending = handleReportViewConsumers(localCtx(wc), ["plugin-view:acme/side"]);
+      if (ending === "destroyed") wc.destroyed = true;
+      wc.emit(ending);
+      resolveService(service);
+      await pending;
+      expect(service.ingestHostedViewConsumers).not.toHaveBeenCalled();
+      // The watch that observed the gap is gone with it.
+      expect(wc.listenerCount("did-navigate")).toBe(0);
+    }
+  );
+
+  it("still records a report when nothing ended while the service loaded", async () => {
     let resolveService: (value: typeof service) => void = () => {};
     vi.mocked(getPluginService).mockImplementationOnce(
       () =>
@@ -96,11 +118,11 @@ describe("plugin view consumer handler (#17068)", () => {
     );
     const wc = new FakeContents();
     const pending = handleReportViewConsumers(localCtx(wc), ["plugin-view:acme/side"]);
-    wc.destroyed = true;
-    wc.emit("destroyed");
     resolveService(service);
     await pending;
-    expect(service.ingestHostedViewConsumers).not.toHaveBeenCalled();
+    expect(count()).toBe(1);
+    // Only the report's own watch is left.
+    expect(wc.listenerCount("did-navigate")).toBe(1);
   });
 
   it("passes a panel lifecycle replay through as one, and a plain batch as transitions", async () => {
