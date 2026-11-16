@@ -1,7 +1,10 @@
 import { createStore } from "zustand/vanilla";
+import {
+  SHORTCUT_HINT_EXHAUSTED_COUNT,
+  SHORTCUT_HINT_MILESTONES,
+} from "@shared/config/shortcutHints";
 
-/** Invocation counts at which a shortcut hint is shown. Encodes the lifetime cap (set size). */
-export const HINT_MILESTONES = new Set([1, 2, 4, 8, 16, 32]);
+export const HINT_MILESTONES = SHORTCUT_HINT_MILESTONES;
 const POINTER_STALE_MS = 2000;
 
 function hoverOneShotKey(actionId: string, count: number): string {
@@ -118,18 +121,23 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
 
   incrementCount(actionId: string) {
     const { counts, hintedHover } = get();
-    const updated = { ...counts, [actionId]: (counts[actionId] ?? 0) + 1 };
+    const count = counts[actionId] ?? 0;
+    // The step onto the exhausted count is still recorded, so the final
+    // milestone's hover hint is spent for good rather than re-offered next session.
+    if (count >= SHORTCUT_HINT_EXHAUSTED_COUNT) return;
+    const updated = { ...counts, [actionId]: count + 1 };
     // Clear hover one-shot entries for this action — the new count level
     // re-enables hover hints for the next milestone.
-    const newHintedHover = new Set(hintedHover);
-    for (const key of newHintedHover) {
-      if (key.startsWith(`${actionId}@`)) {
-        newHintedHover.delete(key);
-      }
+    const prefix = `${actionId}@`;
+    let newHintedHover = hintedHover;
+    for (const key of hintedHover) {
+      if (!key.startsWith(prefix)) continue;
+      if (newHintedHover === hintedHover) newHintedHover = new Set(hintedHover);
+      newHintedHover.delete(key);
     }
     set({ counts: updated, hintedHover: newHintedHover });
     window.electron?.shortcutHints?.incrementCount(actionId)?.catch(() => {});
-    flushHintedHover(newHintedHover);
+    if (newHintedHover !== hintedHover) flushHintedHover(newHintedHover);
   },
 
   isHoverEligible(actionId: string): boolean {
@@ -149,9 +157,10 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
 
   markHoverShown(actionId: string) {
     const { counts, hintedHover } = get();
-    const count = counts[actionId] ?? 0;
+    const key = hoverOneShotKey(actionId, counts[actionId] ?? 0);
+    if (hintedHover.has(key)) return;
     const next = new Set(hintedHover);
-    next.add(hoverOneShotKey(actionId, count));
+    next.add(key);
     set({ hintedHover: next });
     flushHintedHover(next);
   },

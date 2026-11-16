@@ -148,10 +148,11 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
 
   const handleSettingsSet = async (rawSettings: unknown): Promise<void> => {
     const allowed = sanitizeNotificationSettingsPatch(rawSettings, await allowedSoundFiles());
+    if (Object.keys(allowed).length === 0) return;
 
-    for (const [field, value] of Object.entries(allowed)) {
-      store.set(`notificationSettings.${field}`, value);
-    }
+    // One write for the whole patch: a set per field rewrote and fsynced all of
+    // config.json once per field.
+    store.set("notificationSettings", { ...store.get("notificationSettings"), ...allowed });
   };
 
   const handlePlaySound = async (soundFile: unknown): Promise<void> => {

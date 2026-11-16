@@ -152,3 +152,88 @@ describe("actionMruStore (rolling 7-day usage count)", () => {
     expect(useActionMruStore.getState().getSortedActionMruList()).toEqual([]);
   });
 });
+
+describe("actionMruStore persistence (#17026)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function freshStore() {
+    // Let earlier tests' writes reach the shared mock before clearing it, then
+    // load the store again so their baselines don't carry over.
+    await vi.dynamicImportSettled();
+    vi.resetModules();
+    const { appClient } = await import("@/clients/appClient");
+    const { useActionMruStore: store } = await import("../actionMruStore");
+    const setState = vi.mocked(appClient.setState);
+    setState.mockReset();
+    return { store, setState };
+  }
+
+  it("does not write a hydrated list back, and the next real change writes once", async () => {
+    const { store, setState } = await freshStore();
+
+    // An empty list, then one whose aged-out use hydration prunes.
+    const stale = NOW - USAGE_WINDOW_MS - DAY;
+    store.getState().hydrateActionMru([]);
+    store.getState().hydrateActionMru([{ id: "kept", uses: [stale, NOW - DAY] }]);
+    // An unchanged list notifying again matches the hydrated baseline.
+    store.setState({ actionUsageEntries: new Map(store.getState().actionUsageEntries) });
+    store.getState().recordActionMru("kept");
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledExactlyOnceWith({
+      actionMruList: [{ id: "kept", uses: [NOW - DAY, NOW] }],
+    });
+  });
+
+  it("writes a legacy list back once in the current shape so it can decay", async () => {
+    const { store, setState } = await freshStore();
+
+    store.getState().hydrateActionMru(["legacy.action"]);
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledExactlyOnceWith({
+      actionMruList: [{ id: "legacy.action", uses: [NOW] }],
+    });
+  });
+
+  it("follows a write still in flight at hydration with the restored list", async () => {
+    const { store, setState } = await freshStore();
+    let release!: () => void;
+    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+
+    // A use recorded before hydration landed is still being written.
+    store.getState().recordActionMru("early");
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+    store.getState().hydrateActionMru([{ id: "kept", uses: [NOW - DAY] }]);
+    release();
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+    expect(setState).toHaveBeenLastCalledWith({
+      actionMruList: [{ id: "kept", uses: [NOW - DAY] }],
+    });
+  });
+
+  it("lets a change back to the settled list replace an older queued snapshot", async () => {
+    const { store, setState } = await freshStore();
+    let release!: () => void;
+    setState.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+
+    store.getState().hydrateActionMru([]);
+    store.getState().recordActionMru("early");
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(1));
+    store.getState().hydrateActionMru([{ id: "kept", uses: [NOW - DAY] }]);
+    // Back to what disk held before the pending write: still has to land last.
+    store.getState().clearActionMru();
+    release();
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalledTimes(2));
+    expect(setState).toHaveBeenLastCalledWith({ actionMruList: [] });
+  });
+});

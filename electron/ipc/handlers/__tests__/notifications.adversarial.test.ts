@@ -136,12 +136,8 @@ describe("notifications IPC adversarial", () => {
       escalationSoundFile: "unknown-file.mp3",
     });
 
-    // Dot-path writes only land for validated fields. Unsafe values must not
-    // reach the store at all — assert no call targets any sound-file leaf.
-    const writtenKeys = storeMock.set.mock.calls.map((c) => String(c[0]));
-    expect(writtenKeys).not.toContain("notificationSettings.completedSoundFile");
-    expect(writtenKeys).not.toContain("notificationSettings.waitingSoundFile");
-    expect(writtenKeys).not.toContain("notificationSettings.escalationSoundFile");
+    // Nothing in the patch survives validation, so nothing is written at all.
+    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("settingsSet accepts allowed sound file names", async () => {
@@ -149,19 +145,40 @@ describe("notifications IPC adversarial", () => {
       completedSoundFile: "waiting.mp3",
     });
 
-    expect(storeMock.set).toHaveBeenCalledWith(
-      "notificationSettings.completedSoundFile",
-      "waiting.mp3"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("notificationSettings", {
+      ...defaultSettings,
+      completedSoundFile: "waiting.mp3",
+    });
+  });
+
+  it("settingsSet writes a multi-field patch once, keeping untouched fields and dropping rejected ones (#17026)", async () => {
+    await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
+      enabled: false,
+      soundEnabled: true,
+      waitingSoundFile: "waiting.mp3",
+      escalationSoundFile: "/etc/passwd",
+      waitingEscalationEnabled: true,
+      flashEnabled: false,
+    });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("notificationSettings", {
+      enabled: false,
+      uiFeedbackSoundEnabled: true,
+      completedSoundFile: "completed.mp3",
+      soundEnabled: true,
+      waitingSoundFile: "waiting.mp3",
+      waitingEscalationEnabled: true,
+      flashEnabled: false,
+    });
   });
 
   it("settingsSet clamps waitingEscalationDelayMs below 30s up to 30s", async () => {
     await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
       waitingEscalationDelayMs: 0,
     });
-    expect(storeMock.set).toHaveBeenCalledWith(
-      "notificationSettings.waitingEscalationDelayMs",
-      30_000
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "notificationSettings",
+      expect.objectContaining({ waitingEscalationDelayMs: 30_000 })
     );
   });
 
@@ -169,9 +186,9 @@ describe("notifications IPC adversarial", () => {
     await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
       waitingEscalationDelayMs: 3_600_001,
     });
-    expect(storeMock.set).toHaveBeenCalledWith(
-      "notificationSettings.waitingEscalationDelayMs",
-      3_600_000
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "notificationSettings",
+      expect.objectContaining({ waitingEscalationDelayMs: 3_600_000 })
     );
   });
 
@@ -183,8 +200,7 @@ describe("notifications IPC adversarial", () => {
       waitingEscalationDelayMs: Number.POSITIVE_INFINITY,
     });
 
-    const writtenKeys = storeMock.set.mock.calls.map((c) => String(c[0]));
-    expect(writtenKeys).not.toContain("notificationSettings.waitingEscalationDelayMs");
+    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("settingsSet ignores non-object payloads silently", async () => {

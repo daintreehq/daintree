@@ -1,15 +1,16 @@
 import { create } from "zustand";
 import { createActionPrefsSlice, type ActionPrefsSlice } from "./slices/actionPrefsSlice";
 
-// Seed the persistence baseline with the initial store value (`[]`) so the
-// subscribe-to-persist path on app boot — where `hydrateActionPrefs` writes
-// the on-disk values back into the store — doesn't echo an identical payload
-// out to disk as a spurious round-trip.
+// The persistence baseline starts at the initial store value (`[]`).
 const EMPTY_JSON = JSON.stringify([]);
 let lastPinned: string = EMPTY_JSON;
 let lastHidden: string = EMPTY_JSON;
 let inflightPinned: string | null = null;
 let inflightHidden: string | null = null;
+// Hydration restores what Main just read from config.json. Zustand notifies
+// subscribers synchronously inside the slice's `set`, before the baseline below
+// can be primed, so the subscriber is told to ignore that one notification.
+let hydrating = false;
 
 export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) => {
   const slice = createActionPrefsSlice(set, get, store);
@@ -17,18 +18,29 @@ export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) 
   return {
     ...slice,
     hydrateActionPrefs: (prefs) => {
-      baseHydrate(prefs);
-      // After hydrate, prime the persistence baseline to the just-loaded values
-      // so the subscribe-to-persist handler doesn't fire a redundant
-      // `appClient.setState` with the same data we just read.
+      hydrating = true;
+      try {
+        baseHydrate(prefs);
+      } finally {
+        hydrating = false;
+      }
       const next = get();
-      lastPinned = JSON.stringify(next.pinnedActionIds);
-      lastHidden = JSON.stringify(next.hiddenActionIds);
+      // With no write outstanding, disk holds what was just read. A pin or hide
+      // made before hydration landed may still be writing; comparing against it
+      // sends the restored list so that write doesn't leave disk behind.
+      if (inflightPinned === null) lastPinned = JSON.stringify(next.pinnedActionIds);
+      if (inflightHidden === null) lastHidden = JSON.stringify(next.hiddenActionIds);
+      persist(next);
     },
   };
 });
 
 useActionPrefsStore.subscribe((state) => {
+  if (hydrating) return;
+  persist(state);
+});
+
+function persist(state: ActionPrefsSlice): void {
   const pinnedJson = JSON.stringify(state.pinnedActionIds);
   const hiddenJson = JSON.stringify(state.hiddenActionIds);
 
@@ -79,4 +91,4 @@ useActionPrefsStore.subscribe((state) => {
       if (sentPinnedJson !== null && inflightPinned === sentPinnedJson) inflightPinned = null;
       if (sentHiddenJson !== null && inflightHidden === sentHiddenJson) inflightHidden = null;
     });
-});
+}
