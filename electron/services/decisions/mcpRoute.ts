@@ -123,7 +123,10 @@ export interface DecisionsQuestions {
    * A person withdrawing one of a pane's questions from its view (#17099),
    * through the bridge agents ask on, so it takes its turn with their posts.
    */
-  cancelForPerson(questionId: string, scope: QuestionReadScope): Promise<DecisionQuestionCancelResult>;
+  cancelForPerson(
+    questionId: string,
+    scope: QuestionReadScope
+  ): Promise<DecisionQuestionCancelResult>;
   close(): Promise<void>;
 }
 

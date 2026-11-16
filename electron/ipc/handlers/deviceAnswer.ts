@@ -400,7 +400,10 @@ export const decisionsNamespace = defineIpcNamespace({
     cancelQuestion: opValidated(
       CHANNELS.DECISIONS_CANCEL_QUESTION,
       cancelQuestionSchema,
-      async (ctx, payload: CancelDecisionQuestionPayload): Promise<DecisionQuestionCancelResult> => {
+      async (
+        ctx,
+        payload: CancelDecisionQuestionPayload
+      ): Promise<DecisionQuestionCancelResult> => {
         if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
           return { result: "off" };
         }
