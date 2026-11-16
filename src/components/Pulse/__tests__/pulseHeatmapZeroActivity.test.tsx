@@ -219,3 +219,60 @@ describe("PulseHeatmap — a day's tooltip is its readout, not a passing hint", 
     expect(shown()).toContain("5 commits");
   });
 });
+
+describe("PulseHeatmap — one shared tooltip", () => {
+  const cells: HeatCell[] = [
+    { date: "2026-09-21", count: 2, level: 2 },
+    { date: "2026-09-22", count: 5, level: 4 },
+    { date: "2026-09-23", count: 0, level: 0 },
+    { date: "2026-09-24", count: 1, level: 1, isToday: true, isMostRecentActive: true },
+  ];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mounts a single tooltip anchor, not one per cell, and moves it with the pointer", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(document.querySelectorAll('[data-testid="pulse-heatmap-tooltip-anchor"]').length).toBe(
+      1
+    );
+    expect(document.body.textContent).not.toContain("5 commits");
+
+    const first = cellByDate("2026-09-21");
+    const second = cellByDate("2026-09-22");
+    fireEvent.pointerOver(first, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("2 commits");
+    const anchor = document.querySelector<HTMLElement>(
+      '[data-testid="pulse-heatmap-tooltip-anchor"]'
+    )!;
+    const before = anchor.style.top;
+
+    fireEvent.pointerOver(second, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+    expect(anchor.style.top).not.toBe(before);
+  });
+
+  it("closes when the pointer leaves the grid", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.pointerOver(cellByDate("2026-09-22"), { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+
+    fireEvent.pointerLeave(document.querySelector('[data-testid="pulse-heatmap"]')!);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).not.toContain("5 commits");
+  });
+});

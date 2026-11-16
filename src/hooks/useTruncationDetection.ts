@@ -10,30 +10,31 @@ type Subscriber = {
 let singleton: {
   observer: ResizeObserver | null;
   subscribers: Map<HTMLElement, Subscriber>;
-  rafId: number | null;
 } | null = null;
 
 function getSingleton() {
   if (!singleton) {
-    singleton = { observer: null, subscribers: new Map(), rafId: null };
+    singleton = { observer: null, subscribers: new Map() };
   }
   return singleton;
 }
 
-function scheduleCheck() {
+// Only the elements the observer reported: a resize elsewhere says nothing
+// about the other labels, and the callback runs after layout, so reading
+// scrollWidth here does not force a reflow.
+function checkEntries(entries: ResizeObserverEntry[]) {
   const s = getSingleton();
-  if (s.rafId !== null) return;
-  s.rafId = requestAnimationFrame(() => {
-    s.rafId = null;
-    for (const [el, sub] of s.subscribers) {
-      if (!el.isConnected) {
-        s.subscribers.delete(el);
-        continue;
-      }
-      const truncated = el.scrollWidth > el.clientWidth + TOLERANCE;
-      sub.setTruncated(truncated);
+  for (const entry of entries) {
+    const el = entry.target as HTMLElement;
+    const sub = s.subscribers.get(el);
+    if (!sub) continue;
+    if (!el.isConnected) {
+      s.subscribers.delete(el);
+      s.observer?.unobserve(el);
+      continue;
     }
-  });
+    sub.setTruncated(el.scrollWidth > el.clientWidth + TOLERANCE);
+  }
 }
 
 export function isElementTruncated(el: HTMLElement, tolerance = TOLERANCE): boolean {
@@ -70,14 +71,14 @@ export function useTruncationDetection() {
     s.subscribers.set(el, { setTruncated: (v) => stableSetter.current(v), element: el });
 
     if (!s.observer && typeof ResizeObserver !== "undefined") {
-      s.observer = new ResizeObserver(() => scheduleCheck());
+      s.observer = new ResizeObserver(checkEntries);
     }
     if (s.observer) {
       s.observer.observe(el);
     }
-    // Initial check (layout-dependent; useLayoutEffect ensures after render)
-    const truncated = el.scrollWidth > el.clientWidth + TOLERANCE;
-    stableSetter.current(truncated);
+    // No synchronous measure here: a newly observed element gets an initial
+    // observation, which checkEntries answers without a forced reflow in the
+    // commit phase.
   }, []);
 
   // Measure on mount if ResizeObserver isn't available (jsdom / SSR)

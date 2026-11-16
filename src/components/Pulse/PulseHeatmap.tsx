@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties, FocusEvent, KeyboardEvent, PointerEvent } from "react";
 import type { HeatCell, PulseRangeDays } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -12,6 +12,10 @@ import {
   type CalendarKey,
 } from "./pulseCalendar";
 import { pluralize } from "@/lib/pluralize";
+import {
+  isTooltipFocusOpenSuppressed,
+  notifyTooltipPointerActivity,
+} from "@/lib/tooltipDismissRegistry";
 
 interface PulseHeatmapProps {
   cells: HeatCell[];
@@ -126,49 +130,37 @@ function PulseHeatmapCell({
   ) as CSSProperties;
 
   return (
-    // 0ms: dense scrub-hover surface — skip-delay alone doesn't cover the cold first-cell hover (mirrors GitHub contribution-heatmap).
-    // autoDismiss off: this tooltip is the only place a day's date and count
-    // are shown, so it stays while the cell is hovered or focused rather than
-    // vanishing mid-read after the app-wide hint window.
-    <Tooltip delayDuration={0} autoDismiss={false}>
-      <TooltipTrigger asChild>
-        <button
-          ref={cellRef}
-          type="button"
-          role="gridcell"
-          aria-colindex={col + 1}
-          data-cell-date={cell.date}
-          // Forced colors strips the ring's box-shadow; this hook lets that
-          // mode redraw the latest-active marker as an outline.
-          data-latest-active={cell.isMostRecentActive ? "" : undefined}
-          // Clamp to >=1 for the CSS-level cue so a future renderer that emits
-          // a positive-count cell with level: 0 doesn't render a 0-sized
-          // CanvasText shape under forced-colors. The data layer currently
-          // never produces this combination, but the input type permits it.
-          data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
-          style={{
-            width: `${CELL_SIZE_PX}px`,
-            height: `${CELL_SIZE_PX}px`,
-            ...getCellStyle(cell),
-            ...ringStyle,
-          }}
-          className={cn(
-            "pulse-heat-cell relative overflow-hidden rounded-2xs shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
-            // Cells sit 3px apart, so an outside ring would land on the neighbours.
-            "focus-visible:-outline-offset-2",
-            cell.isMostRecentActive && "ring-1 ring-text-primary/25 ring-offset-1"
-          )}
-          aria-label={`${formatted}: ${getCountText(cell)}`}
-          tabIndex={isActive ? 0 : -1}
-        >
-          {cell.count > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-xs">
-        <span className="font-medium">{formatted}</span>
-        <span className="ml-1 text-text-secondary">{getCountText(cell)}</span>
-      </TooltipContent>
-    </Tooltip>
+    <button
+      ref={cellRef}
+      type="button"
+      role="gridcell"
+      aria-colindex={col + 1}
+      data-cell-date={cell.date}
+      // Forced colors strips the ring's box-shadow; this hook lets that
+      // mode redraw the latest-active marker as an outline.
+      data-latest-active={cell.isMostRecentActive ? "" : undefined}
+      // Clamp to >=1 for the CSS-level cue so a future renderer that emits
+      // a positive-count cell with level: 0 doesn't render a 0-sized
+      // CanvasText shape under forced-colors. The data layer currently
+      // never produces this combination, but the input type permits it.
+      data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
+      style={{
+        width: `${CELL_SIZE_PX}px`,
+        height: `${CELL_SIZE_PX}px`,
+        ...getCellStyle(cell),
+        ...ringStyle,
+      }}
+      className={cn(
+        "pulse-heat-cell relative overflow-hidden rounded-2xs shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+        // Cells sit 3px apart, so an outside ring would land on the neighbours.
+        "focus-visible:-outline-offset-2",
+        cell.isMostRecentActive && "ring-1 ring-text-primary/25 ring-offset-1"
+      )}
+      aria-label={`${formatted}: ${getCountText(cell)}`}
+      tabIndex={isActive ? 0 : -1}
+    >
+      {cell.count > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
+    </button>
   );
 }
 
@@ -232,6 +224,46 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (el) cellRefs.current.set(date, el);
     else cellRefs.current.delete(date);
   }, []);
+
+  // One tooltip for the whole grid, anchored to the hovered or focused cell
+  // by position, instead of a Radix tree per cell (up to 180 per card). The
+  // last shown date is kept so the card keeps its text through the exit fade.
+  const [hoverDate, setHoverDate] = useState<string | null>(null);
+  const [focusDate, setFocusDate] = useState<string | null>(null);
+  const [lastTipDate, setLastTipDate] = useState<string | null>(null);
+  const openDate = hoverDate ?? focusDate;
+  const tipDate = openDate ?? lastTipDate;
+  const tipPosition = tipDate ? positions.get(tipDate) : undefined;
+  const tipCell = tipPosition ? weeks[tipPosition.col]?.[tipPosition.row] : undefined;
+
+  const cellDateOf = (target: EventTarget): string | null =>
+    (target as Element).closest?.("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+
+  const handlePointerOver = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") return;
+    notifyTooltipPointerActivity();
+    const date = cellDateOf(event.target);
+    if (date === hoverDate) return;
+    setHoverDate(date);
+    if (date) setLastTipDate(date);
+  };
+
+  const handlePointerLeave = () => setHoverDate(null);
+
+  const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (isTooltipFocusOpenSuppressed()) return;
+    const date = cellDateOf(event.target);
+    setFocusDate(date);
+    if (date) setLastTipDate(date);
+  };
+
+  const handleBlur = () => setFocusDate(null);
+
+  const handleTipOpenChange = (next: boolean) => {
+    if (next) return;
+    setHoverDate(null);
+    setFocusDate(null);
+  };
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -301,7 +333,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
       </div>
 
       <div
-        className="col-start-2 row-start-2 flex flex-col"
+        className="relative col-start-2 row-start-2 flex flex-col"
         style={{ gap: `${GAP_PX}px` }}
         role="grid"
         aria-label={`Activity over the last ${rangeDays} days, one column per week`}
@@ -310,7 +342,39 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
         aria-colcount={weeks.length}
         data-testid="pulse-heatmap"
         onKeyDown={handleKeyDown}
+        onPointerOver={handlePointerOver}
+        onPointerLeave={handlePointerLeave}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
       >
+        {/* 0ms: dense scrub-hover surface (mirrors GitHub's contribution
+            heatmap). autoDismiss off: this tooltip is the only place a day's
+            date and count are shown, so it stays while the cell is hovered or
+            focused rather than vanishing mid-read after the app-wide hint
+            window. */}
+        <Tooltip open={openDate !== null} onOpenChange={handleTipOpenChange} autoDismiss={false}>
+          <TooltipTrigger asChild>
+            <span
+              aria-hidden="true"
+              data-testid="pulse-heatmap-tooltip-anchor"
+              className="pointer-events-none absolute"
+              style={{
+                left: `${(tipPosition?.col ?? 0) * PITCH_PX}px`,
+                top: `${(tipPosition?.row ?? 0) * PITCH_PX}px`,
+                width: `${CELL_SIZE_PX}px`,
+                height: `${CELL_SIZE_PX}px`,
+              }}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            {tipCell && (
+              <>
+                <span className="font-medium">{formatDay(tipCell)}</span>
+                <span className="ml-1 text-text-secondary">{getCountText(tipCell)}</span>
+              </>
+            )}
+          </TooltipContent>
+        </Tooltip>
         {WEEKDAY_LABELS.map((_, row) => (
           <div
             key={row}
