@@ -161,9 +161,7 @@ describe("power-saving motion CSS", () => {
       const timing = reducedRule(".animate-pulse-delayed")?.declarations.get(
         "animation-timing-function"
       );
-      const [reveal, pulse] = (timing ?? "")
-        .split(/,(?![^(]*\))/)
-        .map((part) => part.trim());
+      const [reveal, pulse] = (timing ?? "").split(/,(?![^(]*\))/).map((part) => part.trim());
       expect(reveal).not.toMatch(/^steps\(/);
       expect(stepsOf(pulse)).toBeGreaterThan(0);
     });
