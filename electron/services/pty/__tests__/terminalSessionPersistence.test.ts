@@ -39,6 +39,32 @@ const syncWriter = vi.hoisted(() => ({
   beforeWrite: null as null | (() => void),
   afterWrite: null as null | (() => void),
 }));
+// Every async read of a session file, and a one-shot failure for one path.
+const sessionReads = vi.hoisted(() => ({
+  paths: [] as string[],
+  fault: null as null | { path: string; code: string },
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    default: actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      const [target] = args;
+      if (typeof target === "string") sessionReads.paths.push(target);
+      const fault = sessionReads.fault;
+      if (fault && fault.path === target) {
+        sessionReads.fault = null;
+        return Promise.reject(Object.assign(new Error(fault.code), { code: fault.code }));
+      }
+      return actual.readFile(...args);
+    },
+  };
+});
+
+// The options each async atomic write was given, by destination.
+const asyncWrites = vi.hoisted(() => [] as Array<{ path: string; durable: unknown }>);
+
 // Records the shutdown flush of background writes, passing through to the real fs.
 const shutdownFlush = vi.hoisted(() => ({
   files: [] as string[],
@@ -55,6 +81,10 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
       syncWriter.beforeWrite?.();
       actual.resilientAtomicWriteFileSync(...args);
       syncWriter.afterWrite?.();
+    },
+    resilientAtomicWriteFile: (...args: Parameters<typeof actual.resilientAtomicWriteFile>) => {
+      asyncWrites.push({ path: args[0], durable: args[3]?.durable });
+      return actual.resilientAtomicWriteFile(...args);
     },
     syncFileSync: (filePath: string) => {
       shutdownFlush.files.push(filePath);
@@ -1204,6 +1234,15 @@ describe("terminalSessionPersistence", () => {
       expect(fs.existsSync(path.join(sessionDir, "term-hib.hibernated"))).toBe(false);
     });
 
+    it("writes the marker without the flushes a power cut would need", async () => {
+      asyncWrites.length = 0;
+      await writeHibernatedMarker("term-cheap");
+
+      expect(asyncWrites).toEqual([
+        { path: getHibernatedMarkerPath("term-cheap"), durable: false },
+      ]);
+    });
+
     it("never rejects, even when the session directory can't be made", async () => {
       // A file where the directory should be makes mkdir fail.
       await fsp.writeFile(path.join(userDataDir, "terminal-sessions"), "not a directory");
@@ -1248,13 +1287,14 @@ describe("terminalSessionPersistence", () => {
 
       expect(asyncResult.restored).toBe(true);
       expect(syncResult.restored).toBe(true);
+      expect(asyncHeadless.write).toHaveBeenCalledWith("previous screen");
       expect(asyncHeadless.write.mock.calls.map(([data]) => data)).toEqual(
         syncHeadless.write.mock.calls.map(([data]) => data)
       );
       expect(asyncHeadless.resize.mock.calls).toEqual(syncHeadless.resize.mock.calls);
     });
 
-    it("reads nothing for a missing or unreadable session, leaving its marker", async () => {
+    it("reads nothing for a missing or unsupported session, leaving its marker", async () => {
       expect(await readSessionRestore("term-missing")).toBeNull();
 
       await seedSession("term-future", "DAINTREE_SESSION_v9\npayload", true);
@@ -1262,11 +1302,45 @@ describe("terminalSessionPersistence", () => {
       expect(fs.existsSync(getHibernatedMarkerPath("term-future")!)).toBe(true);
     });
 
-    it("skips a session file past the size cap without reading it", async () => {
-      await seedSession("term-huge", "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 64), false);
+    it("reads nothing when the file can't be read, leaving its marker", async () => {
+      await seedSession("term-locked", "DAINTREE_SESSION_v2\n80x24\nscreen", true);
+      sessionReads.fault = { path: getSessionPath("term-locked")!, code: "EACCES" };
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+      expect(await readSessionRestore("term-locked")).toBeNull();
+      expect(fs.existsSync(getHibernatedMarkerPath("term-locked")!)).toBe(true);
+      warn.mockRestore();
+    });
+
+    it("skips a session file past the size cap without reading it", async () => {
+      await seedSession("term-small", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      await seedSession("term-huge", "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 64), false);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      sessionReads.paths.length = 0;
+
+      expect(await readSessionRestore("term-small")).not.toBeNull();
       expect(await readSessionRestore("term-huge")).toBeNull();
+      expect(sessionReads.paths).toEqual([getSessionPath("term-small")]);
+      warn.mockRestore();
+    });
+
+    it("still restores the screen when its marker can't be consumed", async () => {
+      await seedSession("term-stuck", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      await seedSession("term-stuck-sync", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      // A directory where the marker should be: unlinking it fails, and not with ENOENT.
+      fs.mkdirSync(path.join(getHibernatedMarkerPath("term-stuck")!, "pin"), { recursive: true });
+      fs.mkdirSync(path.join(getHibernatedMarkerPath("term-stuck-sync")!, "pin"), {
+        recursive: true,
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const payload = await readSessionRestore("term-stuck");
+      const headless = createMockHeadless();
+      const sync = restoreSessionFromFile(headless as never, "term-stuck-sync");
+
+      expect(payload).toMatchObject({ content: "screen", wasHibernated: false });
+      expect(sync.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("screen");
       warn.mockRestore();
     });
   });

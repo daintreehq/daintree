@@ -239,22 +239,14 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
 // file has been read the entry IS the journal: a read never touches the disk
 // again, not even to stat it. A hand edit made while the app runs is therefore
 // seen only after a restart. A write that fails drops the entry, because it may
-// have landed before it threw, and an absent file is cached as `[]` the same
-// way. Memory-only — rebuilt from disk on first read after boot.
+// have landed before it threw. An absent file is not cached, so a journal that
+// appears where there was none (seeded by a test harness) is still found.
+// Memory-only — rebuilt from disk on first read after boot.
 const historyCache = new Map<string, AgentSessionRecord[]>();
-// Bumped by every writer, so a cold async read that started before a write
-// can't publish the bytes it read over the array that write cached.
-let historyCacheGeneration = 0;
-
-function invalidateCache(filePath: string): void {
-  historyCache.delete(filePath);
-  historyCacheGeneration++;
-}
 
 /** Forget every journal read so far, as a restart would. */
 export function resetSessionHistoryCacheForTesting(): void {
   historyCache.clear();
-  historyCacheGeneration++;
 }
 
 const writeListeners = new Set<() => void>();
@@ -277,10 +269,9 @@ async function writeJournal(filePath: string, records: AgentSessionRecord[]): Pr
       mode: OWNER_RW_FILE_MODE,
     });
   } catch (error) {
-    invalidateCache(filePath);
+    historyCache.delete(filePath);
     throw error;
   }
-  invalidateCache(filePath);
   historyCache.set(filePath, records);
   for (const listener of [...writeListeners]) {
     try {
@@ -385,10 +376,7 @@ function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResu
     historyCache.set(filePath, records);
     return { status: "ok", records };
   } catch (error) {
-    if (isMissingPathError(error)) {
-      historyCache.set(filePath, []);
-      return { status: "ok", records: [] };
-    }
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
     if (isCorruptionError(error)) {
       return quarantineCorruptJournalSync(filePath, error)
         ? { status: "ok", records: [] }
@@ -408,19 +396,12 @@ async function readSessionHistoryResult(userData?: string): Promise<SessionHisto
   if (!filePath) return { status: "ok", records: [] };
   const cached = historyCache.get(filePath);
   if (cached) return { status: "ok", records: cached };
-  const generation = historyCacheGeneration;
-  const publish = (records: AgentSessionRecord[]): void => {
-    if (historyCacheGeneration === generation) historyCache.set(filePath, records);
-  };
   try {
     const records = parseJournal(await readFile(filePath, "utf8"));
-    publish(records);
+    historyCache.set(filePath, records);
     return { status: "ok", records };
   } catch (error) {
-    if (isMissingPathError(error)) {
-      publish([]);
-      return { status: "ok", records: [] };
-    }
+    if (isMissingPathError(error)) return { status: "ok", records: [] };
     if (isCorruptionError(error)) {
       return (await quarantineCorruptJournal(filePath, error))
         ? { status: "ok", records: [] }
@@ -441,8 +422,11 @@ export function readSessionHistorySync(userData?: string): AgentSessionRecord[] 
   return result.status === "ok" ? result.records : [];
 }
 
+// On the write queue, so its read can't straddle a write: a cold read that
+// finished after a write would cache the bytes from before it, and its
+// quarantine of a corrupt file could move the journal that write just made.
 export async function readSessionHistory(userData?: string): Promise<AgentSessionRecord[]> {
-  const result = await readSessionHistoryResult(userData);
+  const result = await enqueueWrite(() => readSessionHistoryResult(userData));
   return result.status === "ok" ? result.records : [];
 }
 

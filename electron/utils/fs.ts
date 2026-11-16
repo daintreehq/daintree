@@ -305,14 +305,15 @@ function isTransientRenameError(error: unknown): boolean {
  * spinning the event loop the way {@link resilientRenameSync} does.
  *
  * Resolves `false`, with the temp file removed, when `shouldCommit()` refused.
- * `durable: false` has the meaning it has on {@link resilientAtomicWriteFileSync}.
+ * `durable: false` and `onCommitted` have the meaning they have on
+ * {@link resilientAtomicWriteFileSync}.
  */
 export async function resilientAtomicWriteFileIf(
   filePath: string,
   data: string | Buffer | Uint8Array,
   shouldCommit: () => boolean,
   encoding: BufferEncoding = "utf-8",
-  options?: { mode?: number; durable?: boolean }
+  options?: { mode?: number; durable?: boolean; onCommitted?: () => void }
 ): Promise<boolean> {
   const tempPath = await prepareAtomicWriteFile(filePath, data, encoding, options);
   let committed = false;
@@ -323,6 +324,7 @@ export async function resilientAtomicWriteFileIf(
       try {
         renameSync(tempPath, filePath);
         committed = true;
+        options?.onCommitted?.();
         break;
       } catch (error) {
         if (!isTransientRenameError(error) || Date.now() >= deadline) throw error;

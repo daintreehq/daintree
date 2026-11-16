@@ -659,12 +659,33 @@ describe("agentSessionHistory", () => {
 
     it("reads the disk again after a restart", async () => {
       const filePath = getSessionHistoryPath(userDataDir)!;
+      const external = (sessionId: string) => ({
+        sessionId,
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: null,
+        savedAt: Date.now(),
+      });
+      await fsp.writeFile(filePath, JSON.stringify([external("before")]));
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["before"]);
+      await fsp.writeFile(filePath, JSON.stringify([external("after")]));
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["before"]);
+
+      resetSessionHistoryCacheForTesting();
+
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["after"]);
+    });
+
+    it("finds a journal that appears where there was none", async () => {
+      // A harness can seed the journal after launch, once Main has already
+      // looked for it, so an absent file is never held as an empty journal.
       expect(listAgentSessions(undefined, userDataDir)).toEqual([]);
       await fsp.writeFile(
-        filePath,
+        getSessionHistoryPath(userDataDir)!,
         JSON.stringify([
           {
-            sessionId: "external",
+            sessionId: "seeded",
             agentId: "claude",
             worktreeId: "wt-1",
             title: null,
@@ -673,14 +694,8 @@ describe("agentSessionHistory", () => {
           },
         ])
       );
-      // The absent file was read as an empty journal and is still held as one.
-      expect(listAgentSessions(undefined, userDataDir)).toEqual([]);
 
-      resetSessionHistoryCacheForTesting();
-
-      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
-        "external",
-      ]);
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["seeded"]);
     });
 
     it("serves the same parsed array reference on a cache hit (no re-parse)", async () => {

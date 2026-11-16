@@ -13,20 +13,19 @@ const h = vi.hoisted(() => {
   interface Fault {
     code: string;
   }
-  const armed: {
-    read: Fault | null;
-    renameFault: string | null;
-    writeFault: string | null;
-    readHold: Promise<void> | null;
-  } = {
+  const armed: { read: Fault | null; renameFault: string | null; writeFault: string | null } = {
     read: null,
     renameFault: null,
     writeFault: null,
-    readHold: null,
   };
+  // Every read or stat of the journal itself, by call name.
+  const touches: string[] = [];
   const isJournalPath = (p: unknown): boolean =>
     typeof p === "string" && p.endsWith("agent-session-history.json");
   const makeError = (code: string): Error => Object.assign(new Error(code), { code });
+  const touch = (call: string, p: unknown): void => {
+    if (isJournalPath(p)) touches.push(call);
+  };
   const takeFault = (p: unknown): Error | null => {
     const fault = armed.read;
     if (!fault || !isJournalPath(p)) return null;
@@ -41,13 +40,6 @@ const h = vi.hoisted(() => {
     armed.writeFault = null;
     return makeError(code);
   };
-  // One-shot: holds back the bytes the next journal read got off disk.
-  const takeReadHold = (p: unknown): Promise<void> | null => {
-    const hold = armed.readHold;
-    if (!hold || !isJournalPath(p)) return null;
-    armed.readHold = null;
-    return hold;
-  };
   // The quarantine-rename fault is one-shot and journal-path-scoped too, so it
   // can only fail the rename of the corrupt journal it's meant to simulate.
   const takeRenameFault = (src: unknown): Error | null => {
@@ -60,9 +52,9 @@ const h = vi.hoisted(() => {
     armed.read = null;
     armed.renameFault = null;
     armed.writeFault = null;
-    armed.readHold = null;
+    touches.length = 0;
   };
-  return { armed, takeFault, takeRenameFault, takeWriteFault, takeReadHold, reset };
+  return { armed, touches, touch, takeFault, takeRenameFault, takeWriteFault, reset };
 });
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -70,13 +62,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return {
     ...actual,
     default: actual,
-    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      h.touch("readFile", args[0]);
       const fault = h.takeFault(args[0]);
-      if (fault) throw fault;
-      const hold = h.takeReadHold(args[0]);
-      const content = await actual.readFile(...args);
-      if (hold) await hold;
-      return content;
+      return fault ? Promise.reject(fault) : actual.readFile(...args);
+    },
+    stat: (...args: Parameters<typeof actual.stat>) => {
+      h.touch("stat", args[0]);
+      return actual.stat(...args);
     },
   };
 });
@@ -87,9 +80,14 @@ vi.mock("fs", async (importOriginal) => {
     ...actual,
     default: actual,
     readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      h.touch("readFileSync", args[0]);
       const fault = h.takeFault(args[0]);
       if (fault) throw fault;
       return actual.readFileSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      h.touch("statSync", args[0]);
+      return actual.statSync(...args);
     },
   };
 });
@@ -276,17 +274,24 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
     ]);
   });
 
-  it("never publishes a cold read's bytes over a write that landed meanwhile", async () => {
+  it("serves warm reads without reading or statting the journal", async () => {
+    await persistAgentSession(rec("held", "wt-1"), userDataDir);
+    h.touches.length = 0;
+
+    expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["held"]);
+    expect(readSessionHistorySync(userDataDir).map((r) => r.sessionId)).toEqual(["held"]);
+    expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["held"]);
+    expect(h.touches).toEqual([]);
+  });
+
+  it("queues an async read behind the write in flight, so it can't cache what that write replaced", async () => {
     await seedJournal([rec("old", "wt-1")]);
-    let release!: () => void;
-    h.armed.readHold = new Promise<void>((resolve) => (release = resolve));
 
-    // Reads ["old"] off disk, then waits while a write replaces the journal.
-    const coldRead = readSessionHistory(userDataDir);
-    await persistAgentSession(rec("new", "wt-1"), userDataDir);
-    release();
+    const writing = persistAgentSession(rec("new", "wt-1"), userDataDir);
+    const reading = readSessionHistory(userDataDir);
+    await writing;
 
-    expect((await coldRead).map((r) => r.sessionId)).toEqual(["old"]);
+    expect((await reading).map((r) => r.sessionId)).toEqual(["new", "old"]);
     expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
       "new",
       "old",

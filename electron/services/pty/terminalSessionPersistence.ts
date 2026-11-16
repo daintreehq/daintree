@@ -410,6 +410,15 @@ function warnRestoreFailure(terminalId: string, error: unknown): void {
   console.warn(`[terminalSessionPersistence] Failed to restore session for ${terminalId}:`, error);
 }
 
+// The marker only picks the banner's wording, so failing to consume it must
+// not cost the scrollback it labels.
+function warnMarkerFailure(terminalId: string, error: unknown): void {
+  console.warn(
+    `[terminalSessionPersistence] Failed to consume the hibernation marker for ${terminalId}:`,
+    error
+  );
+}
+
 /**
  * Read a terminal's session file without blocking the calling thread, for
  * {@link applySessionRestore}. Null when there is nothing usable to replay.
@@ -424,12 +433,13 @@ export async function readSessionRestore(
     if (sessionFileTooLarge(terminalId, size)) return null;
     const parsed = parseSessionRead(terminalId, await readFile(sessionPath, "utf8"));
     if (parsed === null) return null;
-    return {
-      content: parsed.content,
-      captureGeometry: parsed.geometry,
-      mtimeMs,
-      wasHibernated: await takeHibernatedMarker(terminalId),
-    };
+    let wasHibernated = false;
+    try {
+      wasHibernated = await takeHibernatedMarker(terminalId);
+    } catch (error) {
+      warnMarkerFailure(terminalId, error);
+    }
+    return { content: parsed.content, captureGeometry: parsed.geometry, mtimeMs, wasHibernated };
   } catch (error) {
     warnRestoreFailure(terminalId, error);
     return null;
@@ -444,12 +454,13 @@ function readSessionRestoreSync(terminalId: string): SessionRestorePayload | nul
     if (sessionFileTooLarge(terminalId, size)) return null;
     const parsed = parseSessionRead(terminalId, readFileSync(sessionPath, "utf8"));
     if (parsed === null) return null;
-    return {
-      content: parsed.content,
-      captureGeometry: parsed.geometry,
-      mtimeMs,
-      wasHibernated: readAndDeleteHibernatedMarker(terminalId),
-    };
+    let wasHibernated = false;
+    try {
+      wasHibernated = readAndDeleteHibernatedMarker(terminalId);
+    } catch (error) {
+      warnMarkerFailure(terminalId, error);
+    }
+    return { content: parsed.content, captureGeometry: parsed.geometry, mtimeMs, wasHibernated };
   } catch (error) {
     warnRestoreFailure(terminalId, error);
     return null;
@@ -684,17 +695,22 @@ export async function persistSessionSnapshotAsync(
     await mkdir(dir, { recursive: true, mode: OWNER_RWX_DIR_MODE });
     await tightenDirPermissions(dir);
     const durable = options?.durable !== false;
-    const committed = await resilientAtomicWriteFileIf(
+    await resilientAtomicWriteFileIf(
       owned.sessionPath,
       formatSessionFile(snapshot),
       () => holdsSessionWrite(owned),
       "utf8",
-      { mode: OWNER_RW_FILE_MODE, durable }
+      {
+        mode: OWNER_RW_FILE_MODE,
+        durable,
+        // At the rename, in the same tick: a durable write's directory sync can
+        // still be pending when a newer background write lands over it.
+        onCommitted: () => {
+          if (durable) backgroundSessionWrites.delete(owned.sessionPath);
+          else backgroundSessionWrites.add(owned.sessionPath);
+        },
+      }
     );
-    if (committed) {
-      if (durable) backgroundSessionWrites.delete(owned.sessionPath);
-      else backgroundSessionWrites.add(owned.sessionPath);
-    }
   } finally {
     dropSessionWrite(owned);
   }

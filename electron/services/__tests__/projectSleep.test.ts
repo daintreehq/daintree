@@ -135,6 +135,7 @@ function policy(overrides: Partial<Extract<SleepProjectOptions, { initiator: "po
 describe("sleepProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    persistenceMock.writeHibernatedMarker.mockReset().mockResolvedValue(undefined);
     leased = new Set();
     _resetDictationViewHoldsForTests();
     panelRecoveryMock.readPanelRecoveryHold.mockReset().mockResolvedValue(null);
@@ -194,19 +195,29 @@ describe("sleepProject", () => {
     });
 
     it("evicts nothing until every terminal's restore marker is on disk", async () => {
-      let release!: () => void;
-      persistenceMock.writeHibernatedMarker.mockImplementationOnce(
-        () => new Promise<void>((resolve) => (release = resolve))
+      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValueOnce({
+        confirmed: true,
+        aborted: false,
+        terminalsKilled: 2,
+        sessions: [
+          { id: "t1", agentSessionId: "s1" },
+          { id: "t2", agentSessionId: "s2" },
+        ],
+      });
+      const release = new Map<string, () => void>();
+      persistenceMock.writeHibernatedMarker.mockImplementation(
+        (terminalId) => new Promise<void>((resolve) => release.set(terminalId, resolve))
       );
 
       const sleeping = sleepProject("proj-1", policy(), makeDeps());
-      await vi.waitFor(() => expect(persistenceMock.writeHibernatedMarker).toHaveBeenCalled());
+      await vi.waitFor(() => expect(release.size).toBe(2));
+      release.get("t1")!();
       await flushMicrotasks();
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
 
-      release();
-      expect(await sleeping).toMatchObject({ status: "slept" });
+      release.get("t2")!();
+      expect(await sleeping).toMatchObject({ status: "slept", terminalsKilled: 2 });
       expect(hibernationMock.evictProjectRenderer).toHaveBeenCalled();
     });
 
