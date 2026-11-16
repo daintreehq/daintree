@@ -361,6 +361,8 @@ async function applyResolved(
   return { status: "applied", panelIds: arranged.flatMap(({ ids }) => ids), failures };
 }
 
+type RecipePreviewModule = typeof import("@/components/TerminalRecipe/recipeConfirmPreview");
+
 /**
  * Apply a plugin layout (#13780): open or reuse each listed panel, browser page
  * and recipe, then place, group and maximize them. Additive — a panel the
@@ -391,9 +393,16 @@ export async function applyPluginLayout(
   // digests above were taken from, so the lines and the approval still agree.
   // A withdrawal during the load had no request to decline, so it is honoured
   // here.
+  // Released and read in the continuation that follows the load, with the
+  // request raised in that same one: any gap would let a cancellation land with
+  // neither a watch nor a request to catch it.
   const watch = watchLayoutApplyCancellation(layout.id);
-  const { formatRecipePreviewLines } =
-    await import("@/components/TerminalRecipe/recipeConfirmPreview").finally(watch.release);
+  let preview: RecipePreviewModule;
+  try {
+    preview = await import("@/components/TerminalRecipe/recipeConfirmPreview");
+  } finally {
+    watch.release();
+  }
   if (watch.cancelled) return { status: "cancelled" };
   const approval = requestLayoutApplyConfirmation({
     layoutId: layout.id,
@@ -401,7 +410,7 @@ export async function applyPluginLayout(
     pluginName: layout.pluginName,
     previewLines: recipes.flatMap((recipe, index) => [
       ...(index > 0 ? [""] : []),
-      ...formatRecipePreviewLines(recipe, { spawns: true }),
+      ...preview.formatRecipePreviewLines(recipe, { spawns: true }),
     ]),
   });
 
