@@ -26,7 +26,13 @@ export interface HostSwitchOnScreenError {
  * settled in the background, so it names no hold at all.
  */
 export type CachedViewReleaseBlock =
-  "assistant" | "unsaved-work" | "mcp" | "flush" | "dictation" | "unavailable";
+  | "assistant"
+  | "unsaved-work"
+  | "mcp"
+  | "flush"
+  | "dictation"
+  | "worktree-creation"
+  | "unavailable";
 
 /**
  * A project another window keeps in its cache and can't release. `showable`

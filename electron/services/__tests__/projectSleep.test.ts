@@ -118,6 +118,7 @@ function backgroundWindow(): ProjectViewManager {
     isMcpDispatchProtected: (projectId: string) => leased.has(projectId),
     isDictationHeld: (projectId: string) =>
       projectId === PROJECT.id && isDictationViewHeld(cachedView),
+    isBulkWorktreeRunHeld: () => false,
   } as unknown as ProjectViewManager;
 }
 
@@ -279,6 +280,7 @@ describe("sleepProject", () => {
         win: { id: 2, isDestroyed: () => false },
         isMcpDispatchProtected: () => false,
         isDictationHeld: () => false,
+        isBulkWorktreeRunHeld: () => false,
       } as unknown as ProjectViewManager;
 
       const outcome = await sleepProject(

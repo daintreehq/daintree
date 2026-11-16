@@ -206,6 +206,7 @@ const CACHED_VIEW_RELEASE_BLOCKS: ReadonlySet<string> = new Set<CachedViewReleas
   "mcp",
   "flush",
   "dictation",
+  "worktree-creation",
   "unavailable",
 ]);
 

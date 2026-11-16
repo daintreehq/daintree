@@ -146,6 +146,7 @@ import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
 import { registerSchedulesHandlers } from "./handlers/schedules.js";
 import { registerTerminalWhenDoneHandlers } from "./handlers/terminalWhenDone.js";
 import { registerComposerHoldHandlers } from "./handlers/composerHold.js";
+import { registerBulkWorktreeRunsHandlers } from "./handlers/bulkWorktreeRuns.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {
@@ -320,6 +321,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerSchedulesHandlers());
     register(() => registerTerminalWhenDoneHandlers());
     register(() => registerComposerHoldHandlers());
+    register(() => registerBulkWorktreeRunsHandlers());
     register(() => registerDecisionsHandlers());
     register(() => registerScratchHandlers(deps));
 

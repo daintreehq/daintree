@@ -81,6 +81,7 @@ type SkipReason =
   | IdleShellSkipReason
   | "mcp-dispatch"
   | "dictation"
+  | "worktree-creation"
   | "ineligible"
   | "coordination-hold"
   | "plugin-work";

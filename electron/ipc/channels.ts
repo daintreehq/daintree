@@ -1578,6 +1578,14 @@ export const CHANNELS = {
   COMPOSER_HOLD_LIST: "composer-hold:list",
   COMPOSER_HOLD_CHANGED: "composer-hold:changed",
 
+  // Bulk worktree creation runs, readable and controllable from every view (#17085)
+  BULK_WORKTREE_RUNS_PUBLISH: "bulk-worktree-runs:publish",
+  BULK_WORKTREE_RUNS_LIST: "bulk-worktree-runs:list",
+  BULK_WORKTREE_RUNS_COMMAND: "bulk-worktree-runs:command",
+  BULK_WORKTREE_RUNS_DISMISS: "bulk-worktree-runs:dismiss",
+  BULK_WORKTREE_RUNS_CHANGED: "bulk-worktree-runs:changed",
+  BULK_WORKTREE_RUNS_COMMANDED: "bulk-worktree-runs:commanded",
+
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",
   // One pane's Decisions state, for its chrome to show on mount (#16016).

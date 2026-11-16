@@ -1223,6 +1223,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (change: import("./composerHold.js").ComposerHoldChange) => void
     ): () => void;
   };
+  // publish / list / command / dismiss come from GeneratedElectronAPI (#17085).
+  bulkWorktreeRuns: GeneratedElectronAPI["bulkWorktreeRuns"] & {
+    onChanged(
+      callback: (change: import("./bulkWorktreeRuns.js").BulkWorktreeRunsChanged) => void
+    ): () => void;
+    onCommand(
+      callback: (command: import("./bulkWorktreeRuns.js").BulkWorktreeRunCommand) => void
+    ): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
