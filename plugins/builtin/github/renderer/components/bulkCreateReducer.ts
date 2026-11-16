@@ -8,6 +8,8 @@ export type ItemStage = BulkWorktreeRunItemStage;
 export interface ItemStatus {
   stage: ItemStage;
   attempt: number;
+  /** Times Retry failed has run this item again. */
+  retried?: number;
   error?: string;
   worktreeId?: string;
   worktreePath?: string;
@@ -180,7 +182,12 @@ export function progressReducer(state: ProgressState, action: ProgressAction): P
           val.stage === "terminals-error" ||
           val.stage === "worktree-error"
         ) {
-          items.set(key, { ...val, stage: "pending", error: undefined });
+          items.set(key, {
+            ...val,
+            stage: "pending",
+            error: undefined,
+            retried: (val.retried ?? 0) + 1,
+          });
           retryCount++;
         }
       }
@@ -188,30 +195,5 @@ export function progressReducer(state: ProgressState, action: ProgressAction): P
     }
     case "RESET":
       return { phase: "idle", total: 0, items: new Map() };
-  }
-}
-
-export function getStageLabel(status: ItemStatus | undefined): string | null {
-  if (!status) return null;
-  switch (status.stage) {
-    case "worktree-creating":
-      return "Creating worktree…";
-    case "terminals-spawning":
-      return "Spawning terminals…";
-    case "assigning":
-      return "Assigning issue…";
-    case "verifying":
-      return "Verifying…";
-    case "failed":
-      if (status.failedStep === "terminals") return "Terminal spawn failed";
-      if (status.failedStep === "verification") return "Missing terminals";
-      if (status.failedStep === "assignment") return "Assignment failed";
-      return null;
-    case "cancelled":
-      return status.worktreeId ? "Cancelled after its worktree was created" : "Cancelled";
-    case "interrupted":
-      return status.worktreeId ? "Interrupted after its worktree was created" : "Interrupted";
-    default:
-      return null;
   }
 }

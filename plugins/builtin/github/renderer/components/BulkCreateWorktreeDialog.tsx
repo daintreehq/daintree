@@ -1,14 +1,5 @@
 import { useCallback, useRef, useMemo, useEffect, useLayoutEffect, useState } from "react";
-import {
-  Avatar,
-  Badge,
-  Button,
-  Checkbox,
-  Dialog,
-  Icon,
-  ProgressBar,
-  Spinner,
-} from "@daintreehq/plugin-ui";
+import { Avatar, Badge, Button, Checkbox, Dialog, Icon } from "@daintreehq/plugin-ui";
 // The primary stays focusable while unavailable (`aria-disabled`), and a kit
 // Button can only be natively disabled, so it takes the host's disabled look.
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -36,23 +27,13 @@ import {
 } from "@/components/Worktree/branchPickerUtils";
 import { FormGrid, FormRow, FormSection } from "@/components/Worktree/views/WorktreeFormLayout";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
-import { getStageLabel, type ProgressState } from "./bulkCreateReducer";
 import { collectGitHubIssueNumbers, planIssueWorktrees, planPRWorktrees } from "./bulkCreateUtils";
-import {
-  cancelBulkCreateRun,
-  dismissBulkCreateRun,
-  findBulkCreateRunToShow,
-  retryFailedBulkCreateRun,
-  startBulkCreateRun,
-  useBulkCreateRunStore,
-} from "./bulkCreateRunner";
+import { startBulkCreateRun, useBulkCreateRunStore } from "./bulkCreateRunner";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import type { BranchInfo } from "@shared/types";
 
 /** Conforms to the host's bulk-create slot contract (forge-normalized shapes). */
 export type BulkCreateWorktreeDialogProps = ForgeBulkCreateWorktreeDialogProps;
-
-const IDLE_PROGRESS: ProgressState = { phase: "idle", total: 0, items: new Map() };
 
 export function BulkCreateWorktreeDialog({
   isOpen,
@@ -62,20 +43,12 @@ export function BulkCreateWorktreeDialog({
   selectedPRs,
   onComplete,
 }: BulkCreateWorktreeDialogProps) {
-  // The run this dialog shows. The run lives in the runner, not here: closing
-  // the dialog leaves it going, and reopening shows it again (#17085).
-  const [boundRunId, setBoundRunId] = useState<string | null>(null);
-  // Set the moment Create starts a run, ahead of the re-render, so a second
-  // click can't start another.
-  const boundRunIdRef = useRef<string | null>(null);
+  // The dialog only sets a batch up. Create hands the run to the toolbar's
+  // activity chip, which shows it in every project view, and closes (#17086).
+  // Set the moment Create starts a run, ahead of the close, so a second click
+  // can't start another.
+  const startedRef = useRef(false);
   const prevIsOpenRef = useRef(false);
-  // An ended run the user has acknowledged. Dropped once the dialog closes or
-  // unmounts, not on the click, so its summary stays up until the dialog goes.
-  const acknowledgedRunIdRef = useRef<string | null>(null);
-  const boundRun = useBulkCreateRunStore((state) =>
-    boundRunId ? state.runs[boundRunId] : undefined
-  );
-  const progress = boundRun?.progress ?? IDLE_PROGRESS;
 
   // Shared preferences (same store as single create dialog)
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
@@ -243,20 +216,37 @@ export function BulkCreateWorktreeDialog({
     onSelect: handleBaseBranchSelect,
   });
   const closeBaseBranchPicker = baseBranchPicker.setOpen;
-  const livePlan = useMemo(() => {
+  // Items a run still going in this project is working on. Picking one again
+  // would race that run for the same branch, so it is skipped like an item
+  // that already has its worktree.
+  const runs = useBulkCreateRunStore((state) => state.runs);
+  const inFlightNumbers = useMemo(() => {
+    const numbers = new Set<number>();
+    for (const run of Object.values(runs)) {
+      if (run.projectId !== projectId || run.mode !== mode) continue;
+      const { phase } = run.progress;
+      if (phase !== "executing" && phase !== "cancelling") continue;
+      for (const number of run.progress.items.keys()) numbers.add(number);
+    }
+    return numbers;
+  }, [runs, projectId, mode]);
+  const planned = useMemo(() => {
+    let plan;
     if (mode === "pr") {
       const existingPRNumbers = new Set<number>();
       for (const wt of worktreeMap.values()) {
         if (wt.prNumber) existingPRNumbers.add(wt.prNumber);
       }
-      return planPRWorktrees(selectedPRs, existingPRNumbers);
+      plan = planPRWorktrees(selectedPRs, existingPRNumbers);
+    } else {
+      plan = planIssueWorktrees(selectedIssues, collectGitHubIssueNumbers(worktreeMap.values()));
     }
-    return planIssueWorktrees(selectedIssues, collectGitHubIssueNumbers(worktreeMap.values()));
-  }, [mode, selectedIssues, selectedPRs, worktreeMap]);
-  // Frozen at Create. Each worktree the run lands makes the live plan read its
-  // item as "Has worktree" with no branch, which would shift the counts mid-run
-  // and hand Retry an item with nothing to create from.
-  const planned = boundRun?.plan ?? livePlan;
+    return plan.map((p) =>
+      !p.skipped && inFlightNumbers.has(p.item.number)
+        ? { ...p, skipped: true, skipReason: "Being created" }
+        : p
+    );
+  }, [mode, selectedIssues, selectedPRs, worktreeMap, inFlightNumbers]);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
   const selectedCount = planned.length;
@@ -269,70 +259,30 @@ export function BulkCreateWorktreeDialog({
   const batchSummary =
     selectedCount === 0
       ? `Select ${mode === "pr" ? "a pull request" : "an issue"} to continue`
-      : `${selectedCount} ${selectedCount === 1 ? itemNoun : `${itemNoun}s`} selected` +
-        (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "");
+      : // Create closes this and the batch carries on in the toolbar; say so
+        // before the click, so the dialog vanishing doesn't read as nothing.
+        // "selected" gives way to it: the title and the button already count.
+        `${selectedCount} ${selectedCount === 1 ? itemNoun : `${itemNoun}s`}` +
+        (creatableCount > 0 ? "" : " selected") +
+        (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "") +
+        (creatableCount > 0 ? " \u00b7 runs in the background" : "");
 
-  const isExecuting = progress.phase === "executing";
-  const isCancelling = progress.phase === "cancelling";
-  const isCancelled = progress.phase === "cancelled";
   // Nothing to cut issue branches from yet (detached main worktree, list still
   // loading or empty): hold Create rather than fail every item.
   const createBlocked = creatableCount === 0 || (mode === "issue" && !baseBranch);
-  const isDone = progress.phase === "done";
-  const isEnded = isDone || isCancelled;
-
-  const { succeededCount, failedCount, stoppedCount, worktreesCreatedCount } = useMemo(() => {
-    let succeeded = 0;
-    let failed = 0;
-    let stopped = 0;
-    let created = 0;
-    for (const item of progress.items.values()) {
-      if (item.worktreeId) created++;
-      if (item.stage === "succeeded") succeeded++;
-      else if (item.stage === "failed") failed++;
-      else if (item.stage === "cancelled" || item.stage === "interrupted") stopped++;
-    }
-    return {
-      succeededCount: succeeded,
-      failedCount: failed,
-      stoppedCount: stopped,
-      worktreesCreatedCount: created,
-    };
-  }, [progress.items]);
-
-  const processedCount = succeededCount + failedCount + stoppedCount;
-  // A cancel can leave worktrees made but never set up, and they exist all the
-  // same: once anything was stopped, the count is of worktrees on disk, through
-  // a retry of the failures too.
-  const createdCount = stoppedCount > 0 ? worktreesCreatedCount : succeededCount;
 
   useLayoutEffect(() => {
-    if (!isOpen && acknowledgedRunIdRef.current) {
-      dismissBulkCreateRun(acknowledgedRunIdRef.current);
-      acknowledgedRunIdRef.current = null;
-    }
     if (isOpen && !prevIsOpenRef.current) {
-      const existing = projectId ? findBulkCreateRunToShow(projectId) : undefined;
-      boundRunIdRef.current = existing?.id ?? null;
-      setBoundRunId(existing?.id ?? null);
+      startedRef.current = false;
       setPickedBase(null);
       closeBaseBranchPicker(false);
     }
     prevIsOpenRef.current = isOpen;
-  }, [isOpen, projectId, closeBaseBranchPicker]);
+  }, [isOpen, closeBaseBranchPicker]);
 
-  // ProjectDialogHost unmounts the dialog on close, so this is where an
-  // acknowledged run is usually dropped. A run still going is left alone.
-  useEffect(() => {
-    return () => {
-      if (acknowledgedRunIdRef.current) dismissBulkCreateRun(acknowledgedRunIdRef.current);
-      acknowledgedRunIdRef.current = null;
-    };
-  }, []);
-
-  const handleCreate = useCallback(async () => {
-    if (boundRunIdRef.current) return;
-    const toCreate = livePlan.filter((p) => !p.skipped);
+  const handleCreate = useCallback(() => {
+    if (startedRef.current) return;
+    const toCreate = planned.filter((p) => !p.skipped);
     if (mode === "issue" && !baseBranch) return;
     if (toCreate.length === 0) {
       console.warn(
@@ -354,11 +304,11 @@ export function BulkCreateWorktreeDialog({
       selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId
         ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
         : null;
-    const { runId, done } = startBulkCreateRun({
+    startBulkCreateRun({
       projectId,
       rootPath: currentProject?.path,
       mode,
-      plan: livePlan,
+      plan: planned,
       recipeId: selectedRecipeId,
       recipe: selectedRecipe,
       // What the form showed: an unavailable account is unchecked there.
@@ -367,11 +317,17 @@ export function BulkCreateWorktreeDialog({
       base: baseBranch,
       cloneTerminals,
     });
-    boundRunIdRef.current = runId;
-    setBoundRunId(runId);
-    await done;
+    startedRef.current = true;
+
+    // The batch is committed, so its selection is spent: clear it the way a
+    // finished run's Done always did. Captured before onClose(), which is
+    // wired to closeBulkCreateDialog upstream and zeroes the stored callback.
+    const storedOnComplete = useWorktreeSelectionStore.getState().bulkCreateDialog.onComplete;
+    onComplete();
+    onClose();
+    storedOnComplete?.();
   }, [
-    livePlan,
+    planned,
     selectedRecipeId,
     selectedRecipe,
     assignWorktreeToSelf,
@@ -382,51 +338,13 @@ export function BulkCreateWorktreeDialog({
     setLastSelectedWorktreeRecipeIdByProject,
     baseBranch,
     mode,
+    onComplete,
+    onClose,
   ]);
 
-  const handleRetryFailed = useCallback(async () => {
-    if (!boundRunId) return;
-    await retryFailedBulkCreateRun(boundRunId);
-  }, [boundRunId]);
-
-  // Stops the run; the dialog stays to show what the cancel left behind.
-  const handleCancelRun = useCallback(() => {
-    if (boundRunId) cancelBulkCreateRun(boundRunId);
-  }, [boundRunId]);
-
-  const handleClose = useCallback(() => {
-    // Closing never stops a run: one still going carries on and shows again
-    // when the dialog reopens. Closing while idle or mid-run preserves the
-    // bulk selection so the user can reopen the dropdown and finish picking.
-    // Once the run has completed, dismissing via X/Escape/backdrop must run
-    // the same selection cleanup as the Done button — otherwise the bulk
-    // bar stays visible with the now-stale selection.
-    //
-    // Capture before onClose() — onClose is wired to closeBulkCreateDialog
-    // upstream, which zeroes out the stored callback as part of its reset.
-    const storedOnComplete = isDone
-      ? useWorktreeSelectionStore.getState().bulkCreateDialog.onComplete
-      : undefined;
-    if (isEnded) acknowledgedRunIdRef.current = boundRunId;
-
-    onClose();
-    storedOnComplete?.();
-  }, [isDone, isEnded, boundRunId, onClose]);
-
-  const handleDone = useCallback(() => {
-    acknowledgedRunIdRef.current = boundRunId;
-    // A cancelled run keeps the selection, as a cancel always has.
-    if (isCancelled) {
-      onClose();
-      return;
-    }
-    // Capture before onComplete()/onClose() — both are wired to closeBulkCreateDialog
-    // upstream, which zeroes out the stored callback as part of its reset.
-    const storedOnComplete = useWorktreeSelectionStore.getState().bulkCreateDialog.onComplete;
-    onComplete();
-    onClose();
-    storedOnComplete?.();
-  }, [boundRunId, isCancelled, onComplete, onClose]);
+  // Closing without Create keeps the selection, so the user can reopen the
+  // dropdown and finish picking.
+  const handleClose = onClose;
 
   const handleRecipeSelectCombined = useCallback(
     (recipeId: string | null) => {
@@ -450,302 +368,155 @@ export function BulkCreateWorktreeDialog({
       onClose={handleClose}
       size="md"
       data-testid="bulk-create-worktree-dialog"
-      icon={
-        isExecuting || isCancelling ? (
-          <Spinner size="lg" className="text-text-secondary" />
-        ) : isCancelled ? (
-          <Icon name="alert-triangle" className="w-5 h-5 text-status-warning" />
-        ) : isDone ? (
-          succeededCount === 0 && failedCount > 0 ? (
-            <Icon name="circle-x" className="w-5 h-5 text-status-error" />
-          ) : failedCount > 0 ? (
-            <Icon name="alert-triangle" className="w-5 h-5 text-status-warning" />
-          ) : (
-            <Icon name="circle-check" className="w-5 h-5 text-status-success" />
-          )
-        ) : (
-          <Icon name="worktree" className="w-5 h-5 text-text-muted" />
-        )
-      }
-      title={
-        isExecuting
-          ? "Creating worktrees\u2026"
-          : isCancelling
-            ? "Cancelling\u2026"
-            : isCancelled
-              ? "Creation cancelled"
-              : isDone
-                ? succeededCount === 0 && failedCount > 0
-                  ? "Couldn't create worktrees"
-                  : "Creation complete"
-                : `Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`
-      }
-      // Only while idle: once the run starts, the body's own progress line is
-      // the authority on counts and a second tally would drift from it.
-      hint={progress.phase === "idle" ? batchSummary : undefined}
+      icon={<Icon name="worktree" className="w-5 h-5 text-text-muted" />}
+      title={`Create ${creatableCount} worktree${creatableCount !== 1 ? "s" : ""}`}
+      hint={batchSummary}
       footer={
-        isEnded ? (
-          <>
-            {failedCount > 0 && (
-              <Button
-                variant="ghost"
-                onClick={handleRetryFailed}
-                data-testid="bulk-create-retry-button"
-                icon="refresh"
-              >
-                Retry failed
-              </Button>
-            )}
-            <Button
-              variant="contrast"
-              onClick={handleDone}
-              data-testid="bulk-create-done-button"
-              icon="check"
-            >
-              Done
-            </Button>
-          </>
-        ) : (
-          // The primary stays mounted while executing: dropping it made Cancel
-          // the rightmost button, so it inherited the CTA's hit area one render
-          // after the click that started the run. Mid-run, Cancel stops the
-          // run; closing the dialog any other way leaves it going.
-          <>
-            {isExecuting || isCancelling ? (
-              <Button
-                variant="ghost"
-                aria-disabled={isCancelling || undefined}
-                onClick={isCancelling ? undefined : handleCancelRun}
-                className={cn(isCancelling && ARIA_DISABLED_CLASSES)}
-                data-testid="bulk-create-cancel-run-button"
-              >
-                Cancel run
-              </Button>
-            ) : (
-              <Button variant="ghost" onClick={handleClose}>
-                Cancel
-              </Button>
-            )}
-            <Button
-              aria-disabled={isExecuting || isCancelling || createBlocked || undefined}
-              variant="contrast"
-              onClick={isExecuting || isCancelling || createBlocked ? undefined : handleCreate}
-              className={cn(
-                "min-w-[100px]",
-                (isExecuting || isCancelling || createBlocked) && ARIA_DISABLED_CLASSES
-              )}
-              data-testid="bulk-create-confirm-button"
-              icon="check"
-            >
-              Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
-            </Button>
-          </>
-        )
+        <>
+          <Button variant="ghost" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button
+            aria-disabled={createBlocked || undefined}
+            variant="contrast"
+            onClick={createBlocked ? undefined : handleCreate}
+            className={cn("min-w-[100px]", createBlocked && ARIA_DISABLED_CLASSES)}
+            data-testid="bulk-create-confirm-button"
+            icon="check"
+          >
+            Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
+          </Button>
+        </>
       }
     >
-      {progress.phase === "idle" ? (
-        <FormGrid>
-          <FormSection title="Setup">
-            {/* Rendered for every issue-mode batch, not just once identity
+      <FormGrid>
+        <FormSection title="Setup">
+          {/* Rendered for every issue-mode batch, not just once identity
                   resolves: the row is the same height either way, so a viewer
                   arriving mid-open populates it instead of inserting it. The
                   toggle keeps tracking the preference while the lookup is in
                   flight — the run loop reads the viewer per item, so identity
                   landing mid-run still assigns — and only goes dead once the
                   lookup has come back with no account to assign to. */}
-            {mode === "issue" && (
-              <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
-                <div className="flex items-center gap-2 text-xs text-text-secondary">
-                  {/* A checkbox, not a switch: the value is committed by Create
+          {mode === "issue" && (
+            <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
+              <div className="flex items-center gap-2 text-xs text-text-secondary">
+                {/* A checkbox, not a switch: the value is committed by Create
                         with the rest of the batch, exactly as New Worktree offers it. */}
-                  <Checkbox
-                    id="bulk-assign-to-self"
-                    checked={assignWorktreeToSelf && !assignUnavailable}
-                    onCheckedChange={setAssignWorktreeToSelf}
-                    disabled={assignUnavailable}
-                  />
-                  {currentUser ? (
-                    <Avatar
-                      src={avatarUrlAtSize(currentUserAvatar, 32)}
-                      name={currentUser}
-                      size="xs"
-                      decorative
-                    />
-                  ) : (
-                    <span
-                      className="flex h-4 w-4 shrink-0 items-center justify-center"
-                      aria-hidden="true"
-                    >
-                      <Icon name="user-plus" className="h-3.5 w-3.5" />
-                    </span>
-                  )}
-                  {/* Blank while the lookup is still out: naming a failure
-                        before there is one is worse than naming nothing. */}
-                  {(currentUser || assignUnavailable) && (
-                    <span className="truncate">
-                      {currentUser ? `@${currentUser}` : "Account unavailable"}
-                    </span>
-                  )}
-                </div>
-              </FormRow>
-            )}
-
-            {mode === "issue" && (
-              <FormRow
-                label="Base"
-                htmlFor="base-branch"
-                hint={
-                  branchLoadFailed ? (
-                    <span className="text-xs text-text-secondary">
-                      {baseBranch
-                        ? `Couldn't load branches. Using ${baseBranch.name}.`
-                        : "Couldn't load branches."}
-                    </span>
-                  ) : undefined
-                }
-              >
-                <BaseBranchCombobox
-                  baseBranch={baseBranch?.name ?? ""}
-                  controller={baseBranchPicker}
-                  disabled={branchesLoading || branchLoadFailed}
-                  unavailableLabel={
-                    branches.length === 0
-                      ? (baseBranch?.name ??
-                        (branchesLoading ? "Loading branches\u2026" : "No base branch"))
-                      : undefined
-                  }
+                <Checkbox
+                  id="bulk-assign-to-self"
+                  checked={assignWorktreeToSelf && !assignUnavailable}
+                  onCheckedChange={setAssignWorktreeToSelf}
+                  disabled={assignUnavailable}
                 />
-              </FormRow>
-            )}
+                {currentUser ? (
+                  <Avatar
+                    src={avatarUrlAtSize(currentUserAvatar, 32)}
+                    name={currentUser}
+                    size="xs"
+                    decorative
+                  />
+                ) : (
+                  <span
+                    className="flex h-4 w-4 shrink-0 items-center justify-center"
+                    aria-hidden="true"
+                  >
+                    <Icon name="user-plus" className="h-3.5 w-3.5" />
+                  </span>
+                )}
+                {/* Blank while the lookup is still out: naming a failure
+                        before there is one is worse than naming nothing. */}
+                {(currentUser || assignUnavailable) && (
+                  <span className="truncate">
+                    {currentUser ? `@${currentUser}` : "Account unavailable"}
+                  </span>
+                )}
+              </div>
+            </FormRow>
+          )}
 
-            <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
-              <RecipePickerPopover
-                recipes={startingLayoutRecipes}
-                selectedRecipeId={selectedRecipeId}
-                selectedRecipe={selectedRecipe}
-                defaultRecipeId={defaultRecipeId}
-                open={recipePickerOpen}
-                onOpenChange={setRecipePickerOpen}
-                onSelectRecipe={handleRecipeSelectCombined}
-                onMarkTouched={() => {}}
-                listId="bulk-recipe-selector"
+          {mode === "issue" && (
+            <FormRow
+              label="Base"
+              htmlFor="base-branch"
+              hint={
+                branchLoadFailed ? (
+                  <span className="text-xs text-text-secondary">
+                    {baseBranch
+                      ? `Couldn't load branches. Using ${baseBranch.name}.`
+                      : "Couldn't load branches."}
+                  </span>
+                ) : undefined
+              }
+            >
+              <BaseBranchCombobox
+                baseBranch={baseBranch?.name ?? ""}
+                controller={baseBranchPicker}
+                disabled={branchesLoading || branchLoadFailed}
+                unavailableLabel={
+                  branches.length === 0
+                    ? (baseBranch?.name ??
+                      (branchesLoading ? "Loading branches\u2026" : "No base branch"))
+                    : undefined
+                }
               />
             </FormRow>
-          </FormSection>
+          )}
 
-          {/* Spans both columns: the batch preview is content, not a field, and
+          <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
+            <RecipePickerPopover
+              recipes={startingLayoutRecipes}
+              selectedRecipeId={selectedRecipeId}
+              selectedRecipe={selectedRecipe}
+              defaultRecipeId={defaultRecipeId}
+              open={recipePickerOpen}
+              onOpenChange={setRecipePickerOpen}
+              onSelectRecipe={handleRecipeSelectCombined}
+              onMarkTouched={() => {}}
+              listId="bulk-recipe-selector"
+            />
+          </FormRow>
+        </FormSection>
+
+        {/* Spans both columns: the batch preview is content, not a field, and
                 a 300px scroller pinned beside a 4rem label rail would give up the
                 width the branch names need. */}
-          <FormSection title="Worktrees to create">
-            <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
-              {planned.map((item) => (
-                <li
-                  key={item.item.number}
-                  className={cn(
-                    "px-3 py-2 flex items-center gap-3 text-sm",
-                    item.skipped && "opacity-50"
-                  )}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-text-secondary text-xs font-mono shrink-0">
-                        #{item.item.number}
+        <FormSection title="Worktrees to create">
+          <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
+            {planned.map((item) => (
+              <li
+                key={item.item.number}
+                className={cn(
+                  "px-3 py-2 flex items-center gap-3 text-sm",
+                  item.skipped && "opacity-50"
+                )}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-text-secondary text-xs font-mono shrink-0">
+                      #{item.item.number}
+                    </span>
+                    <span className="text-text-primary truncate">{item.item.title}</span>
+                  </div>
+                  {!item.skipped && (
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Icon name="worktree" className="w-3 h-3 text-text-secondary shrink-0" />
+                      <span className="text-xs text-text-secondary font-mono truncate">
+                        {item.branchName}
                       </span>
-                      <span className="text-text-primary truncate">{item.item.title}</span>
                     </div>
-                    {!item.skipped && (
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <Icon name="worktree" className="w-3 h-3 text-text-secondary shrink-0" />
-                        <span className="text-xs text-text-secondary font-mono truncate">
-                          {item.branchName}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  {item.skipped && (
-                    <Badge size="xs" tone="warning">
-                      {item.skipReason}
-                    </Badge>
                   )}
-                </li>
-              ))}
-            </ul>
-          </FormSection>
-        </FormGrid>
-      ) : (
-        <div className="space-y-4">
-          {/* Per-item status list */}
-          <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
-            {planned
-              .filter((p) => progress.items.has(p.item.number))
-              .map((item) => {
-                const itemStatus = progress.items.get(item.item.number);
-                const stageLabel = getStageLabel(itemStatus);
-                const isInProgress =
-                  itemStatus &&
-                  itemStatus.stage !== "pending" &&
-                  itemStatus.stage !== "succeeded" &&
-                  itemStatus.stage !== "failed" &&
-                  itemStatus.stage !== "cancelled" &&
-                  itemStatus.stage !== "interrupted";
-                return (
-                  <div key={item.item.number} className="px-3 py-2 flex items-start gap-3 text-sm">
-                    <div className="mt-0.5 shrink-0">
-                      {isInProgress ? (
-                        <Spinner size="md" className="text-text-secondary" />
-                      ) : itemStatus?.stage === "succeeded" ? (
-                        <Icon name="circle-check" className="w-4 h-4 text-status-success" />
-                      ) : itemStatus?.stage === "failed" ? (
-                        <Icon name="circle-x" className="w-4 h-4 text-status-error" />
-                      ) : (
-                        <div className="w-4 h-4 rounded-full border border-border-default" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-text-secondary text-xs font-mono shrink-0">
-                          #{item.item.number}
-                        </span>
-                        <span className="text-text-primary truncate">{item.item.title}</span>
-                        {isInProgress && itemStatus.attempt > 1 && (
-                          <Badge size="xs" tone="info">
-                            retry {itemStatus.attempt - 1}
-                          </Badge>
-                        )}
-                      </div>
-                      {stageLabel && (
-                        <p className="text-xs text-text-secondary mt-0.5">{stageLabel}</p>
-                      )}
-                      {itemStatus?.stage === "failed" && itemStatus.error && (
-                        <p className="text-xs text-status-warning mt-0.5 break-words">
-                          {itemStatus.error}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-
-          {/* Progress bar + summary */}
-          <div className="space-y-2">
-            <ProgressBar
-              label="Creating worktrees"
-              value={progress.items.size > 0 ? processedCount / progress.items.size : 0}
-              valueText={`${processedCount} of ${progress.items.size}`}
-            />
-            <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
-              <span>
-                {createdCount} of {progress.items.size} created
-              </span>
-              {failedCount > 0 && (
-                <span className="text-status-warning">&middot; {failedCount} failed</span>
-              )}
-              {stoppedCount > 0 && <span>&middot; {stoppedCount} cancelled</span>}
-            </div>
-          </div>
-        </div>
-      )}
+                </div>
+                {item.skipped && (
+                  <Badge size="xs" tone="warning">
+                    {item.skipReason}
+                  </Badge>
+                )}
+              </li>
+            ))}
+          </ul>
+        </FormSection>
+      </FormGrid>
     </Dialog>
   );
 }

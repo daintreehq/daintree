@@ -68,7 +68,6 @@ import {
   _resetBulkCreateRunsForTests,
   cancelBulkCreateRun,
   dismissBulkCreateRun,
-  findBulkCreateRunToShow,
   retryFailedBulkCreateRun,
   startBulkCreateRun,
   useBulkCreateRunStore,
@@ -191,8 +190,6 @@ describe("bulk create runner", () => {
       [1, "succeeded", "wt-1", "feature/issue-1"],
       [2, "succeeded", "wt-2", "feature/issue-2"],
     ]);
-    expect(findBulkCreateRunToShow("proj-a")?.id).toBe(runId);
-    expect(findBulkCreateRunToShow("proj-b")).toBeUndefined();
   });
 
   it("tracks two runs at once, and cancelling one leaves the other going", async () => {

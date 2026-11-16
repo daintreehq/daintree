@@ -9,7 +9,6 @@ import { notify } from "@/lib/notify";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
@@ -18,9 +17,16 @@ import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import type { BranchInfo, RecipeTerminal, TerminalRecipe } from "@shared/types";
 import {
   BULK_RUN_HEARTBEAT_MS,
+  type BulkWorktreeRunExecution,
   type BulkWorktreeRunPhase,
   type BulkWorktreeRunSnapshot,
 } from "@shared/types/ipc/bulkWorktreeRuns";
+import {
+  attentionVerb,
+  bulkRunItemStep,
+  describeBulkRunNumbers,
+  summarizeBulkRun,
+} from "@/lib/bulkWorktreeRuns";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { progressReducer, type ProgressAction, type ProgressState } from "./bulkCreateReducer";
 import {
@@ -76,6 +82,8 @@ export interface BulkCreateRun {
   plan: PlannedWorktree[];
   progress: ProgressState;
   startedAt: number;
+  /** Every pass over the run: its start, then each retry. */
+  executions: BulkWorktreeRunExecution[];
 }
 
 interface BulkCreateRunState {
@@ -202,8 +210,6 @@ interface RunRuntime {
   controller: AbortController;
   queue: PQueue | null;
   cancelRequested: boolean;
-  /** Worktrees the current execution created, for what a cancel reports. */
-  created: number;
   viewerLookup: Promise<{ login: string; avatarUrl?: string } | null> | null;
 }
 
@@ -225,11 +231,22 @@ function dispatchRun(runId: string, action: ProgressAction): void {
   if (!run) return;
   const progress = progressReducer(run.progress, action);
   if (progress === run.progress) return;
+  const next: BulkCreateRun = { ...run, progress };
+  // A pass ends when the run stops being live, stamped with the same change
+  // that publishes it, so every view sees when it ended.
+  if (isLive(run) && !isLive(next)) {
+    const passes = [...run.executions];
+    const last = passes[passes.length - 1];
+    if (last && last.endedAt === undefined) {
+      passes[passes.length - 1] = { ...last, endedAt: Date.now() };
+    }
+    next.executions = passes;
+  }
   useBulkCreateRunStore.setState((state) => ({
-    runs: { ...state.runs, [runId]: { ...run, progress } },
+    runs: { ...state.runs, [runId]: next },
   }));
   schedulePublish(runId);
-  if (isLive(run) !== isLive({ ...run, progress })) syncHeartbeat();
+  if (isLive(run) !== isLive(next)) syncHeartbeat();
 }
 
 function snapshotPhase(phase: ProgressState["phase"]): BulkWorktreeRunPhase {
@@ -253,6 +270,7 @@ export function toBulkWorktreeRunSnapshot(run: BulkCreateRun): BulkWorktreeRunSn
       title: planned.item.title,
       stage: status.stage,
       attempt: status.attempt,
+      ...(status.retried !== undefined ? { retried: status.retried } : {}),
       ...(status.error !== undefined ? { error: status.error } : {}),
       ...(status.failedStep !== undefined ? { failedStep: status.failedStep } : {}),
       ...(status.worktreeId !== undefined ? { worktreeId: status.worktreeId } : {}),
@@ -267,6 +285,7 @@ export function toBulkWorktreeRunSnapshot(run: BulkCreateRun): BulkWorktreeRunSn
     phase: snapshotPhase(run.progress.phase),
     items,
     startedAt: run.startedAt,
+    executions: run.executions.map((pass) => ({ ...pass })),
     updatedAt: Date.now(),
     controllable: true,
   };
@@ -316,6 +335,7 @@ function syncHeartbeat(): void {
 }
 
 let stopListeningForCommands: (() => void) | null = null;
+let stopFollowingDismissals: (() => void) | null = null;
 
 // Installed with the first run, so a view that never runs one listens for nothing.
 function listenForCommands(): void {
@@ -326,11 +346,90 @@ function listenForCommands(): void {
     // Main held this view for the command; the run as it stands releases it.
     if (!taken) schedulePublish(runId);
   });
+  // The toolbar dismisses a run through main from whichever view it is in, so
+  // an ended run main no longer holds is forgotten here too. A live run is
+  // never dropped: one main hasn't heard of yet is still on its way there.
+  stopFollowingDismissals = bulkWorktreeRunsClient.onChanged(({ runs }) => {
+    const held = new Set(runs.map((run) => run.runId));
+    for (const run of Object.values(useBulkCreateRunStore.getState().runs)) {
+      if (held.has(run.id) || isLive(run)) continue;
+      forgetRun(run.id);
+    }
+  });
+}
+
+function forgetRun(runId: string): void {
+  runtimes.delete(runId);
+  useBulkCreateRunStore.setState((state) => {
+    if (!(runId in state.runs)) return state;
+    const { [runId]: _forgotten, ...runs } = state.runs;
+    return { runs };
+  });
+}
+
+/**
+ * Files the outcome of an execution in the notification center, once, from
+ * the view that ran it: every toast the run used to raise is gone (#17086),
+ * and the toolbar chip is the live handle. Inbox only, so it never interrupts,
+ * and a retry's outcome supersedes the attempt before it. The entry names each
+ * failure and why, so dismissing the chip never loses what went wrong. When
+ * the chip stops showing a clean finish is each view's call, from the snapshot.
+ */
+function settleRun(runId: string): void {
+  const run = useBulkCreateRunStore.getState().runs[runId];
+  if (!run) return;
+  const snapshot = toBulkWorktreeRunSnapshot(run);
+  const summary = summarizeBulkRun(snapshot);
+  const unfinished = snapshot.items.filter(
+    (item) => item.stage === "failed" || item.stage === "interrupted"
+  );
+  // The record outlives the chip, so it keeps every failure and its actual
+  // error, not just a count: dismissing the chip must not lose what went wrong.
+  let message: string;
+  if (unfinished.length > 0 && summary.sharedFailure !== null) {
+    // One reason for all of them: say it once, then every one it hit, since
+    // after Dismiss this record is the only list of them left.
+    const numbers = unfinished.map((item) => `#${item.number}`).join(", ");
+    message = `${summary.detail}. ${summary.sharedFailureLead} ${summary.sharedFailure} (${numbers}).`;
+  } else if (unfinished.length > 0) {
+    const reasons = unfinished
+      .map((item) => {
+        const step = bulkRunItemStep(item, snapshot.mode).toLowerCase();
+        return item.error ? `#${item.number} ${step}: ${item.error}` : `#${item.number} ${step}`;
+      })
+      .join("; ");
+    message = `${summary.detail}. ${reasons}.`;
+  } else if (run.progress.phase === "cancelled") {
+    message = `${summary.detail}.`;
+  } else {
+    message = `For ${describeBulkRunNumbers(snapshot.items.map((item) => item.number))}.`;
+  }
+  const verb = attentionVerb(summary.facts);
+  const title =
+    summary.tone === "error"
+      ? "Worktree creation failed"
+      : summary.tone === "warning"
+        ? `Worktree creation: ${unfinished.length} ${verb}`
+        : summary.tone === "neutral"
+          ? "Worktree creation cancelled"
+          : summary.title;
+  notify({
+    type:
+      summary.tone === "warning" || summary.tone === "error"
+        ? "warning"
+        : summary.tone === "success"
+          ? "success"
+          : "info",
+    priority: "low",
+    title,
+    message,
+    supersedeKey: `bulk-worktree-run:${runId}`,
+    context: { projectId: run.projectId },
+  });
 }
 
 async function execute(runId: string, rt: RunRuntime, toCreate: PlannedWorktree[]) {
   rt.cancelRequested = false;
-  rt.created = 0;
   rt.controller = new AbortController();
   const gen = ++rt.generation;
   try {
@@ -340,22 +439,11 @@ async function execute(runId: string, rt: RunRuntime, toCreate: PlannedWorktree[
   } finally {
     rt.queue = null;
     if (rt.cancelRequested) {
-      finishCancel(runId, rt, toCreate.length);
+      dispatchRun(runId, { type: "CANCELLED" });
     } else if (useBulkCreateRunStore.getState().runs[runId]?.progress.phase === "executing") {
       dispatchRun(runId, { type: "DONE" });
     }
-  }
-}
-
-function finishCancel(runId: string, rt: RunRuntime, total: number): void {
-  dispatchRun(runId, { type: "CANCELLED" });
-  // Silent when nothing was created: there is nothing to go and look at.
-  if (rt.created > 0) {
-    notify({
-      type: "warning",
-      title: "Worktree creation cancelled",
-      message: `${rt.created} of ${total} worktree${total !== 1 ? "s" : ""} created.`,
-    });
+    settleRun(runId);
   }
 }
 
@@ -366,6 +454,7 @@ export function startBulkCreateRun(input: BulkCreateRunInput): {
 } {
   const runId = crypto.randomUUID();
   const toCreate = input.plan.filter((p) => !p.skipped);
+  const startedAt = Date.now();
   const run: BulkCreateRun = {
     id: runId,
     projectId: input.projectId,
@@ -375,7 +464,8 @@ export function startBulkCreateRun(input: BulkCreateRunInput): {
       { phase: "idle", total: 0, items: new Map() },
       { type: "START", issueNumbers: toCreate.map((p) => p.item.number) }
     ),
-    startedAt: Date.now(),
+    startedAt,
+    executions: [{ startedAt }],
   };
   const rt: RunRuntime = {
     input,
@@ -384,7 +474,6 @@ export function startBulkCreateRun(input: BulkCreateRunInput): {
     controller: new AbortController(),
     queue: null,
     cancelRequested: false,
-    created: 0,
     viewerLookup: null,
   };
   runtimes.set(runId, rt);
@@ -445,6 +534,12 @@ export function retryFailedBulkCreateRun(runId: string): Promise<void> | null {
     if (tracked) releaseDeadTerminals(tracked, panelsById, trashPanel);
   }
 
+  useBulkCreateRunStore.setState((state) => ({
+    runs: {
+      ...state.runs,
+      [runId]: { ...run, executions: [...run.executions, { startedAt: Date.now() }] },
+    },
+  }));
   dispatchRun(runId, { type: "RETRY_FAILED" });
   return execute(runId, rt, toRetry);
 }
@@ -455,27 +550,13 @@ export function dismissBulkCreateRun(runId: string): boolean {
   if (!run) return false;
   const { phase } = run.progress;
   if (phase === "executing" || phase === "cancelling") return false;
-  runtimes.delete(runId);
-  useBulkCreateRunStore.setState((state) => {
-    const { [runId]: _dismissed, ...runs } = state.runs;
-    return { runs };
-  });
+  forgetRun(runId);
   if (bridgeAvailable()) {
     bulkWorktreeRunsClient.dismiss(runId).catch((error: unknown) => {
       logError("Failed to dismiss bulk worktree run", error);
     });
   }
   return true;
-}
-
-/** The run the creation dialog shows for this project: its latest one not yet dismissed. */
-export function findBulkCreateRunToShow(projectId: string): BulkCreateRun | undefined {
-  let latest: BulkCreateRun | undefined;
-  for (const run of Object.values(useBulkCreateRunStore.getState().runs)) {
-    if (run.projectId !== projectId) continue;
-    if (!latest || run.startedAt >= latest.startedAt) latest = run;
-  }
-  return latest;
 }
 
 /** Test-only: forget every run and stop listening. */
@@ -491,6 +572,8 @@ export function _resetBulkCreateRunsForTests(): void {
   heartbeat = null;
   stopListeningForCommands?.();
   stopListeningForCommands = null;
+  stopFollowingDismissals?.();
+  stopFollowingDismissals = null;
   useBulkCreateRunStore.setState({ runs: {} });
 }
 
@@ -577,7 +660,6 @@ async function runBatch(
   );
   const succeededItems = new Set<number>();
   const failedItems = new Set<number>();
-  let lastSuccessfulWorktreeId: string | null = null;
 
   // Batch pre-queries: hoist read-only IPC calls out of the per-item queue
   // so N items don't produce N×IPC round-trips before any worktree creates.
@@ -612,12 +694,6 @@ async function runBatch(
       if (toCreate.every((p) => failedItems.has(p.item.number))) {
         dispatch({ type: "DONE" });
         if (rt.queue === queue) rt.queue = null;
-
-        notify({
-          type: "error",
-          title: "Some worktrees couldn't be created",
-          message: `0 created, ${failedItems.size} failed`,
-        });
         return;
       }
     }
@@ -766,7 +842,6 @@ async function runBatch(
               if (!created?.worktreeId) {
                 throw new Error("Failed to create worktree: no ID returned");
               }
-              rt.created++;
 
               worktreeId = created.worktreeId;
               worktreePath = path;
@@ -806,7 +881,6 @@ async function runBatch(
               if (!created?.worktreeId) {
                 throw new Error("Failed to create worktree: no ID returned");
               }
-              rt.created++;
 
               worktreeId = created.worktreeId;
               worktreePath = path;
@@ -1070,7 +1144,6 @@ async function runBatch(
 
           if (rt.generation !== gen) return;
 
-          lastSuccessfulWorktreeId = worktreeId!;
           succeededItems.add(itemNumber);
           dispatch({ type: "ITEM_SUCCEEDED", issueNumber: itemNumber });
           return;
@@ -1153,10 +1226,8 @@ async function runBatch(
     }
   }
 
-  if (lastSuccessfulWorktreeId) {
-    useWorktreeSelectionStore.getState().setPendingWorktree(lastSuccessfulWorktreeId);
-    useWorktreeSelectionStore.getState().selectWorktree(lastSuccessfulWorktreeId);
-  }
-
+  // The selection stays where the user left it: a batch that ends while they
+  // work elsewhere must not move them (#17086). Each worktree is one click
+  // away in the toolbar's run detail instead.
   dispatch({ type: "DONE" });
 }
