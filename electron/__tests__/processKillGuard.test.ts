@@ -190,7 +190,9 @@ describe("unit-test process.kill guard (#14418)", () => {
         leader.stdout.on("data", (chunk) => (out += chunk));
         leader.on("close", () => process.stdout.write(leader.pid + " " + out.trim()));
       `;
-      const parent = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+      const parent = spawn(process.execPath, ["-e", script], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       children.push(parent);
       let out = "";
       parent.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
