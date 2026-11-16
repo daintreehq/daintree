@@ -127,10 +127,8 @@ export class QuestionImageLoader {
         // Checked against another digest than the one this view lists it under.
         load = { status: "failed", failure: "digest-mismatch" };
       } else {
-        // Structured clone gives a plain ArrayBuffer-backed array; the bytes go no further than this Blob.
-        const blob = new Blob([read.image.bytes as Uint8Array<ArrayBuffer>], {
-          type: read.image.mime,
-        });
+        // The bytes go no further than this Blob.
+        const blob = new Blob([read.image.bytes], { type: read.image.mime });
         const url = URL.createObjectURL(blob);
         this.urls.set(attachment.attachmentId, url);
         load = { status: "ready", url };

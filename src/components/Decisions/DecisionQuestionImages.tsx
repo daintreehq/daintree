@@ -135,7 +135,7 @@ function ImageTile({
         ref={stageRef}
         // A place for focus to go when Retry, which held it, goes.
         tabIndex={-1}
-        className="h-28 overflow-hidden rounded-[var(--radius-md)] border border-divider bg-overlay-subtle outline-hidden"
+        className="h-28 overflow-hidden rounded-[var(--radius-md)] border border-divider bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
       >
         {load.status === "ready" && (
           <button

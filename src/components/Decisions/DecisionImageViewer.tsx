@@ -268,7 +268,7 @@ function ImageStage({
       ref={ref}
       // A place for focus to go when Retry, which held it, goes.
       tabIndex={-1}
-      className="relative flex h-full min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-[var(--radius-md)] bg-overlay-subtle outline-hidden"
+      className="relative flex h-full min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-[var(--radius-md)] bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
       data-testid="decision-image-stage"
     >
       {load.status === "ready" && (

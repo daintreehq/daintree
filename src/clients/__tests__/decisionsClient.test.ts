@@ -276,7 +276,7 @@ describe("decisionsClient.getQuestionImage", () => {
   });
 
   it.each([
-    ["bytes that aren't bytes", { bytes: { length: 1 } as unknown as Uint8Array }],
+    ["bytes that aren't bytes", { bytes: { length: 1 } as unknown as Uint8Array<ArrayBuffer> }],
     ["a size that isn't a whole number", { size: 4.5 }],
     ["a size that isn't a number", { size: Number.NaN }],
   ])("refuses a part with %s at once, allocating nothing", async (_label, change) => {

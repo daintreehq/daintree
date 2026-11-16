@@ -202,7 +202,8 @@ export interface DecisionQuestionImage {
   mime: DecisionQuestionAttachment["mime"];
   /** The digest the image was checked against. */
   sha256: string;
-  bytes: Uint8Array;
+  /** Backed by a plain ArrayBuffer, as structured clone and the Remote Host link both deliver bytes. */
+  bytes: Uint8Array<ArrayBuffer>;
 }
 
 /**

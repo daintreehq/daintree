@@ -34,7 +34,7 @@ async function readQuestionImage(
   attachmentId: string,
   signal?: AbortSignal
 ): Promise<DecisionQuestionImageResult> {
-  let whole: { first: DecisionQuestionImagePart; bytes: Uint8Array } | null = null;
+  let whole: { first: DecisionQuestionImagePart; bytes: Uint8Array<ArrayBuffer> } | null = null;
   let offset = 0;
   for (;;) {
     signal?.throwIfAborted();
