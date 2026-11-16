@@ -71,6 +71,23 @@ function pushHostEventToRemoteViews(name: string, payload: unknown): void {
 }
 
 /**
+ * Whether `win` is the one window that carries out a forced menu rebuild while
+ * no window is focused: the primary, being the window the menu shows
+ * (`menuProjectIdFor` in menu.ts), or with no live primary the first live
+ * window registered.
+ */
+function buildsUnfocusedMenu(
+  win: BrowserWindow,
+  windowRegistry: WindowRegistry | undefined
+): boolean {
+  if (!windowRegistry) return true;
+  const primary = windowRegistry.getPrimary()?.browserWindow;
+  if (primary && !primary.isDestroyed()) return primary === win;
+  const first = windowRegistry.all().find((ctx) => !ctx.browserWindow.isDestroyed());
+  return first?.browserWindow === win;
+}
+
+/**
  * Run the per-window initialization steps that happen on every
  * `setupWindowServices` call: the per-window CLI deferred task,
  * deferred-queue arming, NotificationService wire-up, first-window-only
@@ -177,9 +194,10 @@ export async function initPerWindowServices(
       // The menu is app-wide but built against one window's state; let the
       // focused window build it when there is one. A context check needs the
       // focused window outright: with none focused, every window would build
-      // the menu for its own project in turn.
+      // the menu for its own project in turn. A forced rebuild with none focused
+      // still happens, but once, by the window the menu reflects.
       const focused = BrowserWindow.getFocusedWindow();
-      if (focused ? focused !== win : !forced) return;
+      if (focused ? focused !== win : !forced || !buildsUnfocusedMenu(win, windowRegistry)) return;
       try {
         if (forced) createApplicationMenu(win, cliService);
         else rebuildApplicationMenuIfStale(win, cliService);

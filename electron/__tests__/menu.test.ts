@@ -47,8 +47,14 @@ const aboutPanelCapture = vi.hoisted(() => ({
 let capturedTemplate: Electron.MenuItemConstructorOptions[] = [];
 
 const menuItemRegistry = vi.hoisted(() => new Map<string, { label: string; enabled: boolean }>());
-const mockApplicationMenu = vi.hoisted(() => ({
-  getMenuItemById: vi.fn((id: string) => menuItemRegistry.get(id) ?? null),
+// Each build is a menu of its own and the application menu is whichever one
+// setApplicationMenu last installed, as in Electron: menu.ts skips a build only
+// while the menu it installed is still the application menu.
+const applicationMenu = vi.hoisted(() => ({
+  installed: null as { getMenuItemById: (id: string) => unknown } | null,
+  create: () => ({
+    getMenuItemById: (id: string) => menuItemRegistry.get(id) ?? null,
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -70,10 +76,12 @@ vi.mock("electron", () => ({
         }
       };
       collect(template);
-      return mockApplicationMenu;
+      return applicationMenu.create();
     }),
-    setApplicationMenu: vi.fn(),
-    getApplicationMenu: vi.fn(() => mockApplicationMenu),
+    setApplicationMenu: vi.fn((menu: { getMenuItemById: (id: string) => unknown } | null) => {
+      applicationMenu.installed = menu;
+    }),
+    getApplicationMenu: vi.fn(() => applicationMenu.installed),
     sendActionToFirstResponder: vi.fn(),
   },
   dialog: {
@@ -296,6 +304,7 @@ import {
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
 import { getPluginTours } from "../services/plugin/PluginTourRegistry.js";
+import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
 import { isPluginVisibleInProject } from "../services/plugin/projectPluginVisibility.js";
 import { BrowserWindow, webContents, app, Menu, dialog } from "electron";
 import { markProjectlessView } from "../window/projectlessViews.js";
@@ -306,6 +315,8 @@ import { cachedViewBusy } from "../window/cachedViewBusy.js";
 import { registerRemoteService } from "../remote/runtime.js";
 
 beforeEach(() => {
+  // Every test starts in an app with no menu installed yet.
+  applicationMenu.installed = null;
   getPluginToursForProjectMock.mockImplementation((projectId: string | null) =>
     getPluginTours().filter((t) => isPluginVisibleInProject(t.pluginId, projectId))
   );
@@ -535,6 +546,9 @@ describe("createApplicationMenu", () => {
           ? { id: projectId, path: `/tmp/${projectId}`, status: "active" }
           : null
       );
+      // A fresh build each time, so there is a template to read even when the
+      // menu would not have changed.
+      applicationMenu.installed = null;
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
     }
 
@@ -698,6 +712,9 @@ describe("File menu layout (#12473)", () => {
 
   function buildFileMenu(platform: NodeJS.Platform): Electron.MenuItemConstructorOptions[] {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    // A fresh build each time, so there is a template to read even when the
+    // menu would not have changed.
+    applicationMenu.installed = null;
     createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
     const fileMenu = capturedTemplate.find((m) => m.label === "File");
     expect(fileMenu).toBeDefined();
@@ -1104,11 +1121,25 @@ describe("update menu lifecycle", () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       capturedTemplate = [];
       menuItemRegistry.clear();
+      // Nothing installed, so this is a real rebuild with fresh items.
+      applicationMenu.installed = null;
 
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
 
+      expect(Menu.buildFromTemplate).toHaveBeenCalledTimes(2);
       const item = menuItemRegistry.get("check-for-updates-mac");
       expect(item).toBeDefined();
+      expect(item!.label).toBe("Restart to Install Update");
+      expect(item!.enabled).toBe(true);
+    });
+
+    it("applies the current state to the installed items when a build changes nothing", () => {
+      autoUpdaterServiceMock.__setMenuState("ready");
+
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      expect(Menu.buildFromTemplate).toHaveBeenCalledTimes(1);
+      const item = menuItemRegistry.get("check-for-updates-mac");
       expect(item!.label).toBe("Restart to Install Update");
       expect(item!.enabled).toBe(true);
     });
@@ -1431,6 +1462,26 @@ describe("update menu lifecycle", () => {
             .filter((i) => i.type === "checkbox")
             .map((i) => [i.label, i.checked])
         ).toEqual([["website", true]]);
+      });
+
+      it("retitles and re-marks the list in place when nothing else changed", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        const first = fakeWindow(1, "daintree");
+        const second = fakeWindow(2, "website");
+        const registry = useWindows([first, second]);
+        const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+        createApplicationMenu(win);
+        vi.mocked(Menu.buildFromTemplate).mockClear();
+
+        first.title = "(2) daintree";
+        registry.primary = second;
+        createApplicationMenu(win);
+
+        expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
+        const installed = (id: number) =>
+          menuItemRegistry.get(`window-list-${id}`) as { label: string; checked?: boolean };
+        expect([installed(1).label, installed(1).checked]).toEqual(["(2) daintree", false]);
+        expect([installed(2).label, installed(2).checked]).toEqual(["website", true]);
       });
 
       it("tries again after a rebuild that failed to install", () => {
@@ -2694,6 +2745,9 @@ describe("Help menu plugin tours (#12773)", () => {
 
   function helpItems(): Electron.MenuItemConstructorOptions[] {
     capturedTemplate = [];
+    // A fresh build each time, so there is a template to read even when the
+    // menu would not have changed.
+    applicationMenu.installed = null;
     createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
     const help = capturedTemplate.find((m) => m.role === "help");
     return help!.submenu as Electron.MenuItemConstructorOptions[];
@@ -3291,5 +3345,183 @@ describe("a window on a remote host", () => {
     expect(windowHosts.switchWindowToLocal).not.toHaveBeenCalled();
     expect(mockWebContents.send).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe("a build that would install the menu already there (#17040)", () => {
+  const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+  const builds = () => vi.mocked(Menu.buildFromTemplate).mock.calls.length;
+  const cli = (availability: Record<string, string>) =>
+    ({ getAvailability: () => availability }) as never;
+
+  function clickViewItem(label: string): void {
+    const item = findMenuItem(capturedTemplate, "View", label);
+    item!.click!({} as Electron.MenuItem, win as never, {} as Electron.KeyboardEvent);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+
+  afterEach(() => {
+    vi.mocked(getEffectiveRegistry).mockReturnValue({});
+    vi.mocked(getPluginMenuItems).mockReturnValue([]);
+    vi.mocked(getPluginTours).mockReturnValue([]);
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockReturnValue(null);
+  });
+
+  it("builds once across a cold boot whose CLI check and plugin catalog change nothing", () => {
+    vi.mocked(getEffectiveRegistry).mockReturnValue({
+      claude: { id: "claude", name: "Claude" },
+    } as never);
+    const service = cli({ claude: "ready" });
+
+    createApplicationMenu(win, service); // the window's initial build
+    createApplicationMenu(win, service); // CLI availability checked: the same
+    createApplicationMenu(win, service); // plugin catalog settled: no contributions
+
+    expect(Menu.buildFromTemplate).toHaveBeenCalledTimes(1);
+    expect(Menu.setApplicationMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds once the CLI check finds an agent installed", () => {
+    vi.mocked(getEffectiveRegistry).mockReturnValue({
+      claude: { id: "claude", name: "Claude" },
+    } as never);
+    const availability: Record<string, string> = { claude: "missing" };
+    const service = cli(availability);
+    createApplicationMenu(win, service);
+
+    availability.claude = "ready";
+    createApplicationMenu(win, service);
+
+    expect(builds()).toBe(2);
+    expect(findMenuItem(capturedTemplate, "Terminal", "New Claude")).toBeDefined();
+  });
+
+  it("opens and closes the project gates in place rather than rebuilding for them", () => {
+    createApplicationMenu(win);
+    expect(menuItemRegistry.get("file-project-settings")?.enabled).toBe(false);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-1");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "project-1",
+      path: "/tmp/project-1",
+      status: "active",
+    });
+    createApplicationMenu(win);
+
+    expect(builds()).toBe(1);
+    expect(menuItemRegistry.get("file-project-settings")?.enabled).toBe(true);
+    expect(menuItemRegistry.get("file-close-project")?.enabled).toBe(true);
+  });
+
+  it("rebuilds when Open Recent changes", () => {
+    const project = (id: string, lastOpened: number) => ({
+      id,
+      name: id,
+      path: `/work/${id}`,
+      emoji: "📁",
+      lastOpened,
+    });
+    projectStoreMock.getAllProjects.mockReturnValue([project("a", 2), project("b", 1)]);
+    createApplicationMenu(win);
+    createApplicationMenu(win); // reopening the most recent project reorders nothing
+    expect(builds()).toBe(1);
+
+    projectStoreMock.getAllProjects.mockReturnValue([project("a", 2), project("b", 3)]);
+    createApplicationMenu(win);
+    expect(builds()).toBe(2);
+  });
+
+  it("rebuilds when a recent project's path changes though its label reads the same", () => {
+    const recent = (name: string, path: string) => [
+      { id: "p", name, path, emoji: "📁", lastOpened: 1 },
+    ];
+    projectStoreMock.getAllProjects.mockReturnValue(recent("x - /y", "/z"));
+    createApplicationMenu(win);
+
+    projectStoreMock.getAllProjects.mockReturnValue(recent("x", "/y - /z"));
+    createApplicationMenu(win);
+
+    expect(builds()).toBe(2);
+  });
+
+  it("rebuilds for a plugin action that no label tells apart, and dispatches the new one", () => {
+    const viewItem = (actionId: string) => [
+      { pluginId: "acme", item: { label: "Acme Panel", actionId, location: "view" } },
+    ];
+    vi.mocked(getPluginMenuItems).mockReturnValue(viewItem("acme.one") as never);
+    createApplicationMenu(win);
+
+    vi.mocked(getPluginMenuItems).mockReturnValue(viewItem("acme.two") as never);
+    createApplicationMenu(win);
+
+    expect(builds()).toBe(2);
+    clickViewItem("Acme Panel");
+    expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", {
+      actionId: "acme.two",
+      args: undefined,
+    });
+  });
+
+  it("rebuilds for an agent or a tour that no label tells apart", () => {
+    const service = cli({ one: "ready", two: "ready" });
+    vi.mocked(getEffectiveRegistry).mockReturnValue({ one: { id: "one", name: "Agent" } } as never);
+    createApplicationMenu(win, service);
+    vi.mocked(getEffectiveRegistry).mockReturnValue({ two: { id: "two", name: "Agent" } } as never);
+    createApplicationMenu(win, service);
+    expect(builds()).toBe(2);
+
+    const tour = (id: string) => [
+      { id, pluginId: "acme", pluginName: "Acme", title: "Welcome", moduleUrl: "", chapters: [] },
+    ];
+    vi.mocked(getPluginTours).mockReturnValue(tour("acme.one") as never);
+    createApplicationMenu(win, service);
+    vi.mocked(getPluginTours).mockReturnValue(tour("acme.two") as never);
+    createApplicationMenu(win, service);
+    expect(builds()).toBe(4);
+  });
+
+  it("rebuilds for another window or CLI service, which its commands fall back to", () => {
+    const service = cli({});
+    createApplicationMenu(win, service);
+    createApplicationMenu({ ...mockBrowserWindow, id: 2 } as unknown as Electron.BrowserWindow, service);
+    expect(builds()).toBe(2);
+
+    createApplicationMenu(win, service);
+    createApplicationMenu(win, cli({}));
+    expect(builds()).toBe(4);
+  });
+
+  it("rebuilds once the menu it installed is no longer the application menu", () => {
+    createApplicationMenu(win);
+    applicationMenu.installed = null;
+
+    createApplicationMenu(win);
+    expect(builds()).toBe(2);
+
+    applicationMenu.installed = null;
+    rebuildApplicationMenuIfStale(win);
+    expect(builds()).toBe(3);
+  });
+
+  it("tries again after a build that failed to install", () => {
+    createApplicationMenu(win);
+    vi.mocked(getPluginMenuItems).mockReturnValue([
+      { pluginId: "acme", item: { label: "Acme Panel", actionId: "acme.one", location: "view" } },
+    ] as never);
+
+    vi.mocked(Menu.setApplicationMenu).mockImplementationOnce(() => {
+      throw new Error("native menu install failed");
+    });
+    expect(() => createApplicationMenu(win)).toThrow("native menu install failed");
+
+    createApplicationMenu(win);
+    expect(builds()).toBe(3);
+    expect(findMenuItem(capturedTemplate, "View", "Acme Panel")).toBeDefined();
   });
 });

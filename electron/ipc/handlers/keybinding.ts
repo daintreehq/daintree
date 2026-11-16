@@ -15,26 +15,43 @@ import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 export { getValidatedOverrides };
 
+const MENU_REBUILD_COALESCE_MS = 50;
+
 export function registerKeybindingHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   // Native menu accelerators are derived from defaults + these overrides
   // (electron/services/menuAccelerators.ts) — rebuild after every mutation so
-  // the menu can't drift from what the keyboard actually does. Writes are
-  // discrete (save/reset/import), so no debounce is needed. deps.mainWindow is
-  // captured at registration; fall back to any live window so mutations after
-  // the first window closes still rebuild (the menu is app-global). menu.js is
-  // imported lazily: it transitively pulls the window-services graph
-  // (windowServices → perWindowInit → setup/environment), which must not load
-  // as a side effect of registering IPC handlers.
+  // the menu can't drift from what the keyboard actually does. Coalesced: a
+  // conflict resolution is a remove and a set back to back, and each rebuild
+  // would replace every native menu item. deps.mainWindow is captured at
+  // registration; fall back to any live window so mutations after the first
+  // window closes still rebuild (the menu is app-global). menu.js is imported
+  // lazily: it transitively pulls the window-services graph (windowServices →
+  // perWindowInit → setup/environment), which must not load as a side effect
+  // of registering IPC handlers.
+  let disposed = false;
+  const liveWindow = () =>
+    deps.mainWindow && !deps.mainWindow.isDestroyed()
+      ? deps.mainWindow
+      : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
   const rebuildMenuForOverrides = async () => {
-    const win =
-      deps.mainWindow && !deps.mainWindow.isDestroyed()
-        ? deps.mainWindow
-        : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-    if (!win) return;
+    if (!liveWindow()) return;
     const { createApplicationMenu } = await import("../../menu.js");
+    // The import yields: the handlers or the window may be gone by now.
+    const win = liveWindow();
+    if (disposed || !win) return;
     createApplicationMenu(win, deps.cliAvailabilityService);
+  };
+  let menuRebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleMenuRebuild = (): void => {
+    if (menuRebuildTimer) clearTimeout(menuRebuildTimer);
+    menuRebuildTimer = setTimeout(() => {
+      menuRebuildTimer = null;
+      rebuildMenuForOverrides().catch((err) => {
+        console.error("[MAIN] Failed to rebuild the menu after a keybinding change:", err);
+      });
+    }, MENU_REBUILD_COALESCE_MS);
   };
 
   handlers.push(
@@ -67,10 +84,10 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
         const overrides = getValidatedOverrides();
         overrides[actionId] = combo;
-        // Saved and pushed before the menu rebuild yields, so pushes leave in
-        // the order the writes landed.
+        // Saved and pushed before the menu rebuild, so pushes leave in the
+        // order the writes landed.
         const saved = saveKeybindingOverrides(overrides);
-        await rebuildMenuForOverrides();
+        scheduleMenuRebuild();
         return saved;
       }
     )
@@ -85,7 +102,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
       const overrides = getValidatedOverrides();
       delete overrides[actionId];
       const saved = saveKeybindingOverrides(overrides);
-      await rebuildMenuForOverrides();
+      scheduleMenuRebuild();
       return saved;
     })
   );
@@ -93,7 +110,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_RESET_ALL, async () => {
       const saved = saveKeybindingOverrides({});
-      await rebuildMenuForOverrides();
+      scheduleMenuRebuild();
       return saved;
     })
   );
@@ -145,7 +162,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
         if (result.ok) {
           const existing = getValidatedOverrides();
           saveKeybindingOverrides({ ...existing, ...result.overrides });
-          await rebuildMenuForOverrides();
+          scheduleMenuRebuild();
         }
 
         return result;
@@ -153,5 +170,10 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
     )
   );
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  return () => {
+    disposed = true;
+    if (menuRebuildTimer) clearTimeout(menuRebuildTimer);
+    menuRebuildTimer = null;
+    handlers.forEach((cleanup) => cleanup());
+  };
 }
