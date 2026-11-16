@@ -66,14 +66,31 @@ const textEncoder = new TextEncoder();
 // ignoreBOM keeps a leading U+FEFF in the string instead of stripping it.
 const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
+const INITIAL_SCRATCH_BYTES = 256;
+/** Largest writer storage kept between encodes; a bigger message's grown buffer is let go. */
+export const MAX_RETAINED_SCRATCH_BYTES = 128 * 1024;
+
+// Writer storage reused across encodes, so a steady stream of messages stops
+// regrowing from a small buffer every time. Held by one encode at a time: it is
+// taken while in use, so an encode reentered from a getter gets its own.
+let scratch: Uint8Array | null = null;
+
 class Writer {
   private buf: Uint8Array;
   private view: DataView;
   length = 0;
 
-  constructor(private readonly maxBytes: number) {
-    this.buf = new Uint8Array(256);
-    this.view = new DataView(this.buf.buffer);
+  constructor(
+    private readonly maxBytes: number,
+    storage: Uint8Array
+  ) {
+    this.buf = storage;
+    this.view = new DataView(storage.buffer, storage.byteOffset, storage.byteLength);
+  }
+
+  /** The storage written into, grown past what the writer started with if it had to. */
+  get storage(): Uint8Array {
+    return this.buf;
   }
 
   private ensure(extra: number): void {
@@ -124,8 +141,14 @@ class Writer {
     return this.maxBytes - this.length;
   }
 
-  finish(): Uint8Array {
-    return this.buf.slice(0, this.length);
+  /** The encoded bytes, copied into a buffer from `alloc`: storage never leaves the writer. */
+  finish(alloc: (length: number) => Uint8Array): Uint8Array {
+    const out = alloc(this.length);
+    if (out.byteLength !== this.length) {
+      throw new LinkEncodingError(`allocator returned ${out.byteLength} bytes for ${this.length}`);
+    }
+    out.set(this.buf.subarray(0, this.length));
+    return out;
   }
 }
 
@@ -297,13 +320,44 @@ function encodeInto(
   }
 }
 
+const allocPlain = (length: number): Uint8Array => new Uint8Array(length);
+
+function takeScratch(): Uint8Array {
+  const storage = scratch ?? new Uint8Array(INITIAL_SCRATCH_BYTES);
+  scratch = null;
+  return storage;
+}
+
+/** Keeps the larger of what is held and `storage`, never anything over the bound. */
+function returnScratch(storage: Uint8Array): void {
+  if (storage.byteLength > MAX_RETAINED_SCRATCH_BYTES) return;
+  if (!scratch || storage.byteLength > scratch.byteLength) scratch = storage;
+}
+
+/**
+ * `alloc` supplies the buffer the result is returned in (a plain Uint8Array by
+ * default), so a caller can have it laid out for its own use, such as with
+ * room for a frame header in front.
+ */
 export function encodeValue(
   value: unknown,
-  limits: EncodingLimits = DEFAULT_ENCODING_LIMITS
+  limits: EncodingLimits = DEFAULT_ENCODING_LIMITS,
+  alloc: (length: number) => Uint8Array = allocPlain
 ): Uint8Array {
-  const w = new Writer(limits.maxBytes);
-  encodeInto(w, value, 0, limits, new Set());
-  return w.finish();
+  const start = takeScratch();
+  const w = new Writer(limits.maxBytes, start);
+  try {
+    encodeInto(w, value, 0, limits, new Set());
+    return w.finish(alloc);
+  } finally {
+    // A message too big to keep the grown buffer for still leaves the one it began with.
+    returnScratch(w.storage.byteLength <= MAX_RETAINED_SCRATCH_BYTES ? w.storage : start);
+  }
+}
+
+/** Bytes of writer storage held between encodes; 0 before the first. */
+export function retainedScratchBytes(): number {
+  return scratch?.byteLength ?? 0;
 }
 
 class Reader {

@@ -94,7 +94,9 @@ class PCMProcessor extends AudioWorkletProcessor {
       this.outBuf[this.outIdx++] = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
 
       if (this.outIdx >= this.chunkSize) {
-        const buf = this.outBuf.buffer.slice(0);
+        // Transferring detaches the filled buffer, so it goes as is and the
+        // next chunk gets a fresh one: no clone on the real-time thread.
+        const buf = this.outBuf.buffer;
         this.port.postMessage(buf, [buf]);
         this.outBuf = new Int16Array(this.chunkSize);
         this.outIdx = 0;

@@ -8,7 +8,7 @@ import type {
   HostPreviousEnd,
 } from "../../../shared/types/remoteHosts.js";
 import { decodeValue, encodeValue, type EncodingLimits } from "./encoding.js";
-import { Lane, type LinkFrame } from "./frames.js";
+import { Lane, allocFramePayload, type LinkFrame } from "./frames.js";
 
 /**
  * Typed messages carried by link frames. `kind` is unique per lane; the body
@@ -405,7 +405,7 @@ export function messageToFrame(message: LinkMessage, limits?: EncodingLimits): L
     lane: message.lane,
     kind: message.kind,
     streamId: 0,
-    payload: encodeValue(message.body, limits),
+    payload: encodeValue(message.body, limits, allocFramePayload),
   };
 }
 

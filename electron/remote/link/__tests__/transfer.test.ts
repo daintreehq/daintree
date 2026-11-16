@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Lane } from "../frames.js";
+import { BULK_CHUNK_BYTES, FrameDecoder, Lane, encodeFrame } from "../frames.js";
 import {
   BulkKind,
   EventKind,
@@ -243,6 +243,31 @@ describe("bulk transfer", () => {
       destination: { kind: "path", path: "/tmp/f.bin" },
     });
     expect(concat(sinks[1]!.chunks).equals(content)).toBe(true);
+  });
+
+  it("reads whole file chunks that frame without a copy, and a short read to its end", async () => {
+    const file = path.join(dir, "chunks.bin");
+    const content = crypto.randomBytes(BULK_CHUNK_BYTES + 100);
+    await fs.writeFile(file, content);
+    const source = await fileTransferSource(file);
+    try {
+      const chunk = await source.read(0, BULK_CHUNK_BYTES);
+      expect(Buffer.from(chunk).equals(content.subarray(0, BULK_CHUNK_BYTES))).toBe(true);
+      const wire = encodeFrame({
+        lane: Lane.BULK,
+        kind: BulkKind.TRANSFER_CHUNK,
+        streamId: 7,
+        payload: chunk,
+      });
+      expect(wire.buffer).toBe(chunk.buffer);
+      const [frame] = new FrameDecoder().push(wire);
+      expect(Buffer.from(frame!.payload).equals(content.subarray(0, BULK_CHUNK_BYTES))).toBe(true);
+
+      const tail = await source.read(BULK_CHUNK_BYTES, 4096);
+      expect(Buffer.from(tail).equals(content.subarray(BULK_CHUNK_BYTES))).toBe(true);
+    } finally {
+      await source.close?.();
+    }
   });
 
   it("treats a second TRANSFER_END as a protocol violation", async () => {
