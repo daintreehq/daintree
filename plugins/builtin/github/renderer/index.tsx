@@ -1,7 +1,10 @@
 import { lazy } from "react";
 import { registerBuiltinView } from "@/registry/builtinRendererRegistry";
 import { GitHubIcon } from "@/components/icons/brands";
-import { GitHubStatsDropdown } from "./components/GitHubStatsDropdown";
+import {
+  LazyGitHubStatsDropdown,
+  preloadGitHubStatsDropdown,
+} from "./components/LazyGitHubStatsDropdown";
 import { useGitHubConfigStore } from "./stores/githubConfigStore";
 import { withPluginUi } from "./withPluginUi";
 
@@ -38,9 +41,10 @@ registerBuiltinView("github.providerIcon", GitHubIcon, {
   pluginId: "daintree.github",
   label: "GitHub icon",
 });
-registerBuiltinView("github.statsDropdown", GitHubStatsDropdown, {
+registerBuiltinView("github.statsDropdown", LazyGitHubStatsDropdown, {
   pluginId: "daintree.github",
   label: "GitHub list",
+  preload: preloadGitHubStatsDropdown,
 });
 
 // E2E backdoor (gated on the preload-injected __DAINTREE_E2E_MODE__ flag, set

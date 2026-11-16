@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeSidebarSearchBar } from "../WorktreeSidebarSearchBar";
+import { preloadWorktreeFilterContent } from "../WorktreeFilterPopover";
+
+// The filter popover's body is its own chunk; loaded once so opens render it
+// in their first commit.
+beforeAll(() => preloadWorktreeFilterContent());
 
 function resetWorktreeFilterStore() {
   useWorktreeFilterStore.setState({

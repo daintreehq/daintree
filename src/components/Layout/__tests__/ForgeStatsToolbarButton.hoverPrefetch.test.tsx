@@ -74,8 +74,10 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
 // The provider must resolve a dropdown view: hover prefetch is gated on a
 // consumer existing for the warmed list (a slotless provider routes clicks to
 // the forge website instead, so prefetching would waste quota).
+const preloadBuiltinViewMock = vi.hoisted(() => vi.fn());
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? () => null : null),
+  preloadBuiltinView: preloadBuiltinViewMock,
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
@@ -192,6 +194,7 @@ beforeEach(() => {
   mockListIssues.mockReset();
   mockListPRs.mockReset();
   refreshStatsMock.mockClear();
+  preloadBuiltinViewMock.mockClear();
   mockIsTokenError = false;
   mockRateLimitResetAt = null;
   mockListIssues.mockResolvedValue(makeIssuePage([makeIssue(1)]));
@@ -510,5 +513,40 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
 
     const cached = getCache(cacheKey);
     expect(cached?.items.map((i) => i.number)).toEqual([99]);
+  });
+});
+
+describe("ForgeStatsToolbarButton dropdown chunk warming (#17034)", () => {
+  function getCommitsButton(container: HTMLElement): HTMLButtonElement {
+    const btn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="forge-stat-pill-commits"]'
+    );
+    if (!btn) throw new Error("commits button not found");
+    return btn;
+  }
+
+  it("warms each segment's provider view on hover, whatever the pointer", () => {
+    const { container } = renderToolbar();
+    act(() => {
+      pointerEnter(getIssuesButton(container), "touch");
+      pointerEnter(getPrsButton(container));
+      pointerEnter(getCommitsButton(container));
+    });
+    expect(preloadBuiltinViewMock.mock.calls).toEqual([
+      ["github.statsDropdown"],
+      ["github.statsDropdown"],
+      ["github.statsDropdown"],
+    ]);
+    // Code warming spends no quota, so touch still warms; the data prefetch stays mouse-only.
+    expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("warms on keyboard focus, which the data prefetch never does", () => {
+    const { container } = renderToolbar();
+    act(() => {
+      fireEvent.focus(getPrsButton(container));
+    });
+    expect(preloadBuiltinViewMock).toHaveBeenCalledWith("github.statsDropdown");
+    expect(mockListPRs).not.toHaveBeenCalled();
   });
 });

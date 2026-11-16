@@ -43,6 +43,9 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
   }),
 }));
 
+// Off by default: most of this file is about a slotless issues provider.
+const fixture = vi.hoisted(() => ({ issuesHasDropdown: false }));
+
 vi.mock("@/hooks/useResolvedForgeProvider", () => {
   const code = {
     pluginId: "daintree.github",
@@ -57,12 +60,20 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
     pluginId: "daintree.linear",
     contribution: { id: "linear", name: "Linear", matches: [], roles: ["issues"], slots: {} },
   };
+  const issuesWithDropdown = {
+    ...issues,
+    contribution: { ...issues.contribution, slots: { statsDropdown: "linear.statsDropdown" } },
+  };
   return {
     useResolvedForgeProvider: () => ({
       entry: code,
       providerId: "daintree.github.github",
       resolvedVia: "hostname",
-      issues: { entry: issues, providerId: "daintree.linear.linear", resolvedVia: "override" },
+      issues: {
+        entry: fixture.issuesHasDropdown ? issuesWithDropdown : issues,
+        providerId: "daintree.linear.linear",
+        resolvedVia: "override",
+      },
       loading: false,
       refresh: () => {},
     }),
@@ -70,8 +81,11 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => {
 });
 
 // Only the code forge contributes a stats dropdown; the issues provider has none.
+const preloadBuiltinViewMock = vi.hoisted(() => vi.fn());
 vi.mock("@/registry/builtinRendererRegistry", () => ({
-  useBuiltinView: (slotId: string) => (slotId === "github.statsDropdown" ? () => null : null),
+  useBuiltinView: (slotId: string) =>
+    slotId === "github.statsDropdown" || slotId === "linear.statsDropdown" ? () => null : null,
+  preloadBuiltinView: preloadBuiltinViewMock,
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
@@ -147,10 +161,12 @@ beforeEach(() => {
   mockListIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
   mockListPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
   vi.mocked(actionService.dispatch).mockClear();
+  preloadBuiltinViewMock.mockClear();
 });
 
 afterEach(() => {
   cleanup();
+  fixture.issuesHasDropdown = false;
 });
 
 describe("ForgeStatsToolbarButton — slotless issues provider", () => {
@@ -182,6 +198,15 @@ describe("ForgeStatsToolbarButton — slotless issues provider", () => {
     expect(mockListIssues).not.toHaveBeenCalled();
   });
 
+  it("warms each segment's own provider view: none for the slotless issues, the forge's for PRs", () => {
+    const { container } = render(<ForgeStatsToolbarButton currentProject={PROJECT} />);
+    fireEvent.pointerEnter(issuesButton(container), { pointerType: "mouse" });
+    fireEvent.focus(issuesButton(container));
+    expect(preloadBuiltinViewMock).not.toHaveBeenCalled();
+    fireEvent.pointerEnter(prsButton(container), { pointerType: "mouse" });
+    expect(preloadBuiltinViewMock.mock.calls).toEqual([["github.statsDropdown"]]);
+  });
+
   it("keeps the code forge's PR dropdown and its prefetch", async () => {
     const { container } = render(<ForgeStatsToolbarButton currentProject={PROJECT} />);
     fireEvent.pointerEnter(prsButton(container), { pointerType: "mouse" });
@@ -193,5 +218,26 @@ describe("ForgeStatsToolbarButton — slotless issues provider", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+});
+
+describe("ForgeStatsToolbarButton — issues provider with its own dropdown", () => {
+  it("warms the tracker's view for issues and the code forge's for PRs and commits", () => {
+    fixture.issuesHasDropdown = true;
+    const { container } = render(<ForgeStatsToolbarButton currentProject={PROJECT} />);
+    fireEvent.pointerEnter(issuesButton(container), { pointerType: "mouse" });
+    fireEvent.focus(issuesButton(container));
+    expect(preloadBuiltinViewMock.mock.calls).toEqual([
+      ["linear.statsDropdown"],
+      ["linear.statsDropdown"],
+    ]);
+    preloadBuiltinViewMock.mockClear();
+    fireEvent.focus(prsButton(container));
+    const commits = container.querySelector<HTMLElement>('[data-testid="forge-stat-pill-commits"]');
+    fireEvent.pointerEnter(commits!, { pointerType: "mouse" });
+    expect(preloadBuiltinViewMock.mock.calls).toEqual([
+      ["github.statsDropdown"],
+      ["github.statsDropdown"],
+    ]);
   });
 });

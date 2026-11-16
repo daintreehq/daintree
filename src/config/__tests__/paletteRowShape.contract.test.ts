@@ -160,7 +160,7 @@ const POPOVER_FILES = [
   "src/components/Settings/PresetSelector.tsx",
   "src/components/Settings/EnvVarEditor.tsx",
   "src/components/Panel/MoveToWorktreePicker.tsx",
-  "src/components/Layout/DockLaunchButton.tsx",
+  "src/components/Layout/DockLaunchPalette.tsx",
   "src/components/Layout/AssistantPicker.tsx",
   "src/components/Project/ProjectSwitcherRows.tsx",
 ];

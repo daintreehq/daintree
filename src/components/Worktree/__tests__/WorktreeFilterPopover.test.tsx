@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
+import { WorktreeFilterPopover, preloadWorktreeFilterContent } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { emptyChipCounts, type ChipCounts } from "@/lib/worktreeFilters";
 import { STATUS_OPTIONS } from "@/lib/worktreeFilterOptions";
@@ -16,7 +16,14 @@ function render(ui: ReactElement) {
   return rtlRender(ui, { wrapper: TooltipProvider });
 }
 
-const SOURCE = fs.readFileSync(path.resolve(__dirname, "../WorktreeFilterPopover.tsx"), "utf-8");
+// The trigger and its body are two files; the snapshot rules cover both.
+const SOURCE = ["../WorktreeFilterPopover.tsx", "../WorktreeFilterPopoverContent.tsx"]
+  .map((file) => fs.readFileSync(path.resolve(__dirname, file), "utf-8"))
+  .join("\n");
+
+// The body is its own chunk; loaded once here so every open below renders it
+// in its first commit. The cold path has its own file.
+beforeAll(() => preloadWorktreeFilterContent());
 
 function openPopover() {
   return render(

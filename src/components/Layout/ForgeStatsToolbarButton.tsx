@@ -25,7 +25,7 @@ import { useRepositoryStats, type FreshnessLevel } from "@/hooks/useRepositorySt
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useCanOpenForgeRepo } from "@/hooks/useCanOpenForgeRepo";
-import { useBuiltinView } from "@/registry/builtinRendererRegistry";
+import { preloadBuiltinView, useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeStatusIndicator, type ForgeStatusIndicatorStatus } from "./ForgeStatusIndicator";
 import { forgeClient } from "@/clients/forgeClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
@@ -49,7 +49,7 @@ import {
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ForgeStatPill } from "./ForgeStatPill";
 import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
-import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
+import { LazyLocalCommitsDropdown, preloadLocalCommitsDropdown } from "./LazyLocalCommitsDropdown";
 
 // Hover-to-prefetch tuning. The prefetch fires immediately on pointerenter
 // (mouse only) — no debounce: hovering a toolbar pill is strong click intent,
@@ -205,14 +205,26 @@ export const ForgeStatsToolbarButton = memo(
     const handleStatsMenuOpenChange = (open: boolean) => {
       if (open) recheckRepoLink();
     };
-    const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
-      providerEntry?.contribution.slots?.statsDropdown ?? ""
-    );
+    const statsDropdownSlot = providerEntry?.contribution.slots?.statsDropdown ?? "";
+    const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(statsDropdownSlot);
     // The issues segment lists the issues provider's issues in that provider's
     // own view — the code forge's unless the project binds another (#13700).
-    const IssuesDropdownView = useBuiltinView<ForgeStatsDropdownProps>(
-      issuesProvider.entry?.contribution.slots?.statsDropdown ?? ""
-    );
+    const issuesStatsDropdownSlot = issuesProvider.entry?.contribution.slots?.statsDropdown ?? "";
+    const IssuesDropdownView = useBuiltinView<ForgeStatsDropdownProps>(issuesStatsDropdownSlot);
+    // Code, not data: a dropdown's chunk costs no forge quota, so any hover or
+    // focus of its pill warms it ahead of the click, keyboard and touch included.
+    // Each segment warms the view it would render.
+    const warmDropdownView = (segment: "issue" | "pr" | "commit") => {
+      if (segment === "issue") {
+        if (IssuesDropdownView) preloadBuiltinView(issuesStatsDropdownSlot);
+        return;
+      }
+      if (DropdownView && providerId) {
+        preloadBuiltinView(statsDropdownSlot);
+        return;
+      }
+      if (segment === "commit") preloadLocalCommitsDropdown();
+    };
     const issuesProviderId = issuesProvider.providerId;
     // A project can bind its issues to another tracker (#13700). The issues
     // pill then speaks for that tracker alone: its name, its credentials and
@@ -1348,7 +1360,11 @@ export const ForgeStatsToolbarButton = memo(
                 issuesButtonRef.current?.focus();
               }
             }}
-            onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+            onPointerEnter={(e) => {
+              warmDropdownView("issue");
+              handlePrefetchPointerEnter("issue", e);
+            }}
+            onFocus={() => warmDropdownView("issue")}
             activity={showIssuesChip}
           />
         ) : null}
@@ -1443,7 +1459,11 @@ export const ForgeStatsToolbarButton = memo(
                 prsButtonRef.current?.focus();
               }
             }}
-            onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+            onPointerEnter={(e) => {
+              warmDropdownView("pr");
+              handlePrefetchPointerEnter("pr", e);
+            }}
+            onFocus={() => warmDropdownView("pr")}
             activity={showPrsChip}
           />
         ) : null}
@@ -1503,7 +1523,7 @@ export const ForgeStatsToolbarButton = memo(
               // Commit history is local git data, so commits-only mode
               // (no forge provider) still gets a browsable dropdown
               // (issue #10414).
-              <LocalCommitsDropdown
+              <LazyLocalCommitsDropdown
                 cwd={activeWorktree?.path ?? currentProject.path}
                 branch={activeWorktree?.branch}
                 open={commitsOpen}
@@ -1521,6 +1541,8 @@ export const ForgeStatsToolbarButton = memo(
             setPrsOpen(false);
             setCommitsOpen((p) => !p);
           }}
+          onPointerEnter={() => warmDropdownView("commit")}
+          onFocus={() => warmDropdownView("commit")}
           onOpenChange={(open) => {
             setCommitsOpen(open);
             if (!open) {
