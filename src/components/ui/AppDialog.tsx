@@ -306,6 +306,8 @@ function noteWindowDialog(delta: 1 | -1): void {
   for (const listener of windowDialogListeners) listener();
 }
 
+const PORTAL_UNREAD = { isOpen: false, width: 0 };
+
 export function AppDialog({
   isOpen,
   onClose,
@@ -364,9 +366,6 @@ export function AppDialog({
     );
   }, []);
 
-  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
-    useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
-  );
   // A window covers the Portal's strip with the rest: the Portal is hidden
   // while any overlay is up, so there is nothing there to keep in reach.
   const overWindowDialog = useSyncExternalStore(
@@ -374,7 +373,6 @@ export function AppDialog({
     isWindowDialogUp,
     isWindowDialogUp
   );
-  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
 
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
@@ -459,6 +457,14 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
+
+  // Read only while the dialog is on screen. A host keeps its dialog mounted
+  // and closed once it has opened, and the Portal writes its width on every
+  // frame of a dock resize, which woke every such dialog (#17072).
+  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
+    useShallow((s) => (shouldRender ? { isOpen: s.isOpen, width: s.width } : PORTAL_UNREAD))
+  );
+  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
 
   const coversWindow = placement === "window" && shouldRender;
   useEffect(() => {

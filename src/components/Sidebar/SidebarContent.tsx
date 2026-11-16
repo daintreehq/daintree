@@ -244,14 +244,20 @@ function renderSidebarFlatItem(
       </div>
     );
   }
+  // The selection ids reach each row as its own booleans: a cursor step changes
+  // `context` for every row, and the memoized rows skip unless theirs flipped.
+  const isActive = item.worktreeId === context.activeWorktreeId;
+  const isFocused = item.worktreeId === context.focusedWorktreeId;
+  const isKeyboardCursor = item.worktreeId === context.keyboardCursorId;
+  const isSingleWorktree = context.totalWorktreeCount === 1;
   if (item.mode === "static") {
     return (
       <StaticWorktreeRow
         worktreeId={item.worktreeId}
-        activeWorktreeId={context.activeWorktreeId}
-        focusedWorktreeId={context.focusedWorktreeId}
-        keyboardCursorId={context.keyboardCursorId}
-        totalWorktreeCount={context.totalWorktreeCount}
+        isActive={isActive}
+        isFocused={isFocused}
+        isKeyboardCursor={isKeyboardCursor}
+        isSingleWorktree={isSingleWorktree}
         selectWorktree={context.selectWorktree}
         worktreeActions={context.worktreeActions}
         availability={context.availability}
@@ -264,10 +270,10 @@ function renderSidebarFlatItem(
   return (
     <SidebarWorktreeRow
       worktreeId={item.worktreeId}
-      activeWorktreeId={context.activeWorktreeId}
-      focusedWorktreeId={context.focusedWorktreeId}
-      keyboardCursorId={context.keyboardCursorId}
-      totalWorktreeCount={context.totalWorktreeCount}
+      isActive={isActive}
+      isFocused={isFocused}
+      isKeyboardCursor={isKeyboardCursor}
+      isSingleWorktree={isSingleWorktree}
       selectWorktree={context.selectWorktree}
       worktreeActions={context.worktreeActions}
       availability={context.availability}
@@ -1343,10 +1349,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <StaticWorktreeRow
               key={mainWorktree.id}
               worktreeId={mainWorktree.id}
-              activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
-              keyboardCursorId={keyboardCursorId}
-              totalWorktreeCount={deferredWorktrees.length}
+              isActive={mainWorktree.id === activeWorktreeId}
+              isFocused={mainWorktree.id === focusedWorktreeId}
+              isKeyboardCursor={mainWorktree.id === keyboardCursorId}
+              isSingleWorktree={deferredWorktrees.length === 1}
               selectWorktree={selectWorktree}
               worktreeActions={worktreeActions}
               availability={availability}

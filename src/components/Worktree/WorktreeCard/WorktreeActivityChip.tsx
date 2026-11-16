@@ -1,10 +1,11 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { cn } from "@/lib/utils";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 import type { CommitAuthor } from "./CommitAuthorAvatar";
-import { CommitInfoTooltip } from "./CommitInfoTooltip";
+import { CommitInfoTooltip, type CommitInfoTooltipProps } from "./CommitInfoTooltip";
 
 export type { CommitAuthor };
 
@@ -19,8 +20,12 @@ export interface WorktreeActivityChipProps {
   commitBody?: string;
   /** Full HEAD object id, shown abbreviated in the hover tooltip. */
   commitSha?: string;
-  /** Forge profile picture, tried before Gravatar inside the tooltip. */
-  forgeAvatarUrl?: string;
+  /**
+   * The worktree path the author's forge profile picture resolves through,
+   * tried before Gravatar inside the tooltip. Asked for only once the tooltip
+   * opens, so a resting card fetches nothing (#17072).
+   */
+  forgeAvatarCwd?: string;
   /** Drives both the activity light and the adjacent relative time. */
   lastActivityTimestamp?: number | null;
 }
@@ -31,7 +36,7 @@ export function WorktreeActivityChip({
   commitMessage,
   commitBody,
   commitSha,
-  forgeAvatarUrl,
+  forgeAvatarCwd,
   lastActivityTimestamp,
 }: WorktreeActivityChipProps) {
   const now = Date.now();
@@ -68,16 +73,28 @@ export function WorktreeActivityChip({
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="p-3">
-        <CommitInfoTooltip
+        <ForgeCommitInfoTooltip
           lastCommitTimestampMs={lastCommitTimestampMs}
           author={author}
           commitMessage={commitMessage}
           commitBody={commitBody}
           commitSha={commitSha}
-          forgeAvatarUrl={forgeAvatarUrl}
+          forgeAvatarCwd={forgeAvatarCwd}
           lastActivityTimestamp={activityTimestamp}
         />
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/** Mounted with the open tooltip, so the avatar lookup runs only while it shows. */
+function ForgeCommitInfoTooltip({
+  forgeAvatarCwd,
+  ...props
+}: Omit<CommitInfoTooltipProps, "forgeAvatarUrl"> & { forgeAvatarCwd?: string }) {
+  const forgeAvatarUrl = useForgeAuthorAvatar({
+    email: props.author?.email,
+    cwd: forgeAvatarCwd,
+  });
+  return <CommitInfoTooltip {...props} forgeAvatarUrl={forgeAvatarUrl} />;
 }
