@@ -426,12 +426,16 @@ describe("MarkdownEditorView (#12323)", () => {
   it("unmounting the view keeps the draft — it is document state", async () => {
     const { unmount } = await renderReady();
     await type("\nkept");
-    // Still pending when the view goes: leaving Edit commits it at once.
-    await type(" too");
-    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
-      "# Plan\n\nBody\n\nkept"
-    );
-    unmount();
+    // Still pending when the view goes: leaving Edit commits it at once. One
+    // synchronous step, so the commit timer can't land in between.
+    act(() => {
+      const cm = editorView();
+      cm.dispatch({ changes: { from: cm.state.doc.length, insert: " too" } });
+      expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
+        "# Plan\n\nBody\n\nkept"
+      );
+      unmount();
+    });
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
       "# Plan\n\nBody\n\nkept too"
     );

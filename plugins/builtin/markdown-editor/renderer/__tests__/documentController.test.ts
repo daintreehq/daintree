@@ -1222,14 +1222,27 @@ describe("typing held as the editor's document (#17071)", () => {
     expect(first.committedHere("# Plan\n\nab")).toBe(false);
   });
 
-  it("checks for a disk change against the typing still pending", async () => {
+  it("checks for a disk change against the typing pending before and during the check", async () => {
     const controller = await open();
     controller.edit(doc("# Plan\n\nmine"));
     controller.edit(doc("# Plan\n\nmine more"));
     main.files.set(PROPS.filePath, "# Plan\n\ntheirs\n");
-    await controller.revalidate();
-    expect(controller.record().conflict).not.toBeNull();
+    const check: { done: (value: unknown) => void } = { done: () => {} };
+    main.overrides.set(
+      CHANNELS.revalidate,
+      () =>
+        new Promise((resolve) => {
+          check.done = resolve;
+        })
+    );
+    const checking = controller.revalidate();
+    await flush();
     expect(controller.record().draft?.text).toBe("# Plan\n\nmine more");
+    controller.edit(doc("# Plan\n\nmine more still"));
+    check.done({ status: "ok", revision: sha("# Plan\n\ntheirs\n") });
+    await checking;
+    expect(controller.record().conflict).not.toBeNull();
+    expect(controller.record().draft?.text).toBe("# Plan\n\nmine more still");
   });
 
   it("Save as writes the typing still pending", async () => {
