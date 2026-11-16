@@ -79,6 +79,17 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 // window on, and this spares stripping the whole repaint.
 const PROMPT_CHARACTER_PATTERN = /[#$%>➜➤➟➔]/;
 
+// The same shapes by their ends: every one closes on `#$%>` (cmd's `>` may
+// trail `^C` echoes) or, decorated, opens on an arrow. None of those is a
+// lowercase letter or non-ASCII apart from the arrows, so they always land in
+// the edges getTrailingNonBlankLines reads off a long line.
+const PROMPT_LINE_END_PATTERN = /[#$%>](?:\^C)*\s*$/;
+const PROMPT_LINE_START_PATTERN = /^\s*[➜➤➟➔]/;
+
+function promptEdgesMayMatch(head: string, tail: string): boolean {
+  return PROMPT_LINE_END_PATTERN.test(tail) || PROMPT_LINE_START_PATTERN.test(head);
+}
+
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
 
@@ -704,7 +715,8 @@ export class IdentityWatcher {
     return getTrailingNonBlankLines(
       text,
       SHELL_IDENTITY_FALLBACK_SCAN_LINES,
-      PROMPT_CHARACTER_PATTERN
+      PROMPT_CHARACTER_PATTERN,
+      promptEdgesMayMatch
     ).some((line) => isUnambiguousShellPromptLine(line, true));
   }
 
