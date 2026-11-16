@@ -304,9 +304,9 @@ describe("bulk create runner", () => {
     await retryFailedBulkCreateRun(runId);
 
     expect(runOf(runId).progress.items.get(2)?.stage).toBe("succeeded");
-    expect(mockWorktreeCreate.mock.calls.map(([o]) => (o as { newBranch: string }).newBranch)).toEqual(
-      ["feature/issue-1", "feature/issue-2", "feature/issue-2"]
-    );
+    expect(
+      mockWorktreeCreate.mock.calls.map(([o]) => (o as { newBranch: string }).newBranch)
+    ).toEqual(["feature/issue-1", "feature/issue-2", "feature/issue-2"]);
     expect(retryFailedBulkCreateRun(runId)).toBeNull();
   });
 

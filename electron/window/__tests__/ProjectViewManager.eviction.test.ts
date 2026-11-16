@@ -365,7 +365,6 @@ function createMockWindow() {
   };
 }
 
-
 function liveBulkRun(runId: string): BulkWorktreeRunSnapshot {
   return {
     runId,
