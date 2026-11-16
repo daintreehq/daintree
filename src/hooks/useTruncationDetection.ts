@@ -10,30 +10,32 @@ type Subscriber = {
 let singleton: {
   observer: ResizeObserver | null;
   subscribers: Map<HTMLElement, Subscriber>;
-  rafId: number | null;
 } | null = null;
 
 function getSingleton() {
   if (!singleton) {
-    singleton = { observer: null, subscribers: new Map(), rafId: null };
+    singleton = { observer: null, subscribers: new Map() };
   }
   return singleton;
 }
 
-function scheduleCheck() {
+// Only the elements the observer reported: a resize elsewhere says nothing
+// about the other labels, and the callback runs after layout, so reading
+// scrollWidth here does not force a reflow.
+function checkEntries(entries: ResizeObserverEntry[]) {
   const s = getSingleton();
-  if (s.rafId !== null) return;
-  s.rafId = requestAnimationFrame(() => {
-    s.rafId = null;
-    for (const [el, sub] of s.subscribers) {
-      if (!el.isConnected) {
-        s.subscribers.delete(el);
-        continue;
-      }
-      const truncated = el.scrollWidth > el.clientWidth + TOLERANCE;
-      sub.setTruncated(truncated);
+  for (const entry of entries) {
+    const el = entry.target;
+    if (!(el instanceof HTMLElement)) continue;
+    const sub = s.subscribers.get(el);
+    if (!sub) continue;
+    if (!el.isConnected) {
+      s.subscribers.delete(el);
+      s.observer?.unobserve(el);
+      continue;
     }
-  });
+    sub.setTruncated(el.scrollWidth > el.clientWidth + TOLERANCE);
+  }
 }
 
 export function isElementTruncated(el: HTMLElement, tolerance = TOLERANCE): boolean {
@@ -70,14 +72,14 @@ export function useTruncationDetection() {
     s.subscribers.set(el, { setTruncated: (v) => stableSetter.current(v), element: el });
 
     if (!s.observer && typeof ResizeObserver !== "undefined") {
-      s.observer = new ResizeObserver(() => scheduleCheck());
+      s.observer = new ResizeObserver(checkEntries);
     }
     if (s.observer) {
       s.observer.observe(el);
     }
-    // Initial check (layout-dependent; useLayoutEffect ensures after render)
-    const truncated = el.scrollWidth > el.clientWidth + TOLERANCE;
-    stableSetter.current(truncated);
+    // Initial check, so the first paint is right without waiting on the
+    // observer's first delivery.
+    stableSetter.current(el.scrollWidth > el.clientWidth + TOLERANCE);
   }, []);
 
   // Measure on mount if ResizeObserver isn't available (jsdom / SSR)

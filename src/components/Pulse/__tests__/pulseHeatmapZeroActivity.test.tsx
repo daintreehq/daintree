@@ -219,3 +219,139 @@ describe("PulseHeatmap — a day's tooltip is its readout, not a passing hint", 
     expect(shown()).toContain("5 commits");
   });
 });
+
+describe("PulseHeatmap — one shared tooltip", () => {
+  const cells: HeatCell[] = [
+    { date: "2026-09-21", count: 2, level: 2 },
+    { date: "2026-09-22", count: 5, level: 4 },
+    { date: "2026-09-23", count: 0, level: 0 },
+    { date: "2026-09-24", count: 1, level: 1, isToday: true, isMostRecentActive: true },
+  ];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mounts a single tooltip anchor, not one per cell, and moves it with the pointer", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(document.querySelectorAll('[data-testid="pulse-heatmap-tooltip-anchor"]').length).toBe(
+      1
+    );
+    expect(document.body.textContent).not.toContain("5 commits");
+
+    const first = cellByDate("2026-09-21");
+    const second = cellByDate("2026-09-22");
+    fireEvent.pointerOver(first, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("2 commits");
+    const anchor = document.querySelector<HTMLElement>(
+      '[data-testid="pulse-heatmap-tooltip-anchor"]'
+    )!;
+    const before = anchor.style.top;
+
+    fireEvent.pointerOver(second, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+    expect(anchor.style.top).not.toBe(before);
+  });
+
+  it("closes when the pointer leaves the grid", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.pointerOver(cellByDate("2026-09-22"), { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+
+    fireEvent.pointerLeave(document.querySelector('[data-testid="pulse-heatmap"]')!);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).not.toContain("5 commits");
+  });
+
+  it("follows keyboard focus even while the pointer rests on another cell", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.pointerOver(cellByDate("2026-09-21"), { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("2 commits");
+
+    const focused = cellByDate("2026-09-22");
+    act(() => {
+      focused.focus();
+      fireEvent.focus(focused);
+    });
+    expect(document.body.textContent).toContain("5 commits");
+  });
+
+  it("does not open from the focus a click causes, and a press closes it", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    const cell = cellByDate("2026-09-22");
+    fireEvent.pointerOver(cell, { pointerType: "mouse" });
+    expect(document.body.textContent).toContain("5 commits");
+
+    fireEvent.pointerDown(cell, { pointerType: "mouse" });
+    act(() => {
+      cell.focus();
+      fireEvent.focus(cell);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).not.toContain("5 commits");
+  });
+
+  it("keeps keyboard focus's readout when the pointer leaves, and closes it on activation", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    const grid = document.querySelector('[data-testid="pulse-heatmap"]')!;
+    fireEvent.pointerOver(cellByDate("2026-09-21"), { pointerType: "mouse" });
+    const focused = cellByDate("2026-09-22");
+    act(() => {
+      focused.focus();
+      fireEvent.focus(focused);
+    });
+    fireEvent.pointerLeave(grid);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).toContain("5 commits");
+
+    fireEvent.click(focused);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).not.toContain("5 commits");
+  });
+
+  it("still opens on keyboard focus after a press was released elsewhere", async () => {
+    renderHeatmap(cells);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    fireEvent.pointerDown(cellByDate("2026-09-21"), { pointerType: "mouse" });
+    // No pointerup ever reaches the grid: the press was released outside it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const next = cellByDate("2026-09-22");
+    act(() => {
+      next.focus();
+      fireEvent.focus(next);
+    });
+    expect(document.body.textContent).toContain("5 commits");
+  });
+});
