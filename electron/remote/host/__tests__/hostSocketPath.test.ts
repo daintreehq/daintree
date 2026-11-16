@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   SocketPathTooLongError,
   assertSocketPathFits,
@@ -61,6 +62,60 @@ describe("discovery file parsing", () => {
     expect(parseDiscoveryInfo(JSON.stringify({ ...good, token: "short" }))).toBeNull();
     expect(parseDiscoveryInfo(JSON.stringify({ ...good, version: 2 }))).toBeNull();
     expect(parseDiscoveryInfo(" ".repeat(20_000))).toBeNull();
+  });
+
+  // The schema the hand-written parser replaced (#17022): every Host and Shell
+  // already in the field reads discovery files by it, so the two must agree.
+  const zodSchema = z.object({
+    version: z.literal(1),
+    socketPath: z.string().min(1).max(1024),
+    token: z.string().regex(/^[0-9a-f]{64}$/),
+    pid: z.number().int().min(0),
+    startedAt: z.string().min(1).max(64).optional(),
+    command: z.array(z.string().min(1).max(4096)).min(1).max(4).optional(),
+  });
+  const viaZod = (value: unknown) => {
+    const parsed = zodSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  };
+  const emoji = "\u{1F600}";
+
+  it.each([
+    ["the minimal file", good],
+    ["every field", { ...good, startedAt: "Wed Oct 22", command: ["/opt/Daintree", "/app"] }],
+    ["unknown keys", { ...good, extra: true, nested: { a: 1 } }],
+    ["a missing socket path", { ...good, socketPath: undefined }],
+    ["an empty socket path", { ...good, socketPath: "" }],
+    ["a socket path at its limit", { ...good, socketPath: "s".repeat(1024) }],
+    ["a socket path past its limit", { ...good, socketPath: "s".repeat(1025) }],
+    ["a socket path at its limit in code points", { ...good, socketPath: emoji.repeat(1024) }],
+    ["an uppercase token", { ...good, token: "A".repeat(64) }],
+    ["a numeric token", { ...good, token: 1 }],
+    ["a string version", { ...good, version: "1" }],
+    ["a negative pid", { ...good, pid: -1 }],
+    ["a fractional pid", { ...good, pid: 1.5 }],
+    ["an unsafe pid", { ...good, pid: 2 ** 60 }],
+    ["the largest safe pid", { ...good, pid: Number.MAX_SAFE_INTEGER }],
+    ["a string pid", { ...good, pid: "9" }],
+    ["a null startedAt", { ...good, startedAt: null }],
+    ["an empty startedAt", { ...good, startedAt: "" }],
+    ["a startedAt past its limit", { ...good, startedAt: "x".repeat(65) }],
+    ["a startedAt of 64 code points", { ...good, startedAt: emoji.repeat(64) }],
+    ["a startedAt of 65 code points", { ...good, startedAt: emoji.repeat(65) }],
+    ["a startedAt with a lone surrogate", { ...good, startedAt: "\ud83d" }],
+    ["a null command", { ...good, command: null }],
+    ["an empty command", { ...good, command: [] }],
+    ["a command of five parts", { ...good, command: ["a", "b", "c", "d", "e"] }],
+    ["a command with an empty part", { ...good, command: ["a", ""] }],
+    ["a command with a numeric part", { ...good, command: ["a", 1] }],
+    ["a command part past its limit", { ...good, command: ["p".repeat(4097)] }],
+    ["a string command", { ...good, command: "/opt/Daintree" }],
+    ["an array", [good]],
+    ["null", null],
+    ["a number", 1],
+  ])("agrees with the zod schema it replaced on %s", (_label, value) => {
+    const text = JSON.stringify(value);
+    expect(parseDiscoveryInfo(text)).toEqual(viaZod(JSON.parse(text)));
   });
 
   it("compares tokens without accepting empty or different-length values", () => {

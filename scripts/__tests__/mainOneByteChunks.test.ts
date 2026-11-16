@@ -18,14 +18,15 @@ const root = path.resolve(__dirname, "../..");
 // moving a tagged template's glyphs out of it; above it, the cost is at least
 // 256 KB.
 const GUARDED_LENGTH = 256 * 1024;
-// Each process's entries: the app's (package.json "main") and the module it
-// loads Main from, then each host's bootstrap and the module it imports. The
-// hosts are guarded at any size: every terminal's analysis worker loads its
-// closure again, and shares much of it with the pty host.
+// Each process's entries: the app's (package.json "main"), the boot it loads
+// once the compile cache is on and Main, which the boot loads, then each
+// host's bootstrap and the module it imports. The hosts are guarded at any
+// size: every terminal's analysis worker loads its closure again, and shares
+// much of it with the pty host.
 const STARTUP_CLOSURES = [
   {
     name: "Main",
-    entries: ["electron/bootstrap.ts", "electron/main.ts"],
+    entries: ["electron/bootstrap.ts", "electron/boot/appBoot.ts", "electron/main.ts"],
     guardedLength: GUARDED_LENGTH,
   },
   {
