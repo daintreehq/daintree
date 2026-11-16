@@ -274,21 +274,20 @@ vi.mock("@/components/ui/EmptyState", () => ({
   ),
 }));
 
-/** Paths of the file rows that rendered, in order. */
-const rowRenders = vi.hoisted(() => ({ paths: [] as string[] }));
+/** What each rendered file row's path tooltip was given, in order. */
+const rowRenders = vi.hoisted(() => ({ paths: [] as unknown[] }));
 
-vi.mock("../FileStageRow", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../FileStageRow")>();
-  const { createElement, memo } = await import("react");
-  type RowProps = React.ComponentProps<typeof actual.FileStageRow>;
+// Counted inside the real row, through a child it rebuilds on every render of
+// its own, so the row's own `memo` is the only boundary being measured.
+vi.mock("@/components/ui/TruncatedTooltip", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui/TruncatedTooltip")>();
+  const { createElement } = await import("react");
   return {
     ...actual,
-    // The same shallow comparison as the real row's `memo`, so it records
-    // exactly the renders that one lets through.
-    FileStageRow: memo(function CountedFileStageRow(props: RowProps) {
-      rowRenders.paths.push(props.file.path);
-      return createElement(actual.FileStageRow, props);
-    }),
+    TruncatedTooltip: (props: React.ComponentProps<typeof actual.TruncatedTooltip>) => {
+      rowRenders.paths.push(props.content);
+      return createElement(actual.TruncatedTooltip, props);
+    },
   };
 });
 
@@ -767,25 +766,37 @@ describe("ReviewHub windowed file list (#12241)", () => {
   });
 
   it.each([
-    ["static", makeLargeStatus(3, 3)],
-    ["windowed", makeLargeStatus()],
+    ["static", "down", makeLargeStatus(3, 3), 2, "ArrowDown"],
+    ["static", "up", makeLargeStatus(3, 3), 3, "ArrowUp"],
+    ["static", "across the section split", makeLargeStatus(3, 3), 3, "ArrowDown"],
+    ["windowed", "down", makeLargeStatus(), 2, "ArrowDown"],
+    ["windowed", "across the section split", makeLargeStatus(), 60, "ArrowDown"],
   ] as const)(
-    "re-renders only the rows the cursor leaves and lands on in the %s list",
-    async (_path, status) => {
-      await renderLargeHub(status);
-      const press = (key: string) => act(() => void fireEvent.keyDown(document, { key }));
-      press("ArrowDown");
-      press("ArrowDown");
+    "re-renders only the rows the cursor leaves and lands on in the %s list, stepping %s",
+    async (_list, _step, status, presses, key) => {
+      const listbox = await renderLargeHub(status);
+      const rows = [...status.staged, ...status.unstaged].map((file) => file.path);
+      const press = (k: string) => act(() => void fireEvent.keyDown(document, { key: k }));
+      // The first press places the cursor on row 0.
+      for (let i = 0; i < presses; i++) press("ArrowDown");
       // Lets every read the open started land before counting.
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
+      const from = presses - 1;
+      const to = key === "ArrowDown" ? from + 1 : from - 1;
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(`review-hub-row-${from}`);
       rowRenders.paths.length = 0;
 
-      press("ArrowDown");
+      press(key);
 
-      const [, leaving, landing] = status.staged;
-      expect([...new Set(rowRenders.paths)].sort()).toEqual([leaving.path, landing.path].sort());
+      const rendered = new Set(rowRenders.paths.filter((p) => rows.includes(String(p))));
+      expect([...rendered].sort()).toEqual([rows[from], rows[to]].sort());
+      // And the two that did render moved the focus between them.
+      const rowNode = (index: number) =>
+        document.getElementById(`review-hub-row-${index}`)?.getAttribute("data-focused");
+      expect(rowNode(from)).toBeNull();
+      expect(rowNode(to)).toBe("true");
     }
   );
 

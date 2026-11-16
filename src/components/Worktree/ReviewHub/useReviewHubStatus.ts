@@ -234,6 +234,10 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
             };
       if (foreground) {
         lane.foreground = beginForegroundRead();
+        // The deadline below now keeps the list from waiting on the capture;
+        // a background early read beside it would be one read too many.
+        if (lane.timer !== null) clearTimeout(lane.timer);
+        lane.timer = null;
         if (lane.foregroundTimer === null) {
           lane.foregroundTimer = setTimeout(() => {
             lane.foregroundTimer = null;
@@ -248,7 +252,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
             if (refreshIdRef.current === requestId) void sendForegroundRead(requestId);
           }, FOREGROUND_CAPTURE_WAIT_MS);
         }
-      } else if (lane.timer === null && !lane.earlyReadSent) {
+      } else if (lane.timer === null && lane.foregroundTimer === null && !lane.earlyReadSent) {
         lane.timer = setTimeout(() => {
           lane.timer = null;
           if (!lane.running || !session.live) return;
@@ -328,7 +332,15 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     return () => {
       session.live = false;
       const lane = laneRef.current;
-      if (lane?.session === session) clearLaneTimers(lane);
+      if (lane?.session === session) {
+        clearLaneTimers(lane);
+        // A foreground read still waiting on the capture won't go out now,
+        // and nothing else would lower the `loading` it raised.
+        if (lane.foreground !== null && refreshIdRef.current === lane.foreground) {
+          setLoading(false);
+        }
+        lane.foreground = null;
+      }
       latestCaptureRef.current = null;
       unsubscribeUpdate();
       unsubscribeTick();

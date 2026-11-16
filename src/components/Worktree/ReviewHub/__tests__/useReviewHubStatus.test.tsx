@@ -21,10 +21,33 @@ vi.mock("@/store/reviewMarksStore", () => ({
 }));
 
 const WT = "/repo/wt";
-const status = { currentBranch: "feature", staged: [], unstaged: [] } as unknown as StagingStatus;
+const status: StagingStatus = {
+  staged: [],
+  unstaged: [{ path: "src/app.ts", status: "modified", insertions: 3, deletions: 1 }],
+  conflicted: [],
+  conflictedFiles: [],
+  isDetachedHead: false,
+  currentBranch: "feature",
+  hasRemote: false,
+  pushDestination: { remote: "origin", branch: "feature" },
+  pullSource: { remote: "origin", branch: "feature" },
+  repoState: "DIRTY",
+  rebaseStep: null,
+  rebaseTotalSteps: null,
+  rebaseSequence: null,
+};
 
 function captured(captureId: string): ReviewMarkCaptureOutcome {
-  return { status: "captured", capture: { captureId } } as unknown as ReviewMarkCaptureOutcome;
+  return {
+    status: "captured",
+    capture: {
+      captureId,
+      capturedAt: 1,
+      head: { kind: "branch", branch: "feature", commit: "a".repeat(40) },
+      complete: true,
+      pathCount: 1,
+    },
+  };
 }
 
 function deferred<T>() {
@@ -69,6 +92,31 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetStagingStatusCacheForTests();
+});
+
+describe("useReviewHubStatus beginOpen", () => {
+  it("seeds an opening once, so a second call can't leave its status stale", async () => {
+    const { result, rerender } = renderStatus();
+    act(() => result.current.beginOpen());
+    await advance(0);
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.statusCapture?.capture.captureId).toBe("c1");
+
+    act(() => result.current.beginOpen());
+
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.statusCapture?.capture.captureId).toBe("c1");
+    expect(getStagingStatus).toHaveBeenCalledTimes(1);
+
+    // A new opening is a new session, which begins again.
+    rerender({ open: false });
+    const capture = deferred<ReviewMarkCaptureOutcome>();
+    marks.capture.mockReturnValueOnce(capture.promise);
+    rerender({ open: true });
+    act(() => result.current.beginOpen());
+    expect(result.current.statusIsFresh).toBe(false);
+    expect(result.current.statusCapture).toBeNull();
+  });
 });
 
 describe("useReviewHubStatus opening read", () => {
@@ -124,17 +172,49 @@ describe("useReviewHubStatus opening read", () => {
     expect(marks.capture).not.toHaveBeenCalled();
   });
 
-  it("sends nothing for an opening closed while its capture runs", async () => {
+  it("sends nothing for an opening closed while its capture runs, and stops loading", async () => {
     const capture = deferred<ReviewMarkCaptureOutcome>();
     marks.capture.mockReturnValueOnce(capture.promise);
-    const { rerender } = renderStatus();
+    const { result, rerender } = renderStatus();
+    expect(result.current.loading).toBe(true);
 
     rerender({ open: false });
+    expect(result.current.loading).toBe(false);
     await advance(5_000);
     await act(async () => capture.resolve(captured("c1")));
     await advance(5_000);
 
     expect(getStagingStatus).not.toHaveBeenCalled();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("lets a Refresh joining a background capture stand in for its early read", async () => {
+    const { result } = renderStatus();
+    await advance(0);
+    expect(getStagingStatus).toHaveBeenCalledTimes(1);
+
+    // An event's capture runs long; Refresh lands just before its early read is due.
+    const running = deferred<ReviewMarkCaptureOutcome>();
+    marks.capture.mockReturnValueOnce(running.promise).mockResolvedValueOnce(captured("c3"));
+    act(() => result.current.readWithCapture());
+    await advance(1_400);
+    act(() => result.current.refreshWithCapture());
+    const deadlineRead = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(deadlineRead.promise);
+
+    await advance(399);
+    expect(getStagingStatus).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(getStagingStatus).toHaveBeenCalledTimes(2);
+    // Sent as Refresh's own read, so its answer is what lowers `loading`.
+    expect(result.current.loading).toBe(true);
+    await act(async () => deadlineRead.resolve(status));
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => running.resolve(captured("c2")));
+    await advance(0);
+    expect(getStagingStatus).toHaveBeenCalledTimes(3);
+    expect(result.current.statusCapture?.capture.captureId).toBe("c3");
   });
 
   it("captures again for a Refresh that joins a running capture, then reads once", async () => {

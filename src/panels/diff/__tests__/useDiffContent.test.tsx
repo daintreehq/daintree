@@ -101,21 +101,38 @@ describe("useDiffContent", () => {
     await waitFor(() => expect(result.current.content).toBe("ERROR"));
   });
 
-  it("prefetches the next file once the current diff has landed", async () => {
-    vi.useFakeTimers();
-    requestDiffMock.mockResolvedValue({ content: PATCH_A });
-    const next: DiffSubject = {
-      source: "working-tree",
-      worktreePath: "/repo",
-      filePath: "b.ts",
-      status: "modified",
-    };
+  it.each(["working-tree", "staged", "unstaged"] as const)(
+    "prefetches a %s next file only after the current diff has landed and been dwelled on",
+    async (source) => {
+      vi.useFakeTimers();
+      let land!: (value: { content: string }) => void;
+      requestDiffMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          land = resolve;
+        })
+      );
+      requestDiffMock.mockResolvedValue({ content: PATCH_B });
+      const next: DiffSubject = {
+        source,
+        worktreePath: "/repo",
+        filePath: "b.ts",
+        status: "modified",
+      };
+      const files = () => requestDiffMock.mock.calls.map(([s]) => s.filePath);
 
-    renderHook(() => useDiffContent(useSubject("a.ts"), next));
-    await settlePrefetch();
+      renderHook(() => useDiffContent(useSubject("a.ts"), next));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(files()).toEqual(["a.ts"]);
 
-    expect(requestDiffMock.mock.calls.map(([s]) => s.filePath)).toEqual(["a.ts", "b.ts"]);
-  });
+      await act(async () => land({ content: PATCH_A }));
+      expect(files()).toEqual(["a.ts"]);
+      await settlePrefetch();
+
+      expect(files()).toEqual(["a.ts", "b.ts"]);
+    }
+  );
 
   it.each<DiffSubject>([
     {

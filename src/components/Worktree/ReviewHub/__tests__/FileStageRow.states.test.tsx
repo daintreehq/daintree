@@ -144,14 +144,20 @@ describe("FileStageRow — viewed dim", () => {
 });
 
 describe("FileStageRow — viewed toggle", () => {
-  it("names its own file, so the list can hand every row one callback", () => {
-    const onViewedChange = vi.fn();
-    renderRow(SOURCE, { onViewedChange });
+  it.each([
+    [false, true],
+    [true, false],
+  ])(
+    "names its own file, so the list can hand every row one callback (viewed %s)",
+    (viewed, next) => {
+      const onViewedChange = vi.fn();
+      renderRow(SOURCE, { viewed, onViewedChange });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: `Mark ${SOURCE.path} as viewed` }));
+      fireEvent.click(screen.getByRole("checkbox", { name: `Mark ${SOURCE.path} as viewed` }));
 
-    expect(onViewedChange).toHaveBeenCalledWith(SOURCE.path, true);
-  });
+      expect(onViewedChange).toHaveBeenCalledWith(SOURCE.path, next);
+    }
+  );
 });
 
 describe("FileStageRow — stage control", () => {
