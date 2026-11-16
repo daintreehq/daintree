@@ -156,8 +156,11 @@ export function mapPreviewRangesToPrompt(
   let text = "";
   const offsets: number[] = [];
   let gap = -1;
+  let previousEnd = 0;
   for (const { start, text: line } of walk) {
-    if (text && gap < 0) gap = start;
+    // The break between two lines stands for the first character after the one before.
+    if (text && gap < 0) gap = previousEnd;
+    previousEnd = start + line.length;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i]!;
       if (/\s/.test(ch)) {

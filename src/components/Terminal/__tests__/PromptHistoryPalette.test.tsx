@@ -384,16 +384,18 @@ describe("PromptHistoryPalette", () => {
       await type(input, "bakoff");
       expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
       expect(marks().length).toBeGreaterThan(0);
-      // Each marked fragment sits inside a "backoff", never on unrelated text.
-      const prompt = previewText()!;
-      let from = 0;
-      for (const mark of marks()) {
-        const at = prompt.indexOf(mark, from);
-        expect(at).toBeGreaterThanOrEqual(from);
-        expect(prompt.slice(Math.max(0, at - 6), at + mark.length + 6).toLowerCase()).toContain(
-          "backoff"
-        );
-        from = at + mark.length;
+      // Each marked fragment lies wholly inside one "backoff", never spilling over a break.
+      const text = previewText()!;
+      const occurrences = [...text.matchAll(/backoff/gi)].map((m) => [m.index, m.index + 7]);
+      let offset = 0;
+      for (const node of preview()!.querySelector("p")!.childNodes) {
+        const length = node.textContent?.length ?? 0;
+        if (node instanceof HTMLElement && node.hasAttribute("data-highlight")) {
+          expect(occurrences.some(([from, to]) => offset >= from! && offset + length <= to!)).toBe(
+            true
+          );
+        }
+        offset += length;
       }
     });
 
@@ -791,6 +793,12 @@ describe("mapPreviewRangesToPrompt", () => {
     const { text } = toPromptPreview(prompt);
     const at = text.indexOf("the backoff");
     expect(mapPreviewRangesToPrompt(prompt, text, [[at, at + 10]])).toEqual([[12, 22]]);
+  });
+
+  it("puts the space for a line break on the break, not on the next line's first character", () => {
+    const prompt = "backoff\njob";
+    const { text } = toPromptPreview(prompt);
+    expect(mapPreviewRangesToPrompt(prompt, text, [[3, 7]])).toEqual([[3, 7]]);
   });
 
   it("handles CRLF breaks and leading blank lines", () => {
