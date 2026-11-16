@@ -185,7 +185,11 @@ describe("link encoding", () => {
   });
 
   describe("output buffer and reused storage", () => {
-    const sample = { a: [1, "two", new Uint8Array([3, 4])], b: new Map([[1, 2n]]), c: "x".repeat(700) };
+    const sample = {
+      a: [1, "two", new Uint8Array([3, 4])],
+      b: new Map([[1, 2n]]),
+      c: "x".repeat(700),
+    };
 
     it("returns the encoding in the buffer the caller allocates", () => {
       const plain = encodeValue(sample);
@@ -201,9 +205,9 @@ describe("link encoding", () => {
     });
 
     it("refuses an allocator of the wrong size, and one that throws, then encodes normally", () => {
-      expect(() => encodeValue("abc", DEFAULT_ENCODING_LIMITS, (n) => new Uint8Array(n + 1))).toThrow(
-        LinkEncodingError
-      );
+      expect(() =>
+        encodeValue("abc", DEFAULT_ENCODING_LIMITS, (n) => new Uint8Array(n + 1))
+      ).toThrow(LinkEncodingError);
       expect(() =>
         encodeValue("abc", DEFAULT_ENCODING_LIMITS, () => {
           throw new Error("no memory");

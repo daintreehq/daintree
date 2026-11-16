@@ -85,7 +85,12 @@ describe("link frames", () => {
       for (const n of [0, 1, 3000, BULK_CHUNK_BYTES]) {
         const payload = filled(n);
         const before = new Uint8Array(payload);
-        const copied = encodeFrame({ lane: Lane.BULK, kind: 2, streamId: 0xfffffffe, payload: before });
+        const copied = encodeFrame({
+          lane: Lane.BULK,
+          kind: 2,
+          streamId: 0xfffffffe,
+          payload: before,
+        });
         const out = encodeFrame({ lane: Lane.BULK, kind: 2, streamId: 0xfffffffe, payload });
 
         expect(out).toEqual(copied);
@@ -118,7 +123,12 @@ describe("link frames", () => {
     it("copies a view into the payload rather than writing over the bytes in front of it", () => {
       const payload = filled(100);
       const before = new Uint8Array(payload);
-      const out = encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 1, payload: payload.subarray(50) });
+      const out = encodeFrame({
+        lane: Lane.RPC,
+        kind: 1,
+        streamId: 1,
+        payload: payload.subarray(50),
+      });
 
       expect(out.buffer).not.toBe(payload.buffer);
       expect(payload).toEqual(before);
