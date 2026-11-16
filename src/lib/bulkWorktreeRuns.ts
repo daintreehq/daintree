@@ -5,7 +5,7 @@ import {
   type BulkWorktreeRunItem,
   type BulkWorktreeRunSnapshot,
 } from "@shared/types/ipc/bulkWorktreeRuns";
-import { pluralize } from "@/lib/pluralize";
+import { pluralNoun, pluralize } from "@/lib/pluralize";
 
 /**
  * How a bulk worktree run reads wherever it is shown (#17086): the toolbar
@@ -119,7 +119,7 @@ export function summarizeBulkRun(run: BulkWorktreeRunSnapshot): BulkRunSummary {
   const settled = run.phase === "done" || run.phase === "cancelled";
   const nested: string[] = [];
   if (settled && setupFailed > 0) {
-    nested.push(`${setupFailed} with setup failure${setupFailed === 1 ? "" : "s"}`);
+    nested.push(`${setupFailed} with setup ${pluralNoun(setupFailed, "failure")}`);
   }
   if (settled && facts.partlySetUp > 0) nested.push(`${facts.partlySetUp} not fully set up`);
   const createdNote = nested.length > 0 ? ` (${nested.join(", ")})` : "";

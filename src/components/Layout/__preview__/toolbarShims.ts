@@ -140,6 +140,12 @@ installPreviewShims({
     getCurrent: async () => PREVIEW_PROJECT,
     onSwitch: () => () => {},
   }),
+  // The bulk worktree run chip reads the run list on mount; `undefined` from
+  // the inert shim isn't a list, and the chip iterates it.
+  bulkWorktreeRuns: withFallback({
+    list: async () => [],
+    onChanged: () => () => {},
+  }),
   // Opening the switcher loads the scratch list; `undefined` from the inert
   // shim crashes its row builder and takes the page down with it.
   scratch: withFallback({
