@@ -541,6 +541,34 @@ describe("TerminalDecisionsChip", () => {
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     });
 
+    it("keeps main's reason for a refusal over the question having stopped waiting", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      let resolve!: (result: DecisionQuestionCancelResult) => void;
+      cancelQuestion.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          })
+      );
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToCancel();
+      await screen.findByRole("alertdialog");
+
+      act(() => {
+        fireEvent.click(dialogButton("Cancel question"));
+      });
+      // Answered on a phone: the pane drops it before main's refusal arrives.
+      act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+      await act(async () => {
+        resolve({ result: "refused", reason: "answered" });
+      });
+
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("q-42 has been answered, so it can't be cancelled.");
+      expect(dialog.textContent).not.toContain("isn't waiting");
+      expect(dialogButton("Close")).toBeTruthy();
+    });
+
     it("reads the opening line itself when the row hadn't yet, confirming only once it has", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       let answerRow!: (result: DecisionQuestionSummariesResult) => void;
