@@ -253,8 +253,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const showRunningLifecycle = useDohertyGate(runningLifecycle !== undefined);
   // From `setupRun`, which a later phase's status never replaces. Not while
   // setup runs again: that run's own output is the one to read.
+  // `setupStatus` as well: a status check can take the slot mid-run.
   const setupRunning =
-    worktree.lifecycleStatus?.phase === "setup" && worktree.lifecycleStatus.state === "running";
+    (worktree.lifecycleStatus?.phase === "setup" && worktree.lifecycleStatus.state === "running") ||
+    worktree.setupStatus?.state === "running";
   const succeededSetup =
     !setupRunning && worktree.setupRun?.state === "success" && worktree.setupRun.output?.trim()
       ? worktree.setupRun

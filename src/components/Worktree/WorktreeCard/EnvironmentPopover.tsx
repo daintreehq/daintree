@@ -297,6 +297,8 @@ export function EnvironmentPopover({
         align="start"
         className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         aria-label={`${environmentName} environment`}
+        // Where a running command's log hands focus back when the run settles.
+        data-lifecycle-focus-return=""
         ref={contentRef}
         onOpenAutoFocus={(event) => {
           // Land on the popover itself rather than its first control: focusing
@@ -340,9 +342,7 @@ export function EnvironmentPopover({
                     )}
                   </span>
                 </div>
-                {runningCommands && (
-                  <LifecycleRunBody status={runningCommands} focusFallback={contentRef} />
-                )}
+                {runningCommands && <LifecycleRunBody status={runningCommands} />}
               </div>
             )}
 

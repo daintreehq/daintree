@@ -304,6 +304,31 @@ describe("WorktreeLifecycleService live output (#17115)", () => {
     expect(output.endsWith("certs written\n")).toBe(true);
   });
 
+  it("treats a key block's BEGIN line the window's start cuts through as the block it opens", async () => {
+    // 65,540 characters: the window's last 65,536 start inside "-----BEGIN ".
+    const block = `-----BEGIN PRIVATE KEY-----\n${`${"S".repeat(63)}\n`.repeat(1_023)}-----END PRIVATE KEY-----\ncerts written\n`;
+    for (const live of [false, true]) {
+      const run = controlledChild();
+      mockSpawn.mockReturnValue(run.child);
+      const onOutput = vi.fn();
+      const done = service.runCommands(["./run.sh"], {
+        cwd: "/wt",
+        env: {},
+        onProgress: vi.fn(),
+        onOutput,
+      });
+
+      run.print(block);
+      if (live) await vi.advanceTimersByTimeAsync(500);
+      run.exit(0);
+      const { output } = await done;
+      const shown = live ? (onOutput.mock.lastCall?.[0] as string) : output;
+
+      expect(shown, live ? "live" : "final").not.toContain("SSSS");
+      expect(shown.endsWith("certs written\n")).toBe(true);
+    }
+  });
+
   it("scrubs the output before cutting it to the tail, so a cut through a token shows none of it", async () => {
     const run = controlledChild();
     mockSpawn.mockReturnValue(run.child);
@@ -469,6 +494,35 @@ describe("WorktreeLifecycleService live output (#17115)", () => {
 
       run.exit(0);
       await done;
+    });
+
+    it("leaves a later setup run's status alone as it moves on and settles", async () => {
+      const runs = [controlledChild(), controlledChild()];
+      mockSpawn.mockReturnValueOnce(runs[0].child).mockReturnValueOnce(runs[1].child);
+      const monitor = makeMonitor();
+      const ctx = {
+        projectRootPath: "/root",
+        projectEnvVars: {},
+        getMonitor: () => monitor as never,
+        emitUpdate: vi.fn(),
+      } as unknown as import("../WorktreeLifecycleService.js").WorkspaceHostContext;
+
+      const done = service.runLifecycleSetup("wt-1", "/wt", ctx, false);
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1));
+      // An environment switch starts another setup without stopping this one.
+      const later: WorktreeLifecycleStatus = {
+        ...monitor.lifecycleStatus!,
+        startedAt: monitor.lifecycleStatus!.startedAt + 1,
+      };
+      monitor.setLifecycleStatus(later);
+
+      runs[0].exit(0);
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+      expect(monitor.lifecycleStatus).toBe(later);
+
+      runs[1].exit(1);
+      await done;
+      expect(monitor.lifecycleStatus).toBe(later);
     });
 
     it("leaves the slot to another phase that has taken it", async () => {

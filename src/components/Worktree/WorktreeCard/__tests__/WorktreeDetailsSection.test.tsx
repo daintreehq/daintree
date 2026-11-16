@@ -1111,5 +1111,20 @@ describe("WorktreeDetailsSection — what a running lifecycle phase is doing (#1
       )
     );
     expect(screen.queryByText("Setup output")).toBeNull();
+
+    // A retry whose slot a status check took mid-run is still a running setup.
+    view.rerender(
+      card(
+        {
+          ...baseWorktree,
+          lifecycleStatus: { phase: "resource-status", state: "success", startedAt: NOW },
+          setupStatus: { state: "running", stage: "setup-script", startedAt: NOW },
+          setupRun: succeededRun,
+        },
+        vi.fn(),
+        true
+      )
+    );
+    expect(screen.queryByText("Setup output")).toBeNull();
   });
 });

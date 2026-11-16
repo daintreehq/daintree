@@ -512,6 +512,21 @@ describe("EnvironmentPopover — what running commands are doing (#17115)", () =
     expect(document.activeElement).toBe(dialog);
   });
 
+  it("hands focus to the popover when it was opened on a run already past the gate", () => {
+    const view = render(popover(runningSetup()));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    const dialog = openPopover();
+    act(() => {
+      screen.getByRole("region", { name: "Setup output" }).focus();
+    });
+
+    view.rerender(popover({ ...runningSetup(), state: "success", completedAt: NOW }));
+
+    expect(document.activeElement).toBe(dialog);
+  });
+
   it("leaves a status check to the last check's output, and adds nothing of its own", () => {
     render(
       popover(

@@ -311,7 +311,11 @@ export class WorktreeSetupCoordinator {
     // Read immediately, before auto-provision can overwrite the slot.
     const settled = this.host.getMonitor(worktreeId)?.lifecycleStatus;
     if (monitorAtStart && this.host.getMonitor(worktreeId) === monitorAtStart) {
-      if (settled?.phase === "setup" && settled.output !== undefined) {
+      if (
+        settled?.phase === "setup" &&
+        settled.state !== "running" &&
+        settled.output !== undefined
+      ) {
         this.setupScriptOutput.set(monitorAtStart, settled.output);
       } else {
         this.setupScriptOutput.delete(monitorAtStart);

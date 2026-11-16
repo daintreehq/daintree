@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 import { ChevronRight } from "lucide-react";
@@ -6,6 +6,9 @@ import { FactRun } from "@/components/ui/FactSeparator";
 import { useWallClock } from "@/hooks/useWallClock";
 import { cn } from "@/lib/utils";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+
+/** Marks where focus goes when a run's body leaves while holding it. */
+const LIFECYCLE_FOCUS_RETURN_ATTR = "data-lifecycle-focus-return";
 
 // Within this many pixels of the end, the log counts as following it.
 const FOLLOW_SLACK_PX = 8;
@@ -119,29 +122,24 @@ export function LifecycleOutputLog({
 /**
  * What a running command run is doing: the command, and what it has printed so
  * far. It goes the moment the run settles, so a reader focused in it is handed
- * to `focusFallback`, when there is one, rather than to <body>.
+ * to the nearest ancestor marked {@link LIFECYCLE_FOCUS_RETURN_ATTR}, when
+ * there is one, rather than to <body>.
  */
-export function LifecycleRunBody({
-  status,
-  focusFallback,
-}: {
-  status: WorktreeLifecycleStatus;
-  focusFallback?: RefObject<HTMLElement | null>;
-}) {
+export function LifecycleRunBody({ status }: { status: WorktreeLifecycleStatus }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const output = status.output ?? "";
 
-  // Layout cleanup runs before React detaches the node, so the containment
-  // check still sees the focused log.
-  // The fallback holds this body, so it is there from mount to unmount.
+  // Found through the DOM, which is in place when this runs; an ancestor's ref
+  // mounting in the same commit is not attached yet. Layout cleanup runs before
+  // React detaches the node, so the containment check still sees the focus.
   useLayoutEffect(() => {
     const root = rootRef.current;
-    const fallback = focusFallback?.current;
+    const fallback = root?.parentElement?.closest<HTMLElement>(`[${LIFECYCLE_FOCUS_RETURN_ATTR}]`);
     if (!root || !fallback) return;
     return () => {
       if (root.contains(document.activeElement)) fallback.focus({ preventScroll: true });
     };
-  }, [focusFallback]);
+  }, []);
 
   return (
     <div ref={rootRef} className="flex min-w-0 flex-col gap-1.5">

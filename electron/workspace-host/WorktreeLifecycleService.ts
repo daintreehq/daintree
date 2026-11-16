@@ -18,6 +18,7 @@ import type {
   WorktreeLifecyclePhase,
   WorktreeLifecyclePhaseCategory,
   WorktreeLifecycleState,
+  WorktreeLifecycleStatus,
   WorktreeTeardownPhasePreview,
   WorktreeTeardownPreview,
 } from "../../shared/types/worktree.js";
@@ -40,8 +41,8 @@ const OUTPUT_TAIL_BYTES = 8192;
 // secret the scrub's own window cuts through sits well before what is shown.
 const TAIL_SCRUB_WINDOW_CHARS = 65_536;
 // How far before that window a key block's BEGIN line is looked for: as far as
-// `scrubSecrets`' key-block pattern itself reaches.
-const KEY_BLOCK_LOOKBACK_CHARS = 100_000;
+// `scrubSecrets`' key-block pattern itself reaches, its longest header included.
+const KEY_BLOCK_LOOKBACK_CHARS = 100_000 + 128;
 const LIVE_OUTPUT_INTERVAL_MS = 500;
 const FAILURE_SUMMARY_SCAN_CHARS = 4096;
 const MAX_FAILURE_SUMMARY_CHARS = 500;
@@ -1259,7 +1260,7 @@ export class WorktreeLifecycleService {
       readFailureSummary: true,
       onProgress: (commandIndex, totalCommands, command) => {
         const m = ctx.getMonitor(worktreeId);
-        if (m) {
+        if (m && !heldByAnotherRun(m.lifecycleStatus, "setup", startedAt)) {
           m.setLifecycleStatus({
             phase: "setup",
             state: "running",
@@ -1281,7 +1282,9 @@ export class WorktreeLifecycleService {
     });
 
     const finalMonitor = ctx.getMonitor(worktreeId);
-    if (finalMonitor) {
+    // A later setup (an environment switch starts one without stopping this)
+    // has the slot: its run is what the worktree is doing now.
+    if (finalMonitor && !heldByAnotherRun(finalMonitor.lifecycleStatus, "setup", startedAt)) {
       finalMonitor.setLifecycleStatus({
         phase: "setup",
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
@@ -1837,19 +1840,21 @@ function recentOutput(chunks: string[]): {
   }
 
   const windowStart = joined.length - TAIL_SCRUB_WINDOW_CHARS;
-  const before = joined.slice(0, windowStart);
-  const window = joined.slice(windowStart);
+  // Markers that start before the window, including one the window's start
+  // cuts through.
+  const blockStart = joined.lastIndexOf("-----BEGIN ", windowStart - 1);
   let keepFrom: number;
-  if (before.lastIndexOf("-----BEGIN ") > before.lastIndexOf("-----END ")) {
-    const blockEnd = window.indexOf("-----END ");
-    keepFrom = blockEnd === -1 ? window.length : lineEndFrom(window, blockEnd);
+  if (blockStart !== -1 && blockStart > joined.lastIndexOf("-----END ", windowStart - 1)) {
+    const blockEnd = joined.indexOf("-----END ", blockStart);
+    keepFrom = blockEnd === -1 ? joined.length : lineEndFrom(joined, blockEnd);
   } else {
-    keepFrom = before.endsWith("\n") || before.endsWith("\r") ? 0 : lineEndFrom(window, 0);
+    const lineStart = /[\r\n]/.test(joined[windowStart - 1] ?? "");
+    keepFrom = lineStart ? windowStart : lineEndFrom(joined, windowStart);
   }
   return {
-    text: window.slice(keepFrom),
+    text: joined.slice(keepFrom),
     skippedChunks: start,
-    trimmedBytes: Buffer.byteLength(joined.slice(0, windowStart + keepFrom), "utf-8"),
+    trimmedBytes: Buffer.byteLength(joined.slice(0, keepFrom), "utf-8"),
   };
 }
 
@@ -1903,6 +1908,15 @@ function liveOutputTail(chunks: string[]): string {
   const { tail, overflowBytes } = scrubbedTail(text.slice(0, settledOutputEnd(text)));
   const omitted = skippedChunks > 0 || trimmedBytes > 0 || overflowBytes > 0;
   return omitted ? `...(earlier output omitted)\n${tail}` : tail;
+}
+
+/** The slot shows another run of the same phase running, one that started at another time. */
+function heldByAnotherRun(
+  status: WorktreeLifecycleStatus | undefined,
+  phase: WorktreeLifecyclePhase,
+  startedAt: number
+): boolean {
+  return status?.phase === phase && status.state === "running" && status.startedAt !== startedAt;
 }
 
 /**
