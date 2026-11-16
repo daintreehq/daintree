@@ -291,16 +291,17 @@ describe("TerminalDecisionsChip", () => {
       expect(asked.flat().sort()).toEqual(many.map((q) => q.questionId).sort());
     });
 
-    it.each([
+    const unnamed: Array<[string, DecisionQuestionSummariesResult]> = [
       [
         "a line-less summary",
         { result: "read", summaries: [{ questionId: "q42", result: "read", line: null }] },
       ],
       ["Decisions not running", { result: "not-running" }],
       ["Decisions off", { result: "off" }],
-    ] as const)("keeps rows openable by alias with %s", async (_name, result) => {
+    ];
+    it.each(unnamed)("keeps rows openable by alias with %s", async (_name, result) => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
-      getQuestionSummaries.mockResolvedValue(result as DecisionQuestionSummariesResult);
+      getQuestionSummaries.mockResolvedValue(result);
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
       const row = await screen.findByTestId("terminal-decisions-row");
