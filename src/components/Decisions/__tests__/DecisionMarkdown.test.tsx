@@ -49,4 +49,38 @@ describe("DecisionMarkdown", () => {
     expect(root.querySelector("svg")).toBeNull();
     expect(root.querySelector("pre")?.textContent).toContain("A-->B");
   });
+
+  it("shows a link's label and an image's alt text whatever the URL", () => {
+    const root = rendered(
+      "[js](javascript:alert(1)) ![local](file:///etc/passwd) ![data](data:image/png;base64,AAAA)"
+    );
+    expect(root.textContent).toContain("js");
+    expect(root.textContent).toContain("[local]");
+    expect(root.textContent).toContain("[data]");
+  });
+
+  it("keeps reference links, bare URLs, emails and footnotes inert, with their words", () => {
+    const root = rendered(
+      [
+        "See [the docs][d], https://example.com/bare and someone@example.com.",
+        "",
+        "A claim.[^1]",
+        "",
+        "[d]: https://example.com/docs",
+        "[^1]: The note, with ![pic](https://example.com/c.png) and [a](https://example.com).",
+      ].join("\n")
+    );
+    expect(root.querySelector("a, img, [href], [src]")).toBeNull();
+    expect(root.textContent).toContain("the docs");
+    expect(root.textContent).toContain("https://example.com/bare");
+    expect(root.textContent).toContain("someone@example.com");
+    expect(root.textContent).toContain("The note");
+    expect(root.textContent).toContain("[pic]");
+  });
+
+  it("shows an encoded tag as text, not markup", () => {
+    const root = rendered("&lt;img src=x onerror=alert(1)&gt; and &amp;");
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
 });

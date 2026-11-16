@@ -94,6 +94,18 @@ function waitFor(check: () => void) {
   return vi.waitFor(check, { timeout: 4000 });
 }
 
+function pushPane(terminalId: string) {
+  for (const listener of [...paneListeners]) {
+    listener({
+      terminalId,
+      openQuestions: [],
+      waitingAnswers: [],
+      needsAttention: [],
+      revision: 2,
+    });
+  }
+}
+
 function openView(ids: string[], id: string) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, id));
 }
@@ -165,9 +177,39 @@ describe("DecisionQuestionDialog", () => {
     expect(screen.getByTestId("decision-question-requirement").textContent).not.toBe(requirementA);
     expect(screen.getByTestId("decision-question-next").getAttribute("aria-disabled")).toBe("true");
 
-    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByTestId("decision-question-next"), { key: "ArrowLeft" });
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));
     expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true);
+  });
+
+  it("leaves arrow keys alone outside the dialog, in code, and with a modifier", async () => {
+    openView(["qa", "qb"], "qa");
+    await screen.findByTestId("decision-question-content");
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const pre = document.createElement("pre");
+    pre.tabIndex = 0;
+    screen.getByTestId("decision-question-body").appendChild(pre);
+    const inside = screen.getByTestId("decision-question-next");
+
+    fireEvent.keyDown(outside, { key: "ArrowRight" });
+    fireEvent.keyDown(pre, { key: "ArrowRight" });
+    fireEvent.keyDown(inside, { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(inside, { key: "ArrowRight", isComposing: true });
+    expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(0);
+
+    fireEvent.keyDown(inside, { key: "ArrowRight" });
+    expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(1);
+    outside.remove();
+  });
+
+  it("takes a loaded question off screen as soon as it steps away", async () => {
+    openView(["qa", "qb"], "qa");
+    await screen.findByTestId("decision-question-content");
+    getQuestionContent.mockImplementation(() => new Promise(() => {}));
+    fireEvent.click(screen.getByTestId("decision-question-next"));
+    await waitFor(() => expect(getQuestionContent).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("decision-question-content")).toBeNull();
   });
 
   it("never shows a read that lands after stepping away", async () => {
@@ -179,42 +221,82 @@ describe("DecisionQuestionDialog", () => {
     await waitFor(() => expect(pending).toHaveLength(1));
     fireEvent.click(screen.getByTestId("decision-question-next"));
     await waitFor(() => expect(pending).toHaveLength(2));
+    fireEvent.click(screen.getByTestId("decision-question-previous"));
+    await waitFor(() => expect(pending).toHaveLength(3));
 
-    await act(async () => pending[0]!({ result: "read", question: QUESTIONS.qa! }));
-    expect(screen.queryByTestId("decision-question-content")).toBeNull();
-
+    // The first read of q-7 lands last, with an older thread than the fresh one.
+    await act(async () =>
+      pending[2]!({ result: "read", question: content("qa", 7, { context: "Fresh notes" }) })
+    );
     await act(async () => pending[1]!({ result: "read", question: QUESTIONS.qb! }));
-    expect(screen.getByRole("dialog").textContent).toContain("q-8");
+    await act(async () =>
+      pending[0]!({ result: "read", question: content("qa", 7, { context: "Stale notes" }) })
+    );
+    const body = screen.getByTestId("decision-question-content");
+    expect(body.textContent).toContain("Fresh notes");
+    expect(body.textContent).not.toContain("Stale notes");
+  });
+
+  it("keeps the newest of two overlapping reads of one question", async () => {
+    openView(["qa"], "qa");
+    await screen.findByTestId("decision-question-content");
+    const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
+    getQuestionContent.mockImplementation(
+      () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+    );
+    act(() => pushPane("t1"));
+    act(() => pushPane("t1"));
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    await act(async () =>
+      pending[1]!({ result: "read", question: content("qa", 7, { context: "Newer notes" }) })
+    );
+    await act(async () =>
+      pending[0]!({ result: "read", question: content("qa", 7, { context: "Older notes" }) })
+    );
+    const body = screen.getByTestId("decision-question-content");
+    expect(body.textContent).toContain("Newer notes");
+    expect(body.textContent).not.toContain("Older notes");
   });
 
   it("reads again when the pane's state moves, so a new answer shows", async () => {
     openView(["qa"], "qa");
     await screen.findByTestId("decision-question-content");
     expect(getQuestionContent).toHaveBeenCalledTimes(1);
-    act(() => {
-      for (const listener of paneListeners) {
-        listener({
-          terminalId: "t2",
-          openQuestions: [],
-          waitingAnswers: [],
-          needsAttention: [],
-          revision: 2,
-        });
-      }
-    });
+    act(() => pushPane("t2"));
     expect(getQuestionContent).toHaveBeenCalledTimes(1);
-    act(() => {
-      for (const listener of paneListeners) {
-        listener({
-          terminalId: "t1",
-          openQuestions: [],
-          waitingAnswers: [],
-          needsAttention: [],
-          revision: 2,
-        });
-      }
+
+    getQuestionContent.mockResolvedValue({
+      result: "read",
+      question: content("qa", 7, { context: "After the answer" }),
     });
-    expect(getQuestionContent).toHaveBeenCalledTimes(2);
+    act(() => pushPane("t1"));
+    await screen.findByText("After the answer");
+  });
+
+  it("reads again while open, for follow-ups the pane's state doesn't show", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      openView(["qa"], "qa");
+      await screen.findByTestId("decision-question-content");
+      getQuestionContent.mockResolvedValue({
+        result: "read",
+        question: content("qa", 7, { context: "With a follow-up" }),
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(20_000);
+      });
+      await screen.findByText("With a follow-up");
+
+      act(() => useDecisionsQuestionViewStore.getState().close());
+      const calls = getQuestionContent.mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(getQuestionContent.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says why a question can't be read, and offers a retry when it may come back", async () => {
@@ -224,6 +306,47 @@ describe("DecisionQuestionDialog", () => {
     expect(notice.textContent).not.toContain("secret");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByTestId("decision-question-content");
+  });
+
+  it.each([
+    ["not-running", true],
+    ["off", false],
+    ["not-found", false],
+    ["unreadable", false],
+  ] as const)(
+    "a %s read shows a notice, with Retry only when it can recover",
+    async (result, retry) => {
+      getQuestionContent.mockResolvedValueOnce({ result });
+      openView(["qa"], "qa");
+      await screen.findByTestId("decision-question-unavailable");
+      expect(screen.queryByTestId("decision-question-content")).toBeNull();
+      const button = screen.queryByRole("button", { name: "Retry" });
+      expect(button !== null).toBe(retry);
+      if (button !== null) {
+        fireEvent.click(button);
+        await screen.findByTestId("decision-question-content");
+      }
+    }
+  );
+
+  it("drops a read still out when it closes, and opens again on a fresh one", async () => {
+    let resolveOld: (result: DecisionQuestionContentResult) => void = () => {};
+    getQuestionContent.mockImplementationOnce(
+      () => new Promise<DecisionQuestionContentResult>((resolve) => (resolveOld = resolve))
+    );
+    openView(["qa"], "qa");
+    await waitFor(() => expect(getQuestionContent).toHaveBeenCalledTimes(1));
+    act(() => useDecisionsQuestionViewStore.getState().close());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(paneListeners).toHaveLength(0);
+
+    getQuestionContent.mockImplementationOnce(() => new Promise(() => {}));
+    openView(["qa"], "qa");
+    await waitFor(() => expect(getQuestionContent).toHaveBeenCalledTimes(2));
+    await act(async () =>
+      resolveOld({ result: "read", question: content("qa", 7, { context: "Old read" }) })
+    );
+    expect(screen.queryByText("Old read")).toBeNull();
   });
 
   it("closes on Escape", async () => {

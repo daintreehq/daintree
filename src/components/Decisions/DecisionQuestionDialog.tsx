@@ -32,6 +32,12 @@ import {
 /** A pane's Decisions chip, where the close returns while it still shows. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
 
+/** This view's surface, which a stepping key has to come from. */
+const DIALOG = '[data-testid="decision-question-dialog"]';
+
+/** While open, how often the question is read again for follow-ups the pane's state doesn't show. */
+const REREAD_MS = 15_000;
+
 type Read = DecisionQuestionContentResult | { result: "failed" };
 
 /** One read, tagged with what it was for, so a late answer never shows under another question. */
@@ -246,15 +252,16 @@ export function DecisionQuestionDialog() {
     if (!isOpen || !on || terminalId === null || questionId === null) return;
     const thisKey = readKey(terminalId, questionId);
     let live = true;
+    // Reads can land out of order; only the newest one started may paint.
+    let latest = 0;
     const read = () => {
-      decisionsClient.getQuestionContent(terminalId, questionId).then(
-        (result) => {
-          if (live) setTagged({ key: thisKey, read: result });
-        },
-        () => {
-          // Never the error itself: it could carry what the question says.
-          if (live) setTagged({ key: thisKey, read: { result: "failed" } });
-        }
+      const seq = ++latest;
+      const accept = (result: Read) => {
+        if (live && seq === latest) setTagged({ key: thisKey, read: result });
+      };
+      decisionsClient.getQuestionContent(terminalId, questionId).then(accept, () =>
+        // Never the error itself: it could carry what the question says.
+        accept({ result: "failed" })
       );
     };
     read();
@@ -262,9 +269,12 @@ export function DecisionQuestionDialog() {
     const off = decisionsClient.onPaneState((state) => {
       if (state.terminalId === terminalId) read();
     });
+    // A follow-up can change the thread without moving the pane's state.
+    const timer = setInterval(read, REREAD_MS);
     return () => {
       live = false;
       off();
+      clearInterval(timer);
     };
   }, [isOpen, on, terminalId, questionId, attempt]);
 
@@ -302,9 +312,9 @@ export function DecisionQuestionDialog() {
       if (event.isComposing || event.defaultPrevented) return;
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const target = event.target;
-      if (target instanceof HTMLElement) {
-        if (target.isContentEditable || target.closest("input, textarea, select, pre")) return;
-      }
+      // Only while focus is in this dialog: another modal over it keeps its own arrows.
+      if (!(target instanceof HTMLElement) || target.closest(DIALOG) === null) return;
+      if (target.isContentEditable || target.closest("input, textarea, select, pre")) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       goTo(event.key === "ArrowLeft" ? -1 : 1);

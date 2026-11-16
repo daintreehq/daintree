@@ -12,9 +12,13 @@ describe("decisionsQuestionViewStore", () => {
     });
   });
 
-  it("ignores a question that isn't listed", () => {
-    useDecisionsQuestionViewStore.getState().open("t1", ["a"], "z");
-    expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+  it("ignores a question that isn't listed, leaving an open view as it was", () => {
+    const store = useDecisionsQuestionViewStore;
+    store.getState().open("t1", ["a", "b"], "b");
+    const before = store.getState().request;
+    store.getState().open("t2", ["x"], "z");
+    expect(store.getState().isOpen).toBe(true);
+    expect(store.getState().request).toBe(before);
   });
 
   it("steps within the list and stops at either end", () => {
@@ -30,9 +34,13 @@ describe("decisionsQuestionViewStore", () => {
 
   it("keeps the request through the close, so the closing view keeps its place", () => {
     const store = useDecisionsQuestionViewStore;
-    store.getState().open("t1", ["a"], "a");
+    store.getState().open("t1", ["a", "b"], "b");
     store.getState().close();
     expect(store.getState().isOpen).toBe(false);
-    expect(store.getState().request?.questionIds).toEqual(["a"]);
+    expect(store.getState().request).toEqual({
+      terminalId: "t1",
+      questionIds: ["a", "b"],
+      index: 1,
+    });
   });
 });

@@ -42,7 +42,10 @@ function message(over: Partial<DecisionThreadMessage> = {}): DecisionThreadMessa
 
 describe("decisionQuestionModel", () => {
   it("names a choice by its label when chosen, else the option's, else its id", () => {
-    const options = [{ id: "b", label: "Option B", description: null }];
+    const options = [
+      { id: "a", label: "Renamed A", description: null },
+      { id: "b", label: "Option B", description: null },
+    ];
     const labels = choiceLabels(
       answer({
         choices: [
@@ -67,12 +70,26 @@ describe("decisionQuestionModel", () => {
       threadEntryHeading({ type: "expired", entryId: "e", sentAt: "2026-11-02T10:00:00.000Z" }),
     ]);
     expect(headings.size).toBe(7);
+    expect(threadEntryHeading(message({ from: "person" }))).not.toBe(
+      threadEntryHeading(message({ from: "agent" }))
+    );
+    // A confirmation of the model's answer reads as one even when it also corrects.
+    expect(threadEntryHeading(answer({ confirmsModel: true, correction: true }))).toBe(
+      threadEntryHeading(answer({ confirmsModel: true }))
+    );
+    // The model's own answer is never attributed to a person.
+    expect(threadEntryHeading(answer({ from: "model", confirmsModel: true }))).toBe(
+      threadEntryHeading(answer({ from: "model" }))
+    );
   });
 
   it("says why an entry has nothing to read, and nothing when it does", () => {
     expect(emptyEntryText(answer({ text: "Yes" }))).toBeNull();
     expect(emptyEntryText(answer({ choices: [{ id: "a", label: "A" }] }))).toBeNull();
-    expect(emptyEntryText(message({ unreadable: true, text: null }))).not.toBeNull();
+    // Unreadable wins over words that may be left over, and reads differently from an empty entry.
+    const unreadable = emptyEntryText(message({ unreadable: true, text: "leftover" }));
+    expect(unreadable).not.toBeNull();
+    expect(unreadable).not.toBe(emptyEntryText(message({ text: null })));
     const imagesOnly = emptyEntryText(
       message({
         text: null,

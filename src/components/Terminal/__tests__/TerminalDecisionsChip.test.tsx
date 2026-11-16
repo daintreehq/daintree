@@ -250,22 +250,75 @@ describe("TerminalDecisionsChip", () => {
     it("never shows a line that arrives after the dropdown closed", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       let resolve: (value: DecisionQuestionSummariesResult) => void = () => {};
-      getQuestionSummaries.mockReturnValue(new Promise((r) => (resolve = r)));
+      getQuestionSummaries.mockReturnValueOnce(new Promise((r) => (resolve = r)));
       render(<TerminalDecisionsChip terminalId="t1" />);
       const chip = await screen.findByTestId("terminal-decisions-chip");
       fireEvent.click(chip);
       await waitFor(() => expect(getQuestionSummaries).toHaveBeenCalledTimes(1));
       fireEvent.click(chip);
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+
+      getQuestionSummaries.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(chip);
+      await waitFor(() => expect(getQuestionSummaries).toHaveBeenCalledTimes(2));
       await act(async () => {
         resolve({
           result: "read",
           summaries: [{ questionId: "q42", result: "read", line: "Late line" }],
         });
       });
-      getQuestionSummaries.mockResolvedValue({ result: "not-running" });
-      fireEvent.click(chip);
-      await act(async () => {});
+      expect(screen.getByTestId("popover-content")).toBeTruthy();
       expect(screen.queryByText("Late line")).toBeNull();
+    });
+
+    it("reads a long list in batches the bridge accepts, and names rows from every batch", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      const many = Array.from({ length: 70 }, (_, i) => ({
+        questionId: `q${i + 1}`,
+        alias: i + 1,
+        status: "open" as const,
+        askedAt: "2026-11-02T10:00:00.000Z",
+        expiresAt: null,
+      }));
+      getPaneState.mockResolvedValue(paneState({ openQuestions: many }));
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      await waitFor(() =>
+        expect(screen.getAllByTestId("terminal-decisions-row-line")).toHaveLength(70)
+      );
+      const asked = getQuestionSummaries.mock.calls.map(([payload]) => payload.questionIds);
+      expect(asked.every((ids) => ids.length <= 64)).toBe(true);
+      expect(asked.flat().sort()).toEqual(many.map((q) => q.questionId).sort());
+    });
+
+    it.each([
+      [
+        "a line-less summary",
+        { result: "read", summaries: [{ questionId: "q42", result: "read", line: null }] },
+      ],
+      ["Decisions not running", { result: "not-running" }],
+      ["Decisions off", { result: "off" }],
+    ] as const)("keeps rows openable by alias with %s", async (_name, result) => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getQuestionSummaries.mockResolvedValue(result as DecisionQuestionSummariesResult);
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      await act(async () => {});
+      expect(screen.queryByTestId("terminal-decisions-row-line")).toBeNull();
+      fireEvent.click(row);
+      expect(useDecisionsQuestionViewStore.getState().request?.questionIds).toEqual(["q42"]);
+    });
+
+    it("keeps rows openable when the read fails", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getQuestionSummaries.mockRejectedValue(new Error("bridge gone"));
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      await act(async () => {});
+      fireEvent.click(row);
+      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true);
     });
 
     it("opens the chosen question with every listed question to step through", async () => {
