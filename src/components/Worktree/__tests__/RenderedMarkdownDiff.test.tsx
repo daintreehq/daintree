@@ -33,7 +33,16 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-vi.mock("@/hooks/useScopedSelectAll", () => ({ useScopedSelectAll: () => {} }));
+// The chord itself is the hook's business; what this view owes it is the
+// callback that puts every block in the DOM before the selection is made.
+const { selectAll } = vi.hoisted(() => ({
+  selectAll: { beforeSelect: undefined as (() => void) | undefined },
+}));
+vi.mock("@/hooks/useScopedSelectAll", () => ({
+  useScopedSelectAll: (_ref: unknown, _enabled: unknown, _scope: unknown, before?: () => void) => {
+    selectAll.beforeSelect = before;
+  },
+}));
 
 vi.mock("@/components/ui/EmptyState", () => ({
   EmptyState: (props: { title: string; description?: string }) => (
@@ -780,5 +789,145 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(blockKinds(container)).toContain("removed");
     expect(visibleText(container)).toContain("Removed paragraph 400");
+  });
+});
+
+describe("RenderedMarkdownDiff staged mounting", () => {
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrame: number;
+
+  beforeEach(() => {
+    frames = new Map();
+    nextFrame = 1;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    return () => vi.restoreAllMocks();
+  });
+
+  /** Run every queued frame, and the frames those schedule, until none is left. */
+  function drainFrames(limit = 1000) {
+    let ran = 0;
+    while (frames.size > 0) {
+      if (++ran > limit) throw new Error("frames never settled");
+      const [id, callback] = frames.entries().next().value!;
+      frames.delete(id);
+      act(() => callback(performance.now()));
+    }
+    return ran;
+  }
+
+  function runOneFrame() {
+    const [id, callback] = frames.entries().next().value!;
+    frames.delete(id);
+    act(() => callback(performance.now()));
+  }
+
+  function pendingCount(container: HTMLElement): number {
+    return container.querySelectorAll(".rendered-markdown-diff__pending").length;
+  }
+
+  function addedDocument(count: number) {
+    const paragraphs = Array.from({ length: count }, (_, i) => `Added paragraph ${i + 1}.`);
+    const lines = paragraphs.flatMap((line, i) => (i === 0 ? [line] : ["", line]));
+    const diff = patch([`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]);
+    return { diff, newSource: lines.join("\n") + "\n" };
+  }
+
+  it("mounts a long document a slice at a time, with every change's frame in place", () => {
+    const { diff, newSource } = addedDocument(80);
+    const { container } = renderDiff(diff, newSource, { status: "added" });
+
+    const changes = container.querySelectorAll("[data-change-index]").length;
+    expect(changes).toBeGreaterThan(0);
+    const firstPending = pendingCount(container);
+    expect(firstPending).toBeGreaterThan(0);
+    expect(firstPending).toBeLessThan(changes);
+    // Frames stand in for every change from the first commit, so the stepper
+    // can land on any of them.
+    expect(container.querySelectorAll("[data-block-kind]").length).toBe(changes);
+
+    runOneFrame();
+    expect(pendingCount(container)).toBeLessThan(firstPending);
+
+    expect(drainFrames()).toBeGreaterThan(1);
+    expect(pendingCount(container)).toBe(0);
+    expect(visibleText(container)).toContain("Added paragraph 80.");
+  });
+
+  it("renders a short document whole in its first commit", () => {
+    const { container } = renderDiff(EDITED_DIFF, EDITED_SOURCE);
+    expect(pendingCount(container)).toBe(0);
+    expect(frames.size).toBe(0);
+  });
+
+  it("stages the blocks a fold reveals without unmounting the ones already shown", () => {
+    const { diff, newSource } = documentWithUnchangedRun(120);
+    const { container } = renderDiff(diff, newSource);
+    drainFrames();
+    expect(pendingCount(container)).toBe(0);
+    const shown = container.querySelector('[data-block-kind="unchanged"] p');
+
+    act(() => {
+      container
+        .querySelector(".rendered-markdown-diff__fold")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.querySelectorAll('[data-block-kind="unchanged"]').length).toBe(120);
+    expect(pendingCount(container)).toBeGreaterThan(0);
+    // The block that was already on screen is the same node, not a placeholder.
+    expect(container.querySelector('[data-block-kind="unchanged"] p')).toBe(shown);
+
+    drainFrames();
+    expect(pendingCount(container)).toBe(0);
+    expect(visibleText(container)).toContain("Untouched paragraph 60.");
+  });
+
+  it("puts every block in the DOM before a Select All is made", () => {
+    const { diff, newSource } = addedDocument(80);
+    const { container } = renderDiff(diff, newSource, { status: "added" });
+    expect(pendingCount(container)).toBeGreaterThan(0);
+
+    act(() => selectAll.beforeSelect?.());
+
+    expect(pendingCount(container)).toBe(0);
+    expect(visibleText(container)).toContain("Added paragraph 80.");
+  });
+
+  it("starts a new document over rather than inheriting the last one's progress", () => {
+    const first = addedDocument(80);
+    const view = renderDiff(first.diff, first.newSource, { status: "added" });
+    drainFrames();
+    expect(pendingCount(view.container)).toBe(0);
+
+    const second = addedDocument(90);
+    view.rerender(
+      <RenderedMarkdownDiff
+        diff={second.diff}
+        newSource={second.newSource}
+        status="added"
+        filePath={FILE}
+        rootPath={ROOT}
+        attemptKey="attempt-2"
+        requestKey="pane-1"
+      />
+    );
+    expect(pendingCount(view.container)).toBeGreaterThan(0);
+    drainFrames();
+    expect(pendingCount(view.container)).toBe(0);
+  });
+
+  it("stops staging when it unmounts", () => {
+    const { diff, newSource } = addedDocument(80);
+    const view = renderDiff(diff, newSource, { status: "added" });
+    expect(frames.size).toBe(1);
+    view.unmount();
+    expect(frames.size).toBe(0);
   });
 });

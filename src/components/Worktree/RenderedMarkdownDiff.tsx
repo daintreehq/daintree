@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -32,6 +33,7 @@ import {
   type TextRange,
 } from "./markdownBlockDiff";
 import { RenderedMarkdownDiffSkeleton } from "./RenderedMarkdownDiffSkeleton";
+import { useStagedMarkdownBlocks, type StagedMarkdownUnit } from "./useStagedMarkdownBlocks";
 import "@/components/Markdown/MarkdownDocument.css";
 import "./RenderedMarkdownDiff.css";
 
@@ -165,6 +167,67 @@ function toSections(changes: readonly MarkdownBlockChange[]): {
     sections.push({ kind: "change", index: changeCount++, change });
   }
   return { sections, changeCount };
+}
+
+/** The indices of a run's blocks that are on the page: all of them, or the fold's two edges. */
+function shownRunIndices(length: number, expanded: boolean): number[] {
+  const all = Array.from({ length }, (_, index) => index);
+  if (expanded || length <= UNCHANGED_RUN_LIMIT) return all;
+  return [...all.slice(0, UNCHANGED_CONTEXT), ...all.slice(length - UNCHANGED_CONTEXT)];
+}
+
+function changeUnitKey(index: number): string {
+  return `change-${index}`;
+}
+
+function runUnitKey(runId: number, index: number): string {
+  return `run-${runId}-${index}`;
+}
+
+/** What a block parses: its source, plus the definitions appended when it cites one. */
+function blockChars(block: MarkdownBlock, definitions: string): number {
+  return block.source.length + (block.referenceIds.length ? definitions.length : 0);
+}
+
+/** Every unit on the page, in document order, for the stage to admit. */
+function stageUnits(
+  sections: readonly Section[],
+  expandedRuns: ReadonlySet<number>,
+  oldDefinitions: string,
+  newDefinitions: string
+): StagedMarkdownUnit[] {
+  const units: StagedMarkdownUnit[] = [];
+  for (const section of sections) {
+    if (section.kind === "change") {
+      const { change } = section;
+      units.push(
+        change.kind === "modified"
+          ? {
+              key: changeUnitKey(section.index),
+              pipelines: 2,
+              chars:
+                blockChars(change.old, oldDefinitions) + blockChars(change.new, newDefinitions),
+            }
+          : {
+              key: changeUnitKey(section.index),
+              pipelines: 1,
+              chars: blockChars(
+                change.block,
+                change.kind === "removed" ? oldDefinitions : newDefinitions
+              ),
+            }
+      );
+      continue;
+    }
+    for (const index of shownRunIndices(section.blocks.length, expandedRuns.has(section.id))) {
+      units.push({
+        key: runUnitKey(section.id, index),
+        pipelines: 1,
+        chars: blockChars(section.blocks[index]!, newDefinitions),
+      });
+    }
+  }
+  return units;
 }
 
 type BlockKind = "unchanged" | "added" | "removed";
@@ -315,6 +378,7 @@ function DiffBlock({
   ranges,
   expectedText,
   whole,
+  pending,
   blockRef,
   tabIndex,
   components,
@@ -334,6 +398,13 @@ function DiffBlock({
    * has a partner and only parts of it actually moved.
    */
   whole: boolean;
+  /**
+   * Not mounted yet (see `useStagedMarkdownBlocks`): the block keeps its frame,
+   * so focus, navigation and the page's height survive, and holds its source as
+   * invisible plain text, which lays out at roughly the rendered height without
+   * a parse.
+   */
+  pending: boolean;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
@@ -358,17 +429,23 @@ function DiffBlock({
       data-whole={whole ? "true" : "false"}
     >
       {kind !== "unchanged" && <span className="sr-only">{BLOCK_LABEL[kind]}</span>}
-      <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={rehypePlugins}
-          urlTransform={urlTransform}
-          components={components}
-          skipHtml
-        >
-          {content}
-        </ReactMarkdown>
-      </MarkdownTableLabelPrefix>
+      {pending ? (
+        <div className="rendered-markdown-diff__pending" aria-hidden="true">
+          {source}
+        </div>
+      ) : (
+        <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={rehypePlugins}
+            urlTransform={urlTransform}
+            components={components}
+            skipHtml
+          >
+            {content}
+          </ReactMarkdown>
+        </MarkdownTableLabelPrefix>
+      )}
     </div>
   );
 }
@@ -389,7 +466,12 @@ export function RenderedMarkdownDiff({
   onChangeCount,
 }: RenderedMarkdownDiffProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useScopedSelectAll(rootRef);
+  // Blocks mount in slices, so a Select All has to put the rest in the DOM
+  // first or the copy would stop at whatever had been reached.
+  const [stageFlush, setStageFlush] = useState(0);
+  useScopedSelectAll(rootRef, true, "surface", () => {
+    flushSync(() => setStageFlush((count) => count + 1));
+  });
 
   // Reconstruction, parsing and both LCS passes run in exactly one of two
   // places. A small document builds here, memoized because the React Compiler
@@ -468,6 +550,22 @@ export function RenderedMarkdownDiff({
   // historical blob would need an IPC this view deliberately avoids.
   const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
 
+  // One block is one unified pipeline. A long document mounts a budgeted slice
+  // per frame rather than every changed and expanded block in one commit.
+  const units = useMemo(
+    () =>
+      result?.ok
+        ? stageUnits(
+            sections,
+            expandedRuns,
+            result.model.oldDefinitions,
+            result.model.newDefinitions
+          )
+        : [],
+    [result, sections, expandedRuns]
+  );
+  const admitted = useStagedMarkdownBlocks(units, result, stageFlush);
+
   const fontStyle: MarkdownFontStyle | undefined =
     fontSize === undefined
       ? undefined
@@ -513,6 +611,7 @@ export function RenderedMarkdownDiff({
             >
               <BlockChange
                 change={section.change}
+                pending={!admitted.has(changeUnitKey(section.index))}
                 oldDefinitions={result.model.oldDefinitions}
                 newDefinitions={result.model.newDefinitions}
                 components={components}
@@ -522,6 +621,8 @@ export function RenderedMarkdownDiff({
           ) : (
             <UnchangedRun
               key={`unchanged-${section.id}`}
+              runId={section.id}
+              admitted={admitted}
               blocks={section.blocks}
               definitions={result.model.newDefinitions}
               expanded={expandedRuns.has(section.id)}
@@ -546,6 +647,8 @@ export function RenderedMarkdownDiff({
  * they were heading for back off the screen.
  */
 function UnchangedRun({
+  runId,
+  admitted,
   blocks,
   definitions,
   expanded,
@@ -553,6 +656,9 @@ function UnchangedRun({
   components,
   urlTransform,
 }: {
+  runId: number;
+  /** The stage's mounted units; a block outside it renders its placeholder. */
+  admitted: ReadonlySet<string>;
   blocks: readonly MarkdownBlock[];
   /** The new side's reference definitions, for the blocks that cite one. */
   definitions: string;
@@ -573,54 +679,52 @@ function UnchangedRun({
   }, [expanded]);
 
   const shared = { components, urlTransform, kind: "unchanged" as const, ranges: [], whole: false };
-  const render = (block: MarkdownBlock, key: string, reveal = false) => (
-    <DiffBlock
-      key={key}
-      blockRef={reveal ? revealedRef : undefined}
-      tabIndex={reveal ? -1 : undefined}
-      source={block.source}
-      // Every block renders on its own, so one citing `[docs][d]` needs the
-      // definition appended or it renders the literal brackets and loses its
-      // link. Only the blocks that actually cite one pay for it.
-      definitions={block.referenceIds.length ? definitions : ""}
-      expectedText={block.text}
-      {...shared}
-    />
-  );
-
-  if (expanded || blocks.length <= UNCHANGED_RUN_LIMIT) {
+  const render = (index: number) => {
+    const block = blocks[index]!;
+    const reveal = expanded && index === UNCHANGED_CONTEXT;
     return (
-      <>
-        {blocks.map((block, index) =>
-          render(block, `block-${index}`, expanded && index === UNCHANGED_CONTEXT)
-        )}
-      </>
+      <DiffBlock
+        // Keyed by position in the run, in one flat list with the fold, so
+        // opening it keeps the edge blocks mounted instead of parsing them again.
+        key={`block-${index}`}
+        blockRef={reveal ? revealedRef : undefined}
+        tabIndex={reveal ? -1 : undefined}
+        pending={!admitted.has(runUnitKey(runId, index))}
+        source={block.source}
+        // Every block renders on its own, so one citing `[docs][d]` needs the
+        // definition appended or it renders the literal brackets and loses its
+        // link. Only the blocks that actually cite one pay for it.
+        definitions={block.referenceIds.length ? definitions : ""}
+        expectedText={block.text}
+        {...shared}
+      />
     );
-  }
+  };
+
+  const items = shownRunIndices(blocks.length, expanded).map(render);
+  if (items.length === blocks.length) return <>{items}</>;
 
   const hiddenCount = blocks.length - UNCHANGED_CONTEXT * 2;
-  return (
-    <>
-      {blocks.slice(0, UNCHANGED_CONTEXT).map((block, index) => render(block, `lead-${index}`))}
-      <button
-        type="button"
-        onClick={onExpand}
-        className="rendered-markdown-diff__fold"
-        aria-expanded={false}
-      >
-        {/*
-          "Expand", not "Show", and "unchanged", not "hidden": the Unified and
-          Split layouts of this same panel are one segmented-control click away
-          and their hunk expanders already say `Expand N lines` and
-          `N unchanged lines hidden`. Same panel, same gesture, same verb.
-        */}
-        {`Expand ${hiddenCount} unchanged ${hiddenCount === 1 ? "block" : "blocks"}`}
-      </button>
-      {blocks
-        .slice(blocks.length - UNCHANGED_CONTEXT)
-        .map((block, index) => render(block, `trail-${index}`))}
-    </>
+  items.splice(
+    UNCHANGED_CONTEXT,
+    0,
+    <button
+      key="fold"
+      type="button"
+      onClick={onExpand}
+      className="rendered-markdown-diff__fold"
+      aria-expanded={false}
+    >
+      {/*
+        "Expand", not "Show", and "unchanged", not "hidden": the Unified and
+        Split layouts of this same panel are one segmented-control click away
+        and their hunk expanders already say `Expand N lines` and
+        `N unchanged lines hidden`. Same panel, same gesture, same verb.
+      */}
+      {`Expand ${hiddenCount} unchanged ${hiddenCount === 1 ? "block" : "blocks"}`}
+    </button>
   );
+  return <>{items}</>;
 }
 
 /** Keys that scroll a focused table or activate something in it. */
@@ -754,18 +858,21 @@ function useLinkedTableScroll(pairRef: RefObject<HTMLDivElement | null>, content
 
 function BlockChange({
   change,
+  pending,
   oldDefinitions,
   newDefinitions,
   components,
   urlTransform,
 }: {
   change: MarkdownBlockChange;
+  /** A pair mounts both halves together, so its table linking sees both tables. */
+  pending: boolean;
   oldDefinitions: string;
   newDefinitions: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
-  const shared = { components, urlTransform };
+  const shared = { components, urlTransform, pending };
   if (change.kind === "modified") {
     return (
       <ModifiedPair
@@ -797,20 +904,23 @@ function BlockChange({
 
 function ModifiedPair({
   change,
+  pending,
   oldDefinitions,
   newDefinitions,
   components,
   urlTransform,
 }: {
   change: Extract<MarkdownBlockChange, { kind: "modified" }>;
+  pending: boolean;
   oldDefinitions: string;
   newDefinitions: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
   const pairRef = useRef<HTMLDivElement>(null);
-  useLinkedTableScroll(pairRef, `${change.old.source}\n${change.new.source}`);
-  const shared = { components, urlTransform };
+  // Keyed on mounting too: a pending pair has no tables to link yet.
+  useLinkedTableScroll(pairRef, pending ? "" : `${change.old.source}\n${change.new.source}`);
+  const shared = { components, urlTransform, pending };
   // Removed then added, GitHub's ordering: the reader sees what the block
   // said before the replacement that follows it.
   return (
