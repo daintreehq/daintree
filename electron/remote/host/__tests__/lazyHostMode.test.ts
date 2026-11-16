@@ -21,7 +21,9 @@ function realStatus(): HostModeStatus {
     advertise: true,
     socketPath: "/run/host.sock",
     listening: true,
-    attachedClients: [{ clientId: "c1", clientName: "laptop", connectedAt: 1, drivingProjectIds: [] }],
+    attachedClients: [
+      { clientId: "c1", clientName: "laptop", connectedAt: 1, drivingProjectIds: [] },
+    ],
     rows: [{ id: "socket", state: "ok", detail: "Listening" }],
   };
 }

@@ -109,7 +109,11 @@ describe("startHostRole", () => {
   });
 
   it("uses the location it is given, and reaps nothing when none resolves", async () => {
-    const given = { dir: "/tmp/h", socketPath: "/tmp/h/host.sock", discoveryPath: "/tmp/h/host.json" };
+    const given = {
+      dir: "/tmp/h",
+      socketPath: "/tmp/h/host.sock",
+      discoveryPath: "/tmp/h/host.json",
+    };
     await startHostRole({ hostMode: true, hostLocation: given }, addTeardown);
     expect(m.reapOrphanedAdvert).toHaveBeenCalledWith("/tmp/h");
     expect(m.createHostModeService).toHaveBeenCalledWith({ location: given });
