@@ -403,6 +403,31 @@ describe("initializeStore", () => {
       expect(store.get("_schemaVersion" as never)).toBe(5);
     });
 
+    it("drops the seed when a whole-store assignment is what lazily initializes the store", async () => {
+      const previousUserData = process.env.DAINTREE_USER_DATA;
+      process.env.DAINTREE_USER_DATA = tempDir;
+      vi.resetModules();
+      try {
+        // storeOptions reads DAINTREE_USER_DATA at module load, so the lazy
+        // path needs a fresh module instance pointed at the temp dir.
+        const fresh = await import("../store.js");
+        // First boot writes every default, so the next construction leaves the
+        // bytes alone and seeds the cache.
+        fresh.initializeStore();
+        const replacement = { ...fresh._peekStoreInstance()!.store, _schemaVersion: 99 };
+        fresh._resetStoreInstance();
+
+        (fresh.store as unknown as { store: unknown }).store = replacement;
+
+        expect(fresh.store.get("_schemaVersion")).toBe(99);
+        fresh._resetStoreInstance();
+      } finally {
+        if (previousUserData === undefined) delete process.env.DAINTREE_USER_DATA;
+        else process.env.DAINTREE_USER_DATA = previousUserData;
+        vi.resetModules();
+      }
+    });
+
     it("does not seed when conf merges new defaults during construction", () => {
       const configPath = path.join(tempDir, "config.json");
       fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");

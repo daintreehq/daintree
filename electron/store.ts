@@ -1836,8 +1836,9 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
       return bound;
     },
     set(_target, prop, value) {
-      invalidate();
+      // Resolve first: a lazy init seeds the cache, which this write must drop.
       const instance = getInstance();
+      invalidate();
       return Reflect.set(instance as object, prop, value, instance);
     },
     has(_target, prop) {
