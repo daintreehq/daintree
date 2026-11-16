@@ -19,6 +19,14 @@ export interface ProjectAcrossHostsDeps {
    * id never adopts an unavailable local project's identity and state.
    */
   registerProject(projectPath: string, options?: { fresh?: boolean }): Promise<Project>;
+  /**
+   * Change a project's name, emoji or colour on this host (a `color` key set
+   * to undefined clears it), and tell its windows. Never writes the repository.
+   */
+  updateProjectDisplay(
+    projectId: string,
+    updates: Partial<Pick<Project, "name" | "emoji" | "color">>
+  ): Project;
   /** The `id` in a committed `.daintree/project.json`, when there is one. */
   readCommittedProjectId(projectPath: string): Promise<string | null>;
   readInRepoRecipes(projectPath: string): Promise<Array<{ id: string; name: string }>>;

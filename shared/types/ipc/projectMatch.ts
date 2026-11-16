@@ -103,6 +103,16 @@ export type HostCloneSource =
   /** A repository bundle already received on this host, named by its token. */
   | { kind: "bundle"; token: string };
 
+/**
+ * How a project shows itself (never its id), sent with a clone or an open so
+ * the host's copy looks the way the project does where it was asked from.
+ */
+export interface ProjectDisplayIdentity {
+  name: string;
+  emoji: string;
+  color: string | null;
+}
+
 export interface CloneAndOpenPayload {
   opId: string;
   source: HostCloneSource;
@@ -111,6 +121,8 @@ export interface CloneAndOpenPayload {
   options: HostCloneOptions;
   /** An in-repo recipe to run once the project is opened, if the clone has it. */
   setupRecipeId: string | null;
+  /** The source project's identity, which the new copy takes. Absent from older Shells. */
+  display?: ProjectDisplayIdentity;
 }
 
 /** A project on this host, ready to open, and where its branch is. */
@@ -152,6 +164,8 @@ export interface OpenOnHostPayload {
   branchRemoteUrl: string | null;
   /** Open the copy as it is: nothing is fetched into it. */
   navigateOnly?: boolean;
+  /** The source project's identity, filling only what the host's copy still has at its defaults. */
+  display?: ProjectDisplayIdentity;
 }
 
 /**
@@ -196,6 +210,8 @@ export interface CheckOutBranchPayload {
 export interface SourceProjectDescription {
   projectId: string;
   projectName: string;
+  /** The project's name, emoji and colour as this host shows them. Absent from older hosts. */
+  display?: ProjectDisplayIdentity;
   projectPath: string;
   worktreePath: string;
   branch: string | null;

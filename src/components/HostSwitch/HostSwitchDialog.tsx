@@ -564,6 +564,7 @@ export function HostSwitchDialog({
         options: { submodules: source === "remote" && showSubmodules && submodules, depth },
         // A placed worktree carries the recipe itself, so the project's setup isn't asked twice.
         setupRecipeId: placed || recipeId === NO_RECIPE ? null : recipeId,
+        ...(prep.display ? { display: prep.display } : {}),
       },
       "destination"
     );
@@ -584,6 +585,7 @@ export function HostSwitchDialog({
         branch: branchTarget(),
         branchRemoteUrl: branchRemoteUrl(),
         ...(navigateOnly ? { navigateOnly: true } : {}),
+        ...(prep.display ? { display: prep.display } : {}),
       },
       "destination"
     );

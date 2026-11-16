@@ -18,7 +18,26 @@ export interface TestHost {
   focusWorktree: ReturnType<typeof vi.fn>;
   clone: ReturnType<typeof vi.fn>;
   registerProject: ReturnType<typeof vi.fn>;
-  addProject(projectPath: string, id?: string): Project;
+  updateProjectDisplay: ReturnType<typeof vi.fn>;
+  addProject(projectPath: string, id?: string, display?: Partial<ProjectDisplay>): Project;
+}
+
+type ProjectDisplay = Pick<Project, "name" | "emoji" | "color">;
+
+/** The name, emoji and colour a committed `.daintree/project.json` gives, as `addProject` reads them. */
+function readInRepoDisplay(projectPath: string): Partial<ProjectDisplay> {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(projectPath, ".daintree", "project.json"), "utf8")
+    );
+    return {
+      ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+      ...(typeof parsed.emoji === "string" ? { emoji: parsed.emoji } : {}),
+      ...(typeof parsed.color === "string" ? { color: parsed.color } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 let nextId = 1;
@@ -37,12 +56,17 @@ export function createTestHost(root: string, name: string): TestHost {
   const registry = new OperationRegistry({ progressIntervalMs: 0 });
   const homeDir = path.join(root, `${name}-home`);
   fs.mkdirSync(homeDir, { recursive: true });
-  const addProject = (projectPath: string, id = `${name}-p${nextId++}`): Project => {
+  const addProject = (
+    projectPath: string,
+    id = `${name}-p${nextId++}`,
+    display: Partial<ProjectDisplay> = {}
+  ): Project => {
     const project: Project = {
       id,
       path: projectPath,
-      name: path.basename(projectPath),
-      emoji: "🌲",
+      name: display.name ?? path.basename(projectPath),
+      emoji: display.emoji ?? "🌲",
+      ...(display.color ? { color: display.color } : {}),
       lastOpened: Date.now(),
     };
     projects.push(project);
@@ -58,14 +82,27 @@ export function createTestHost(root: string, name: string): TestHost {
   const focusWorktree = vi.fn(async () => {});
   const registerProject = vi.fn(
     async (projectPath: string, _options?: { fresh?: boolean }) =>
-      projects.find((p) => p.path === projectPath) ?? addProject(projectPath)
+      projects.find((p) => p.path === projectPath) ??
+      addProject(projectPath, undefined, readInRepoDisplay(projectPath))
   );
+  const updateProjectDisplay = vi.fn((projectId: string, updates: Partial<ProjectDisplay>) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    if (updates.name !== undefined) project.name = updates.name;
+    if (updates.emoji !== undefined) project.emoji = updates.emoji;
+    if ("color" in updates) {
+      if (updates.color) project.color = updates.color;
+      else delete project.color;
+    }
+    return { ...project };
+  });
   const clone = vi.fn(plainClone);
   const deps: ProjectAcrossHostsDeps = {
     git: testGit,
     listProjects: () => projects,
     getProject: (id) => projects.find((p) => p.id === id) ?? null,
     registerProject,
+    updateProjectDisplay,
     readCommittedProjectId: async () => null,
     readInRepoRecipes: async (projectPath) => {
       const dir = path.join(projectPath, ".daintree", "recipes");
@@ -98,6 +135,7 @@ export function createTestHost(root: string, name: string): TestHost {
     focusWorktree,
     clone,
     registerProject,
+    updateProjectDisplay,
     addProject,
   };
 }

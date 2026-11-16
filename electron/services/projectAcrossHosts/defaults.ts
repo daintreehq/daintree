@@ -2,6 +2,9 @@ import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
 import { projectStore } from "../ProjectStore.js";
+import { notificationService } from "../NotificationService.js";
+import { CHANNELS } from "../../ipc/channels.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 import { getOperationRegistry } from "../operations/index.js";
 import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
@@ -36,6 +39,12 @@ export function createDefaultProjectAcrossHostsDeps(): ProjectAcrossHostsDeps {
       // lived here doesn't lend its approvals to code from another machine.
       await forgetLifecycleApprovals(projectPath);
       return project;
+    },
+    updateProjectDisplay: (projectId, updates) => {
+      const updated = projectStore.updateProject(projectId, updates);
+      broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
+      if (updates.name !== undefined) notificationService.refreshTitles();
+      return updated;
     },
     readCommittedProjectId: async (projectPath) =>
       (await identityFiles.readInRepoProjectIdentity(projectPath)).id ?? null,
