@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { EnvironmentPopover } from "../EnvironmentPopover";
@@ -413,5 +413,60 @@ describe("EnvironmentPopover content", () => {
 
     expect(dialog.textContent).toContain("dt-feature-x");
     expect(screen.queryByRole("button", { name: "Open on its machine" })).toBeNull();
+  });
+});
+
+describe("EnvironmentPopover — what running commands are doing (#17115)", () => {
+  const NOW = 2_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("names the command, which of how many, for how long, and what it has printed", () => {
+    renderPopover({
+      isLifecycleRunning: true,
+      lifecycle: {
+        phase: "setup",
+        state: "running",
+        commandIndex: 1,
+        totalCommands: 3,
+        currentCommand: "npm ci",
+        startedAt: NOW - 20_000,
+        commandStartedAt: NOW - 7_000,
+        output: "added 1200 packages\n",
+      },
+    });
+    const dialog = openPopover();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(dialog.textContent).toContain("Running setup…");
+    expect(dialog.textContent).toContain("Command 2 of 3");
+    expect(dialog.textContent).toContain("7s");
+    expect(screen.getByText("npm ci", { selector: "code" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "added 1200 packages\n"
+    );
+  });
+
+  it("adds nothing for a status check, whose output is the last check's", () => {
+    renderPopover({
+      isLifecycleRunning: true,
+      lifecycle: { phase: "resource-status", state: "running", startedAt: NOW, output: "probe" },
+    });
+    const dialog = openPopover();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(dialog.textContent).not.toContain("No output yet");
+    expect(screen.queryByRole("region", { name: /command output|setup output/i })).toBeNull();
   });
 });

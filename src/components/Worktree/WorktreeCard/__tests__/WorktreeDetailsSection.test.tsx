@@ -3,10 +3,11 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
+import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
@@ -847,5 +848,162 @@ describe("WorktreeDetailsSection forge avatar lookup", () => {
       cwd: authored.path,
       enabled: true,
     });
+  });
+});
+
+describe("WorktreeDetailsSection — what a running lifecycle phase is doing (#17115)", () => {
+  const NOW = 1_000_000;
+
+  function runningSetup(overrides: Partial<WorktreeLifecycleStatus> = {}): WorktreeLifecycleStatus {
+    return {
+      phase: "setup",
+      state: "running",
+      commandIndex: 0,
+      totalCommands: 2,
+      currentCommand: "node scripts/link-shared-node-modules.mjs",
+      startedAt: NOW - 65_000,
+      commandStartedAt: NOW - 42_000,
+      output: "Shared node_modules is behind package-lock.json.\nRefreshing it with npm ci\n",
+      ...overrides,
+    };
+  }
+
+  function renderRunning(status: WorktreeLifecycleStatus, onCardClick = vi.fn()) {
+    render(
+      <div onClick={onCardClick}>
+        <TooltipProvider>
+          <WorktreeDetailsSection
+            {...baseProps}
+            worktree={{ ...baseWorktree, lifecycleStatus: status }}
+            isLifecycleRunning
+            lifecycleLabel={`Running setup: ${status.currentCommand ?? ""}`}
+          />
+        </TooltipProvider>
+      </div>
+    );
+    // Past the gate that keeps a quick run from adding a row at all.
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+  }
+
+  function openDisclosure(details: HTMLDetailsElement) {
+    act(() => {
+      details.open = true;
+      fireEvent(details, new Event("toggle"));
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says which command of how many is running, and for how long, without being opened", () => {
+    renderRunning(runningSetup());
+
+    const row = screen.getByTestId("worktree-lifecycle-run");
+    expect(row.textContent).toContain("Command 1 of 2");
+    expect(row.textContent).toContain("42s");
+
+    // A second at a time: each tick re-arms the next from its own render.
+    for (let second = 0; second < 3; second++) {
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+    }
+    expect(row.textContent).toContain("45s");
+  });
+
+  it("opens onto the command and what it has printed so far", () => {
+    renderRunning(runningSetup());
+
+    openDisclosure(screen.getByTestId("worktree-lifecycle-run").querySelector("details")!);
+
+    expect(
+      screen.getByText("node scripts/link-shared-node-modules.mjs", { selector: "code" })
+    ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "Shared node_modules is behind package-lock.json.\nRefreshing it with npm ci\n"
+    );
+  });
+
+  it("shows a progress bar's latest state, not every state it drew", () => {
+    renderRunning(runningSetup({ output: "fetching\n10%\r55%\r90%\r\n" }));
+
+    openDisclosure(screen.getByTestId("worktree-lifecycle-run").querySelector("details")!);
+
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "fetching\n90%\n"
+    );
+  });
+
+  it("says when the command has printed nothing yet", () => {
+    renderRunning(runningSetup({ output: undefined }));
+
+    openDisclosure(screen.getByTestId("worktree-lifecycle-run").querySelector("details")!);
+
+    expect(screen.getByText("No output yet")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Setup output" })).toBeNull();
+  });
+
+  it("never selects the card when the disclosure is clicked", () => {
+    const onCardClick = vi.fn();
+    renderRunning(runningSetup(), onCardClick);
+
+    fireEvent.click(screen.getByTestId("worktree-lifecycle-run").querySelector("summary")!);
+
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it("adds no row for a status check, which comes and goes on a timer", () => {
+    renderRunning({ phase: "resource-status", state: "running", startedAt: NOW, output: "ok" });
+
+    expect(screen.queryByTestId("worktree-lifecycle-run")).toBeNull();
+  });
+
+  it("adds no row for a setup that is over before the gate opens", () => {
+    render(
+      <TooltipProvider>
+        <WorktreeDetailsSection
+          {...baseProps}
+          worktree={{ ...baseWorktree, lifecycleStatus: runningSetup() }}
+          isLifecycleRunning
+        />
+      </TooltipProvider>
+    );
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(screen.queryByTestId("worktree-lifecycle-run")).toBeNull();
+  });
+
+  it("keeps a successful setup's output in Details, and only there", () => {
+    const succeeded: WorktreeLifecycleStatus = {
+      phase: "setup",
+      state: "success",
+      totalCommands: 2,
+      startedAt: NOW - 90_000,
+      completedAt: NOW - 30_000,
+      output: "Refreshing it with npm ci\nadded 1200 packages\n",
+    };
+    const { unmount } = renderSection({
+      worktree: { ...baseWorktree, lifecycleStatus: succeeded },
+    });
+    expect(screen.queryByText("Setup output")).toBeNull();
+    unmount();
+
+    renderSection({ worktree: { ...baseWorktree, lifecycleStatus: succeeded }, isExpanded: true });
+    const summary = screen.getByText("Setup output").closest("summary")!;
+    openDisclosure(summary.parentElement as HTMLDetailsElement);
+
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "Refreshing it with npm ci\nadded 1200 packages\n"
+    );
   });
 });
