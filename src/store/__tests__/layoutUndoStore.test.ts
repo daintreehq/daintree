@@ -51,7 +51,7 @@ vi.mock("@/clients/appClient", () => ({
   },
 }));
 
-import { useLayoutUndoStore } from "../layoutUndoStore";
+import { selectLayoutPanelIds, useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import { setProjectHomeExitAccessor, setWorktreeSelectionAccessor } from "@/store/storeAccessors";
@@ -1260,5 +1260,31 @@ describe("layoutUndoStore — leaving the project's Home", () => {
 
     expect(usePanelStore.getState().focusedId).toBe("t1");
     expect(exitHome).not.toHaveBeenCalled();
+  });
+});
+
+describe("selectLayoutPanelIds", () => {
+  it("hands back the same set until a write changes which panels are in layout", () => {
+    const t1 = makeTerminal({ location: "grid" });
+    const t2 = makeTerminal({ location: "dock" });
+    const t3 = makeTerminal({ location: "grid" });
+    const ids = selectLayoutPanelIds({ panelsById: { [t1.id]: t1, [t2.id]: t2 } });
+    expect([...ids].sort()).toEqual([t1.id, t2.id].sort());
+
+    const renamed = { [t1.id]: { ...t1, title: "renamed" }, [t2.id]: { ...t2, location: "grid" } };
+    expect(selectLayoutPanelIds({ panelsById: renamed as Record<string, PtyPanelData> })).toBe(ids);
+
+    // Same size, different panels.
+    const swapped = selectLayoutPanelIds({ panelsById: { [t1.id]: t1, [t3.id]: t3 } });
+    expect([...swapped].sort()).toEqual([t1.id, t3.id].sort());
+
+    const trashed = selectLayoutPanelIds({
+      panelsById: { [t1.id]: { ...t1, location: "trash" }, [t3.id]: t3 },
+    });
+    expect([...trashed]).toEqual([t3.id]);
+
+    const grown = selectLayoutPanelIds({ panelsById: { [t1.id]: t1, [t2.id]: t2, [t3.id]: t3 } });
+    expect([...grown].sort()).toEqual([t1.id, t2.id, t3.id].sort());
+    expect([...ids].sort()).toEqual([t1.id, t2.id].sort());
   });
 });

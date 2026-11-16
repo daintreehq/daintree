@@ -6,6 +6,13 @@ import { usePanelStore } from "@/store/panelStore";
 
 type PanelsById = ReturnType<typeof usePanelStore.getState>["panelsById"];
 
+function hasAnyKey(record: Readonly<Record<string, unknown>>): boolean {
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
 /**
  * A drop its pane can't show, because the pane was closed or is in the
  * trash, whether the drop or the close came first. The inbox says so once,
@@ -17,6 +24,12 @@ function reportDropsOutOfSight(
   previous: PanelsById,
   reported: Set<string>
 ): void {
+  // Every panel write lands here, and nearly always nothing is dropped: then
+  // there is nothing to report or forget, and no reported token is still live.
+  if (!hasAnyKey(useHeldComposerSendStore.getState().dropped)) {
+    reported.clear();
+    return;
+  }
   for (const [terminalId, note] of Object.entries(useHeldComposerSendStore.getState().dropped)) {
     const panel = panels[terminalId];
     if (panel !== undefined && panel.location !== "trash") continue;
