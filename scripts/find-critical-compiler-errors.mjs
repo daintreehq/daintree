@@ -37,7 +37,8 @@ const SECTIONS = [
   {
     severity: "Hint",
     label: "Hint (`Todo`)",
-    meaning: "syntax React Compiler doesn't support yet, and the function goes uncompiled all the same",
+    meaning:
+      "syntax React Compiler doesn't support yet, and the function goes uncompiled all the same",
   },
 ];
 
