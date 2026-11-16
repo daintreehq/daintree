@@ -18,7 +18,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   unknownSessionFile,
@@ -34,8 +34,10 @@ const MAX_TREE_PIDS = 256;
 const MAX_CANDIDATES = 8;
 /**
  * Bytes read to find the first record. Codex's opening `session_meta` carries
- * the model's base instructions, about 22 KiB in codex-cli 0.166.
+ * the model's base instructions, about 22 KiB in codex-cli 0.166, so the first
+ * read takes that much and later ones double it up to the cap.
  */
+const SESSION_META_FIRST_READ_BYTES = 32 * 1024;
 const SESSION_META_MAX_BYTES = 256 * 1024;
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -338,6 +340,26 @@ function sameDevice(listed: string, dev: bigint): boolean {
   return BigInt(listed) === dev;
 }
 
+/** The file's first line, or null when it doesn't end inside the cap or the file. */
+async function readFirstLine(handle: FileHandle, size: number): Promise<string | null> {
+  const limit = Math.min(SESSION_META_MAX_BYTES, Math.max(size, 0));
+  let buffer = Buffer.alloc(Math.min(SESSION_META_FIRST_READ_BYTES, limit));
+  let filled = 0;
+  for (;;) {
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
+      if (bytesRead === 0) return null;
+      const newline = buffer.subarray(filled, filled + bytesRead).indexOf(0x0a);
+      if (newline >= 0) return buffer.subarray(0, filled + newline).toString("utf8");
+      filled += bytesRead;
+    }
+    if (buffer.length >= limit) return null;
+    const grown = Buffer.alloc(Math.min(buffer.length * 2, limit));
+    buffer.copy(grown, 0, 0, filled);
+    buffer = grown;
+  }
+}
+
 /**
  * The first record of the file `lsof` saw, read through a descriptor checked
  * to be that same file: the device and inode it listed, a regular file, no
@@ -360,16 +382,7 @@ async function readFirstRecord(candidate: OpenFileRecord): Promise<string | null
   try {
     const stats = await handle.stat({ bigint: true });
     if (!stats.isFile() || stats.ino !== checked.ino || stats.dev !== checked.dev) return null;
-    const buffer = Buffer.alloc(Math.min(SESSION_META_MAX_BYTES, Math.max(Number(stats.size), 0)));
-    let filled = 0;
-    while (filled < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
-    }
-    const newline = buffer.subarray(0, filled).indexOf(0x0a);
-    if (newline < 0) return null;
-    return buffer.subarray(0, newline).toString("utf8");
+    return await readFirstLine(handle, Number(stats.size));
   } finally {
     await handle.close();
   }
