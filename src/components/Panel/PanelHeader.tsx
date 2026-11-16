@@ -1,4 +1,5 @@
 import React, {
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -100,7 +101,6 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
-import { PanelEmojiDialog } from "./PanelEmojiDialog";
 import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
@@ -108,7 +108,7 @@ import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
 import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
-import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   getRegisteredTourIdsSnapshot,
   subscribeToTourRegistry,
@@ -172,6 +172,17 @@ const CONTROL_ICON = "[&_svg]:size-3.5 focus-visible:-outline-offset-2";
  * that same hook, so work that moves focus elsewhere starts after it lands.
  */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
+
+// Loaded on demand: every pane has a header, and these only matter once the
+// overflow menu offers them.
+const MoveToWorktreePicker = lazyWithPreload(
+  () => import("./MoveToWorktreePicker"),
+  (mod) => mod.MoveToWorktreePicker
+);
+const PanelEmojiDialog = lazyWithPreload(
+  () => import("./PanelEmojiDialog"),
+  (mod) => mod.PanelEmojiDialog
+);
 
 /** Space kept between the maximized readout and anything it might meet. */
 const READOUT_CLEARANCE_PX = 12;
@@ -692,6 +703,10 @@ function PanelHeaderComponent({
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
+    // Fetched while the menu is up, so picking the item mounts the picker in
+    // the same frame the menu hands focus over instead of after a chunk load.
+    if (canMoveToWorktree) void MoveToWorktreePicker.preload().catch(() => {});
+    if (chrome.isAgent || displayEmoji) void PanelEmojiDialog.preload().catch(() => {});
     // A menu reopened inside its exit animation never unmounts, so the close
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
@@ -2241,24 +2256,28 @@ function PanelHeaderComponent({
       modal={true}
     >
       {header}
-      {hasOpenedMovePicker && (
-        <MoveToWorktreePicker
-          panelId={id}
-          currentWorktreeId={currentWorktreeId}
-          isOpen={isMovePickerOpen}
-          onOpenChange={handleMovePickerOpenChange}
-          returnFocusRef={overflowButtonRef}
-        />
-      )}
-      {hasOpenedEmojiDialog && (
-        <PanelEmojiDialog
-          panelId={emojiDialogPanelId ?? id}
-          title={title}
-          isOpen={emojiDialogPanelId !== null}
-          onClose={() => setEmojiDialogPanelId(null)}
-          restoreFocusTo={overflowButtonRef}
-        />
-      )}
+      <Suspense fallback={null}>
+        {hasOpenedMovePicker && (
+          <MoveToWorktreePicker
+            panelId={id}
+            currentWorktreeId={currentWorktreeId}
+            isOpen={isMovePickerOpen}
+            onOpenChange={handleMovePickerOpenChange}
+            returnFocusRef={overflowButtonRef}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {hasOpenedEmojiDialog && (
+          <PanelEmojiDialog
+            panelId={emojiDialogPanelId ?? id}
+            title={title}
+            isOpen={emojiDialogPanelId !== null}
+            onClose={() => setEmojiDialogPanelId(null)}
+            restoreFocusTo={overflowButtonRef}
+          />
+        )}
+      </Suspense>
     </AppPalettePopover>
   );
 }

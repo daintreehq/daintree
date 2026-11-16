@@ -141,14 +141,7 @@ export const VOICE_REWRITE_MAX_SELECTION_CHARS = 12_000;
 /** The longest spoken instruction a rewrite sends. */
 export const VOICE_REWRITE_MAX_INSTRUCTION_CHARS = 2_000;
 
-/** The most recently sent prompts a cleanup request carries. */
-export const VOICE_RECENT_PROMPTS_MAX = 6;
-
-/**
- * The longest a recent prompt runs in a cleanup request, in UTF-16 units, its
- * cut marker included: past it a pasted log or file is only its opening.
- */
-export const VOICE_RECENT_PROMPT_MAX_CHARS = 1_000;
+export { VOICE_RECENT_PROMPTS_MAX, VOICE_RECENT_PROMPT_MAX_CHARS } from "./voiceRecentPrompts.js";
 
 /**
  * The most draft text after a passage a cleanup request carries, in UTF-16

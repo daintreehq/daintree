@@ -2,7 +2,7 @@
 // HelpSessionController.ts (#11009). No behavior change — the probe
 // functions and cooldown state are unchanged, just relocated.
 
-import * as semver from "semver";
+import semverLt from "semver/functions/lt";
 
 import { getAgentConfig } from "@/config/agents";
 import { logError } from "@/utils/logger";
@@ -54,7 +54,7 @@ async function probeAssistantVersion(
   if (!installed) return { status: "indeterminate" };
 
   try {
-    if (semver.lt(installed, required)) {
+    if (semverLt(installed, required)) {
       return {
         status: "too-old",
         block: { agentId, agentName, installedVersion: installed, requiredVersion: required },
