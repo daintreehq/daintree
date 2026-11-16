@@ -136,6 +136,15 @@ describe("checkRadixOverlayBundles", () => {
     }
   });
 
+  it("matches module ids and seeds through query and hash suffixes", () => {
+    expect(
+      checkRadixOverlayBundles(
+        build({ appModules: ["src/App.tsx?v=1", "src/components/ui/DialogDismissSurface.tsx"] })
+      )
+    ).toEqual([]);
+    expect(checkRadixOverlayBundles(build({ bootModules: [`${BARREL}#x`] }))).toHaveLength(3);
+  });
+
   it("fails when index.html preloads the overlay chunk the graphs don't reach", () => {
     const problems = checkRadixOverlayBundles(
       build({
@@ -158,9 +167,12 @@ describe("checkRadixOverlayBundles", () => {
     expect(checkRadixOverlayBundles(build({ entryModules: [] }))).toEqual([
       "the entry chunk assets/index-a.js lists no modules",
     ]);
-    expect(checkRadixOverlayBundles(build({ appModules: ["src/Other.tsx"] }))).toEqual([
-      "first-render seed src/App.tsx is missing from its own chunk's module list",
-    ]);
+    // The seed sits in another chunk's list, so only a lookup in its own chunk catches it.
+    expect(
+      checkRadixOverlayBundles(
+        build({ appModules: ["src/Other.tsx"], bootModules: ["src/boot.ts", "src/App.tsx"] })
+      )
+    ).toEqual(["first-render seed src/App.tsx is missing from its own chunk's module list"]);
     expect(checkRadixOverlayBundles(build({ entryImports: ["_gone.js"] }))).toContain(
       "the renderer's eager graph: index.html imports _gone.js, which the manifest lacks"
     );
@@ -217,6 +229,7 @@ describe("modulePreloadFiles", () => {
       '<link href="assets/vendor-radix-utils-d.js?v=1" rel="modulepreload">',
       "<link rel='modulepreload' href='./assets/single-g.js' />",
       '<LINK REL = "ModulePreload"\n  HREF = "./assets/upper-h.js">',
+      '<link rel="modulepreload prefetch" href="./assets/tokens-i.js#top">',
       '<link rel="stylesheet" href="./assets/index-e.css">',
       '<link rel="preload" href="./assets/font-f.woff2" as="font">',
     ].join("\n");
@@ -226,6 +239,7 @@ describe("modulePreloadFiles", () => {
       "assets/vendor-radix-utils-d.js",
       "assets/single-g.js",
       "assets/upper-h.js",
+      "assets/tokens-i.js",
     ]);
   });
 
@@ -233,7 +247,9 @@ describe("modulePreloadFiles", () => {
     const html = [
       '<link rel="modulepreload" data-href="./assets/decoy-a.js" href="./assets/real-b.js">',
       '<link rel="stylesheet" data-rel="modulepreload" href="./assets/index-c.css">',
+      '<link rel="modulepreload-extra" href="./assets/not-a-token-d.js">',
+      '<link rel="modulepreload" href="./assets/first-e.js" href="./assets/second-f.js">',
     ].join("\n");
-    expect(modulePreloadFiles(html)).toEqual(["assets/real-b.js"]);
+    expect(modulePreloadFiles(html)).toEqual(["assets/real-b.js", "assets/first-e.js"]);
   });
 });
