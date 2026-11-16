@@ -11,6 +11,7 @@ import {
   useWindowNotifications,
   useWatchedPanelNotifications,
   useMenuActions,
+  useUndoCloseMenuLabel,
   useErrors,
   useReEntrySummary,
   useOverlayClaim,
@@ -438,6 +439,7 @@ function AppInner() {
   useProjectPluginBridge();
 
   useMenuActions();
+  useUndoCloseMenuLabel();
 
   // Global keybinding handler - provides chord support and priority resolution
   // All keybindings dispatch through ActionService via this centralized handler

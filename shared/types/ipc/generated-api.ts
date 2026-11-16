@@ -1149,6 +1149,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["mcp-server:stop-pane-notices"]["result"]>;
   };
   menu: {
+    setUndoClose(
+      ...args: IpcInvokeMap["menu:set-undo-close"]["args"]
+    ): Promise<IpcInvokeMap["menu:set-undo-close"]["result"]>;
     showApplication(
       ...args: IpcInvokeMap["menu:show-application"]["args"]
     ): Promise<IpcInvokeMap["menu:show-application"]["result"]>;

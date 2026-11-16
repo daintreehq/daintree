@@ -202,6 +202,7 @@ export const CHANNELS = {
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
   MENU_SHOW_APPLICATION: "menu:show-application",
+  MENU_SET_UNDO_CLOSE: "menu:set-undo-close",
 
   LOGS_GET_ALL: "logs:get-all",
   LOGS_GET_SOURCES: "logs:get-sources",

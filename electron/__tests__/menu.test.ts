@@ -103,6 +103,8 @@ vi.mock("electron", () => ({
     }),
     setPath: vi.fn(),
     getPath: vi.fn(() => "/mock/path"),
+    on: vi.fn(),
+    removeListener: vi.fn(),
     commandLine: {
       appendSwitch: vi.fn(),
       appendArgument: vi.fn(),
@@ -321,6 +323,7 @@ import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
 import { cachedViewBusy } from "../window/cachedViewBusy.js";
 import { registerRemoteService } from "../remote/runtime.js";
+import { resetUndoMenuStateForTests, setUndoCloseState } from "../undoMenuState.js";
 
 beforeEach(() => {
   // Every test starts in an app with no menu installed yet.
@@ -3434,6 +3437,51 @@ describe("a build that would install the menu already there (#17040)", () => {
     expect(builds()).toBe(1);
     expect(menuItemRegistry.get("file-project-settings")?.enabled).toBe(false);
     expect(menuItemRegistry.get("file-close-project")?.enabled).toBe(false);
+  });
+
+  it("names a close in Edit > Undo in place rather than rebuilding for it (#17108)", async () => {
+    const view = {
+      id: 7108,
+      isDestroyed: () => false,
+      on: vi.fn(),
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      send: vi.fn(),
+      undo: vi.fn(),
+    };
+    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    vi.mocked(webContents.getFocusedWebContents).mockImplementation(() => view as never);
+    try {
+      createApplicationMenu(win);
+      expect(menuItemRegistry.get("edit-undo")?.label).toBe("Undo");
+
+      setUndoCloseState(view as never, { count: 1, title: "Claude: fix tests" });
+      await settle();
+      expect(menuItemRegistry.get("edit-undo")?.label).toBe('Undo Close "Claude: fix tests"');
+
+      createApplicationMenu(win);
+      expect(builds()).toBe(1);
+
+      // Chosen from the menu, the close comes back in the view that named it.
+      findMenuItem(capturedTemplate, "Edit", "Undo")!.click!(
+        {} as Electron.MenuItem,
+        win as never,
+        { triggeredByAccelerator: false } as Electron.KeyboardEvent
+      );
+      expect(view.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+        actionId: "panel.undoClose",
+      });
+      expect(view.undo).not.toHaveBeenCalled();
+
+      setUndoCloseState(view as never, null);
+      await settle();
+      expect(menuItemRegistry.get("edit-undo")?.label).toBe("Undo");
+    } finally {
+      resetUndoMenuStateForTests();
+      vi.mocked(webContents.getFocusedWebContents).mockImplementation(
+        () => mockFocusedWebContents as never
+      );
+    }
   });
 
   it("disables Close Window in place once the app is windowless", () => {

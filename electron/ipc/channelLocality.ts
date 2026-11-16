@@ -709,6 +709,7 @@ export const CHANNEL_LOCALITY = {
   "mcp:get-manifest-request": "shell",
   "mcp:get-manifest-response": "shell",
   "menu:action": "shell",
+  "menu:set-undo-close": "shell",
   "menu:show-application": "shell",
   "menu:show-context": "shell",
   "notification:play-sound": "shell",

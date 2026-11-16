@@ -56,6 +56,12 @@ import {
   noteOpenWindowMenuInstalled,
   refreshOpenWindowMenu,
 } from "./windowMenuState.js";
+import {
+  currentUndoMenuLabel,
+  handleUndoMenuClick,
+  refreshUndoMenuItem,
+  UNDO_MENU_ITEM_ID,
+} from "./undoMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError, type AppError } from "./utils/errorTypes.js";
@@ -203,6 +209,7 @@ function liveMenuItemFields(id: string): readonly string[] | undefined {
   ) {
     return ["enabled"];
   }
+  if (id === UNDO_MENU_ITEM_ID) return ["label"];
   if (isOpenWindowMenuItemId(id)) return ["label", "checked", "visible"];
   return undefined;
 }
@@ -541,13 +548,13 @@ export function createApplicationMenu(
       // path depends on the native Edit menu roles.
       submenu: [
         {
-          label: "Undo",
+          // Names the panel close the next Cmd+Z would reopen, and reopens it
+          // when chosen (#17108); the label follows focus in place.
+          id: UNDO_MENU_ITEM_ID,
+          label: currentUndoMenuLabel(),
           accelerator: "CommandOrControl+Z",
           registerAccelerator: false,
-          click: () => {
-            const focused = webContents.getFocusedWebContents();
-            if (focused && !focused.isDestroyed()) focused.undo();
-          },
+          click: (_item, _window, event) => handleUndoMenuClick(event),
         },
         {
           label: "Redo",
@@ -985,6 +992,7 @@ export function createApplicationMenu(
     // The fields the signature leaves out, brought current as a rebuild would.
     refreshProjectMenuState();
     refreshOpenWindowMenu();
+    refreshUndoMenuItem();
   }
 
   wireUpdateMenuState();

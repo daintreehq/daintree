@@ -35,6 +35,25 @@ export interface EditorUndo {
 
 const editors = new WeakMap<Element, EditorUndo>();
 
+const editListeners = new Set<() => void>();
+
+/**
+ * Called when what a field's undo would take back next may have changed: an
+ * edit, an undo or redo, a history reset. Edit > Undo reads it to know whether
+ * the field or the close has Cmd+Z (#17108).
+ */
+export function subscribeCloseUndoEdits(listener: () => void): () => void {
+  editListeners.add(listener);
+  return () => {
+    editListeners.delete(listener);
+  };
+}
+
+/** Tells the subscribers a field's undo history moved. Editors call it for their own. */
+export function notifyCloseUndoEdit(): void {
+  for (const listener of [...editListeners]) listener();
+}
+
 /** Registers an editor by its `.cm-editor` root. */
 export function registerEditorUndo(root: Element, editor: EditorUndo): () => void {
   editors.set(root, editor);
@@ -93,6 +112,7 @@ function onInput(event: Event): void {
   if (!isTextField(target)) return;
   const history = fieldHistories.get(target);
   if (history !== undefined) history.observed = target.value;
+  notifyCloseUndoEdit();
 }
 
 let fieldTrackingInstalled = false;

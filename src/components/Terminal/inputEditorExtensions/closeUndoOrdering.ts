@@ -7,7 +7,11 @@ import {
 } from "@codemirror/state";
 import { ViewPlugin, type Command } from "@codemirror/view";
 import { invertedEffects, isolateHistory, undo, undoDepth } from "@codemirror/commands";
-import { latestCloseSeq, registerEditorUndo } from "@/services/terminal/closeUndoOrder";
+import {
+  latestCloseSeq,
+  notifyCloseUndoEdit,
+  registerEditorUndo,
+} from "@/services/terminal/closeUndoOrder";
 
 // An edit of the person's own. Undo and redo walk the history rather than add
 // to it, and a write kept out of history (a draft loading) can't be undone.
@@ -74,7 +78,22 @@ export function closeUndoOrdering(undoCommand: Command = undo): Extension {
         undoCommand(view);
       },
     });
-    return { destroy: unregister };
+    return {
+      // What undo takes back next is the field above and the history's depth.
+      update(update) {
+        if (
+          update.startState.field(editCloseSeq, false) !==
+            update.state.field(editCloseSeq, false) ||
+          undoDepth(update.startState) !== undoDepth(update.state)
+        ) {
+          notifyCloseUndoEdit();
+        }
+      },
+      destroy: () => {
+        unregister();
+        notifyCloseUndoEdit();
+      },
+    };
   });
   return [editCloseSeq, carryWithHistory, isolateFirstEditAfterClose, registration];
 }

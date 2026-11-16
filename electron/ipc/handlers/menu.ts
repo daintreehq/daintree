@@ -1,11 +1,14 @@
 import { Menu } from "electron";
+import { z } from "zod";
 import type { HandlerDependencies } from "../types.js";
 import type {
   MenuItemOption,
   ShowApplicationMenuPayload,
   ShowContextMenuPayload,
+  UndoCloseMenuState,
 } from "../../../shared/types/menu.js";
-import { defineIpcNamespace, op } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
+import { setUndoCloseState } from "../../undoMenuState.js";
 import { MENU_METHOD_CHANNELS } from "./menu.preload.js";
 import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 import { getCliAvailabilityServiceRef } from "../../window/serviceRefs.js";
@@ -121,9 +124,32 @@ export function resolveApplicationMenuAnchor(
   return { x: clamp(x as number, bounds.width), y: clamp(y as number, bounds.height) };
 }
 
+// A history holds ten closes at most; the bounds only keep a bad payload out.
+const UndoCloseMenuStateSchema = z
+  .object({
+    count: z.number().int().min(1).max(10_000),
+    title: z.string().max(4096).nullable(),
+  })
+  .nullable();
+
 export const menuNamespace = defineIpcNamespace({
   name: "menu",
   ops: {
+    /**
+     * What the next Cmd+Z in the sender's view would reopen, for Edit > Undo
+     * to name (#17108). Keyed by the sender, never a view the payload names.
+     */
+    setUndoClose: opValidated(
+      MENU_METHOD_CHANNELS.setUndoClose,
+      UndoCloseMenuStateSchema,
+      (ctx, state: UndoCloseMenuState): void => {
+        if (ctx.endpoint.kind !== "local-view") return;
+        const sender = ctx.event?.sender;
+        if (!sender || sender.isDestroyed()) return;
+        setUndoCloseState(sender, state);
+      },
+      { withContext: true }
+    ),
     /**
      * Pop up the installed application menu at a renderer-supplied anchor
      * (#11813).

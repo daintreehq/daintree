@@ -1,6 +1,8 @@
 import type { ActionSource } from "@shared/types/actions";
-import { isPtyPanel } from "@shared/types/panel";
+import { isBrowserPanel, isDiffPanel, isFilePanel, isPtyPanel } from "@shared/types/panel";
+import { getTerminalDisplayTitle } from "@shared/utils/terminalTitleDisplay";
 import type { usePanelStore } from "@/store/panelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { getCurrentProjectId } from "@/store/storeAccessors";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { logWarn } from "@/utils/logger";
@@ -21,6 +23,11 @@ const MAX_FOLLOWERS = 8;
 
 export interface ClosedPanel {
   id: string;
+  /**
+   * The name its header showed when it closed, for Edit > Undo to name it
+   * (#17108): a panel the trash let go is gone from the store.
+   */
+  title: string;
   worktreeId: string | null;
   location: "grid" | "dock";
   /**
@@ -65,6 +72,7 @@ type PanelState = ReturnType<PanelStoreApi["getState"]>;
 
 let steps: CloseStep[] = [];
 let unsubscribe: (() => void) | null = null;
+const historyListeners = new Set<() => void>();
 // Handed over by the store orchestrator rather than imported: every close
 // path records here, and a static store import would drag the store's client
 // graph into each of their tests.
@@ -76,6 +84,36 @@ export function connectPanelCloseHistory(api: PanelStoreApi | null): void {
   unsubscribe = null;
   panelStore = api;
   setSteps(api === null ? [] : steps);
+}
+
+function urlHost(url: string): string | null {
+  try {
+    return new URL(url).host || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The name a panel's header shows, by that kind's own rule: an agent's task
+ * beside its name, a file's or diff's file name until the person renames it,
+ * and a browser's host until its page has a title.
+ */
+export function closedPanelTitle(panel: Parameters<typeof isPtyPanel>[0]): string {
+  if (isPtyPanel(panel)) {
+    return getTerminalDisplayTitle(panel, "full", {
+      showTask: usePreferencesStore.getState().showAgentTaskTitles,
+    });
+  }
+  if ((isFilePanel(panel) || isDiffPanel(panel)) && panel.titleMode !== "user") {
+    const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
+    if (fileName) return fileName;
+  }
+  if (isBrowserPanel(panel) && (!panel.title || panel.title === "Browser")) {
+    const host = panel.browserUrl ? urlHost(panel.browserUrl) : null;
+    if (host) return host;
+  }
+  return panel.title;
 }
 
 function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSnapshot | null {
@@ -99,6 +137,7 @@ function snapshotClose(state: PanelState, panelIds: readonly string[]): CloseSna
     const index = state.panelIds.indexOf(id);
     panels.push({
       id,
+      title: closedPanelTitle(panel),
       worktreeId: panel.worktreeId ?? null,
       location,
       agentId:
@@ -172,8 +211,22 @@ function reconcile(state: PanelState): void {
   if (changed) setSteps(next);
 }
 
+// A listener only names the step in a menu: it must never stop a close from
+// being recorded or taken back.
+function notifyHistoryListeners(): void {
+  for (const listener of [...historyListeners]) {
+    try {
+      listener();
+    } catch (error) {
+      logWarn("A close history listener failed", { error });
+    }
+  }
+}
+
 function setSteps(next: CloseStep[]): void {
+  const changed = next !== steps && (next.length > 0 || steps.length > 0);
   steps = next;
+  if (changed) notifyHistoryListeners();
   if (steps.length === 0) {
     unsubscribe?.();
     unsubscribe = null;
@@ -244,6 +297,17 @@ export function userCloseCommit(
   if (!isForegroundDispatch(source)) return commit;
   const run = prepareUserClose(panelIds);
   return () => run(commit);
+}
+
+/**
+ * Called whenever a close joins, leaves or changes in the history: recorded,
+ * taken back, returned, trimmed, or a panel of it restored another way.
+ */
+export function subscribePanelCloseHistory(listener: () => void): () => void {
+  historyListeners.add(listener);
+  return () => {
+    historyListeners.delete(listener);
+  };
 }
 
 /** The newest close in this project that may still come back. */

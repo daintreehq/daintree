@@ -1095,6 +1095,87 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("peekKeybinding (#17108)", () => {
+    const cmdK = () => createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
+    const cmdZ = () => createKeyboardEvent({ key: "z", code: "KeyZ", metaKey: true });
+
+    it("names what a keystroke would run, as resolving it does", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe(
+        service.resolveKeybinding(cmdZ()).match?.actionId
+      );
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("panel.undoClose");
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Z"] });
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("nav.toggleSidebar");
+    });
+
+    it("neither starts, completes nor cancels a chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      expect(service.peekKeybinding(cmdK(), null)).toBeUndefined();
+      expect(service.getPendingChord()).toBeNull();
+
+      service.resolveKeybinding(cmdK());
+      const pending = service.getPendingChord();
+      chord.mockClear();
+      // A keystroke no chord completes would cancel a real one.
+      expect(service.peekKeybinding(cmdZ(), null)).toBeUndefined();
+      expect(service.getPendingChord()).toBe(pending);
+      expect(service.getLastInvalidKey()).toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("names the binding a pending chord's next key would complete, and leaves the chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "panel.undoClose": ["Cmd+K Cmd+Z"] });
+      expect(service.peekKeybinding(cmdZ(), null)).toBeUndefined();
+
+      service.resolveKeybinding(cmdK());
+      const pending = service.getPendingChord();
+      expect(pending).not.toBeNull();
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBe(pending);
+      expect(chord).not.toHaveBeenCalled();
+      // The real keystroke completes it.
+      expect(service.resolveKeybinding(cmdZ()).match?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBeNull();
+    });
+
+    it("hands the target it asks about to the when context", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const target = {} as Element;
+      const provider = vi.fn(() => ({ special: true }));
+      service.setWhenContextProvider(provider);
+      service.registerBinding({
+        actionId: "test.whenBound",
+        combo: "Cmd+Alt+Shift+F11",
+        scope: "global",
+        priority: 1,
+        when: "special",
+      });
+      const event = createKeyboardEvent({
+        key: "F11",
+        code: "F11",
+        metaKey: true,
+        altKey: true,
+        shiftKey: true,
+      });
+
+      expect(service.peekKeybinding(event, target)?.actionId).toBe("test.whenBound");
+      expect(provider).toHaveBeenCalledWith(event, target);
+    });
+  });
+
   describe("chord state and bindings notify separately (#17059)", () => {
     const cmdK = () => createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
 
