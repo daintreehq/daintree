@@ -432,8 +432,7 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
       // Looked up per call: each window replaces the version service, and this
       // one outlives the window that built it.
       getCliVersion: async (agentId) =>
-        (await getAgentVersionService()?.getInstalledVersionForLaunch(agentId as AgentId)) ??
-        null,
+        (await getAgentVersionService()?.getInstalledVersionForLaunch(agentId as AgentId)) ?? null,
     });
     setAgentModelCatalogService(modelCatalogSvc);
     // Warm the cache in the background so the first renderer request hits

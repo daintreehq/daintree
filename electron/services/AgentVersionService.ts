@@ -87,8 +87,10 @@ export class AgentVersionService {
 
   async getVersions(refresh = false): Promise<AgentVersionInfo[]> {
     const agentIds = getEffectiveAgentIds();
-    const results = await settleWithConcurrency(agentIds, MAX_CONCURRENT_VERSION_CHECKS, (agentId) =>
-      this.getVersion(agentId as AgentId, refresh)
+    const results = await settleWithConcurrency(
+      agentIds,
+      MAX_CONCURRENT_VERSION_CHECKS,
+      (agentId) => this.getVersion(agentId as AgentId, refresh)
     );
 
     return results.map((result, index) => {
