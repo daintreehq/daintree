@@ -677,10 +677,13 @@ describe("agentSessionHistory", () => {
       expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["after"]);
     });
 
-    it("finds a journal that appears where there was none", async () => {
+    it.each([
+      ["sync", (dir: string) => Promise.resolve(readSessionHistorySync(dir))],
+      ["async", (dir: string) => readSessionHistory(dir)],
+    ] as const)("finds a journal that appears where there was none (%s read)", async (_, read) => {
       // A harness can seed the journal after launch, once Main has already
       // looked for it, so an absent file is never held as an empty journal.
-      expect(listAgentSessions(undefined, userDataDir)).toEqual([]);
+      expect(await read(userDataDir)).toEqual([]);
       await fsp.writeFile(
         getSessionHistoryPath(userDataDir)!,
         JSON.stringify([
@@ -695,7 +698,7 @@ describe("agentSessionHistory", () => {
         ])
       );
 
-      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["seeded"]);
+      expect((await read(userDataDir)).map((r) => r.sessionId)).toEqual(["seeded"]);
     });
 
     it("serves the same parsed array reference on a cache hit (no re-parse)", async () => {

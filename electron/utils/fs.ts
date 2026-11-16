@@ -324,11 +324,10 @@ export async function resilientAtomicWriteFileIf(
       try {
         renameSync(tempPath, filePath);
         committed = true;
-        options?.onCommitted?.();
-        break;
       } catch (error) {
         if (!isTransientRenameError(error) || Date.now() >= deadline) throw error;
       }
+      if (committed) break;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       delayMs = Math.min(delayMs * 2, RENAME_RETRY_MAX_DELAY_MS);
     }
@@ -340,6 +339,8 @@ export async function resilientAtomicWriteFileIf(
     await fsUnlink(tempPath).catch(() => {});
     return false;
   }
+  // Still the rename's tick, but outside its retry: the temp is gone now.
+  options?.onCommitted?.();
   if (options?.durable !== false) await syncParentDirectory(filePath);
   return true;
 }

@@ -39,28 +39,51 @@ const syncWriter = vi.hoisted(() => ({
   beforeWrite: null as null | (() => void),
   afterWrite: null as null | (() => void),
 }));
-// Every async read of a session file, and a one-shot failure for one path.
-const sessionReads = vi.hoisted(() => ({
-  paths: [] as string[],
-  fault: null as null | { path: string; code: string },
-}));
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
+// Every async read of a session file, a one-shot failure for one path, and a
+// one-shot hold on the next directory sync of a given directory.
+const sessionReads = vi.hoisted(() => {
+  const state = {
+    paths: [] as string[],
+    fault: null as null | { path: string; code: string },
+    dirSyncHold: null as null | { dir: string; until: Promise<void>; reached: () => void },
+  };
+  const wrap = (actual: typeof import("node:fs/promises")) => ({
     ...actual,
     default: actual,
     readFile: (...args: Parameters<typeof actual.readFile>) => {
       const [target] = args;
-      if (typeof target === "string") sessionReads.paths.push(target);
-      const fault = sessionReads.fault;
+      if (typeof target === "string") state.paths.push(target);
+      const fault = state.fault;
       if (fault && fault.path === target) {
-        sessionReads.fault = null;
+        state.fault = null;
         return Promise.reject(Object.assign(new Error(fault.code), { code: fault.code }));
       }
       return actual.readFile(...args);
     },
-  };
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const hold = state.dirSyncHold;
+      if (hold && hold.dir === args[0]) {
+        state.dirSyncHold = null;
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          hold.reached();
+          await hold.until;
+          return sync();
+        };
+      }
+      return handle;
+    },
+  });
+  return Object.assign(state, { wrap });
 });
+// utils/fs.ts imports the bare specifier; this module the node: one.
+vi.mock("node:fs/promises", async (importOriginal) =>
+  sessionReads.wrap(await importOriginal<typeof import("node:fs/promises")>())
+);
+vi.mock("fs/promises", async (importOriginal) =>
+  sessionReads.wrap(await importOriginal<typeof import("node:fs/promises")>())
+);
 
 // The options each async atomic write was given, by destination.
 const asyncWrites = vi.hoisted(() => [] as Array<{ path: string; durable: unknown }>);
@@ -1376,6 +1399,38 @@ describe("terminalSessionPersistence", () => {
         [getSessionPath("term-a"), getSessionPath("term-b")].sort()
       );
       expect(shutdownFlush.dirs).toHaveLength(1);
+    });
+
+    it("still flushes a background write that lands while an older durable one syncs", async () => {
+      const sessionPath = getSessionPath("term-overtaken")!;
+      let release!: () => void;
+      let reached!: () => void;
+      const durableRenamed = new Promise<void>((resolve) => (reached = resolve));
+      sessionReads.dirSyncHold = {
+        dir: path.dirname(sessionPath),
+        until: new Promise<void>((resolve) => (release = resolve)),
+        reached,
+      };
+
+      const durable = persistSessionSnapshotAsync("term-overtaken", {
+        data: "older",
+        cols: 80,
+        rows: 24,
+      });
+      await durableRenamed;
+      await persistSessionSnapshotAsync(
+        "term-overtaken",
+        { data: "newer", cols: 80, rows: 24 },
+        undefined,
+        { durable: false }
+      );
+      release();
+      await durable;
+
+      flushPendingSessionWritesSync();
+
+      expect(fs.readFileSync(sessionPath, "utf8")).toBe("DAINTREE_SESSION_v2\n80x24\nnewer");
+      expect(shutdownFlush.files).toEqual([sessionPath]);
     });
 
     it("leaves alone a file a durable write has since replaced", async () => {

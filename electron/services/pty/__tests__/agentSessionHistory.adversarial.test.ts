@@ -13,10 +13,16 @@ const h = vi.hoisted(() => {
   interface Fault {
     code: string;
   }
-  const armed: { read: Fault | null; renameFault: string | null; writeFault: string | null } = {
+  const armed: {
+    read: Fault | null;
+    renameFault: string | null;
+    writeFault: string | null;
+    writeHold: { until: Promise<void>; reached: () => void } | null;
+  } = {
     read: null,
     renameFault: null,
     writeFault: null,
+    writeHold: null,
   };
   // Every read or stat of the journal itself, by call name.
   const touches: string[] = [];
@@ -52,6 +58,7 @@ const h = vi.hoisted(() => {
     armed.read = null;
     armed.renameFault = null;
     armed.writeFault = null;
+    armed.writeHold = null;
     touches.length = 0;
   };
   return { armed, touches, touch, takeFault, takeRenameFault, takeWriteFault, reset };
@@ -108,6 +115,13 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     resilientAtomicWriteFile: async (
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
+      // One-shot: holds the next journal write before it touches the disk.
+      const hold = h.armed.writeHold;
+      if (hold && String(args[0]).endsWith("agent-session-history.json")) {
+        h.armed.writeHold = null;
+        hold.reached();
+        await hold.until;
+      }
       await actual.resilientAtomicWriteFile(...args);
       const fault = h.takeWriteFault(args[0]);
       if (fault) throw fault;
@@ -286,11 +300,23 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
 
   it("queues an async read behind the write in flight, so it can't cache what that write replaced", async () => {
     await seedJournal([rec("old", "wt-1")]);
+    let release!: () => void;
+    let reached!: () => void;
+    const writerHeld = new Promise<void>((resolve) => (reached = resolve));
+    h.armed.writeHold = { until: new Promise<void>((resolve) => (release = resolve)), reached };
 
     const writing = persistAgentSession(rec("new", "wt-1"), userDataDir);
-    const reading = readSessionHistory(userDataDir);
-    await writing;
+    await writerHeld; // the writer has read ["old"] and holds before writing
+    let settled = false;
+    const reading = readSessionHistory(userDataDir).then((records) => {
+      settled = true;
+      return records;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
 
+    release();
+    await writing;
     expect((await reading).map((r) => r.sessionId)).toEqual(["new", "old"]);
     expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
       "new",

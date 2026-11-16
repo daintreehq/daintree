@@ -194,32 +194,38 @@ describe("sleepProject", () => {
       expect(broadcastMock).not.toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
     });
 
-    it("evicts nothing until every terminal's restore marker is on disk", async () => {
-      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValueOnce({
-        confirmed: true,
-        aborted: false,
-        terminalsKilled: 2,
-        sessions: [
-          { id: "t1", agentSessionId: "s1" },
-          { id: "t2", agentSessionId: "s2" },
-        ],
-      });
-      const release = new Map<string, () => void>();
-      persistenceMock.writeHibernatedMarker.mockImplementation(
-        (terminalId) => new Promise<void>((resolve) => release.set(terminalId, resolve))
-      );
+    it.each([
+      ["t1", "t2"],
+      ["t2", "t1"],
+    ] as const)(
+      "evicts nothing until every terminal's restore marker is on disk (%s first)",
+      async (first, last) => {
+        teardownMock.gracefulTeardownAndJournalProject.mockResolvedValueOnce({
+          confirmed: true,
+          aborted: false,
+          terminalsKilled: 2,
+          sessions: [
+            { id: "t1", agentSessionId: "s1" },
+            { id: "t2", agentSessionId: "s2" },
+          ],
+        });
+        const release = new Map<string, () => void>();
+        persistenceMock.writeHibernatedMarker.mockImplementation(
+          (terminalId) => new Promise<void>((resolve) => release.set(terminalId, resolve))
+        );
 
-      const sleeping = sleepProject("proj-1", policy(), makeDeps());
-      await vi.waitFor(() => expect(release.size).toBe(2));
-      release.get("t1")!();
-      await flushMicrotasks();
-      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
-      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+        const sleeping = sleepProject("proj-1", policy(), makeDeps());
+        await vi.waitFor(() => expect(release.size).toBe(2));
+        release.get(first)!();
+        await flushMicrotasks();
+        expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
 
-      release.get("t2")!();
-      expect(await sleeping).toMatchObject({ status: "slept", terminalsKilled: 2 });
-      expect(hibernationMock.evictProjectRenderer).toHaveBeenCalled();
-    });
+        release.get(last)!();
+        expect(await sleeping).toMatchObject({ status: "slept", terminalsKilled: 2 });
+        expect(hibernationMock.evictProjectRenderer).toHaveBeenCalled();
+      }
+    );
 
     it("refuses when a dispatch starts while the kill's snapshot is in flight", async () => {
       teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(

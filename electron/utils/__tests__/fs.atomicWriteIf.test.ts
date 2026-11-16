@@ -166,6 +166,18 @@ describe("resilientAtomicWriteFileIf", () => {
     expect(refused).not.toHaveBeenCalled();
   });
 
+  it("surfaces a failing commit callback without retrying the rename that landed", async () => {
+    const writing = resilientAtomicWriteFileIf(target, "payload", () => true, "utf-8", {
+      onCommitted: () => {
+        throw errno("EBUSY");
+      },
+    });
+
+    await expect(writing).rejects.toMatchObject({ code: "EBUSY" });
+    expect(renameTap).toHaveBeenCalledTimes(1);
+    expect(readFileSync(target, "utf8")).toBe("payload");
+  });
+
   posixIt("surfaces a failed directory sync with the file already in place", async () => {
     dirSyncTap.mockRejectedValueOnce(errno("EIO"));
 
