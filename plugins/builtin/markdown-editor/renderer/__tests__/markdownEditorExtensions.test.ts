@@ -58,7 +58,8 @@ describe("markdownEditorExtensions (#12323)", () => {
     expect(view.contentDOM.getAttribute("aria-label")).toBe("plan.md");
     view.dispatch({ changes: { from: view.state.doc.length, insert: "more" } });
     // The immutable document, never a string made per keystroke (#17071).
-    expect(callbacks.onChange).toHaveBeenCalledWith(view.state.doc);
+    expect(callbacks.onChange).toHaveBeenCalledTimes(1);
+    expect(callbacks.onChange.mock.calls[0]![0]).toBe(view.state.doc);
     expect(view.state.doc.toString()).toBe("# Plan\nmore");
   });
 
@@ -165,6 +166,22 @@ describe("markdownEditorExtensions (#12323)", () => {
     const encoded = (state: EditorState) => new TextEncoder().encode(state.doc.toString()).length;
     let state = EditorState.create({ doc: "# Plan\n😀 é\r\nend", extensions: [docUtf8Bytes] });
     expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    const apply = (changes: Array<{ from: number; to?: number; insert?: string }>) => {
+      state = state.update({ changes }).state;
+      expect(state.field(docUtf8Bytes)).toBe(encoded(state));
+    };
+    const emoji = state.doc.toString().indexOf("😀");
+    // Split a pair, rejoin it, then two changes either side of one kept unit.
+    apply([{ from: emoji + 1, to: emoji + 2 }]);
+    apply([{ from: emoji + 1, insert: "\ude00" }]);
+    apply([
+      { from: emoji, to: emoji + 1, insert: "\ud83d" },
+      { from: emoji + 2, insert: "\ud83d" },
+    ]);
+    apply([
+      { from: emoji + 1, to: emoji + 2 },
+      { from: emoji + 3, insert: "\ude00" },
+    ]);
     const pieces = ["a", "é", "€", "😀", "\n", "\ud83d", "\ude00", "", "xy\nz"];
     let seed = 17071;
     const random = (n: number) => {

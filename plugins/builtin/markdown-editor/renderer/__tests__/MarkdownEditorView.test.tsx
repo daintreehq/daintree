@@ -37,7 +37,7 @@ vi.mock("@/store/panelStore", async () => {
 });
 
 import { MarkdownEditorView } from "../MarkdownEditorView";
-import { __resetDocumentControllersForTests } from "../documentController";
+import { DocumentController, __resetDocumentControllersForTests } from "../documentController";
 import { useDocumentStateStore } from "../documentStateStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -428,6 +428,9 @@ describe("MarkdownEditorView (#12323)", () => {
     await type("\nkept");
     // Still pending when the view goes: leaving Edit commits it at once.
     await type(" too");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
+      "# Plan\n\nBody\n\nkept"
+    );
     unmount();
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
       "# Plan\n\nBody\n\nkept too"
@@ -448,15 +451,16 @@ describe("MarkdownEditorView (#12323)", () => {
     } finally {
       toString.mockRestore();
     }
-    expect(shellRenders).not.toHaveBeenCalled();
     const typed = "# Plan\n\nBody\n\nfirstabcde";
     expect(screen.getByTestId("markdown-editor-status").textContent).toContain(
       formatBytes(Buffer.byteLength(typed))
     );
-    // The draft string follows within the commit interval.
+    // The draft string follows within the commit interval, and its arrival
+    // changes nothing the shell shows either.
     await waitFor(() =>
       expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(typed)
     );
+    expect(shellRenders).not.toHaveBeenCalled();
   });
 
   it("a second panel on the document follows committed typing and catches up when focused", async () => {
@@ -477,6 +481,8 @@ describe("MarkdownEditorView (#12323)", () => {
       act(async () => {
         cm.dispatch({ changes: { from: cm.state.doc.length, insert: text } });
       });
+    // Catching up is not typing: the receiving panel never reports it back.
+    const secondEdits = vi.spyOn(DocumentController.get("panel-2")!, "edit");
     await insert(first!, "\na");
     expect(second!.state.doc.toString()).toBe("# Plan\n\nBody\n\na");
     await insert(first!, "b");
@@ -485,6 +491,7 @@ describe("MarkdownEditorView (#12323)", () => {
       second!.contentDOM.dispatchEvent(new FocusEvent("focus"));
     });
     expect(second!.state.doc.toString()).toBe("# Plan\n\nBody\n\nab");
+    expect(secondEdits).not.toHaveBeenCalled();
     await insert(second!, "c");
     await waitFor(() => expect(first!.state.doc.toString()).toBe("# Plan\n\nBody\n\nabc"));
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.draftText).toBe(
