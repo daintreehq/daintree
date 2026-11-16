@@ -95,6 +95,9 @@ export function countBulkWorktreeRun(run: Pick<BulkWorktreeRunSnapshot, "items">
   return counts;
 }
 
+/** How often the view running a live run republishes it, so main's hold on that view doesn't lapse during a long step. */
+export const BULK_RUN_HEARTBEAT_MS = 2 * 60_000;
+
 export function isBulkWorktreeRunLive(phase: BulkWorktreeRunPhase): boolean {
   return phase === "running" || phase === "cancelling";
 }

@@ -218,6 +218,7 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
     recipeSelectionTouchedRef: { current: false },
+    markRecipeSelectionTouched: vi.fn(),
     selectedRecipe:
       mockSelectedRecipeId && mockSelectedRecipeId !== "__clone_layout__"
         ? { name: "Test Recipe", terminals: [{}] }
@@ -1107,6 +1108,10 @@ describe("BulkCreateWorktreeDialog", () => {
     // The three that landed are reported as created; the queued one never started.
     expect(screen.getAllByText("Cancelled after its worktree was created")).toHaveLength(3);
     expect(screen.getAllByText("Cancelled")).toHaveLength(1);
+    // The summary counts the worktrees that exist, and nothing still spins.
+    expect(screen.getByText(/3 of 4 created/)).toBeTruthy();
+    expect(screen.getByText(/4 cancelled/)).toBeTruthy();
+    expect(document.querySelectorAll(".animate-spin")).toHaveLength(0);
     const run = Object.values(useBulkCreateRunStore.getState().runs)[0]!;
     expect(run.progress.items.get(4)?.worktreeId).toBeUndefined();
     expect([1, 2, 3].map((n) => run.progress.items.get(n)?.worktreeId)).toEqual([
@@ -1294,6 +1299,13 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     // The queued item still starts once a slot frees.
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(4);
+
+    // Reopening mid-run shows the live run, not a fresh form, and follows it.
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(screen.getByText("Creating worktrees\u2026")).toBeTruthy();
+    expect(screen.getByText(/3 of 4 created/)).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-cancel-run-button")).toBeTruthy();
+
     await act(async () => {
       resolvers[3]?.(createdWorktree("wt-4"));
       await vi.advanceTimersByTimeAsync(5000);
@@ -1303,9 +1315,6 @@ describe("BulkCreateWorktreeDialog", () => {
     const runs = Object.values(useBulkCreateRunStore.getState().runs);
     expect(runs).toHaveLength(1);
     expect(runs[0]!.progress.phase).toBe("done");
-
-    // Reopening shows the run that carried on, not a fresh form.
-    render(<BulkCreateWorktreeDialog {...props} />);
     expect(screen.getByText(/4 of 4 created/)).toBeTruthy();
     expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
   });

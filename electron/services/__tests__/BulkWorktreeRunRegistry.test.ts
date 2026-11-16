@@ -156,6 +156,32 @@ describe("BulkWorktreeRunRegistry", () => {
     expect(sendCommand).toHaveBeenLastCalledWith(OWNER, { runId: "run-a", kind: "retry-failed" });
   });
 
+  it("holds an ended run's view before it sends the retry that wakes it", () => {
+    registry.publish(
+      OWNER,
+      "proj-a",
+      snapshot("run-a", { phase: "done", items: [item(1, { stage: "failed" })] })
+    );
+    expect(isBulkWorktreeRunViewHeld(wc(OWNER))).toBe(false);
+    sendCommand.mockImplementation(() => {
+      expect(isBulkWorktreeRunViewHeld(wc(OWNER))).toBe(true);
+      return true;
+    });
+
+    expect(registry.command({ runId: "run-a", kind: "retry-failed" })).toEqual({
+      accepted: true,
+    });
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+
+    // A view that turns it down republishes the run as it was, which lets go.
+    registry.publish(
+      OWNER,
+      "proj-a",
+      snapshot("run-a", { phase: "done", items: [item(1, { stage: "failed" })] })
+    );
+    expect(isBulkWorktreeRunViewHeld(wc(OWNER))).toBe(false);
+  });
+
   it("settles a run whose view went away, keeping every worktree that landed", () => {
     registry.publish(
       OWNER,

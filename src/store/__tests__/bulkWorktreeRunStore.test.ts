@@ -22,29 +22,26 @@ const run = (runId: string, phase: BulkWorktreeRunSnapshot["phase"]): BulkWorktr
 let push: ((change: BulkWorktreeRunsChanged) => void) | null = null;
 let resolveList: (runs: BulkWorktreeRunSnapshot[]) => void = () => {};
 const unsubscribe = vi.fn();
+const list = vi.fn(
+  () =>
+    new Promise<BulkWorktreeRunSnapshot[]>((resolve) => {
+      resolveList = resolve;
+    })
+);
+const onChanged = vi.fn((callback: (change: BulkWorktreeRunsChanged) => void) => {
+  push = callback;
+  return unsubscribe;
+});
 
 beforeEach(() => {
   push = null;
-  unsubscribe.mockClear();
-  (globalThis as unknown as { window: unknown }).window = {
-    electron: {
-      bulkWorktreeRuns: {
-        list: () =>
-          new Promise<BulkWorktreeRunSnapshot[]>((resolve) => {
-            resolveList = resolve;
-          }),
-        onChanged: (callback: (change: BulkWorktreeRunsChanged) => void) => {
-          push = callback;
-          return unsubscribe;
-        },
-      },
-    },
-  };
+  vi.clearAllMocks();
+  vi.stubGlobal("window", { electron: { bulkWorktreeRuns: { list, onChanged } } });
 });
 
 afterEach(() => {
   _resetBulkWorktreeRunStoreForTest();
-  delete (globalThis as unknown as { window?: unknown }).window;
+  vi.unstubAllGlobals();
 });
 
 describe("bulkWorktreeRunStore", () => {
@@ -52,7 +49,8 @@ describe("bulkWorktreeRunStore", () => {
     expect(push).toBeNull();
     useBulkWorktreeRunStore.getState().init();
     useBulkWorktreeRunStore.getState().init();
-    expect(push).not.toBeNull();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
 
     resolveList([run("a", "running")]);
     await Promise.resolve();

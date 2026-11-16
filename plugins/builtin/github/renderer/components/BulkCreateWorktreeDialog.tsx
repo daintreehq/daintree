@@ -118,6 +118,7 @@ export function BulkCreateWorktreeDialog({
     recipePickerOpen,
     setRecipePickerOpen,
     recipeSelectionTouchedRef,
+    markRecipeSelectionTouched,
     selectedRecipe,
   } = useRecipePicker({
     isOpen,
@@ -279,17 +280,29 @@ export function BulkCreateWorktreeDialog({
   const isDone = progress.phase === "done";
   const isEnded = isDone || isCancelled;
 
-  const { succeededCount, failedCount } = useMemo(() => {
+  const { succeededCount, failedCount, stoppedCount, worktreesCreatedCount } = useMemo(() => {
     let succeeded = 0;
     let failed = 0;
+    let stopped = 0;
+    let created = 0;
     for (const item of progress.items.values()) {
+      if (item.worktreeId) created++;
       if (item.stage === "succeeded") succeeded++;
       else if (item.stage === "failed") failed++;
+      else if (item.stage === "cancelled" || item.stage === "interrupted") stopped++;
     }
-    return { succeededCount: succeeded, failedCount: failed };
+    return {
+      succeededCount: succeeded,
+      failedCount: failed,
+      stoppedCount: stopped,
+      worktreesCreatedCount: created,
+    };
   }, [progress.items]);
 
-  const processedCount = succeededCount + failedCount;
+  const processedCount = succeededCount + failedCount + stoppedCount;
+  // A cancel can leave worktrees made but never set up, and they exist all the
+  // same: once cancelled, the count is of worktrees on disk.
+  const createdCount = isCancelled ? worktreesCreatedCount : succeededCount;
 
   useLayoutEffect(() => {
     if (!isOpen && acknowledgedRunIdRef.current) {
@@ -413,7 +426,7 @@ export function BulkCreateWorktreeDialog({
 
   const handleRecipeSelectCombined = useCallback(
     (recipeId: string | null) => {
-      recipeSelectionTouchedRef.current = true;
+      markRecipeSelectionTouched();
       setSelectedRecipeId(recipeId);
       if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, recipeId);
       setRecipePickerOpen(false);
@@ -421,7 +434,7 @@ export function BulkCreateWorktreeDialog({
     [
       setSelectedRecipeId,
       setRecipePickerOpen,
-      recipeSelectionTouchedRef,
+      markRecipeSelectionTouched,
       projectId,
       setLastSelectedWorktreeRecipeIdByProject,
     ]
@@ -469,7 +482,7 @@ export function BulkCreateWorktreeDialog({
       footer={
         isEnded ? (
           <>
-            {isDone && failedCount > 0 && (
+            {failedCount > 0 && (
               <Button
                 variant="ghost"
                 onClick={handleRetryFailed}
@@ -668,7 +681,9 @@ export function BulkCreateWorktreeDialog({
                   itemStatus &&
                   itemStatus.stage !== "pending" &&
                   itemStatus.stage !== "succeeded" &&
-                  itemStatus.stage !== "failed";
+                  itemStatus.stage !== "failed" &&
+                  itemStatus.stage !== "cancelled" &&
+                  itemStatus.stage !== "interrupted";
                 return (
                   <div key={item.item.number} className="px-3 py-2 flex items-start gap-3 text-sm">
                     <div className="mt-0.5 shrink-0">
@@ -717,11 +732,12 @@ export function BulkCreateWorktreeDialog({
             />
             <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
               <span>
-                {succeededCount} of {progress.items.size} created
+                {createdCount} of {progress.items.size} created
               </span>
               {failedCount > 0 && (
                 <span className="text-status-warning">&middot; {failedCount} failed</span>
               )}
+              {stoppedCount > 0 && <span>&middot; {stoppedCount} cancelled</span>}
             </div>
           </div>
         </div>

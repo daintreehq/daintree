@@ -22,7 +22,10 @@ import {
  * the hold synchronously.
  */
 
-/** How long a live run's hold lasts without a publish. Every step publishes, and the longest wait is a 5-minute transient retry. */
+/**
+ * How long a live run's hold lasts without a publish. A live run republishes
+ * at least every `BULK_RUN_HEARTBEAT_MS`, however long a step takes.
+ */
 export const BULK_RUN_HOLD_TTL_MS = 10 * 60_000;
 
 /** Ended runs kept until dismissed. Past this the oldest go first; live runs are never dropped. */
@@ -154,6 +157,14 @@ export class BulkWorktreeRunRegistry {
       if (!snapshot.items.some((item) => item.stage === "failed")) {
         return { accepted: false, reason: "nothing-to-retry" };
       }
+    }
+    // A retry wakes a view that may be frozen or next in line for eviction, so
+    // it is held before the command goes, not once the run reports back. A view
+    // that turns the retry down republishes the run as it was, which releases
+    // the hold; one that never answers lets it lapse.
+    if (command.kind === "retry-failed") {
+      hold(record.ownerId, record.snapshot.runId);
+      this.armHoldTimer(record);
     }
     if (!this.deps.sendCommand(record.ownerId, command)) {
       this.ownerGone(record.ownerId);

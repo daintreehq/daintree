@@ -333,8 +333,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
       vi.advanceTimersByTime(500);
       expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
 
+      // The run's end freezes it on its own, with no sweep to wait for.
       endRun();
-      manager.refreezeUnprotectedCachedViews();
+      vi.advanceTimersByTime(0);
       expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
     });
   });

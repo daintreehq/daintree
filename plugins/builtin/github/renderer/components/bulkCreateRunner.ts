@@ -14,10 +14,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import type { BranchInfo, RecipeTerminal, TerminalRecipe } from "@shared/types";
-import type {
-  BulkWorktreeRunPhase,
-  BulkWorktreeRunSnapshot,
+import {
+  BULK_RUN_HEARTBEAT_MS,
+  type BulkWorktreeRunPhase,
+  type BulkWorktreeRunSnapshot,
 } from "@shared/types/ipc/bulkWorktreeRuns";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { progressReducer, type ProgressAction, type ProgressState } from "./bulkCreateReducer";
@@ -195,6 +197,20 @@ interface RunRuntime {
   cancelRequested: boolean;
   /** Worktrees the current execution created, for what a cancel reports. */
   created: number;
+  /** The recipe the first launch ran, by id and digest, so a retry relaunching by index runs the same one. */
+  launchedRecipe: { id: string; terminalsDigest: string } | null;
+  viewerLookup: Promise<{ login: string; avatarUrl?: string } | null> | null;
+}
+
+function lookUpViewer(
+  rt: RunRuntime,
+  rootPath: string
+): Promise<{ login: string; avatarUrl?: string } | null> {
+  rt.viewerLookup ??= forgeClient
+    .getCurrentUser(rootPath)
+    .then((user) => (user ? { login: user.login, avatarUrl: user.avatarUrl } : null))
+    .catch(() => null);
+  return rt.viewerLookup;
 }
 
 const runtimes = new Map<string, RunRuntime>();
@@ -208,6 +224,7 @@ function dispatchRun(runId: string, action: ProgressAction): void {
     runs: { ...state.runs, [runId]: { ...run, progress } },
   }));
   schedulePublish(runId);
+  if (isLive(run) !== isLive({ ...run, progress })) syncHeartbeat();
 }
 
 function snapshotPhase(phase: ProgressState["phase"]): BulkWorktreeRunPhase {
@@ -270,14 +287,39 @@ function schedulePublish(runId: string): void {
   });
 }
 
+// While any run here is live, republish it now and then: a long step (a slow
+// branch lookup, a transient retry) changes nothing, and main's hold on this
+// view lapses without word from it.
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+function isLive(run: BulkCreateRun | undefined): boolean {
+  return run?.progress.phase === "executing" || run?.progress.phase === "cancelling";
+}
+
+function syncHeartbeat(): void {
+  const live = Object.values(useBulkCreateRunStore.getState().runs).filter(isLive);
+  if (live.length > 0 && heartbeat === null && bridgeAvailable()) {
+    heartbeat = setInterval(() => {
+      for (const run of Object.values(useBulkCreateRunStore.getState().runs)) {
+        if (isLive(run)) schedulePublish(run.id);
+      }
+    }, BULK_RUN_HEARTBEAT_MS);
+  } else if (live.length === 0 && heartbeat !== null) {
+    clearInterval(heartbeat);
+    heartbeat = null;
+  }
+}
+
 let stopListeningForCommands: (() => void) | null = null;
 
 // Installed with the first run, so a view that never runs one listens for nothing.
 function listenForCommands(): void {
   if (stopListeningForCommands || !bridgeAvailable()) return;
   stopListeningForCommands = bulkWorktreeRunsClient.onCommand(({ runId, kind }) => {
-    if (kind === "cancel") cancelBulkCreateRun(runId);
-    else void retryFailedBulkCreateRun(runId);
+    const taken =
+      kind === "cancel" ? cancelBulkCreateRun(runId) : retryFailedBulkCreateRun(runId) !== null;
+    // Main held this view for the command; the run as it stands releases it.
+    if (!taken) schedulePublish(runId);
   });
 }
 
@@ -338,11 +380,23 @@ export function startBulkCreateRun(input: BulkCreateRunInput): {
     queue: null,
     cancelRequested: false,
     created: 0,
+    launchedRecipe: null,
+    viewerLookup: null,
   };
+  if (input.recipeId && input.recipeId !== CLONE_LAYOUT_ID) {
+    const recipe = useRecipeStore.getState().getRecipeById(input.recipeId);
+    if (recipe) {
+      rt.launchedRecipe = {
+        id: recipe.id,
+        terminalsDigest: recipeApprovalDigest(recipe.terminals),
+      };
+    }
+  }
   runtimes.set(runId, rt);
   useBulkCreateRunStore.setState((state) => ({ runs: { ...state.runs, [runId]: run } }));
   listenForCommands();
   schedulePublish(runId);
+  syncHeartbeat();
   return { runId, done: execute(runId, rt, toCreate) };
 }
 
@@ -365,14 +419,16 @@ export function cancelBulkCreateRun(runId: string): boolean {
 }
 
 /**
- * Run the failed items of an ended run again. Worktrees already created are
- * reused, and only the terminals that are missing or dead launch again
- * (#16834). Null when the run has nothing to retry or is still running.
+ * Run the failed items of an ended run again, a cancelled one included; what
+ * a cancel stopped stays stopped. Worktrees already created are reused, and
+ * only the terminals that are missing or dead launch again (#16834). Null
+ * when the run has nothing to retry or is still running.
  */
 export function retryFailedBulkCreateRun(runId: string): Promise<void> | null {
   const run = useBulkCreateRunStore.getState().runs[runId];
   const rt = runtimes.get(runId);
-  if (!run || !rt || run.progress.phase !== "done") return null;
+  const { phase } = run?.progress ?? {};
+  if (!run || !rt || (phase !== "done" && phase !== "cancelled")) return null;
   const failedIssueNumbers = new Set<number>();
   for (const [issueNumber, item] of run.progress.items) {
     if (
@@ -436,6 +492,8 @@ export function _resetBulkCreateRunsForTests(): void {
   }
   runtimes.clear();
   publishPending.clear();
+  if (heartbeat !== null) clearInterval(heartbeat);
+  heartbeat = null;
   stopListeningForCommands?.();
   stopListeningForCommands = null;
   useBulkCreateRunStore.setState({ runs: {} });
@@ -881,6 +939,11 @@ async function runBatch(
               .runRecipeWithResults(input.recipeId, worktreePath, worktreeId, recipeContext, {
                 terminalIndices: pendingIndices,
                 spawnBatch: recipeSpawnBatches.get(itemNumber),
+                // Indices from an earlier launch only mean the same entries
+                // in the same recipe: an edit since refuses the relaunch.
+                ...(pendingIndices !== undefined && rt.launchedRecipe
+                  ? { expectedRecipe: rt.launchedRecipe }
+                  : {}),
               });
 
             // Defence in depth: the assignment and success gates below
@@ -933,11 +996,15 @@ async function runBatch(
           // with an isolated 60s backoff cap so the assignment endpoint's secondary
           // rate limit (~60s) doesn't widen worktree/terminal retry delays.
           if (planned.mode === "issue" && input.assignToSelf && itemNumber) {
-            const username = input.getViewer()?.login;
+            // The dialog's lookup normally has the viewer by now; one closed
+            // before its lookup landed leaves the run to look for itself.
+            const viewer = input.getViewer() ?? (await lookUpViewer(rt, rootPath));
+            if (rt.generation !== gen) return;
+            const username = viewer?.login;
             // Snap the avatar alongside the login before any async work so
             // the optimistic cache entry matches the user we assign to,
             // mirroring the single-create flow (#10529).
-            const assignAvatarUrl = input.getViewer()?.avatarUrl;
+            const assignAvatarUrl = viewer?.avatarUrl;
             if (username) {
               dispatch({
                 type: "ITEM_ASSIGNING",

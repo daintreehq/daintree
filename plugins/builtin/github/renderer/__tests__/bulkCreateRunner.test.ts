@@ -12,6 +12,9 @@ const mockWorktreeCreate = vi.fn();
 const mockGetAvailableBranch = vi.fn(async (_root: string, branch: string) => branch);
 const mockGetDefaultPath = vi.fn(async (_root: string, branch: string) => `/worktrees/${branch}`);
 const mockRunRecipe = vi.fn();
+const mockAssignIssue = vi.fn();
+const mockGetCurrentUser = vi.fn();
+const recipesById: Record<string, unknown> = {};
 const mockNotify = vi.fn();
 
 vi.mock("@/clients", () => ({
@@ -21,7 +24,10 @@ vi.mock("@/clients", () => ({
     getDefaultPath: (root: string, branch: string) => mockGetDefaultPath(root, branch),
     listBranches: vi.fn(async () => []),
   },
-  forgeClient: { assignIssue: vi.fn() },
+  forgeClient: {
+    assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
+    getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
+  },
   agentSettingsClient: { get: vi.fn() },
   systemClient: { getTmpDir: vi.fn() },
 }));
@@ -35,7 +41,10 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
 vi.mock("@/components/Worktree/panelSpawning", () => ({ spawnPanelsFromRecipe: vi.fn() }));
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: {
-    getState: () => ({ runRecipeWithResults: mockRunRecipe, getRecipeById: () => null }),
+    getState: () => ({
+      runRecipeWithResults: mockRunRecipe,
+      getRecipeById: (id: string) => recipesById[id] ?? null,
+    }),
   },
 }));
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -66,6 +75,9 @@ import {
   type BulkCreateRunInput,
 } from "../components/bulkCreateRunner";
 import type { PlannedWorktree } from "../components/bulkCreateUtils";
+import { BULK_RUN_HEARTBEAT_MS } from "@shared/types/ipc/bulkWorktreeRuns";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import type { RecipeTerminal } from "@shared/types";
 
 const issue = (n: number): Issue =>
   ({ number: n, title: `Issue ${n}`, state: "open", assignees: [] }) as unknown as Issue;
@@ -145,8 +157,11 @@ function installBridge() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRunRecipe.mockReset();
+  mockWorktreeCreate.mockReset();
   _resetBulkCreateRunsForTests();
   for (const key of Object.keys(panelsById)) delete panelsById[key];
+  for (const key of Object.keys(recipesById)) delete recipesById[key];
 });
 
 afterEach(() => {
@@ -323,5 +338,144 @@ describe("bulk create runner", () => {
     expect(dismissBulkCreateRun(runId)).toBe(true);
     expect(useBulkCreateRunStore.getState().runs[runId]).toBeUndefined();
     expect(bridge.dismissed).toEqual([runId]);
+  });
+
+  it("retries the failures of a cancelled run, leaving what the cancel stopped", async () => {
+    const bridge = installBridge();
+    const pending = new Map<
+      string,
+      { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    >();
+    mockWorktreeCreate.mockImplementation(
+      (options: { newBranch: string }) =>
+        new Promise((resolve, reject) => pending.set(options.newBranch, { resolve, reject }))
+    );
+
+    const { runId, done } = startBulkCreateRun(input([1, 2, 3, 4]));
+    await flush();
+    pending.get("feature/issue-1")!.reject(new Error("disk full"));
+    await flush();
+    cancelBulkCreateRun(runId);
+    pending.get("feature/issue-2")!.resolve({ worktreeId: "wt-2", branch: "feature/issue-2" });
+    pending.get("feature/issue-3")!.resolve({ worktreeId: "wt-3", branch: "feature/issue-3" });
+    // Item 1's failure freed a slot, so item 4 had started too.
+    pending.get("feature/issue-4")!.resolve({ worktreeId: "wt-4", branch: "feature/issue-4" });
+    await done;
+    expect(runOf(runId).progress.phase).toBe("cancelled");
+    expect(runOf(runId).progress.items.get(1)?.stage).toBe("failed");
+
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+    bridge.send({ runId, kind: "retry-failed" });
+    await vi.waitFor(() => expect(runOf(runId).progress.phase).toBe("done"));
+
+    const stages = [1, 2, 3, 4].map((n) => runOf(runId).progress.items.get(n)?.stage);
+    expect(stages).toEqual(["succeeded", "cancelled", "cancelled", "cancelled"]);
+    // Only the failed item went again.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(5);
+    expect(mockWorktreeCreate.mock.calls.at(-1)?.[0]).toMatchObject({
+      newBranch: "feature/issue-1",
+    });
+  });
+
+  it("republishes a run whose command it turned down, so main lets the view go", async () => {
+    const bridge = installBridge();
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+    const { runId, done } = startBulkCreateRun(input([1]));
+    await done;
+    await flush();
+    const before = bridge.published.length;
+
+    bridge.send({ runId, kind: "retry-failed" });
+    await flush();
+
+    expect(bridge.published.length).toBe(before + 1);
+    expect(bridge.lastFor(runId)?.phase).toBe("done");
+  });
+
+  it("keeps republishing a live run through a long step, and stops once it ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = installBridge();
+      const creates = deferCreates();
+      const { runId, done } = startBulkCreateRun(input([1]));
+      await vi.advanceTimersByTimeAsync(0);
+      const before = bridge.published.length;
+
+      await vi.advanceTimersByTimeAsync(BULK_RUN_HEARTBEAT_MS * 3);
+      expect(bridge.published.length).toBe(before + 3);
+      expect(bridge.lastFor(runId)?.phase).toBe("running");
+
+      creates.land(1);
+      await vi.advanceTimersByTimeAsync(0);
+      await done;
+      await vi.advanceTimersByTimeAsync(0);
+      const afterEnd = bridge.published.length;
+      await vi.advanceTimersByTimeAsync(BULK_RUN_HEARTBEAT_MS * 3);
+      expect(bridge.published.length).toBe(afterEnd);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("looks up who to assign to itself when the dialog closed before its lookup landed", async () => {
+    installBridge();
+    mockGetCurrentUser.mockResolvedValue({ login: "octocat", avatarUrl: "a.png" });
+    mockAssignIssue.mockResolvedValue(undefined);
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+
+    const { runId, done } = startBulkCreateRun(
+      input([1, 2], { assignToSelf: true, getViewer: () => null })
+    );
+    await done;
+
+    expect(mockGetCurrentUser).toHaveBeenCalledTimes(1);
+    expect(mockAssignIssue.mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      [1, "octocat"],
+      [2, "octocat"],
+    ]);
+    expect(runOf(runId).progress.items.get(2)?.stage).toBe("succeeded");
+  });
+
+  it("relaunches failed recipe entries only against the recipe the first launch ran", async () => {
+    installBridge();
+    recipesById.recipe = { id: "recipe", terminals: [{ type: "terminal" }, { type: "claude" }] };
+    mockWorktreeCreate.mockImplementation(async (options: { newBranch: string }) => ({
+      worktreeId: `wt-${options.newBranch}`,
+      branch: options.newBranch,
+    }));
+    mockRunRecipe.mockResolvedValueOnce({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "spawn refused" }],
+    });
+    mockRunRecipe.mockResolvedValue({ spawned: [{ index: 1, terminalId: "t-1" }], failed: [] });
+
+    const { runId, done } = startBulkCreateRun(
+      input([1], { recipeId: "recipe", recipe: recipesById.recipe as never })
+    );
+    await done;
+    expect(mockRunRecipe.mock.calls[0]?.[4]).not.toHaveProperty("expectedRecipe");
+
+    await retryFailedBulkCreateRun(runId);
+
+    const relaunch = mockRunRecipe.mock.calls[1]?.[4] as {
+      terminalIndices?: number[];
+      expectedRecipe?: { id: string; terminalsDigest: string };
+    };
+    expect(relaunch.terminalIndices).toEqual([1]);
+    expect(relaunch.expectedRecipe).toEqual({
+      id: "recipe",
+      terminalsDigest: recipeApprovalDigest(
+        (recipesById.recipe as { terminals: RecipeTerminal[] }).terminals
+      ),
+    });
   });
 });

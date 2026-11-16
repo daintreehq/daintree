@@ -53,7 +53,9 @@ const SnapshotSchema = z.object({
   projectId: text(512),
   mode: z.enum(["issue", "pr"]),
   phase: z.enum(["running", "cancelling", "cancelled", "done"]),
-  items: z.array(ItemSchema).max(500),
+  // Far past any selection a person makes; a run the ledger refused would go
+  // on unseen and unheld.
+  items: z.array(ItemSchema).max(5000),
   startedAt: z.number(),
   updatedAt: z.number(),
   controllable: z.boolean(),
