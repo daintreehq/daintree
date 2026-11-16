@@ -771,7 +771,7 @@ export function DockLaunchPalette({
   const finishCapture = useCallback(() => {
     setCapturingRowKey(null);
     requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
-  }, []);
+  }, [inputRef]);
 
   const collapsePresets = useCallback(
     (row: DockLaunchRow) => {
@@ -984,6 +984,7 @@ export function DockLaunchPalette({
       capturingRowKey,
       collapsePresets,
       expandedPresetParentKey,
+      inputRef,
       moreOpen,
       moreRowKeys,
       results,

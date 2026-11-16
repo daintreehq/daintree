@@ -10,7 +10,7 @@
  *
  *   npx vitest run src/components/Layout/__tests__/DockLaunchButton.bench.test.tsx
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Profiler, type ReactNode } from "react";
 import {
@@ -226,7 +226,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => ({
   PALETTE_SURFACE_WIDTHS: { anchored: "w", command: "w" },
 }));
 
-import { DockLaunchButton } from "../DockLaunchButton";
+import { DockLaunchButton, preloadDockLaunchPalette } from "../DockLaunchButton";
 import type { DockLaunchAgent } from "../dockLaunchItems";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
@@ -365,6 +365,10 @@ function optionLabels(container: HTMLElement): string {
     .map((el) => el.getAttribute("aria-label"))
     .join("\n");
 }
+
+// The palette's chunk, loaded once so an open measures the palette rather than
+// the import.
+beforeAll(() => preloadDockLaunchPalette());
 
 beforeEach(() => {
   seedPanels();

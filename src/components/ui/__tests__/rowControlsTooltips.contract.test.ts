@@ -24,7 +24,7 @@ const SCAN_ROOTS = [path.join(REPO_ROOT, "src"), path.join(REPO_ROOT, "plugins")
  * they draw no fill and replace a glyph in its own slot.
  */
 const GLYPH_TOGGLES: Record<string, string> = {
-  "src/components/Layout/DockLaunchButton.tsx": "preset disclosure chevron in the icon column",
+  "src/components/Layout/DockLaunchPalette.tsx": "preset disclosure chevron in the icon column",
   "src/components/Worktree/WorktreeOverviewRow.tsx": "selection checkbox in the type-icon slot",
   "src/panels/file-browser/FileTreeView.tsx": "tree disclosure chevron",
   "src/components/PluginKit/kitTreeRow.tsx":

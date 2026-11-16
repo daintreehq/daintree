@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, createEvent, waitFor, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
@@ -446,7 +446,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   };
 });
 
-import { DockLaunchButton } from "../DockLaunchButton";
+import { DockLaunchButton, preloadDockLaunchPalette } from "../DockLaunchButton";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import type { LauncherArrangement } from "@shared/config/launcherArrangement";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
@@ -545,6 +545,10 @@ function movePointer(
 // jsdom implements no layout, so it ships no scrollIntoView at all. The
 // launcher scrolls the active option into view on every selection move.
 Element.prototype.scrollIntoView = vi.fn();
+
+// The palette is its own chunk. Loaded once here, so every launcher below draws
+// it in its first commit; the cold path has its own file.
+beforeAll(() => preloadDockLaunchPalette());
 
 beforeEach(() => {
   mockRecipes = [];
