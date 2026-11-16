@@ -1,20 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 
-const { restMock, restPageMock } = vi.hoisted(() => ({
+const { restMock, restPageMock, graphqlMock } = vi.hoisted(() => ({
   restMock: vi.fn(),
   restPageMock: vi.fn(),
+  graphqlMock: vi.fn(),
 }));
 
 vi.mock("../GitLabClient.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../GitLabClient.js")>()),
   gitlabRest: restMock,
   gitlabRestPage: restPageMock,
+  gitlabGraphQL: graphqlMock,
 }));
 
 import { GitLabApiError } from "../GitLabClient.js";
 import {
   clearGitLabCaches,
+  findPRsByNumbersImpl,
   getIssueTooltipImpl,
   getPRTooltipImpl,
   getRepoStatsImpl,
@@ -36,6 +39,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   restMock.mockReset();
   restPageMock.mockReset();
+  graphqlMock.mockReset();
   clearGitLabCaches();
 });
 
@@ -46,6 +50,16 @@ afterEach(() => {
 
 describe("GitLab cache residency", () => {
   function serveEverything(): void {
+    graphqlMock.mockImplementation(
+      async (_host: string, _query: string, variables: { iids: string[] }) => ({
+        project: {
+          mergeRequests: {
+            pageInfo: { hasNextPage: false },
+            nodes: variables.iids.map((iid) => ({ iid, title: `MR ${iid}`, headPipeline: null })),
+          },
+        },
+      })
+    );
     restMock.mockImplementation(async ({ path }: { path: string }) => {
       if (path === "/avatar") {
         return { data: { avatar_url: "https://gitlab.com/a.png" }, headers: new Headers() };
@@ -62,6 +76,7 @@ describe("GitLab cache residency", () => {
       (i: number) => resolveAuthorAvatarImpl("gitlab.com", `user${i}@example.com`),
       62 * 60_000,
     ],
+    ["mergeRequests", (i: number) => findPRsByNumbersImpl(REPO, [i]), 2 * 60_000],
   ] as const)(
     "releases expired %s entries without their keys being read again",
     async (cacheName, read, idleMs) => {
@@ -99,6 +114,7 @@ describe("GitLab cache residency", () => {
       await getIssueTooltipImpl(REPO, i);
       await getPRTooltipImpl(REPO, i);
       await resolveAuthorAvatarImpl("gitlab.com", `user${i}@example.com`);
+      await findPRsByNumbersImpl(REPO, [i]);
     }
     for (let i = 0; i < 100; i++) await getRepoStatsImpl(repo(`r${i}`));
 
@@ -109,6 +125,7 @@ describe("GitLab cache residency", () => {
     expect(sizes.issueTooltips).toBeLessThan(1_500);
     expect(sizes.prTooltips).toBeLessThan(1_500);
     expect(sizes.avatars).toBeLessThan(1_500);
+    expect(sizes.mergeRequests).toBeLessThan(1_500);
     expect(sizes.repoStats).toBeLessThan(100);
     expect(vi.getTimerCount()).toBe(1);
 
@@ -119,8 +136,11 @@ describe("GitLab cache residency", () => {
     await getPRTooltipImpl(REPO, 1_500);
     await resolveAuthorAvatarImpl("gitlab.com", "user1500@example.com");
     expect((await getRepoStatsImpl(repo("r99"))).source).toBe("memory-cache");
+    const queries = graphqlMock.mock.calls.length;
+    expect((await findPRsByNumbersImpl(REPO, [1_500])).get(1_500)?.number).toBe(1_500);
     expect(restMock.mock.calls.length).toBe(rest);
     expect(restPageMock.mock.calls.length).toBe(pages);
+    expect(graphqlMock.mock.calls.length).toBe(queries);
   });
 
   it("keeps serving hits and negative entries", async () => {

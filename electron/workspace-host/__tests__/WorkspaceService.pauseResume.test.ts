@@ -607,6 +607,8 @@ describe("WorkspaceService.refreshOnWake", () => {
     await service.refreshOnWake("req-wake-empty");
 
     expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    // Waking is not a request to re-ask about issues the forge didn't find.
+    expect(mockPullRequestService.refresh).toHaveBeenCalledWith({ preserveIssueBackoff: true });
     expect(mockSendEvent).toHaveBeenCalledWith({
       type: "refresh-result",
       requestId: "req-wake-empty",
