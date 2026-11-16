@@ -838,7 +838,9 @@ describe("Worker governance (idle dispose + snapshots)", () => {
     const base = baseline();
     await writeWorkerPlugin("sided", "acme.sided", {
       contributes: {
-        views: [{ id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" }],
+        views: [
+          { id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" },
+        ],
       },
     });
     const service = startService();

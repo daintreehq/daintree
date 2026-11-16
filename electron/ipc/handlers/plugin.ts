@@ -374,11 +374,9 @@ export const pluginNamespace = defineIpcNamespace({
       handleReportPanelInventory,
       { withContext: true }
     ),
-    reportViewConsumers: op(
-      PLUGIN_METHOD_CHANNELS.reportViewConsumers,
-      handleReportViewConsumers,
-      { withContext: true }
-    ),
+    reportViewConsumers: op(PLUGIN_METHOD_CHANNELS.reportViewConsumers, handleReportViewConsumers, {
+      withContext: true,
+    }),
     reportUnsavedPanels: op(PLUGIN_METHOD_CHANNELS.reportUnsavedPanels, handleReportUnsavedPanels, {
       withContext: true,
     }),
