@@ -617,19 +617,24 @@ function attachPendingFlush(): () => void {
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return () => {};
   }
-  window.addEventListener("pagehide", flushAllPending);
-  window.addEventListener("beforeunload", flushAllPending);
-  const watchVisibility =
-    typeof document !== "undefined" && typeof document.addEventListener === "function";
-  if (watchVisibility) document.addEventListener("visibilitychange", flushPendingWhenHidden);
+  // Held for the detach, which runs from the last flush's timer: by then the
+  // globals may be gone (a torn-down page or test environment).
+  const win = window;
+  const doc =
+    typeof document !== "undefined" && typeof document.addEventListener === "function"
+      ? document
+      : null;
+  win.addEventListener("pagehide", flushAllPending);
+  win.addEventListener("beforeunload", flushAllPending);
+  doc?.addEventListener("visibilitychange", flushPendingWhenHidden);
   // The bridge itself rather than `subscribeProjectViewCachedFlush`: every
   // persisted store sits on this module, and suites that stub viewCacheState
   // without that export would throw on their first debounced write.
-  const offCached = window.electron?.app?.onViewCachedFlush?.(flushAllPending);
+  const offCached = win.electron?.app?.onViewCachedFlush?.(flushAllPending);
   return () => {
-    window.removeEventListener("pagehide", flushAllPending);
-    window.removeEventListener("beforeunload", flushAllPending);
-    if (watchVisibility) document.removeEventListener("visibilitychange", flushPendingWhenHidden);
+    win.removeEventListener("pagehide", flushAllPending);
+    win.removeEventListener("beforeunload", flushAllPending);
+    doc?.removeEventListener("visibilitychange", flushPendingWhenHidden);
     offCached?.();
   };
 }

@@ -221,10 +221,9 @@ describe("safe storage skips an unchanged persisted slice (#17055)", () => {
       write(first);
       write(first);
 
-      const realSetItem = localStorage.setItem.bind(localStorage);
       const quota = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
         if (key === KEY) throw new DOMException("Quota exceeded", "QuotaExceededError");
-        realSetItem(key, value);
+        backing.set(key, value);
       });
       vi.spyOn(console, "warn").mockImplementation(() => {});
       write(second);
@@ -337,6 +336,23 @@ describe("debounced safe storage defers serialization to the flush (#17055)", ()
     expect(backing.has("broken")).toBe(false);
     expect(JSON.parse(backing.get("fine")!).state.size).toBe(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drains a pending write whose timer outlives the page's globals", async () => {
+    vi.useFakeTimers();
+    const { backing } = installCountingStorage();
+    const { createDebouncedSafeJSONStorage } = await import("../safeStorage");
+    const storage = createDebouncedSafeJSONStorage<Width>(300);
+    storage.setItem("portal", { state: { width: 5 }, version: 0 });
+
+    vi.stubGlobal("window", undefined);
+    vi.stubGlobal("document", undefined);
+    try {
+      expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(JSON.parse(backing.get("portal")!).state.width).toBe(5);
   });
 
   it("holds no lifecycle listener while nothing is pending", async () => {
