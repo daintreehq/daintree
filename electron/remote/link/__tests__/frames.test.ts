@@ -132,6 +132,8 @@ describe("link frames", () => {
 
       expect(out.buffer).not.toBe(payload.buffer);
       expect(payload).toEqual(before);
+      const [decoded] = new FrameDecoder().push(out);
+      expect(decoded!.payload).toEqual(before.subarray(50));
       expect(encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 0, payload }).buffer).toBe(
         payload.buffer
       );

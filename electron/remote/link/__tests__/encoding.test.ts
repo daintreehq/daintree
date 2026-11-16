@@ -205,9 +205,11 @@ describe("link encoding", () => {
     });
 
     it("refuses an allocator of the wrong size, and one that throws, then encodes normally", () => {
-      expect(() =>
-        encodeValue("abc", DEFAULT_ENCODING_LIMITS, (n) => new Uint8Array(n + 1))
-      ).toThrow(LinkEncodingError);
+      for (const delta of [1, -1]) {
+        expect(() =>
+          encodeValue("abc", DEFAULT_ENCODING_LIMITS, (n) => new Uint8Array(n + delta))
+        ).toThrow(LinkEncodingError);
+      }
       expect(() =>
         encodeValue("abc", DEFAULT_ENCODING_LIMITS, () => {
           throw new Error("no memory");
@@ -216,10 +218,23 @@ describe("link encoding", () => {
       expect(roundTrip(sample)).toEqual(sample);
     });
 
+    it("encodes inside an allocator that itself encodes", () => {
+      let nested: Uint8Array | null = null;
+      const out = encodeValue(sample, DEFAULT_ENCODING_LIMITS, (n) => {
+        nested = encodeValue({ inner: "i".repeat(500) });
+        return new Uint8Array(n);
+      });
+      expect(decodeValue(out)).toEqual(sample);
+      expect(decodeValue(nested!)).toEqual({ inner: "i".repeat(500) });
+    });
+
     it("leaves earlier results intact as later encodes reuse storage", () => {
+      // Warm enough that neither encode grows: the second writes over the
+      // very storage the first was written in.
+      encodeValue(new Uint8Array(4096));
       const first = encodeValue({ text: "x".repeat(1000) });
       const firstBytes = new Uint8Array(first);
-      encodeValue({ text: "y".repeat(2000) });
+      encodeValue({ text: "y".repeat(1000) });
       expect(first).toEqual(firstBytes);
       expect(decodeValue(first)).toEqual({ text: "x".repeat(1000) });
     });
@@ -230,6 +245,8 @@ describe("link encoding", () => {
     });
 
     it("encodes a value whose getter encodes another value", () => {
+      // Warm, so the outer encode holds storage the nested one could write over.
+      encodeValue(new Uint8Array(4096));
       const inner = { n: 1, s: "inner".repeat(100) };
       let nested: Uint8Array | null = null;
       const outer = {
@@ -255,13 +272,19 @@ describe("link encoding", () => {
       expect(warm).toBeGreaterThanOrEqual(64 * 1024);
       expect(warm).toBeLessThanOrEqual(MAX_RETAINED_SCRATCH_BYTES);
 
+      // A small encode writes into the warm storage rather than a fresh buffer.
+      expect(roundTrip({ small: 1 })).toEqual({ small: 1 });
+      expect(retainedScratchBytes()).toBe(warm);
+
       encodeValue(new Uint8Array(MAX_RETAINED_SCRATCH_BYTES * 4));
       expect(retainedScratchBytes()).toBe(warm);
 
-      // Warm storage larger than a call's limit doesn't lift the limit.
-      expect(() =>
-        encodeValue("x".repeat(200), { ...DEFAULT_ENCODING_LIMITS, maxBytes: 100 })
-      ).toThrow(LinkEncodingError);
+      // Warm storage larger than a call's limit doesn't lift the limit: an
+      // int32 is five bytes.
+      expect(decodeValue(encodeValue(42, { ...DEFAULT_ENCODING_LIMITS, maxBytes: 5 }))).toBe(42);
+      expect(() => encodeValue(42, { ...DEFAULT_ENCODING_LIMITS, maxBytes: 4 })).toThrow(
+        LinkEncodingError
+      );
     });
   });
 });

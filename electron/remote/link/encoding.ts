@@ -322,6 +322,18 @@ function encodeInto(
 
 const allocPlain = (length: number): Uint8Array => new Uint8Array(length);
 
+function takeScratch(): Uint8Array {
+  const storage = scratch ?? new Uint8Array(INITIAL_SCRATCH_BYTES);
+  scratch = null;
+  return storage;
+}
+
+/** Keeps the larger of what is held and `storage`, never anything over the bound. */
+function returnScratch(storage: Uint8Array): void {
+  if (storage.byteLength > MAX_RETAINED_SCRATCH_BYTES) return;
+  if (!scratch || storage.byteLength > scratch.byteLength) scratch = storage;
+}
+
 /**
  * `alloc` supplies the buffer the result is returned in (a plain Uint8Array by
  * default), so a caller can have it laid out for its own use, such as with
@@ -332,16 +344,14 @@ export function encodeValue(
   limits: EncodingLimits = DEFAULT_ENCODING_LIMITS,
   alloc: (length: number) => Uint8Array = allocPlain
 ): Uint8Array {
-  const start = scratch ?? new Uint8Array(INITIAL_SCRATCH_BYTES);
-  scratch = null;
+  const start = takeScratch();
   const w = new Writer(limits.maxBytes, start);
   try {
     encodeInto(w, value, 0, limits, new Set());
     return w.finish(alloc);
   } finally {
-    const grown = w.storage;
-    const keep = grown.byteLength <= MAX_RETAINED_SCRATCH_BYTES ? grown : start;
-    if (!scratch || keep.byteLength > scratch.byteLength) scratch = keep;
+    // A message too big to keep the grown buffer for still leaves the one it began with.
+    returnScratch(w.storage.byteLength <= MAX_RETAINED_SCRATCH_BYTES ? w.storage : start);
   }
 }
 
