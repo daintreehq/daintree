@@ -74,20 +74,25 @@ describe("WorktreeDialogs (#17072)", () => {
   it("mounts the confirm dialog on open and keeps it mounted through the close", () => {
     const view = render(<WorktreeDialogs {...props()} />);
     view.rerender(<WorktreeDialogs {...props({ confirmDialog: OPEN })} />);
-    expect(view.getByTestId("confirm").dataset.open).toBe("true");
+    const opened = view.getByTestId("confirm");
+    expect(opened.dataset.open).toBe("true");
 
+    // The same instance, so the dialog's own exit plays rather than a remount.
     view.rerender(<WorktreeDialogs {...props({ confirmDialog: CLOSED })} />);
-    expect(view.getByTestId("confirm").dataset.open).toBe("false");
+    expect(view.getByTestId("confirm")).toBe(opened);
+    expect(opened.dataset.open).toBe("false");
     expect(mounted.title).toEqual([]);
   });
 
   it("mounts the title dialog on open and keeps it mounted through the close", () => {
     const view = render(<WorktreeDialogs {...props()} />);
     view.rerender(<WorktreeDialogs {...props({ showTitleDialog: true })} />);
-    expect(view.getByTestId("title").dataset.open).toBe("true");
+    const opened = view.getByTestId("title");
+    expect(opened.dataset.open).toBe("true");
 
     view.rerender(<WorktreeDialogs {...props({ showTitleDialog: false })} />);
-    expect(view.getByTestId("title").dataset.open).toBe("false");
+    expect(view.getByTestId("title")).toBe(opened);
+    expect(opened.dataset.open).toBe("false");
     expect(mounted.confirm).toEqual([]);
   });
 });

@@ -12,13 +12,21 @@ vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
 
-// Painted while open; the exit finishes at once on close.
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
-    isVisible: isOpen,
-    shouldRender: isOpen,
-  }),
-}));
+// While set, a closing dialog stays painted, mid-exit, until a render with it
+// cleared. Otherwise the exit finishes at once on close.
+let mockExitPending = false;
+
+vi.mock("@/hooks/useAnimatedPresence", async () => {
+  const { useRef } = await import("react");
+  return {
+    useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => {
+      const painted = useRef(false);
+      if (isOpen) painted.current = true;
+      else if (painted.current && !mockExitPending) painted.current = false;
+      return { isVisible: isOpen, shouldRender: painted.current };
+    },
+  };
+});
 
 vi.mock("@/lib/scrollbarGutter", () => ({
   SCROLLBAR_GUTTER_VAR: "--app-scrollbar-gutter",
@@ -69,6 +77,7 @@ function backdropRight(): string | undefined {
 beforeEach(() => {
   usePortalStore.setState({ isOpen: true, width: 300 });
   commits = 0;
+  mockExitPending = false;
 });
 
 afterEach(() => {
@@ -100,5 +109,19 @@ describe("AppDialog Portal reads (#17072)", () => {
 
     view.rerender(<Dialog isOpen />);
     expect(backdropRight()).toBe("380px");
+  });
+
+  it("follows the Portal through the exit, and lets go once it has finished", () => {
+    const view = render(<Dialog isOpen />);
+    mockExitPending = true;
+    view.rerender(<Dialog isOpen={false} />);
+    resizePortal(420);
+    expect(backdropRight()).toBe("420px");
+
+    mockExitPending = false;
+    view.rerender(<Dialog isOpen={false} />);
+    commits = 0;
+    resizePortal(440);
+    expect(commits).toBe(0);
   });
 });

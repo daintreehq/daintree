@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveAuthorAvatar = vi.fn();
@@ -149,8 +149,9 @@ describe("useForgeAuthorAvatar", () => {
       expect(resolvedProvider.askedFor.at(-1)).toBe("project-1");
 
       rerender({ enabled: false });
-      release("https://avatars.example/late");
-      await Promise.resolve();
+      await act(async () => {
+        release("https://avatars.example/late");
+      });
       expect(result.current).toBeUndefined();
     });
   });

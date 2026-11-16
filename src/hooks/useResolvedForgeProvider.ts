@@ -93,10 +93,11 @@ function resolveProviderOnce(id: string): Promise<ForgeProviderResolution> {
   return request;
 }
 
-// Manual refreshes discard the in-flight request once per synchronous burst:
-// the first drops the pre-refresh request, and any other component refreshing
-// in the same burst joins the fresh one it started. The marker clears on the
-// microtask after the burst, so the next refresh discards again.
+// Invalidations — a provenance or remote event, a manual refresh — discard the
+// in-flight request once per synchronous burst: the first drops the
+// pre-invalidation request, and any other in the same burst joins the fresh one
+// it started. The marker clears on the microtask after the burst, so the next
+// genuine invalidation discards again.
 const discardedThisBurst = new Set<string>();
 
 function discardInFlightResolution(id: string): void {
@@ -166,14 +167,28 @@ function resolveProject(id: string): void {
   );
 }
 
+// A request still out when nothing will hear what invalidates it can't be
+// trusted to answer the next consumer: stop sharing it, and let its answer land
+// nowhere.
+function abandonRequest(id: string): void {
+  inFlightResolutions.delete(id);
+  const seq = resolveSeq.get(id);
+  if (seq !== undefined) resolveSeq.set(id, seq + 1);
+}
+
+function forgetUnwatched(id: string): void {
+  resolutionCache.delete(id);
+  abandonRequest(id);
+}
+
 function handleProvenanceChanged(): void {
-  for (const id of [...resolutionCache.keys()]) {
-    if (!projectListeners.has(id)) resolutionCache.delete(id);
+  for (const id of new Set([...resolutionCache.keys(), ...inFlightResolutions.keys()])) {
+    if (!projectListeners.has(id)) forgetUnwatched(id);
   }
   for (const id of projectListeners.keys()) {
     // A resolution already in flight answers the pre-change registry;
     // joining it would hand every consumer a stale provider.
-    inFlightResolutions.delete(id);
+    discardInFlightResolution(id);
     resolveProject(id);
   }
 }
@@ -186,16 +201,17 @@ function handleProvenanceChanged(): void {
 function handleRemoteChanged(payload: { projectId: string }): void {
   const id = payload.projectId;
   if (!projectListeners.has(id)) {
-    resolutionCache.delete(id);
+    forgetUnwatched(id);
     return;
   }
-  inFlightResolutions.delete(id);
+  discardInFlightResolution(id);
   resolveProject(id);
 }
 
 // One provenance and one remote-change listener for the whole renderer, held
 // while any project has a consumer. Events that land while it is detached are
-// covered by the resolve every project gets when its first consumer mounts.
+// covered by the fresh resolve every project gets when its first consumer
+// mounts.
 let detachInvalidationListeners: (() => void) | null = null;
 
 function attachInvalidationListeners(): void {
@@ -234,11 +250,18 @@ function subscribeToProject(id: string, listener: () => void): () => void {
     if (listeners.size === 0 && projectListeners.get(id) === listeners) {
       projectListeners.delete(id);
     }
-    if (projectListeners.size === 0 && detachInvalidationListeners) {
-      detachInvalidationListeners();
-      detachInvalidationListeners = null;
-    }
+    if (projectListeners.size === 0) queueMicrotask(releaseInvalidationListeners);
   };
+}
+
+// Deferred a microtask: StrictMode replays every consumer's unmount and remount
+// inside one commit, and letting go in between would abandon, and so double,
+// every first request.
+function releaseInvalidationListeners(): void {
+  if (projectListeners.size > 0 || !detachInvalidationListeners) return;
+  detachInvalidationListeners();
+  detachInvalidationListeners = null;
+  for (const id of [...inFlightResolutions.keys()]) abandonRequest(id);
 }
 
 function noopUnsubscribe(): void {}

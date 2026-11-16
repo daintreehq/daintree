@@ -49,6 +49,16 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
 }));
 
+const avatarLookups = vi.hoisted(() => ({
+  calls: [] as Array<{ email?: string; cwd?: string; enabled?: boolean }>,
+}));
+vi.mock("@/hooks/useForgeAuthorAvatar", () => ({
+  useForgeAuthorAvatar: (args: { email?: string; cwd?: string; enabled?: boolean }) => {
+    avatarLookups.calls.push(args);
+    return undefined;
+  },
+}));
+
 vi.mock("../../LifecycleCommandApprovalDialog", () => ({
   LifecycleCommandApprovalDialog: (props: { isOpen: boolean; setupAwaitingApproval: boolean }) =>
     props.isOpen ? (
@@ -809,4 +819,33 @@ describe("WorktreeDetailsSection resource controls", () => {
       expect(container.querySelector("[data-radix-context-menu-trigger], .sr-only")).toBeNull();
     }
   );
+});
+
+// #17072 — every card holds this section; a resting one asks for no avatar.
+describe("WorktreeDetailsSection forge avatar lookup", () => {
+  const authored = withChanges({
+    lastCommitAuthor: { name: "Jane Doe", email: "jane@example.com" },
+    lastCommitTimestampMs: Date.now() - 60_000,
+  });
+
+  beforeEach(() => {
+    avatarLookups.calls = [];
+  });
+
+  it("asks for nothing while the details are closed, and for the author once opened", () => {
+    const { rerender } = renderSection({ worktree: authored, isExpanded: false });
+    expect(avatarLookups.calls.length).toBeGreaterThan(0);
+    expect(avatarLookups.calls.every((call) => call.enabled === false)).toBe(true);
+
+    rerender(
+      <TooltipProvider>
+        <WorktreeDetailsSection {...baseProps} worktree={authored} isExpanded={true} />
+      </TooltipProvider>
+    );
+    expect(avatarLookups.calls.at(-1)).toEqual({
+      email: "jane@example.com",
+      cwd: authored.path,
+      enabled: true,
+    });
+  });
 });

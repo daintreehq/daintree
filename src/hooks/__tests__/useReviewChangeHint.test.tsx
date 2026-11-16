@@ -34,16 +34,19 @@ function adopt(marks: Record<string, ReviewMarkSummary>) {
 
 function renderCard(headOid: string) {
   let renders = 0;
-  const hook = renderHook(() => {
-    renders += 1;
-    return useReviewChangeHint({
-      id: "wt-1",
-      branch: "feature",
-      isDetached: false,
-      worktreeChanges: { headOid } as never,
-      lastActivityTimestamp: null,
-    });
-  });
+  const hook = renderHook(
+    ({ head, branch }: { head: string; branch: string }) => {
+      renders += 1;
+      return useReviewChangeHint({
+        id: "wt-1",
+        branch,
+        isDetached: false,
+        worktreeChanges: { headOid: head } as never,
+        lastActivityTimestamp: null,
+      });
+    },
+    { initialProps: { head: headOid, branch: "feature" } }
+  );
   return { hook, renders: () => renders };
 }
 
@@ -82,6 +85,27 @@ describe("useReviewChangeHint (#17072)", () => {
     // A mark from another branch never applies to this checkout.
     adopt({ "wt-1": mark("elsewhere", 2) });
     expect(hook.result.current).toBeNull();
+
+    adopt({});
+    expect(hook.result.current).toBeNull();
+  });
+
+  it("follows the card's own head and branch with the marks unchanged", () => {
+    adopt({ "wt-1": mark("feature", 1) });
+    const { hook } = renderCard(COMMIT);
+    expect(hook.result.current).toBeNull();
+
+    hook.rerender({ head: MOVED, branch: "feature" });
+    expect(hook.result.current).toBe(CHANGED_SINCE_REVIEW);
+
+    hook.rerender({ head: MOVED, branch: "elsewhere" });
+    expect(hook.result.current).toBeNull();
+  });
+
+  it("drops a showing hint when its mark is cleared", () => {
+    adopt({ "wt-1": mark("feature", 1) });
+    const { hook } = renderCard(MOVED);
+    expect(hook.result.current).toBe(CHANGED_SINCE_REVIEW);
 
     adopt({});
     expect(hook.result.current).toBeNull();

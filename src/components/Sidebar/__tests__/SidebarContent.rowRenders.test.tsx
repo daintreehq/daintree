@@ -18,11 +18,13 @@ vi.mock("@/components/Worktree", () => ({
     isActive,
     isFocused,
     isKeyboardCursor,
+    isSingleWorktree,
   }: {
     worktree: WorktreeState;
     isActive: boolean;
     isFocused: boolean;
     isKeyboardCursor: boolean;
+    isSingleWorktree: boolean;
   }) => {
     cardRenders.set(worktree.id, (cardRenders.get(worktree.id) ?? 0) + 1);
     return (
@@ -31,6 +33,7 @@ vi.mock("@/components/Worktree", () => ({
         data-active={String(isActive)}
         data-focused={String(isFocused)}
         data-cursor={String(isKeyboardCursor)}
+        data-single={String(isSingleWorktree)}
       />
     );
   },
@@ -171,5 +174,13 @@ describe.each(["sortable", "static"] as const)("sidebar %s rows (#17072)", (mode
     const { step } = setup(mode);
     step({ keyboardCursorId: "not-in-list" });
     expect(cardRenders.size).toBe(0);
+  });
+
+  it("re-renders every card when the worktree count crosses one", () => {
+    const { view, step } = setup(mode);
+    expect(view.getByTestId("card-wt-a").dataset.single).toBe("false");
+    step({ totalWorktreeCount: 1 });
+    expect(cardRenders.size).toBe(IDS.length);
+    for (const id of IDS) expect(view.getByTestId(`card-${id}`).dataset.single).toBe("true");
   });
 });
