@@ -271,12 +271,29 @@ describe("probing a pane across a turn's reads (#17044)", () => {
     expect(observe).toHaveBeenCalledTimes(1);
   });
 
-  it("looks again right away once the process was replaced mid-listing", async () => {
-    observe.mockResolvedValueOnce({ status: "unknown", reason: "pane-changed" });
+  it.each<AgentSessionFileUnknownReason>(["pane-changed", "no-live-agent", "unsupported-platform"])(
+    "looks again right away after a %s answer, which a second listing may not repeat",
+    async (reason) => {
+      observe.mockResolvedValueOnce({ status: "unknown", reason });
 
-    await readCodexPaneContextUsage("t-1", signal(), deps());
-    expect(await readCodexPaneContextUsage("t-1", signal(), deps())).toEqual(OK);
-    expect(observe).toHaveBeenCalledTimes(2);
+      await readCodexPaneContextUsage("t-1", signal(), deps());
+      expect(await readCodexPaneContextUsage("t-1", signal(), deps())).toEqual(OK);
+      expect(observe).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("reuses a miss through the memo every caller shares by default", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
+    observe.mockResolvedValue({ status: "unknown", reason: "not-observed" });
+    const shared = { ...deps(), probes: undefined };
+
+    try {
+      await readCodexPaneContextUsage("t-default-memo", signal(), shared);
+      await readCodexPaneContextUsage("t-default-memo", signal(), shared);
+      expect(observe).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("finds the rollout afresh for every reading, so a new conversation's replaces the old", async () => {
@@ -317,6 +334,7 @@ describe("probing a pane across a turn's reads (#17044)", () => {
 
     await readCodexPaneContextUsage("t-1", signal(), deps());
     await readCodexPaneContextUsage("t-2", signal(), deps());
+    await readCodexPaneContextUsage("t-1", signal(), deps());
 
     expect(observe).toHaveBeenCalledTimes(2);
   });
@@ -326,8 +344,11 @@ describe("probing a pane across a turn's reads (#17044)", () => {
     observe.mockReturnValue(probe.promise);
 
     const first = readCodexPaneContextUsage("t-1", signal(), deps());
-    const second = readCodexPaneContextUsage("t-1", signal(), deps());
     await vi.waitFor(() => expect(observe).toHaveBeenCalled());
+    // A probe still running has no miss to age out, however long it takes.
+    clock += CODEX_PROBE_MISS_REUSE_MS * 2;
+    const second = readCodexPaneContextUsage("t-1", signal(), deps());
+    await new Promise((resolve) => setTimeout(resolve, 0));
     probe.resolve(OBSERVED);
 
     expect(await Promise.all([first, second])).toEqual([OK, OK]);

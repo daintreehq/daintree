@@ -507,10 +507,11 @@ describe("probeCodexSessionFile", () => {
       await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toMatchObject({
         status: "observed",
       });
-      const requested = read.mock.calls.reduce(
-        (total, call) => total + (typeof call[2] === "number" ? call[2] : 0),
-        0
-      );
+      // Production reads positionally: (buffer, offset, length, position).
+      const requested = read.mock.calls.reduce((total, call) => {
+        const length = (call as unknown[])[2];
+        return total + (typeof length === "number" ? length : 0);
+      }, 0);
       expect(requested).toBeGreaterThan(0);
       expect(requested).toBeLessThan(64 * 1024);
     } finally {
