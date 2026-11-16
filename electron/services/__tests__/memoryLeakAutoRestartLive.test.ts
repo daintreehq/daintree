@@ -10,7 +10,9 @@ const thawMock = vi.hoisted(() => ({
   release: () => {},
   unfreezeWebContents: vi.fn(),
 }));
+// Every view counts as frozen, so each delivery takes the thaw path under test.
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: () => true,
   unfreezeWebContents: thawMock.unfreezeWebContents,
 }));
 

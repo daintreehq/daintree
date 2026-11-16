@@ -60,7 +60,9 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   },
 }));
 
+// Every view counts as frozen, so routed sends keep taking the thaw path.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: () => true,
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 

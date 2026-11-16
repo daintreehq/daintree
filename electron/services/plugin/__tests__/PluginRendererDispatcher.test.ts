@@ -44,15 +44,16 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: registryMock.getProjectForWebContents,
 }));
 
-// The dispatcher thaws a (possibly CDP-frozen) view before sending (#13119).
-// The fakes have no debugger, so the thaw is mocked; each test that inspects a
-// dispatch send drains it first.
+// The dispatcher thaws a CDP-frozen view before sending (#13119). The fakes
+// have no debugger, so the thaw is mocked and every fake counts as frozen; each
+// test that inspects a dispatch send drains it first.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: vi.fn(() => true),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { PluginRendererDispatcher, projectAgentPanes } from "../PluginRendererDispatcher.js";
-import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
+import { isWebContentsFrozen, unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 
 /** Let a dispatch's awaited thaw settle so its send has run. */
 async function flushThaw(): Promise<void> {
@@ -430,6 +431,18 @@ describe("PluginRendererDispatcher", () => {
       void d.sendDispatchToRenderer("action.run", null);
       await flushThaw();
       expect(unfreezeWebContents).toHaveBeenCalledWith(wc);
+      expect(wc.send).toHaveBeenCalled();
+      d.dispose();
+    });
+
+    it("sends to a view never frozen at once, with no thaw (#17036)", () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      vi.mocked(isWebContentsFrozen).mockReturnValueOnce(false);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      void d.sendDispatchToRenderer("action.run", null);
+      expect(unfreezeWebContents).not.toHaveBeenCalled();
       expect(wc.send).toHaveBeenCalled();
       d.dispose();
     });

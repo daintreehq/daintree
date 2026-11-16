@@ -59,10 +59,12 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (wc: { id: number }) => mockWindowForWebContents.get(wc.id) ?? null,
 }));
 
-// `unfreezeWebContents` is the only member the bridge imports. Mocked so the
-// routed paths' thaw is observable and so the real CDP helper doesn't warn its
-// way through every test against a WebContents fake with no `debugger`.
+// Mocked so the routed paths' thaw is observable and so the real CDP helper
+// doesn't warn its way through every test against a WebContents fake with no
+// `debugger`. Every view counts as frozen unless a test says otherwise, so the
+// routed paths keep taking the thaw.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: vi.fn(() => true),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -74,7 +76,7 @@ import {
   RemoteHostWindowOnlyError,
 } from "../rendererBridge.js";
 import { registerRemoteService } from "../../../remote/runtime.js";
-import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
+import { isWebContentsFrozen, unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { RoutedViewWorktreePort } from "../worktreeViewPort.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
@@ -1812,6 +1814,37 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
 
     settlePendingDispatch(101);
     await promise;
+  });
+
+  it("sends a routed dispatch and manifest request in the same turn to a view never frozen (#17036)", async () => {
+    vi.mocked(isWebContentsFrozen).mockReturnValue(false);
+    try {
+      const wc = registerView("ws-a", 101);
+
+      const dispatched = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      const listed = bridge.requestManifestForWorkspace("ws-a");
+
+      expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
+      expect(wc.send).toHaveBeenCalledWith(
+        CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+        expect.objectContaining({ actionId: "terminal.list" })
+      );
+      expect(wc.send).toHaveBeenCalledWith(
+        CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST,
+        expect.objectContaining({ requestId: expect.any(String) })
+      );
+
+      settlePendingDispatch(101);
+      const [requestId] = [...pendingManifests.keys()];
+      mockIpcMain.emit(
+        CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+        { sender: { id: 101 } },
+        { requestId, manifest: [] }
+      );
+      await Promise.all([dispatched, listed]);
+    } finally {
+      vi.mocked(isWebContentsFrozen).mockReturnValue(true);
+    }
   });
 
   it("thaws a pinned view too — a help session's view is an ordinary cached view", async () => {
