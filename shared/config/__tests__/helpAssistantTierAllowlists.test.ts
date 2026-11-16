@@ -126,7 +126,10 @@ describe("toNonRendererOwnedTools", () => {
     expect(linkTools.length).toBeGreaterThan(0);
     for (const tier of HELP_ASSISTANT_TIERS) {
       const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);
-      expect(projected.filter((id) => id.startsWith("portal.")), tier).toEqual([]);
+      expect(
+        projected.filter((id) => id.startsWith("portal.")),
+        tier
+      ).toEqual([]);
     }
     expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => id.startsWith("portal."))).toEqual([]);
   });

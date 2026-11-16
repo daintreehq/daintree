@@ -1154,10 +1154,7 @@ describe("ProjectSettingsManager caching", () => {
         }),
       ]);
 
-      expect((await readFromDisk()).portalLinks?.map((link) => link.title)).toEqual([
-        "One",
-        "Two",
-      ]);
+      expect((await readFromDisk()).portalLinks?.map((link) => link.title)).toEqual(["One", "Two"]);
     });
 
     it("refuses the Assistant a link the user added, writing nothing", async () => {

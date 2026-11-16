@@ -30,7 +30,15 @@ interface LaunchpadRowProps {
   onOpenUrl: PortalLaunchpadProps["onOpenUrl"];
 }
 
-function LaunchpadRow({ id, title, url, icon, addedByAssistant, mac, onOpenUrl }: LaunchpadRowProps) {
+function LaunchpadRow({
+  id,
+  title,
+  url,
+  icon,
+  addedByAssistant,
+  mac,
+  onOpenUrl,
+}: LaunchpadRowProps) {
   return (
     <li>
       <ChoiceCard

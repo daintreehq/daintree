@@ -44,9 +44,7 @@ describe("PortalLaunchpad project links (#17091)", () => {
     expect(headings).toEqual(["This project", "New chat"]);
     const host = container.querySelector("#portal-link-project-a-host");
     expect(host?.textContent).toBe("staging.example.com, added by the Assistant");
-    expect(container.querySelector("#portal-link-project-b-host")?.textContent).toBe(
-      "example.com"
-    );
+    expect(container.querySelector("#portal-link-project-b-host")?.textContent).toBe("example.com");
   });
 
   it("marks only the links the Assistant added", () => {

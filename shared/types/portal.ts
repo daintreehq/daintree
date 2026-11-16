@@ -40,11 +40,7 @@ export interface ProjectPortalLinksChangePayload {
 }
 
 export type ProjectPortalLinkRefusal =
-  | "invalid-title"
-  | "invalid-url"
-  | "limit"
-  | "not-found"
-  | "not-added-by-assistant";
+  "invalid-title" | "invalid-url" | "limit" | "not-found" | "not-added-by-assistant";
 
 /** `saved` rather than `ok`: an IPC handler's result can't carry the envelope's own keys. */
 export type ProjectPortalLinksChangeResult =

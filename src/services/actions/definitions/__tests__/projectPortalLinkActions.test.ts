@@ -100,9 +100,9 @@ describe("portal.projectLinks (#17091)", () => {
       await expect(
         run("portal.projectLinks.add", { title: "X", url: "https://x.example.com" }, ctx)
       ).rejects.toBeInstanceOf(UnactionableTargetError);
-      await expect(
-        run("portal.projectLinks.remove", { id: "link-1" }, ctx)
-      ).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(run("portal.projectLinks.remove", { id: "link-1" }, ctx)).rejects.toBeInstanceOf(
+        UnactionableTargetError
+      );
     }
     expect(changeMock).not.toHaveBeenCalled();
   });
@@ -124,7 +124,11 @@ describe("portal.projectLinks (#17091)", () => {
 
   it("refuses without a project, and passes main's refusal on as unactionable", async () => {
     await expect(
-      run("portal.projectLinks.remove", { id: "link-1" }, { dispatchSource: "agent", hostCallerOrigin: "assistant" })
+      run(
+        "portal.projectLinks.remove",
+        { id: "link-1" },
+        { dispatchSource: "agent", hostCallerOrigin: "assistant" }
+      )
     ).rejects.toBeInstanceOf(UnactionableTargetError);
 
     changeMock.mockResolvedValueOnce({

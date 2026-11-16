@@ -139,9 +139,7 @@ export function ProjectPortalLinksSection({ projectId }: { projectId: string }) 
 
   const remove = async (link: ProjectPortalLink) => {
     setRowError(null);
-    await change({ op: "remove", id: link.id }, (message) =>
-      setRowError({ id: link.id, message })
-    );
+    await change({ op: "remove", id: link.id }, (message) => setRowError({ id: link.id, message }));
   };
 
   const submitOnEnter = (action: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
