@@ -23,6 +23,8 @@ import {
   stripConversationSelectorArgs,
   stripConversationSelectorFlags,
   relaunchResumeAsAssignedSession,
+  resumeByTranscriptPath,
+  exactResumeSessionId,
   supportsExactSessionCapture,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
@@ -2064,6 +2066,64 @@ describe("launch-time session id assignment (#11782)", () => {
         relaunchResumeAsAssignedSession(`claude --resume ${sessionId}`, undefined)
       ).toBeUndefined();
     });
+  });
+});
+
+describe("resuming a conversation by its transcript's path (#17087)", () => {
+  const sessionId = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+  const transcript = `/Users/me/.claude-a/projects/-Users-me-work/${sessionId}.jsonl`;
+
+  it("points the one exact resume at the transcript and keeps everything else", () => {
+    const command = `/opt/claude/bin/claude --verbose --resume ${sessionId} 'carry on'`;
+    expect(resumeByTranscriptPath(command, "claude", sessionId, transcript)).toBe(
+      `/opt/claude/bin/claude --verbose --resume '${transcript}' 'carry on'`
+    );
+  });
+
+  it("quotes a path holding spaces or quotes as one shell word", () => {
+    const odd = `/Users/me/My Accounts/it's/projects/x/${sessionId}.jsonl`;
+    expect(resumeByTranscriptPath(`claude --resume ${sessionId}`, "claude", sessionId, odd)).toBe(
+      `claude --resume '/Users/me/My Accounts/it'\\''s/projects/x/${sessionId}.jsonl'`
+    );
+  });
+
+  it("leaves a command that resumes another conversation, or none, alone", () => {
+    const other = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
+    expect(
+      resumeByTranscriptPath(`claude --resume ${other}`, "claude", sessionId, transcript)
+    ).toBeUndefined();
+    expect(resumeByTranscriptPath("claude --continue", "claude", sessionId, transcript)).toBe(
+      undefined
+    );
+    expect(
+      resumeByTranscriptPath(
+        `claude 'why does --resume ${sessionId} fail'`,
+        "claude",
+        sessionId,
+        transcript
+      )
+    ).toBeUndefined();
+    expect(
+      resumeByTranscriptPath(`claude --session-id ${sessionId}`, "claude", sessionId, transcript)
+    ).toBeUndefined();
+  });
+
+  it("never rewrites a command already resuming by path", () => {
+    const byPath = resumeByTranscriptPath(
+      `claude --resume ${sessionId}`,
+      "claude",
+      sessionId,
+      transcript
+    ) as string;
+    expect(exactResumeSessionId(byPath, "claude")).toBeUndefined();
+    expect(relaunchResumeAsAssignedSession(byPath, "claude")).toBeUndefined();
+    expect(resumeByTranscriptPath(byPath, "claude", sessionId, transcript)).toBeUndefined();
+  });
+
+  it("reads the id an exact resume names", () => {
+    expect(exactResumeSessionId(`claude --resume '${sessionId}'`, "claude")).toBe(sessionId);
+    expect(exactResumeSessionId(`claude --resume ${sessionId}`, undefined)).toBeUndefined();
+    expect(exactResumeSessionId("", "claude")).toBeUndefined();
   });
 });
 

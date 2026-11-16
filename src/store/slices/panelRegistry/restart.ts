@@ -1806,6 +1806,15 @@ type PresetRespawnMode =
   /** Same preset, only the account changed (#16040). */
   | { kind: "account"; account: AccountSwitchTarget };
 
+/** The config folder the pane's running Claude launch writes to (#16269), if it can be read. */
+async function readLaunchConfigDir(id: string): Promise<string | undefined> {
+  try {
+    return (await terminalClient.getInfo(id)).claudeConfigDir;
+  } catch {
+    return undefined;
+  }
+}
+
 async function respawnAgentOnPreset(
   set: Set,
   get: Get,
@@ -1908,10 +1917,7 @@ async function respawnAgentOnPreset(
       // The folder the running launch writes its conversation to, read while it
       // still runs: a kept conversation reopens from there (#17087).
       keepConversation && reopensFromConversationStore(effectiveAgentId)
-        ? terminalClient
-            .getInfo(id)
-            .then((info) => info.claudeConfigDir)
-            .catch(() => undefined)
+        ? readLaunchConfigDir(id)
         : undefined,
     ]);
     const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};

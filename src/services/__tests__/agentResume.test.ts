@@ -183,6 +183,21 @@ describe("buildResumePanelOptions", () => {
     });
   });
 
+  it("reopens a conversation from the account folder its record names (#17087)", () => {
+    const store = { sessionId: "s-1", configDir: "/home/me/.claude-company" };
+
+    expect(
+      buildResumePanelOptions({ ...baseSession, conversationStore: store }, { cwd: "/active" })
+        ?.conversationStore
+    ).toEqual(store);
+    expect(
+      buildResumePanelOptions(
+        { ...baseSession, conversationStore: { ...store, sessionId: "s-other" } },
+        { cwd: "/active" }
+      )?.conversationStore
+    ).toBeUndefined();
+  });
+
   // A resumed pane restarts from its stored flags, so dropping them would lose
   // the standing instruction (and model) on its first restart (#12431).
   it("stores the reconciled flags, not the captured ones, on the resumed pane", () => {

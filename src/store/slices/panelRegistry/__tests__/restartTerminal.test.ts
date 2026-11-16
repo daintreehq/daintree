@@ -5,6 +5,7 @@ import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
 const mockGracefulKill = vi.fn().mockResolvedValue(null);
+const mockGetInfo = vi.fn().mockRejectedValue(new Error("no terminal"));
 const getMergedPresetMock = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
 const buildAgentLaunchFlagsMock = vi.hoisted(() => vi.fn().mockReturnValue([]));
 const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn((flags: readonly string[]) => [...flags]));
@@ -23,6 +24,7 @@ vi.mock("@/clients", () => ({
     onAgentStateChanged: vi.fn(),
     updateTitle: vi.fn(),
     gracefulKill: mockGracefulKill,
+    getInfo: mockGetInfo,
     submit: vi.fn().mockResolvedValue(undefined),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
@@ -3116,6 +3118,124 @@ describe("accounts on restart and switch (#16040)", () => {
       expect(mockKill).not.toHaveBeenCalled();
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(pane().agentAccountId).toBe("company");
+    });
+
+    describe("from the folder the conversation was written under (#17087)", () => {
+      const FIRST = "/home/me/.claude-first";
+
+      it("carries the folder the run wrote it to, and won't start one afresh under its id", async () => {
+        seed();
+        await resumeBuilds();
+        mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+        mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+        expect(mockGetInfo).toHaveBeenCalledWith("test-1");
+        // Read while the launch still ran, before it was stopped.
+        expect(mockGetInfo.mock.invocationCallOrder[0]).toBeLessThan(
+          mockGracefulKill.mock.invocationCallOrder[0]!
+        );
+        const payload = mockSpawn.mock.calls[0]![0];
+        const store = { sessionId: "sess-captured", configDir: COMPANY };
+        expect(payload.command).toBe("claude --resume sess-captured");
+        expect(payload.exactResume).toBe(true);
+        expect(payload.conversationStore).toEqual(store);
+        expect(pane().conversationStore).toEqual(store);
+        expect(pane().presetSwitchResume?.prior.conversationStore).toBeUndefined();
+      });
+
+      it("keeps the folder an earlier switch carried the conversation from", async () => {
+        const store = { sessionId: "sess-1", configDir: FIRST };
+        seed({ conversationStore: store });
+        await resumeBuilds();
+        mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", null, { keepConversation: true });
+
+        expect(mockSpawn.mock.calls[0]![0].conversationStore).toEqual(store);
+        expect(pane().conversationStore).toEqual(store);
+        expect(pane().presetSwitchResume?.prior.conversationStore).toEqual(store);
+      });
+
+      it("files a conversation the run moved on to where the run wrote it", async () => {
+        seed({ conversationStore: { sessionId: "sess-1", configDir: FIRST } });
+        await resumeBuilds();
+        mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+        mockGracefulKill.mockResolvedValueOnce("sess-new");
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+        expect(mockSpawn.mock.calls[0]![0].conversationStore).toEqual({
+          sessionId: "sess-new",
+          configDir: COMPANY,
+        });
+      });
+
+      it("still refuses a fresh conversation when the folder can't be read", async () => {
+        seed();
+        await resumeBuilds();
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", null, { keepConversation: true });
+
+        const payload = mockSpawn.mock.calls[0]![0];
+        expect(payload.exactResume).toBe(true);
+        expect(payload.conversationStore).toBeUndefined();
+        expect(pane().conversationStore).toBeUndefined();
+      });
+
+      it("reads no folder for a switch that starts a new conversation", async () => {
+        seed({ conversationStore: { sessionId: "sess-1", configDir: FIRST } });
+
+        await usePanelStore.getState().restartTerminalOnAccount("test-1", toPersonal);
+
+        expect(mockGetInfo).not.toHaveBeenCalled();
+        const payload = mockSpawn.mock.calls[0]![0];
+        expect(payload.exactResume).toBeUndefined();
+        expect(payload.conversationStore).toBeUndefined();
+        expect(pane().conversationStore).toBeUndefined();
+      });
+
+      it("puts the folder back with the account when the spawn fails", async () => {
+        const store = { sessionId: "sess-1", configDir: FIRST };
+        seed({ conversationStore: store });
+        await resumeBuilds();
+        mockGetInfo.mockResolvedValueOnce({ claudeConfigDir: COMPANY });
+        mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+        expect(pane().agentAccountId).toBe("company");
+        expect(pane().conversationStore).toEqual(store);
+      });
+
+      it("reopens it from that folder on a restart, and drops it for a new conversation", async () => {
+        const store = { sessionId: "sess-1", configDir: FIRST };
+        seed({ agentAccountId: "personal", conversationStore: store });
+        await resumeBuilds();
+
+        await usePanelStore.getState().restartTerminal("test-1");
+
+        expect(mockSpawn.mock.calls[0]![0].conversationStore).toEqual(store);
+        expect(pane().conversationStore).toEqual(store);
+
+        mockSpawn.mockClear();
+        mockGracefulKill.mockResolvedValueOnce("sess-new");
+        await usePanelStore.getState().restartTerminal("test-1");
+
+        expect(mockSpawn.mock.calls[0]![0].conversationStore).toBeUndefined();
+        expect(pane().conversationStore).toBeUndefined();
+      });
     });
 
     it("puts the old account back with the captured id when the spawn fails", async () => {

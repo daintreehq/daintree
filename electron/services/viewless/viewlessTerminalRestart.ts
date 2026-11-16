@@ -201,10 +201,7 @@ export async function restartTerminalWithoutView(
                   ? resumedSessionId
                   : undefined,
               // Still in the account folder it was written under (#17087).
-              conversationStore: conversationStoreFor(
-                snapshot.conversationStore,
-                resumedSessionId
-              ),
+              conversationStore: conversationStoreFor(snapshot.conversationStore, resumedSessionId),
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,

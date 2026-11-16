@@ -85,6 +85,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Conversation origin and the recovery hold (#12434) — a held pane must stay
   // held across a restart instead of launching fresh.
   conversationCwd: true,
+  // The account folder a kept conversation is stored in (#17087), written
+  // beside the session id it belongs to.
+  conversationStore: true,
   restoreRecovery: true,
   // How restore last rebuilt the pane and the plugin hold (#14017) — a pane
   // held across restarts keeps the state last seen before the first of them.
@@ -482,6 +485,7 @@ const terminalFixture: PtySerializeInput = {
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
   conversationCwd: "/home/origin",
+  conversationStore: { sessionId: "session-abc", configDir: "/home/me/.claude-company" },
   restoreProvenance: {
     at: 1_700_000_000_002,
     disposition: "resume",
@@ -684,6 +688,8 @@ describe("panel serializer field coverage", () => {
     >;
     expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(output.conversationCwd).toBe("/home/origin");
+    // Its store goes only with the conversation the hold offers (#17087).
+    expect(output).not.toHaveProperty("conversationStore");
     // What was last observed for the pane outlives its process (#14017).
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
     expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
@@ -693,6 +699,24 @@ describe("panel serializer field coverage", () => {
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");
     expect(output).not.toHaveProperty("exitCode");
+  });
+
+  it("terminal serializer writes a conversation's store only beside that conversation (#17087)", () => {
+    const serialize = getPanelKindConfig("terminal")!.serialize!;
+    const store = { sessionId: "session-held", configDir: "/home/me/.claude-company" };
+
+    const moved = serialize({ ...terminalFixture, agentSessionId: "session-new" }) as Record<
+      string,
+      unknown
+    >;
+    expect(moved).not.toHaveProperty("conversationStore");
+
+    const held = serialize({
+      ...terminalFixture,
+      conversationStore: store,
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot", sessionId: "session-held" },
+    }) as Record<string, unknown>;
+    expect(held.conversationStore).toEqual(store);
   });
 
   it("browser serializer covers every persisted browser field", () => {

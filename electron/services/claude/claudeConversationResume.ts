@@ -15,7 +15,10 @@
  */
 
 import path from "path";
-import { exactResumeSessionId, resumeByTranscriptPath } from "../../../shared/types/agentSettings.js";
+import {
+  exactResumeSessionId,
+  resumeByTranscriptPath,
+} from "../../../shared/types/agentSettings.js";
 import type { ConversationStore } from "../../../shared/types/panel.js";
 import { locateClaudeTranscript } from "./ClaudeSessionReader.js";
 import { CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS } from "./ClaudeSessionStore.js";

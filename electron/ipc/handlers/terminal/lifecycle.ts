@@ -813,9 +813,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         : undefined;
     let reopenedConversation: ConversationStore | undefined;
     if (conversationStore && safeCommand) {
-      const { resumeClaudeFromConversationStore } = await import(
-        "../../../services/claude/claudeConversationResume.js"
-      );
+      const { resumeClaudeFromConversationStore } =
+        await import("../../../services/claude/claudeConversationResume.js");
       const byPath = await resumeClaudeFromConversationStore(
         safeCommand,
         conversationStore,

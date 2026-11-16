@@ -315,6 +315,46 @@ describe("agentSessionHistory", () => {
     });
   });
 
+  // #17087: the account folder a conversation is stored in, for a resume.
+  describe("conversation store", () => {
+    const base = { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null };
+    const store = (sessionId: string) => ({ sessionId, configDir: "/home/me/.claude-company" });
+
+    it("keeps a store only beside the session it names", async () => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      const now = Date.now();
+      await fsp.writeFile(
+        filePath,
+        JSON.stringify([
+          { ...base, sessionId: "s1", savedAt: now, conversationStore: store("s1") },
+          { ...base, sessionId: "s2", savedAt: now - 1, conversationStore: store("s1") },
+          {
+            ...base,
+            sessionId: "s3",
+            savedAt: now - 2,
+            conversationStore: { sessionId: "s3", configDir: "relative" },
+          },
+        ])
+      );
+
+      const records = await readSessionHistory(userDataDir);
+      expect(records.find((r) => r.sessionId === "s1")?.conversationStore).toEqual(store("s1"));
+      expect(records.find((r) => r.sessionId === "s2")).not.toHaveProperty("conversationStore");
+      expect(records.find((r) => r.sessionId === "s3")).not.toHaveProperty("conversationStore");
+    });
+
+    it("stays with the conversation when it is journaled again without one", async () => {
+      await persistAgentSession(
+        { ...base, sessionId: "s1", conversationStore: store("s1") },
+        userDataDir
+      );
+      await persistAgentSession({ ...base, sessionId: "s1", title: "Carried on" }, userDataDir);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record).toMatchObject({ title: "Carried on", conversationStore: store("s1") });
+    });
+  });
+
   it("listAgentSessions filters by worktreeId", async () => {
     await persistAgentSession(
       { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
