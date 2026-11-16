@@ -334,10 +334,13 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.currentScope = scope;
       this.clearPendingChord();
+      // An action bound in several scopes displays the active scope's combo.
+      this.notifyListeners();
     }
   }
 
   restoreScope(scope: KeyScope): void {
+    const previous = this.currentScope;
     const idx = this.scopeStack.lastIndexOf(scope);
     if (idx > 0) {
       this.scopeStack.splice(idx, 1);
@@ -346,6 +349,7 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.clearPendingChord();
     }
+    if (this.currentScope !== previous) this.notifyListeners();
   }
 
   setWhenContext(ctx: WhenClauseContext): void {

@@ -1064,6 +1064,20 @@ describe("KeybindingService", () => {
       expect(after).toHaveBeenCalledTimes(2);
     });
 
+    it("still runs a listener another one unsubscribes mid-notification, then stops", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      let unsubscribeLater: (() => void) | null = null;
+      listen(service, () => unsubscribeLater?.());
+      const later = vi.fn();
+      unsubscribeLater = listen(service, later);
+
+      triggerNotify(service);
+
+      // The first notification was already under way when `later` left.
+      expect(later).toHaveBeenCalledTimes(1);
+    });
+
     it("returns an unsubscribe that detaches the listener", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -1136,6 +1150,28 @@ describe("KeybindingService", () => {
       service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
 
       expect(service.getPendingChord()).not.toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("tells binding subscribers when a scope change moves an action's combo", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const bindings = vi.fn(() => service.getEffectiveCombo("fleet.armFocused"));
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.setScope("worktreeGrid");
+      service.setScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      expect(bindings).toHaveLastReturnedWith("X");
+
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(2);
+      expect(bindings).toHaveLastReturnedWith("Cmd+J");
+      // No chord was pending, so there was nothing to tell its subscribers.
       expect(chord).not.toHaveBeenCalled();
     });
 

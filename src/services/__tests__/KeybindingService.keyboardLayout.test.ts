@@ -48,7 +48,7 @@ describe("KeybindingService display text and the keyboard layout", () => {
     await flush();
     expect(listener).toHaveBeenCalledTimes(2);
     expect(service.formatComboForDisplay("Cmd+/")).toBe("Ctrl+/");
-    // The pending chord is a raw combo, so a layout change leaves it as it was.
+    // Chord subscribers watch a raw combo, which no layout change touches.
     expect(chordListener).not.toHaveBeenCalled();
     unsubscribe();
     unsubscribeChord();
