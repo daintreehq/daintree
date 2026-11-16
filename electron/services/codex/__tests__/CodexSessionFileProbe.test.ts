@@ -517,6 +517,34 @@ describe("probeCodexSessionFile", () => {
     }
   });
 
+  it("pieces together a first record the filesystem hands over in short reads", async () => {
+    const file = await writeRollout(
+      ROOT_ID,
+      sessionMeta(ROOT_ID, { base_instructions: "y".repeat(40 * 1024) }),
+      { rest: '{"type":"event_msg"}\n' }
+    );
+    const run = runner(await lsofFor([{ fd: "37", access: "u", name: file }]));
+    const probe = await open(file);
+    const handlePrototype = Object.getPrototypeOf(probe) as FileHandle;
+    await probe.close();
+    const original = handlePrototype.read as (...args: unknown[]) => Promise<unknown>;
+    const read = vi
+      .spyOn(handlePrototype, "read")
+      .mockImplementation(function (this: FileHandle, ...args: unknown[]) {
+        const [buffer, offset, length, position] = args;
+        return original.call(this, buffer, offset, Math.min(Number(length), 1_000), position);
+      } as never);
+
+    try {
+      await expect(probeCodexSessionFile(100, { platform: "darwin", run })).resolves.toMatchObject({
+        status: "observed",
+        sessionId: ROOT_ID,
+      });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("drops the listing when the process it listed was replaced under it", async () => {
     const file = await writeRollout(ROOT_ID, sessionMeta(ROOT_ID));
     const lsof = await lsofFor([{ fd: "37", access: "u", name: file }]);
