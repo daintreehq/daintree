@@ -508,6 +508,9 @@ export interface GeneratedElectronAPI {
     getQuestionContent(
       ...args: IpcInvokeMap["decisions:get-question-content"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-content"]["result"]>;
+    getQuestionImage(
+      ...args: IpcInvokeMap["decisions:get-question-image"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-image"]["result"]>;
     getQuestionSummaries(
       ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;

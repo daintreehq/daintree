@@ -886,6 +886,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
   };
+  "decisions:get-question-image": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImagePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionImageResult;
+  };
   "decisions:get-question-summaries": {
     args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
     result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;

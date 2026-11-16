@@ -6,6 +6,13 @@ export interface GetDecisionQuestionPayload {
   questionId: string;
 }
 
+/** One image of a pane's question, asked by its attachment id (#17100). */
+export interface GetDecisionQuestionImagePayload {
+  terminalId: string;
+  questionId: string;
+  attachmentId: string;
+}
+
 /** The questions of a pane whose opening lines a list needs (#17097). */
 export interface GetDecisionQuestionSummariesPayload {
   terminalId: string;
@@ -53,6 +60,8 @@ export interface DecisionQuestionAttachment {
   mime: "image/png" | "image/jpeg" | "image/webp";
   /** Bytes of the image itself. */
   size: number;
+  /** SHA-256 (hex) of the image itself: what it is checked against, and what an approval names it by. */
+  sha256: string;
 }
 
 /** An image a person attached to an answer or a follow-up from their phone. */
@@ -162,3 +171,44 @@ export type DecisionQuestionSummariesResult =
   | { result: "read"; summaries: DecisionQuestionSummary[] }
   | { result: "off" }
   | { result: "not-running" };
+
+/**
+ * Why one of a question's images can't be shown, as checked in order:
+ * `key-unavailable`, the key it was sealed under isn't held here;
+ * `fetch-failed`, the relay didn't serve it (gone, past retention, unreachable);
+ * `size-mismatch`, it isn't the size the question declares;
+ * `decrypt-failed`, it doesn't open under the question's binding;
+ * `digest-mismatch`, what opened doesn't hash to the question's digest;
+ * `type-mismatch`, it isn't the PNG, JPEG or WebP image the question declares;
+ * `timed-out`, fetching and checking it took too long.
+ */
+export type DecisionQuestionImageUnavailable =
+  | "key-unavailable"
+  | "fetch-failed"
+  | "size-mismatch"
+  | "decrypt-failed"
+  | "digest-mismatch"
+  | "type-mismatch"
+  | "timed-out";
+
+/** One of a question's images, opened and checked against its digest, in memory. Never stored. */
+export interface DecisionQuestionImage {
+  attachmentId: string;
+  mime: DecisionQuestionAttachment["mime"];
+  /** The digest the image was checked against. */
+  sha256: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Reading one of a question's images. `not-found`: the store holds no such
+ * question for this pane, or the question names no such image.
+ * `unreadable`: the question's content can't be opened here.
+ */
+export type DecisionQuestionImageResult =
+  | { result: "read"; image: DecisionQuestionImage }
+  | { result: "unavailable"; reason: DecisionQuestionImageUnavailable }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "not-found" }
+  | { result: "unreadable" };

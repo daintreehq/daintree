@@ -32,7 +32,9 @@ import type {
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionImageResult,
   DecisionQuestionSummariesResult,
+  GetDecisionQuestionImagePayload,
   GetDecisionQuestionPayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
@@ -68,6 +70,12 @@ const decisionsEntry = vi.hoisted(() => ({
       _projectId: string | null,
       _payload: CancelDecisionQuestionPayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
+  ),
+  getDecisionQuestionImage: vi.fn(
+    async (
+      _projectId: string | null,
+      _payload: GetDecisionQuestionImagePayload
+    ): Promise<DecisionQuestionImageResult> => ({ result: "not-found" })
   ),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -231,6 +239,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionContent: decisionsEntry.getDecisionQuestionContent,
     getDecisionQuestionSummaries: decisionsEntry.getDecisionQuestionSummaries,
     cancelDecisionQuestion: decisionsEntry.cancelDecisionQuestion,
+    getDecisionQuestionImage: decisionsEntry.getDecisionQuestionImage,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -307,6 +316,10 @@ const cancelQuestion = decisionsNamespace.ops.cancelQuestion.handler as unknown 
   ctx: { projectId: string | null },
   payload: CancelDecisionQuestionPayload
 ) => Promise<DecisionQuestionCancelResult>;
+const getQuestionImage = decisionsNamespace.ops.getQuestionImage.handler as unknown as (
+  ctx: { projectId: string | null },
+  payload: GetDecisionQuestionImagePayload
+) => Promise<DecisionQuestionImageResult>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -411,6 +424,7 @@ const RESTORE: RestoreDecisionsIdentityPayload = {
 type SafeParse = { safeParse(value: unknown): { success: boolean } };
 
 const QUESTION_ID = "0190f0aa11112222333344445555aa01";
+const ATTACHMENT_ID = "attach_0001";
 
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
@@ -459,6 +473,7 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionContent.mockClear();
     decisionsEntry.getDecisionQuestionSummaries.mockClear();
     decisionsEntry.cancelDecisionQuestion.mockClear();
+    decisionsEntry.getDecisionQuestionImage.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -559,6 +574,13 @@ describe("decisions IPC", () => {
       await expect(
         getQuestionSummaries(ctx, { terminalId: "pane-a", questionIds: [QUESTION_ID] })
       ).resolves.toEqual({ result: "off" });
+      await expect(
+        getQuestionImage(ctx, {
+          terminalId: "pane-a",
+          questionId: QUESTION_ID,
+          attachmentId: ATTACHMENT_ID,
+        })
+      ).resolves.toEqual({ result: "off" });
 
       expect(decisionsEntry.evaluated).toBe(0);
       expect(decisionsEntry.libraries).toBe(0);
@@ -606,6 +628,13 @@ describe("decisions IPC", () => {
     ).resolves.toEqual({ result: "not-running" });
     await expect(
       getQuestionSummaries(ctx, { terminalId: "pane-a", questionIds: [] })
+    ).resolves.toEqual({ result: "not-running" });
+    await expect(
+      getQuestionImage(ctx, {
+        terminalId: "pane-a",
+        questionId: QUESTION_ID,
+        attachmentId: ATTACHMENT_ID,
+      })
     ).resolves.toEqual({ result: "not-running" });
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1094,6 +1123,51 @@ describe("decisions IPC", () => {
       { terminalId: "pane-a", questionId: QUESTION_ID, projectId: "project-2" },
     ]) {
       expect(cancel.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("reads a question's image for the asking view's own project once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const payload = { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: ATTACHMENT_ID };
+    const image: DecisionQuestionImageResult = {
+      result: "read",
+      image: {
+        attachmentId: ATTACHMENT_ID,
+        mime: "image/png",
+        sha256: "b".repeat(64),
+        bytes: new Uint8Array([1, 2, 3]),
+      },
+    };
+    decisionsEntry.getDecisionQuestionImage.mockResolvedValueOnce(image);
+
+    await expect(getQuestionImage({ projectId: "project-1" }, payload)).resolves.toBe(image);
+
+    expect(decisionsEntry.getDecisionQuestionImage).toHaveBeenCalledExactlyOnceWith(
+      "project-1",
+      payload
+    );
+  });
+
+  it("takes only a pane, a question id and an attachment id for an image, never a project", () => {
+    const image = decisionsNamespace.ops.getQuestionImage.schema as SafeParse;
+    expect(
+      image.safeParse({ terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: ATTACHMENT_ID })
+        .success
+    ).toBe(true);
+    for (const bad of [
+      { terminalId: "pane-a", questionId: QUESTION_ID },
+      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "short" },
+      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "../attach_0001" },
+      { terminalId: "pane-a", questionId: QUESTION_ID, attachmentId: "a".repeat(65) },
+      { terminalId: "pane-a", questionId: "../q", attachmentId: ATTACHMENT_ID },
+      {
+        terminalId: "pane-a",
+        questionId: QUESTION_ID,
+        attachmentId: ATTACHMENT_ID,
+        projectId: "project-2",
+      },
+    ]) {
+      expect(image.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
   });
 

@@ -1,16 +1,21 @@
 import {
+  RelayError,
   openAnswerContent,
   openMessageContent,
   openQuestionContent,
   parseAnswers,
   parseMessages,
   type QuestionRow,
+  type RelayClient,
   type SealContext,
 } from "@daintreehq/decisions-client";
+import { decryptAttachment, sha256Hex, sniffImageMime } from "@daintreehq/decisions-crypto";
 import { DecisionContentV1, type PhoneImageReference } from "@daintreehq/decisions-protocol";
 import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
+  DecisionQuestionImageResult,
+  DecisionQuestionImageUnavailable,
   DecisionQuestionSummary,
   DecisionThreadEntry,
   DecisionThreadImage,
@@ -77,6 +82,7 @@ export async function readQuestionContent(
       alt: attachment.alt ?? null,
       mime: attachment.mime,
       size: attachment.size,
+      sha256: attachment.sha256,
     })),
     thread: await readThread(ctx, row),
   };
@@ -91,6 +97,108 @@ export async function readQuestionSummary(
   const content = await openedQuestion(ctx, row);
   if (content === null) return { questionId: row.question_id, result: "unreadable" };
   return { questionId: row.question_id, result: "read", line: questionLine(content.question) };
+}
+
+/** What reading an image needs beyond sealing: the relay its ciphertext is fetched from. */
+export interface ImageReadContext extends SealContext {
+  client: Pick<RelayClient, "downloadAttachment">;
+}
+
+/** How long one image may take to fetch, open and check before it's reported as timed out. */
+export const QUESTION_IMAGE_TIMEOUT_MS = 30_000;
+
+/** AES-GCM appends a 16-byte tag: the ciphertext is exactly this much longer than the image. */
+const GCM_TAG_BYTES = 16;
+
+/**
+ * One of the question's images (#17100), fetched from the relay and opened
+ * in memory, then checked as the library checks a phone's image: exactly the
+ * declared size, opened under the question's binding, hashing to the digest
+ * the question carries, and the declared PNG, JPEG or WebP. Nothing is
+ * written, logged or kept: the bytes go only to the view that asked.
+ */
+export async function readQuestionImage(
+  ctx: ImageReadContext,
+  row: QuestionRow,
+  attachmentId: string,
+  timeoutMs = QUESTION_IMAGE_TIMEOUT_MS
+): Promise<DecisionQuestionImageResult> {
+  const content = await openedQuestion(ctx, row);
+  if (content === null) return { result: "unreadable" };
+  const descriptor = content.attachments.find(
+    (attachment) => attachment.attachment_id === attachmentId
+  );
+  if (descriptor === undefined) return { result: "not-found" };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(() => resolve("timed-out"), timeoutMs);
+  });
+  try {
+    const checked = await Promise.race([checkedImage(ctx, row.question_id, descriptor), late]);
+    if (typeof checked === "string") return { result: "unavailable", reason: checked };
+    return {
+      result: "read",
+      image: {
+        attachmentId,
+        mime: descriptor.mime,
+        sha256: descriptor.sha256,
+        bytes: checked,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+type AttachmentDescriptor = DecisionContentV1["attachments"][number];
+
+async function checkedImage(
+  ctx: ImageReadContext,
+  questionId: string,
+  descriptor: AttachmentDescriptor
+): Promise<Uint8Array | DecisionQuestionImageUnavailable> {
+  let key = ctx.identity.epochs.get(descriptor.key_epoch);
+  if (!key && ctx.refreshIdentity) {
+    try {
+      await ctx.refreshIdentity();
+    } catch (error) {
+      rethrowRetired(error);
+    }
+    key = ctx.identity.epochs.get(descriptor.key_epoch);
+  }
+  if (!key) return "key-unavailable";
+  const expected = descriptor.size + GCM_TAG_BYTES;
+  let ciphertext: Uint8Array;
+  try {
+    ciphertext = await ctx.client.downloadAttachment(descriptor.attachment_id, {
+      maxBytes: expected,
+    });
+  } catch (error) {
+    rethrowRetired(error);
+    return error instanceof RelayError && error.code === "payload_too_large"
+      ? "size-mismatch"
+      : "fetch-failed";
+  }
+  if (ciphertext.length !== expected) return "size-mismatch";
+  let bytes: Uint8Array;
+  try {
+    bytes = await decryptAttachment(
+      key,
+      {
+        installationId: ctx.identity.config.installationId,
+        questionId,
+        attachmentId: descriptor.attachment_id,
+        keyEpoch: descriptor.key_epoch,
+      },
+      descriptor.nonce,
+      ciphertext
+    );
+  } catch {
+    return "decrypt-failed";
+  }
+  if ((await sha256Hex(bytes)) !== descriptor.sha256) return "digest-mismatch";
+  if (sniffImageMime(bytes) !== descriptor.mime) return "type-mismatch";
+  return bytes;
 }
 
 /**

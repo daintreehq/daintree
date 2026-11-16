@@ -7,6 +7,7 @@ import type {
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionImageResult,
   DecisionQuestionSummariesResult,
 } from "@shared/types/decisionsQuestion";
 
@@ -79,6 +80,18 @@ export const decisionsClient = {
     questionId: string
   ): Promise<DecisionQuestionContentResult> =>
     window.electron.decisions.getQuestionContent({ terminalId, questionId }),
+
+  /**
+   * One of a question's images, fetched and checked against its digest on the
+   * machine that owns the pane. The bytes are held in memory only: never
+   * write them anywhere, log them, or keep them in a persisted store.
+   */
+  getQuestionImage: (
+    terminalId: string,
+    questionId: string,
+    attachmentId: string
+  ): Promise<DecisionQuestionImageResult> =>
+    window.electron.decisions.getQuestionImage({ terminalId, questionId, attachmentId }),
 
   /** The opening line of each of a pane's questions, for a list to name them by. */
   getQuestionSummaries: (

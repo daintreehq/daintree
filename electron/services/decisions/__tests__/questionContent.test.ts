@@ -1,6 +1,7 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   MemoryKeyStore,
+  RelayError,
   loadIdentity,
   sealAnswerContent,
   sealQuestionContent,
@@ -13,6 +14,7 @@ import {
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import {
+  encryptAttachment,
   encryptEnvelope,
   generateDeviceKeys,
   generateEpochKeyBytes,
@@ -24,7 +26,13 @@ import {
   bytesToBase64Url,
   type PhoneImageReference,
 } from "@daintreehq/decisions-protocol";
-import { inScope, readQuestionContent, readQuestionSummary } from "../questionContent.js";
+import {
+  inScope,
+  readQuestionContent,
+  readQuestionImage,
+  readQuestionSummary,
+  type ImageReadContext,
+} from "../questionContent.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 import { row as baseRow } from "./questionRows.js";
 
@@ -213,6 +221,7 @@ describe("readQuestionContent", () => {
             alt: "Current schema",
             mime: "image/png",
             size: 4096,
+            sha256: SHA,
           },
         ],
         thread: [],
@@ -472,5 +481,196 @@ describe("inScope", () => {
     expect(
       inScope({ ...row, origin: { ...row.origin, project_id: "" } }, { ...scope, projectId: "" })
     ).toBe(false);
+  });
+});
+
+/** A PNG's signature and a little more: what `sniffImageMime` reads as a PNG. */
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7]);
+const ATTACHMENT_ID = "attach_0002";
+
+/** A question carrying one image really sealed under the identity's epoch, and its ciphertext. */
+async function imageQuestion(
+  descriptor: Record<string, unknown> = {},
+  bytes: Uint8Array = PNG
+): Promise<{ row: QuestionRow; ciphertext: Uint8Array; sha256: string }> {
+  const sealed = await encryptAttachment(
+    identity.epochs.get(1)!,
+    {
+      installationId: identity.config.installationId,
+      questionId: QID,
+      attachmentId: ATTACHMENT_ID,
+      keyEpoch: 1,
+    },
+    bytes
+  );
+  const row = await question({
+    question: "Which layout?",
+    attachments: [
+      {
+        attachment_id: ATTACHMENT_ID,
+        role: "after",
+        alt: "The new layout",
+        mime: "image/png",
+        size: bytes.length,
+        sha256: sealed.sha256Plaintext,
+        nonce: sealed.nonce,
+        key_epoch: 1,
+        ...descriptor,
+      },
+    ],
+  });
+  return { row, ciphertext: sealed.ciphertext, sha256: sealed.sha256Plaintext };
+}
+
+function relay(download: (id: string, opts?: { maxBytes?: number }) => Promise<Uint8Array>) {
+  const downloadAttachment = vi.fn(download);
+  const context: ImageReadContext = { identity, client: { downloadAttachment } };
+  return { context, downloadAttachment };
+}
+
+describe("readQuestionImage", () => {
+  it("fetches the image, opens it and checks it against its digest and type", async () => {
+    const { row, ciphertext, sha256 } = await imageQuestion();
+    const { context, downloadAttachment } = relay(async () => ciphertext);
+
+    const read = await readQuestionImage(context, row, ATTACHMENT_ID);
+
+    expect(read).toEqual({
+      result: "read",
+      image: { attachmentId: ATTACHMENT_ID, mime: "image/png", sha256, bytes: PNG },
+    });
+    // Never reads more than the declared size and its tag.
+    expect(downloadAttachment).toHaveBeenCalledExactlyOnceWith(ATTACHMENT_ID, {
+      maxBytes: PNG.length + 16,
+    });
+  });
+
+  it("finds nothing for an image the question doesn't name, and fetches nothing", async () => {
+    const { row, ciphertext } = await imageQuestion();
+    const { context, downloadAttachment } = relay(async () => ciphertext);
+
+    await expect(readQuestionImage(context, row, "attach_9999")).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  it("says the question is unreadable when its content can't be opened", async () => {
+    const { ciphertext } = await imageQuestion();
+    const { context, downloadAttachment } = relay(async () => ciphertext);
+    const row = await question(CONTENT, { content_sealed: "not sealed" });
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unreadable",
+    });
+    expect(downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the relay doesn't serve it", "fetch-failed", async () => Promise.reject(new Error("gone"))],
+    [
+      "the relay refuses it as larger than declared",
+      "size-mismatch",
+      async () => Promise.reject(new RelayError("payload_too_large", "too large", 413)),
+    ],
+  ] as const)("reports an image %s as %s", async (_label, reason, download) => {
+    const { row } = await imageQuestion();
+    const { context } = relay(download);
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason,
+    });
+  });
+
+  it("refuses ciphertext that isn't exactly the declared size and its tag", async () => {
+    const { row, ciphertext } = await imageQuestion();
+    const { context } = relay(async () => ciphertext.slice(0, ciphertext.length - 1));
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason: "size-mismatch",
+    });
+  });
+
+  it("refuses ciphertext that doesn't open under the question's binding", async () => {
+    const { row, ciphertext } = await imageQuestion();
+    const tampered = ciphertext.slice();
+    tampered[0] = tampered[0]! ^ 0xff;
+    const { context } = relay(async () => tampered);
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason: "decrypt-failed",
+    });
+  });
+
+  it("refuses an image that doesn't hash to the question's digest", async () => {
+    const { row, ciphertext } = await imageQuestion({ sha256: "c".repeat(64) });
+    const { context } = relay(async () => ciphertext);
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason: "digest-mismatch",
+    });
+  });
+
+  it("refuses an image that isn't the type the question declares", async () => {
+    const { row, ciphertext } = await imageQuestion({ mime: "image/jpeg" });
+    const { context } = relay(async () => ciphertext);
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason: "type-mismatch",
+    });
+  });
+
+  it("refuses bytes that aren't an image at all", async () => {
+    const text = new TextEncoder().encode("plain text, not an image");
+    const { row, ciphertext } = await imageQuestion({}, text);
+    const { context } = relay(async () => ciphertext);
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).resolves.toEqual({
+      result: "unavailable",
+      reason: "type-mismatch",
+    });
+  });
+
+  it("reloads the keys once for an epoch it doesn't hold, then says the key is unavailable", async () => {
+    const { row, ciphertext } = await imageQuestion({ key_epoch: 2 });
+    const refreshIdentity = vi.fn(async () => {});
+    const downloadAttachment = vi.fn(async () => ciphertext);
+
+    await expect(
+      readQuestionImage(
+        { identity, refreshIdentity, client: { downloadAttachment } },
+        row,
+        ATTACHMENT_ID
+      )
+    ).resolves.toEqual({ result: "unavailable", reason: "key-unavailable" });
+    expect(refreshIdentity).toHaveBeenCalledOnce();
+    expect(downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  it("says an image that takes too long timed out", async () => {
+    const { row } = await imageQuestion();
+    // Never settles; the opening's WebCrypto work needs real timers, so the budget is short and real.
+    const { context } = relay(() => new Promise<Uint8Array>(() => {}));
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID, 20)).resolves.toEqual({
+      result: "unavailable",
+      reason: "timed-out",
+    });
+  });
+
+  it("passes a stopped delivery's refusal through rather than calling the image unavailable", async () => {
+    const { row } = await imageQuestion();
+    const { context } = relay(async () => {
+      throw new RetiredAttemptError();
+    });
+
+    await expect(readQuestionImage(context, row, ATTACHMENT_ID)).rejects.toBeInstanceOf(
+      RetiredAttemptError
+    );
   });
 });
