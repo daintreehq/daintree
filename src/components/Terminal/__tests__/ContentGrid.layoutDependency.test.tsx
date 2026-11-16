@@ -39,7 +39,9 @@ vi.mock("framer-motion", async (importOriginal) => {
     return (
       <div
         {...rest}
-        data-layout-dependency={layoutDependency === undefined ? undefined : String(layoutDependency)}
+        data-layout-dependency={
+          layoutDependency === undefined ? undefined : String(layoutDependency)
+        }
       >
         {children}
       </div>

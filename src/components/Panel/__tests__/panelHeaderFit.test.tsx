@@ -84,17 +84,15 @@ class StubIntersectionObserver implements IntersectionObserver {
   }
   fire(isIntersecting: boolean) {
     if (this.disconnected) return;
-    const entries = [...this.targets].map(
-      (target): IntersectionObserverEntry => ({
-        target,
-        isIntersecting,
-        intersectionRatio: isIntersecting ? 1 : 0,
-        boundingClientRect: new DOMRect(),
-        intersectionRect: new DOMRect(),
-        rootBounds: null,
-        time: 0,
-      })
-    );
+    const entries = [...this.targets].map((target): IntersectionObserverEntry => ({
+      target,
+      isIntersecting,
+      intersectionRatio: isIntersecting ? 1 : 0,
+      boundingClientRect: new DOMRect(),
+      intersectionRect: new DOMRect(),
+      rootBounds: null,
+      time: 0,
+    }));
     this.cb(entries, this);
   }
 }
@@ -156,9 +154,7 @@ beforeEach(() => {
   vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(function (this: Element) {
     return this.getAttribute("data-testid") === "row" ? layout.rowWidth : 0;
   });
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: Element
-  ) {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     layout.log.push("read");
     const rect = layout.rects.get(this.getAttribute("data-testid") ?? "") ?? {
       left: 0,
