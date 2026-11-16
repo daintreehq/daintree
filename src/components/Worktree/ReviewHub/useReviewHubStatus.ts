@@ -293,6 +293,12 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     [worktreeId, worktreePath, refresh, backgroundRefresh, beginForegroundRead, sendForegroundRead]
   );
 
+  /** Drops a foreground read still waiting on a capture, with the `loading` it raised. */
+  const abandonWaitingRead = useCallback((lane: CaptureLane) => {
+    if (lane.foreground !== null && refreshIdRef.current === lane.foreground) setLoading(false);
+    lane.foreground = null;
+  }, []);
+
   /** A capture and the silent read after it: what events and a mark ask for. */
   const readWithCapture = useCallback(() => requestCapture(false), [requestCapture]);
 
@@ -334,12 +340,8 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
       const lane = laneRef.current;
       if (lane?.session === session) {
         clearLaneTimers(lane);
-        // A foreground read still waiting on the capture won't go out now,
-        // and nothing else would lower the `loading` it raised.
-        if (lane.foreground !== null && refreshIdRef.current === lane.foreground) {
-          setLoading(false);
-        }
-        lane.foreground = null;
+        // Its read won't go out now, and nothing else would lower its `loading`.
+        abandonWaitingRead(lane);
       }
       latestCaptureRef.current = null;
       unsubscribeUpdate();
@@ -347,7 +349,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
       debouncedBgRefresh.cancel();
       debouncedBgRefreshRef.current = null;
     };
-  }, [isOpen, worktreePath, readWithCapture, refreshWithCapture]);
+  }, [isOpen, worktreePath, readWithCapture, refreshWithCapture, abandonWaitingRead]);
 
   /**
    * Once per session, which the subscription has already started, with its

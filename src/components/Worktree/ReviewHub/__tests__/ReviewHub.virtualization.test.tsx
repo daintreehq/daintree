@@ -790,8 +790,9 @@ describe("ReviewHub windowed file list (#12241)", () => {
 
       press(key);
 
-      const rendered = new Set(rowRenders.paths.filter((p) => rows.includes(String(p))));
-      expect([...rendered].sort()).toEqual([rows[from], rows[to]].sort());
+      // Once each, not merely each of the two.
+      const rendered = rowRenders.paths.filter((p) => rows.includes(String(p)));
+      expect(rendered.sort()).toEqual([rows[from], rows[to]].sort());
       // And the two that did render moved the focus between them.
       const rowNode = (index: number) =>
         document.getElementById(`review-hub-row-${index}`)?.getAttribute("data-focused");

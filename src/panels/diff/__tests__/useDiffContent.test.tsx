@@ -127,6 +127,10 @@ describe("useDiffContent", () => {
       expect(files()).toEqual(["a.ts"]);
 
       await act(async () => land({ content: PATCH_A }));
+      // Not on the next tick either: it waits out a dwell first.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(files()).toEqual(["a.ts"]);
       await settlePrefetch();
 
