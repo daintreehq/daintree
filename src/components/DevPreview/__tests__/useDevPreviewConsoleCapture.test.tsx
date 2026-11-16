@@ -284,6 +284,23 @@ describe("useDevPreviewConsoleCapture", () => {
     unmount();
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
   });
+
+  it("drops buffered rows when the panel unmounts because it was trashed (#17067)", () => {
+    usePanelStore.setState({
+      panelsById: {
+        [PANE_ID]: { id: PANE_ID, location: "trash" } as unknown as PtyPanelData,
+      },
+    });
+    const webview = makeWebviewElement();
+    const { unmount } = renderHook(() =>
+      useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
+    );
+    addRowViaCb(row({ paneId: PANE_ID }));
+    expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
+
+    unmount();
+    expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(0);
+  });
 });
 
 describe("useDevPreviewConsoleCapture — HMR liveness", () => {

@@ -170,15 +170,17 @@ export function useDevPreviewConsoleCapture(
     };
   }, [paneId, webviewElement, isWebviewReady, isEvicted, guestRevision]);
 
-  // Drop this pane's buffered rows + counts only when the panel is gone for
-  // good. Unmount alone is not deletion: a DevPreview panel in a grid tab
+  // Drop this pane's buffered rows + counts only when the panel is gone or
+  // trashed. Unmount alone is not deletion: a DevPreview panel in a grid tab
   // group fully unmounts when another tab is activated, and we must keep its
   // captured rows so they survive a tab switch. By cleanup time a deleted
-  // panel is already absent from the panel registry, so its absence is the
-  // signal that this is a real teardown rather than a deactivation.
+  // panel is already absent from the panel registry and a trashed one already
+  // reads `location: "trash"`. Rows a guest logged between the trash and this
+  // unmount would otherwise outlive the orchestrator's trash sweep.
   useEffect(() => {
     return () => {
-      if (!usePanelStore.getState().panelsById?.[paneId]) {
+      const panel = usePanelStore.getState().panelsById?.[paneId];
+      if (!panel || panel.location === "trash") {
         useConsoleCaptureStore.getState().removePane(paneId);
       }
     };
