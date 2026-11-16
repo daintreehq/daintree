@@ -152,3 +152,35 @@ describe("actionMruStore (rolling 7-day usage count)", () => {
     expect(useActionMruStore.getState().getSortedActionMruList()).toEqual([]);
   });
 });
+
+describe("actionMruStore persistence (#17026)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not write the hydrated list back, and the next real change writes once", async () => {
+    // Fresh module state, so earlier tests' baselines and in-flight writes can't leak in.
+    const { appClient } = await import("@/clients/appClient");
+    const { useActionMruStore: store } = await import("../actionMruStore");
+    const setState = vi.mocked(appClient.setState);
+    setState.mockClear();
+
+    // A legacy string list and an aged-out use are both rewritten by hydration.
+    const stale = NOW - USAGE_WINDOW_MS - DAY;
+    store.getState().hydrateActionMru([{ id: "kept", uses: [stale, NOW - DAY] }]);
+    store.getState().hydrateActionMru(["legacy.action"]);
+    store.getState().recordActionMru("legacy.action");
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledTimes(1);
+    expect(setState).toHaveBeenCalledWith({
+      actionMruList: [{ id: "legacy.action", uses: [NOW, NOW] }],
+    });
+  });
+});

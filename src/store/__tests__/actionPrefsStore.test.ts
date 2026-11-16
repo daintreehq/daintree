@@ -128,3 +128,24 @@ describe("actionPrefsStore", () => {
     });
   });
 });
+
+describe("actionPrefsStore persistence (#17026)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("does not write the hydrated prefs back, and the next change sends only what changed", async () => {
+    // Fresh module state, so earlier tests' baselines and in-flight writes can't leak in.
+    const { appClient } = await import("@/clients/appClient");
+    const { useActionPrefsStore: store } = await import("../actionPrefsStore");
+    const setState = vi.mocked(appClient.setState);
+    setState.mockClear();
+
+    store.getState().hydrateActionPrefs({ pinnedIds: ["a.one"], hiddenIds: ["x.one"] });
+    store.getState().pinAction("a.two");
+
+    await vi.waitFor(() => expect(setState).toHaveBeenCalled());
+    expect(setState).toHaveBeenCalledTimes(1);
+    expect(setState).toHaveBeenCalledWith({ actionPinnedIds: ["a.one", "a.two"] });
+  });
+});

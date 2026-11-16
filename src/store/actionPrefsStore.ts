@@ -1,15 +1,16 @@
 import { create } from "zustand";
 import { createActionPrefsSlice, type ActionPrefsSlice } from "./slices/actionPrefsSlice";
 
-// Seed the persistence baseline with the initial store value (`[]`) so the
-// subscribe-to-persist path on app boot — where `hydrateActionPrefs` writes
-// the on-disk values back into the store — doesn't echo an identical payload
-// out to disk as a spurious round-trip.
+// The persistence baseline starts at the initial store value (`[]`).
 const EMPTY_JSON = JSON.stringify([]);
 let lastPinned: string = EMPTY_JSON;
 let lastHidden: string = EMPTY_JSON;
 let inflightPinned: string | null = null;
 let inflightHidden: string | null = null;
+// Hydration restores what Main just read from config.json. Zustand notifies
+// subscribers synchronously inside the slice's `set`, before the baseline below
+// can be primed, so the subscriber is told to ignore that one notification.
+let hydrating = false;
 
 export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) => {
   const slice = createActionPrefsSlice(set, get, store);
@@ -17,10 +18,12 @@ export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) 
   return {
     ...slice,
     hydrateActionPrefs: (prefs) => {
-      baseHydrate(prefs);
-      // After hydrate, prime the persistence baseline to the just-loaded values
-      // so the subscribe-to-persist handler doesn't fire a redundant
-      // `appClient.setState` with the same data we just read.
+      hydrating = true;
+      try {
+        baseHydrate(prefs);
+      } finally {
+        hydrating = false;
+      }
       const next = get();
       lastPinned = JSON.stringify(next.pinnedActionIds);
       lastHidden = JSON.stringify(next.hiddenActionIds);
@@ -29,6 +32,7 @@ export const useActionPrefsStore = create<ActionPrefsSlice>()((set, get, store) 
 });
 
 useActionPrefsStore.subscribe((state) => {
+  if (hydrating) return;
   const pinnedJson = JSON.stringify(state.pinnedActionIds);
   const hiddenJson = JSON.stringify(state.hiddenActionIds);
 
