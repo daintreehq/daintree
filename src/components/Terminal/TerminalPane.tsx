@@ -631,7 +631,9 @@ function TerminalPaneComponent({
         sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
-        runtimeStatus: pty?.runtimeStatus,
+        // Only a stop matters here; the flow statuses behind the rest change
+        // every frame a streaming agent writes, and would repaint the pane.
+        runtimeStopped: pty?.runtimeStatus === "exited" || pty?.runtimeStatus === "error",
         eagerAttach: pty?.eagerAttach ?? false,
         isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
@@ -646,7 +648,7 @@ function TerminalPaneComponent({
     sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
-    runtimeStatus,
+    runtimeStopped,
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
@@ -1541,7 +1543,7 @@ function TerminalPaneComponent({
     restartBannerVariant.type === "agent-resume-offer";
   const attachedProcessRunning = isAttachedProcessRunning({
     spawnStatus,
-    runtimeStatus,
+    runtimeStatus: runtimeStopped ? "exited" : undefined,
     isExited,
     isRestarting,
     hasSpawnError: Boolean(spawnError),

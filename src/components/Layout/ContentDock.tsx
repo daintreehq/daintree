@@ -20,13 +20,10 @@ import {
 } from "@/components/DragDrop/useArmedDropTarget";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
-import { isPtyPanel, type DockPanelData, type PanelInstance } from "@shared/types/panel";
-import { dockChipTitle } from "./dockChipTitle";
-import type { TrashedTerminal } from "@/store/slices";
-import { DockedTerminalItem } from "./DockedTerminalItem";
-import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
-import { DockedTabGroup } from "./DockedTabGroup";
-import { TrashContainer } from "./TrashContainer";
+import { isDockPanel, type DockPanelData } from "@shared/types/panel";
+import { ConnectedDockItem } from "./ConnectedDockItem";
+import { ConnectedTrashContainer } from "./ConnectedTrashContainer";
+import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
 import { WaitingContainer } from "./WaitingContainer";
 import { UnreadContainer } from "./UnreadContainer";
 import { ErrorsContainer } from "./ErrorsContainer";
@@ -45,7 +42,6 @@ import { useLauncherData } from "./useLauncherData";
 import { DockLaunchMenuItems, type DockLaunchMenuComponents } from "./DockLaunchMenuItems";
 import type { DockLaunchAgentOptions } from "./dockLaunchItems";
 import {
-  SortableDockItem,
   SortableDockPlaceholder,
   DOCK_PLACEHOLDER_ID,
   useIsWorktreeSortDragging,
@@ -74,12 +70,7 @@ import {
 } from "@/components/ui/context-menu";
 
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
-import {
-  buildDockRenderItems,
-  collectDockPanels,
-  filterRailDockPanels,
-  type DockRenderItem,
-} from "./dockRenderItems";
+import { selectDockRenderDescriptors, dockRenderDescriptorsEqual } from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
 import { dockSessionTags } from "./dockSessionTag";
 
@@ -97,10 +88,6 @@ const CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
 };
 
 export type { DockDensity } from "@/store/preferencesStore";
-
-// Stable empty refs so the narrowed dock subscriptions below can bail under
-// `useShallow` when the dock is empty instead of yielding a fresh `[]`.
-const EMPTY_DOCK_TERMINALS: readonly DockPanelData[] = [];
 
 interface ContentDockProps {
   density?: DockDensity;
@@ -123,53 +110,44 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
-  const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
-  const storeTabGroups = usePanelStore((state) => state.tabGroups);
   // Every lane, not the focused one (#12108): all assistant terminals render
   // inside HelpPanel, so all must stay out of the dock.
   const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
-  // Narrow dock subscription (#10908). Subscribing to the whole `panelsById`
-  // re-rendered the dock on every panel's rAF status-buffer flush — including
-  // grid agents that never appear here. This selector reacts only to dock
-  // panels, whose membership `collectDockPanels` owns; the PTY chip and the
-  // generic `DockedNonPtyPanelItem` chip cover every member below.
+  // The rail is ids and groups only (#17053). A docked agent streaming output
+  // replaces its panel record on every status flush, so a selector returning
+  // records would repaint the whole rail; each chip (`ConnectedDockItem`) reads
+  // its own panels instead, and this selector stays equal until membership,
+  // order, grouping or the active tab changes.
   //
-  // The list is object-valued (the dock renders live activity/agent state from
-  // it) and ordered, and it is the sole authority for chip order — so a pure
-  // `reorderTerminals`, which rewrites only `panelIds`/`panelIdsByWorktreeId`,
-  // repaints the rail. Order used to come from the `getTabGroups` action behind
-  // a `useMemo` whose deps were read for invalidation only; React Compiler
-  // drops deps a callback never consumes, so that memo held the pre-drag order
-  // and every dock reorder snapped back (#11873). Everything downstream now
-  // consumes its inputs for real, so the compiler keeps them in the cache key.
-  const dockTerminalsRaw = usePanelStore(
-    useShallow((state) => {
-      const result = collectDockPanels(state, activeWorktreeId);
-      return result.length === 0 ? EMPTY_DOCK_TERMINALS : result;
-    })
+  // It is the sole authority for chip order — a pure `reorderTerminals`, which
+  // rewrites only `panelIds`/`panelIdsByWorktreeId`, must repaint the rail. Order
+  // used to come from the `getTabGroups` action behind a `useMemo` whose deps were
+  // read for invalidation only; React Compiler drops deps a callback never
+  // consumes, so that memo held the pre-drag order and every dock reorder snapped
+  // back (#11873). Everything here consumes its inputs for real, so the compiler
+  // keeps them in the cache key.
+  const dockItems = useStabilizedSelector(
+    usePanelStore,
+    (state) => selectDockRenderDescriptors(state, activeWorktreeId, helpTerminalIdList),
+    dockRenderDescriptorsEqual
   );
 
-  // The help-panel and worktree filters read stores the selector above can't.
-  const dockTerminals = useMemo<DockPanelData[]>(
-    () => filterRailDockPanels(dockTerminalsRaw, activeWorktreeId, helpTerminalIdList),
-    [dockTerminalsRaw, helpTerminalIdList, activeWorktreeId]
-  );
-
-  // Trashed panels resolved from the store, keyed by id. Values are the actual
-  // store panel references (not freshly constructed), so `useShallow` bails
-  // unless the trashed set — or a trashed panel's reference — actually changes,
-  // rather than on every unrelated status-buffer flush (#10908).
-  const trashedPanelsById = usePanelStore(
+  // Chips that would read the same get the time their session started. Resolved
+  // in a selector so a title or task change updates the tags without handing
+  // the rail the panel records; the map of strings stays shallow-equal across
+  // status flushes.
+  const sessionTags = usePanelStore(
     useShallow((state) => {
-      const result: Record<string, PanelInstance> = {};
-      for (const trashed of state.trashedTerminals.values()) {
-        const panel = state.panelsById[trashed.id];
-        if (panel) result[trashed.id] = panel;
+      const singles: DockPanelData[] = [];
+      for (const item of dockItems) {
+        if (item.panelIds.length !== 1) continue;
+        const panel = state.panelsById[item.panelIds[0]!];
+        if (panel && isDockPanel(panel)) singles.push(panel);
       }
-      return result;
+      return dockSessionTags(singles, showAgentTaskTitles, Date.now());
     })
   );
 
@@ -442,40 +420,13 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     [dockLandmarkCandidates]
   );
 
-  const trashedItems = Array.from(trashedTerminals.values())
-    .map((trashed) => ({
-      terminal: trashedPanelsById[trashed.id] as PanelInstance | undefined,
-      trashedInfo: trashed,
-    }))
-    .filter(
-      (item): item is { terminal: PanelInstance; trashedInfo: TrashedTerminal } =>
-        item.terminal !== undefined
-    );
-
-  // Every input is genuinely consumed, so React Compiler keeps all three in the
-  // cache key — the reason chip order now tracks `panelIds` (#11873).
-  const dockItems = useMemo<DockRenderItem[]>(() => {
-    return buildDockRenderItems(dockTerminals, storeTabGroups, activeWorktreeId);
-  }, [dockTerminals, storeTabGroups, activeWorktreeId]);
-
-  // Chips that would read the same get the time their session started.
-  const sessionTags = useMemo(
-    () =>
-      dockSessionTags(
-        dockItems.filter((item) => item.panels.length === 1).map((item) => item.panels[0]!),
-        showAgentTaskTitles,
-        Date.now()
-      ),
-    [dockItems, showAgentTaskTitles]
-  );
-
   // Tab group IDs for SortableContext
   const panelIds = useMemo(() => {
     if (dockItems.length === 0) {
       return [DOCK_PLACEHOLDER_ID];
     }
     // Use first panel's ID for each group (consistent with terminal-based DnD)
-    return dockItems.map((item) => item.panels[0]?.id ?? item.group.id);
+    return dockItems.map((item) => item.panelIds[0] ?? item.group.id);
   }, [dockItems]);
 
   const isCompact = density === "compact";
@@ -634,43 +585,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                   {dockItems.length === 0 ? (
                     <SortableDockPlaceholder />
                   ) : (
-                    dockItems.map(({ group, panels }, index) => {
-                      // Single-panel group: render the kind's chip directly
-                      if (panels.length === 1) {
-                        const terminal = panels[0]!;
-                        return (
-                          <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
-                            {isPtyPanel(terminal) ? (
-                              <DockedTerminalItem
-                                terminal={terminal}
-                                sessionTag={sessionTags.get(terminal.id)}
-                              />
-                            ) : (
-                              <DockedNonPtyPanelItem
-                                panel={terminal}
-                                displayTitle={dockChipTitle(terminal)}
-                              />
-                            )}
-                          </SortableDockItem>
-                        );
-                      }
-
-                      // Multi-panel group: pass group context for group-aware DnD.
-                      // `buildDockRenderItems` resolves group members PTY-only,
-                      // so the runtime narrow below never drops a panel.
-                      const firstPanel = panels[0]!;
-                      return (
-                        <SortableDockItem
-                          key={group.id}
-                          terminal={firstPanel}
-                          sourceIndex={index}
-                          groupId={group.id}
-                          groupPanelIds={group.panelIds}
-                        >
-                          <DockedTabGroup group={group} panels={panels.filter(isPtyPanel)} />
-                        </SortableDockItem>
-                      );
-                    })
+                    dockItems.map((descriptor, index) => (
+                      <ConnectedDockItem
+                        key={descriptor.group.id}
+                        descriptor={descriptor}
+                        sourceIndex={index}
+                        sessionTag={sessionTags.get(descriptor.panelIds[0]!)}
+                      />
+                    ))
                   )}
                 </div>
               </SortableContext>
@@ -716,7 +638,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               <WaitingContainer compact={isTrayCompact} />
               <UnreadContainer compact={isTrayCompact} />
               <ErrorsContainer compact={isTrayCompact} />
-              <TrashContainer trashedTerminals={trashedItems} compact={isTrayCompact} />
+              <ConnectedTrashContainer compact={isTrayCompact} />
             </DockFocusLandmarkContext.Provider>
           </div>
         </div>

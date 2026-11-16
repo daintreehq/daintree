@@ -12,6 +12,8 @@ import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
+import { useFleetBandTerminals } from "@/hooks/useTerminalSelectors";
+import type { FleetBand } from "@/lib/fleetAttention";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
@@ -98,12 +100,13 @@ export interface AgentStatusConfig {
    * Unread offers that and leaves Kill to the row's context menu.
    */
   rowAction: "kill" | "mark-read";
+  /** The fleet bands whose agents the pill holds. */
+  bands: ReadonlySet<FleetBand>;
   /** Row order; groups take the place of their first member. */
   compare: (a: PtyPanelData, b: PtyPanelData) => number;
 }
 
 interface AgentStatusContainerProps {
-  terminals: PtyPanelData[];
   /**
    * Plugin panels the user let into this pill (#13821). Their own section,
    * below every agent's, so a plugin can never rank above an agent asking.
@@ -137,7 +140,6 @@ interface AgentDisplayGroup {
 type AgentDisplayItem = AgentDisplaySingle | AgentDisplayGroup;
 
 export function AgentStatusContainer({
-  terminals,
   pluginRows: reportedPluginRows = NO_PLUGIN_ROWS,
   config,
   compact = false,
@@ -145,6 +147,10 @@ export function AgentStatusContainer({
   const [isOpen, setIsOpen] = useState(false);
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
   const { kind, compare } = config;
+  // The pill's members are read here, not by its parent, because only this
+  // component knows whether rows are showing. Closed, it keeps its list across
+  // the per-frame writes of a streaming member (#17053).
+  const terminals = useFleetBandTerminals(config.bands, isOpen || killConfirmId !== null);
   const tabGroups = usePanelStore((state) => state.tabGroups);
   const { activateTerminal, pingTerminal, removePanel, setActiveTab } = usePanelStore(
     useShallow((state) => ({

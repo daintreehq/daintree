@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useMemo } from "react";
+import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
 import { useShallow } from "zustand/react/shallow";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
@@ -26,10 +27,8 @@ import {
 } from "@/store/worktreeStore";
 import type { WorktreeState } from "@/types";
 import {
-  selectSidebarVisiblePanelIds,
-  selectSidebarAgentStateByPanelId,
-  selectSidebarAgentPanelIds,
-  selectSidebarFleetEligibleWorktreeById,
+  selectSidebarPanelMaps,
+  sidebarPanelMapsEqual,
   computePanelStateByWorktree,
 } from "./sidebarPanelDerivation";
 import {
@@ -156,12 +155,8 @@ export function useSidebarWorktreeModel({
   // `sidebarPanelDerivation.ts`) — none of which the buffer writes — so
   // `useShallow` bails on buffer flushes and re-renders fire only on real
   // structural, agent-state, or fleet-eligibility changes.
-  const visiblePanelIds = usePanelStore(useShallow(selectSidebarVisiblePanelIds));
-  const agentStateByPanelId = usePanelStore(useShallow(selectSidebarAgentStateByPanelId));
-  const agentPanelIds = usePanelStore(useShallow(selectSidebarAgentPanelIds));
-  const fleetEligibleWorktreeById = usePanelStore(
-    useShallow(selectSidebarFleetEligibleWorktreeById)
-  );
+  const { visiblePanelIds, agentStateByPanelId, agentPanelIds, fleetEligibleWorktreeById } =
+    useStabilizedSelector(usePanelStore, selectSidebarPanelMaps, sidebarPanelMapsEqual);
   const panelStateByWorktree = useMemo(
     () =>
       computePanelStateByWorktree(

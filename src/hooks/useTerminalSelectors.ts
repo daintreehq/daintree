@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { shallow } from "zustand/shallow";
+import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -97,16 +99,55 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 const EMPTY_TERMINALS: PtyPanelData[] = [];
 
 /**
+ * What a closed dock pill reads of its members: who they are, where they live,
+ * and the observation `isNeedsYouPane` weighs for the Background count. The
+ * rest of a record — activity, flow, held time — is rewritten every frame a
+ * member streams, so a pill that is not open holds its previous list across
+ * those writes instead of waking at 60fps (#17053).
+ */
+function closedPanelsEquivalent(a: readonly PanelInstance[], b: readonly PanelInstance[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]! as PanelInstance & Partial<PtyPanelData>;
+    const right = b[i]! as PanelInstance & Partial<PtyPanelData>;
+    if (left === right) continue;
+    if (
+      left.id !== right.id ||
+      left.worktreeId !== right.worktreeId ||
+      left.kind !== right.kind ||
+      left.location !== right.location ||
+      left.agentState !== right.agentState ||
+      left.waitingReason !== right.waitingReason ||
+      left.isRestarting !== right.isRestarting ||
+      (left.runtimeStatus === "exited") !== (right.runtimeStatus === "exited")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The equality a pill's list selector settles on: exact while its popover (or a
+ * confirmation over it) is showing rows, structural while it is only a count.
+ */
+function listEquality<T extends PanelInstance>(live: boolean) {
+  return live ? shallow<readonly T[]> : closedPanelsEquivalent;
+}
+
+/**
  * Visible terminals whose fleet run sits in `bands`, so the dock's pills hold
  * the same agents as the sidebar's buckets and Pilot. A terminal the fleet has
  * not reported belongs to none of them.
  */
-function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
+export function useFleetBandTerminals(bands: ReadonlySet<FleetBand>, live = true): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
   const runIds = useFleetBandRunIds(bands);
 
-  return usePanelStore(
-    useShallow((state) => {
+  return useStabilizedSelector(
+    usePanelStore,
+    (state) => {
       if (runIds.size === 0) return EMPTY_TERMINALS;
       const out: PtyPanelData[] = [];
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
@@ -116,7 +157,8 @@ function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
         out.push(panel);
       }
       return out;
-    })
+    },
+    listEquality<PtyPanelData>(live)
   );
 }
 
@@ -125,13 +167,13 @@ function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
  * not one of them unless its agent said it needs the user or Canopy read an
  * ask in it, and a parked or snoozed agent has been shelved by the user.
  */
-export function useWaitingTerminals(): PtyPanelData[] {
-  return useFleetBandTerminals(ATTENTION_FILTER_BANDS);
+export function useWaitingTerminals(live = true): PtyPanelData[] {
+  return useFleetBandTerminals(ATTENTION_FILTER_BANDS, live);
 }
 
 /** Hand-backs nobody has read yet: the unread half of the sidebar's Finished bucket. */
-export function useUnreadTerminals(): PtyPanelData[] {
-  return useFleetBandTerminals(UNREAD_FILTER_BANDS);
+export function useUnreadTerminals(live = true): PtyPanelData[] {
+  return useFleetBandTerminals(UNREAD_FILTER_BANDS, live);
 }
 
 /**
@@ -155,11 +197,12 @@ export function useDemandTerminalCount(): number {
   });
 }
 
-export function useErrorTerminals(): PtyPanelData[] {
+export function useErrorTerminals(live = true): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
 
-  return usePanelStore(
-    useShallow((state) => {
+  return useStabilizedSelector(
+    usePanelStore,
+    (state) => {
       const out: PtyPanelData[] = [];
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
         if (!isPtyPanel(panel)) continue;
@@ -174,7 +217,8 @@ export function useErrorTerminals(): PtyPanelData[] {
         out.push(panel);
       }
       return out;
-    })
+    },
+    listEquality<PtyPanelData>(live)
   );
 }
 
@@ -183,11 +227,12 @@ export function useErrorTerminals(): PtyPanelData[] {
  * sent there, and this list is the way back. It reads the raw records because
  * `getNarrowPanels` drops file browsers, diffs and plugin panels.
  */
-export function useBackgroundedTerminals(): PanelInstance[] {
+export function useBackgroundedTerminals(live = true): PanelInstance[] {
   const worktreeIds = useWorktreeIds();
 
-  return usePanelStore(
-    useShallow((state) => {
+  return useStabilizedSelector(
+    usePanelStore,
+    (state) => {
       const out: PanelInstance[] = [];
       for (const id of state.panelIds) {
         const panel = state.panelsById[id];
@@ -196,7 +241,8 @@ export function useBackgroundedTerminals(): PanelInstance[] {
         out.push(panel);
       }
       return out;
-    })
+    },
+    listEquality<PanelInstance>(live)
   );
 }
 

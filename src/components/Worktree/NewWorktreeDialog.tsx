@@ -1,4 +1,13 @@
-import { useState, useEffect, useRef, useMemo, useCallback, useId, Fragment } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  useId,
+  useSyncExternalStore,
+  Fragment,
+} from "react";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
@@ -132,6 +141,24 @@ function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged
     default:
       return "open";
   }
+}
+
+const noopSubscribe = () => () => {};
+
+function useCloneStartsAgent(active: boolean, worktreeId: string | null): boolean {
+  return useSyncExternalStore(
+    active ? usePanelStore.subscribe : noopSubscribe,
+    () => {
+      if (!active || !worktreeId) return false;
+      try {
+        return recipeTerminalsStartAgent(
+          useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId)
+        );
+      } catch {
+        return false;
+      }
+    }
+  );
 }
 
 interface NewWorktreeDialogProps {
@@ -780,19 +807,14 @@ export function NewWorktreeDialog({
   // of their own — judged from the same snapshot Create will clone, so the
   // conflict is said here rather than in a toast after the fact.
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  // A panel-store selector, so the warning follows the source layout while the
-  // dialog is up — a terminal opened or closed behind it changes what Create
-  // launches. The helper reads the same store state the selector is handed.
-  const cloneStartsAgent = usePanelStore(() => {
-    if (!isOpen || selectedRecipeId !== CLONE_LAYOUT_ID || !activeWorktreeId) return false;
-    try {
-      return recipeTerminalsStartAgent(
-        useRecipeStore.getState().generateRecipeFromActiveTerminals(activeWorktreeId)
-      );
-    } catch {
-      return false;
-    }
-  });
+  // Follows the source layout while the dialog is up — a terminal opened or
+  // closed behind it changes what Create launches. The dialog stays mounted
+  // while closed, so the subscription exists only while `active`: a store
+  // selector would run on every status flush of a streaming agent (#17053).
+  const cloneStartsAgent = useCloneStartsAgent(
+    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId,
+    activeWorktreeId
+  );
   // The layout's own agent wins, so the dialog's agent and its prompt never
   // launch. The draft is kept in case the layout changes back.
   const layoutStartsAgent = selectedRecipeStartsAgent || cloneStartsAgent;

@@ -27,20 +27,25 @@ export function useDockRenderState(): DockRenderState & {
     }))
   );
 
-  const dockTerminals = usePanelStore(
-    useShallow((state) =>
-      state.panelIds
-        .map((id) => state.panelsById[id])
-        .filter(
-          (t) =>
-            t &&
-            t.location === "dock" &&
-            !state.trashedTerminals.has(t.id) &&
-            // Show terminals that match active worktree OR have no worktree (global terminals)
-            (t.worktreeId == null || t.worktreeId === activeWorktreeId)
-        )
-    )
-  );
+  // A count, not the panels: this hook only needs "is anything docked", and a
+  // raw `PanelInstance` list would re-render the consumer on every status flush
+  // of a streaming docked agent (#17053).
+  const dockedCount = usePanelStore((state) => {
+    let count = 0;
+    for (const id of state.panelIds) {
+      const t = state.panelsById[id];
+      if (
+        t &&
+        t.location === "dock" &&
+        !state.trashedTerminals.has(t.id) &&
+        // Show terminals that match active worktree OR have no worktree (global terminals)
+        (t.worktreeId == null || t.worktreeId === activeWorktreeId)
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  });
 
   const trashedCount = usePanelStore((state) => state.trashedTerminals.size);
 
@@ -59,8 +64,7 @@ export function useDockRenderState(): DockRenderState & {
     })
   );
 
-  const hasDocked = dockTerminals.length > 0;
-  const dockedCount = dockTerminals.length;
+  const hasDocked = dockedCount > 0;
   const hasStatus = demandCount > 0 || trashedCount > 0;
 
   // Dock is always visible now - no hidden mode
