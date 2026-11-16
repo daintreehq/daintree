@@ -36,6 +36,8 @@ vi.mock("@/services/terminal/inputGate", async (importOriginal) => ({
 const { usePanelStore } = await import("@/store/panelStore");
 const { terminalClient } = await import("@/clients");
 const { registerTerminalInputActions } = await import("../terminalInputActions");
+// Loaded on first dispatch; warmed so fake timers never wait on a chunk load.
+await import("../terminalInputActions.impl");
 
 type ActionRegistry = Parameters<typeof registerTerminalInputActions>[0];
 
