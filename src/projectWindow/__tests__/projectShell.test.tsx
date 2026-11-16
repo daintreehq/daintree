@@ -2,7 +2,11 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import ts from "typescript";
 import { StrictMode, isValidElement, type ReactNode } from "react";
+import { PROJECT_SHELL_SOURCE } from "@shared/config/projectShell";
 
 const mocks = vi.hoisted(() => {
   const calls: string[] = [];
@@ -95,10 +99,12 @@ vi.mock("@/lib/remoteHosts", () => ({ isRemoteShellSupported: () => false }));
 vi.mock("@/services/terminal/terminalInstanceServiceAccessor", () => ({
   answerBufferSamplesUntilLoaded: mocks.record("answerBufferSamplesUntilLoaded"),
 }));
-vi.mock("@/App", () => {
-  mocks.calls.push("App evaluated");
-  return { default: function App() {} };
-});
+function mockApp(): void {
+  vi.doMock("@/App", () => {
+    mocks.calls.push("App evaluated");
+    return { default: function App() {} };
+  });
+}
 
 /** Everything the shell must have done, in this order, before it imports App. */
 const SYNCHRONOUS_BOOTSTRAP = [
@@ -133,6 +139,10 @@ function typeOf(node: ReactNode): unknown {
 describe("project shell", () => {
   beforeEach(() => {
     vi.resetModules();
+    // Registered per test: a factory's module stays cached across
+    // resetModules, so a test that ran first would otherwise decide whether
+    // the next one sees App evaluate.
+    mockApp();
     mocks.calls.length = 0;
     mocks.callsAtFirstMicrotask = null;
     mocks.render.mockReset();
@@ -174,12 +184,8 @@ describe("project shell", () => {
       throw new Error("App chunk failed");
     });
 
-    try {
-      await evaluateShell();
-      await vi.waitFor(() => expect(mocks.reportBootstrapFailure).toHaveBeenCalledTimes(1));
-    } finally {
-      vi.doMock("@/App", () => ({ default: function App() {} }));
-    }
+    await evaluateShell();
+    await vi.waitFor(() => expect(mocks.reportBootstrapFailure).toHaveBeenCalledTimes(1));
 
     // Vitest wraps a throwing mock factory, keeping the module's own error as the cause.
     expect(mocks.reportBootstrapFailure.mock.calls[0]![0]).toHaveProperty(
@@ -187,6 +193,36 @@ describe("project shell", () => {
       "App chunk failed"
     );
     expect(mocks.render).not.toHaveBeenCalled();
+  });
+
+  it("awaits nothing in startProjectWindow before the App import", () => {
+    // The first-microtask snapshot can't see a yield ahead of its own anchor
+    // (`initBuiltInPanelKinds`), so the source must not have one: the App
+    // import is the bootstrap's only await.
+    const file = join(process.cwd(), PROJECT_SHELL_SOURCE);
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    const start = source.statements.find(
+      (statement): statement is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === "startProjectWindow"
+    );
+    const awaited: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isAwaitExpression(node) || (ts.isForOfStatement(node) && node.awaitModifier)) {
+        awaited.push(node.getText(source));
+        return;
+      }
+      if (ts.isFunctionLike(node) && node !== start) return;
+      ts.forEachChild(node, visit);
+    };
+    expect(start).toBeDefined();
+    visit(start!);
+    expect(awaited).toEqual(['await import("@/App")']);
   });
 
   it("reports a throw during the synchronous bootstrap instead of leaving it uncaught", async () => {
