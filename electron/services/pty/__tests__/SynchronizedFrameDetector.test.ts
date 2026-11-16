@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Terminal } from "@xterm/headless";
 import type { FrameSnapshot } from "../SynchronizedFrameAnalyzer.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
@@ -26,6 +26,7 @@ describe("SynchronizedFrameDetector", () => {
   afterEach(() => {
     detector.dispose();
     terminal.dispose();
+    vi.restoreAllMocks();
   });
 
   it("fires exactly one frame-close on a balanced 2026 bracket pair", async () => {
@@ -109,6 +110,22 @@ describe("SynchronizedFrameDetector", () => {
     terminal.write(`${OPEN}second${CLOSE}`);
     await flushTerminal(terminal);
     expect(frames).toHaveLength(1);
+  });
+
+  it("cancels its pending missing-close timer on dispose", async () => {
+    const setTimer = vi.spyOn(globalThis, "setTimeout");
+    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
+    // A delay nothing else in the parse path uses, so its handle is unambiguous.
+    const missingCloseTimeoutMs = 60_000;
+    const guarded = new SynchronizedFrameDetector(terminal, () => {}, { missingCloseTimeoutMs });
+
+    terminal.write(OPEN);
+    await flushTerminal(terminal);
+    const armedAt = setTimer.mock.calls.findIndex(([, ms]) => ms === missingCloseTimeoutMs);
+    expect(armedAt).toBeGreaterThanOrEqual(0);
+
+    guarded.dispose();
+    expect(clearTimer).toHaveBeenCalledWith(setTimer.mock.results[armedAt].value);
   });
 
   it("does not double-fire when the same write batch contains multiple frames", async () => {
