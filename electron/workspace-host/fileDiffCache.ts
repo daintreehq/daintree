@@ -114,7 +114,9 @@ async function probeValidator(
   let dotGit: string;
   try {
     const s = await lstat(join(cwd, ".git"), { bigint: true });
-    dotGit = s.isDirectory() ? `d:${s.dev}:${s.ino}` : `f:${s.mode}:${s.ino}:${s.size}:${s.mtimeNs}`;
+    dotGit = s.isDirectory()
+      ? `d:${s.dev}:${s.ino}`
+      : `f:${s.mode}:${s.ino}:${s.size}:${s.mtimeNs}`;
   } catch {
     return null;
   }
