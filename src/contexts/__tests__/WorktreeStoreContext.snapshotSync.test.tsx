@@ -28,8 +28,11 @@ const WAIT_MS = 10_000;
 
 let portReady = false;
 let readyCallbacks: Array<() => void> = [];
-let answerStates: (states: WorktreeSnapshot[]) => void = () => {};
+let answerStates: (states: WorktreeSnapshot[], seq?: number) => void = () => {};
 let answerAssociations: () => void = () => {};
+let stateRequests = 0;
+let associationRequests = 0;
+let eventListeners = new Map<string, (data: unknown) => void>();
 
 function worktree(id: string): WorktreeSnapshot {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields the store keys on
@@ -43,6 +46,9 @@ beforeAll(async () => {
 beforeEach(() => {
   portReady = false;
   readyCallbacks = [];
+  stateRequests = 0;
+  associationRequests = 0;
+  eventListeners = new Map();
   resetWorktreeSnapshotSyncForTesting();
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
   useProjectStore.setState({ currentProject: { id: "p1", path: "/repo" } as unknown as Project });
@@ -53,17 +59,21 @@ beforeEach(() => {
       isReady: () => portReady,
       request: (_name: string) =>
         new Promise((resolve) => {
-          answerStates = (states) =>
+          stateRequests += 1;
+          answerStates = (states, seq = 7) =>
             resolve({
               states,
               watcherDegraded: false,
               topologyWatcherDark: false,
               epoch: "epoch-1",
-              seq: 7,
+              seq,
               lastAcknowledgedMutationIds: [],
             });
         }),
-      onEvent: (_name: string, _cb: (data: unknown) => void) => () => {},
+      onEvent: (name: string, cb: (data: unknown) => void) => {
+        eventListeners.set(name, cb);
+        return () => eventListeners.delete(name);
+      },
       onReady: (cb: () => void) => {
         readyCallbacks.push(cb);
         return () => {
@@ -76,6 +86,7 @@ beforeEach(() => {
     worktree: {
       getAllIssueAssociations: () =>
         new Promise((resolve) => {
+          associationRequests += 1;
           answerAssociations = () => resolve({});
         }),
       getPRStatus: () => Promise.resolve(null),
@@ -164,6 +175,58 @@ describe("WorktreeStoreProvider — snapshot wait for MCP dispatch (#13348)", ()
       await waiting;
     });
     expect(store.getState().worktrees.has("wt-new")).toBe(true);
+
+    unmount();
+  });
+});
+
+describe("WorktreeStoreProvider — re-hydrating after a port gap (#17037)", () => {
+  it("fetches again when a live update overtakes the snapshot, so changes it missed still land", async () => {
+    const { store, unmount } = await renderProvider();
+    deliverPort();
+    await act(async () => {
+      answerStates([worktree("wt-a"), worktree("wt-gone")], 7);
+      answerAssociations();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(store.getState().worktrees.has("wt-gone")).toBe(true);
+
+    // The view comes back with a fresh port: "wt-gone" was deleted while it
+    // held none, and an update to "wt-a" overtakes the snapshot that says so.
+    deliverPort();
+    await act(async () => {
+      answerStates([worktree("wt-a")], 9);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    act(() => {
+      eventListeners.get("worktree-update")!({
+        worktree: worktree("wt-a"),
+        epoch: "epoch-1",
+        seq: 10,
+      });
+    });
+    const waiting = waitForWorktreeSnapshot(WAIT_MS)!;
+    let done = false;
+    void waiting.then(() => {
+      done = true;
+    });
+    await act(async () => {
+      answerAssociations();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(stateRequests).toBe(3);
+    expect(associationRequests).toBe(2);
+    expect(done).toBe(false);
+
+    // The retry reuses the associations it already has, so it applies as soon
+    // as its states arrive, however busy the host is.
+    await act(async () => {
+      answerStates([worktree("wt-a")], 10);
+      await waiting;
+    });
+    expect(store.getState().worktrees.has("wt-gone")).toBe(false);
+    expect(store.getState().worktrees.has("wt-a")).toBe(true);
+    expect(done).toBe(true);
 
     unmount();
   });

@@ -1,5 +1,3 @@
-import type { MessagePort } from "node:worker_threads";
-
 // Surface used by `fanoutEventToPorts`. Kept narrow so tests can mock it
 // without dragging in `node:worker_threads` types.
 export interface FanoutPort {
@@ -31,7 +29,8 @@ export interface FanoutLogger {
 export function fanoutEventToPorts<TPort extends FanoutPort, TEvent>(
   ports: TPort[],
   event: TEvent,
-  logger: FanoutLogger = console
+  logger: FanoutLogger = console,
+  onDropped?: (port: TPort) => void
 ): void {
   for (let i = ports.length - 1; i >= 0; i--) {
     try {
@@ -39,6 +38,7 @@ export function fanoutEventToPorts<TPort extends FanoutPort, TEvent>(
     } catch (error) {
       const failedPort = ports[i];
       ports.splice(i, 1);
+      onDropped?.(failedPort);
       try {
         failedPort.close();
       } catch {
@@ -47,10 +47,4 @@ export function fanoutEventToPorts<TPort extends FanoutPort, TEvent>(
       logger.error("[WorkspaceHost] sendToWorktreePorts: postMessage failed, closing port:", error);
     }
   }
-}
-
-// Convenience overload pinned to the `node:worker_threads` MessagePort type
-// for the production call site. Re-uses the generic implementation above.
-export function fanoutEventToWorktreePorts<TEvent>(ports: MessagePort[], event: TEvent): void {
-  fanoutEventToPorts(ports as unknown as FanoutPort[], event);
 }

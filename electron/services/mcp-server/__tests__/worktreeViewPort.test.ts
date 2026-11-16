@@ -93,7 +93,7 @@ describe("routedViewWorktreePort (#13348)", () => {
       // another project's port instead.
       cachedViews.add(1);
       const elsewhere = { ...PROJECT, workspacePath: "/remote/repo" };
-      broker.brokerPort.mockImplementation((host) => host.attachWorktreePort({} as never));
+      broker.brokerPort.mockImplementation((host) => host.attachWorktreePort({} as never, 1));
 
       await expect(routedViewWorktreePort.prepare(wc(1), elsewhere)).resolves.toBe(false);
 

@@ -144,7 +144,7 @@ describe("client worktree port override", () => {
     hosts.set(11, "studio-01");
     const host = m.broker.override!(11) as WorktreePortHost;
     expect(host).not.toBeNull();
-    expect(host.attachWorktreePort({} as never)).toBe(false);
+    expect(host.attachWorktreePort({} as never, 1)).toBe(false);
     expect(m.broker.closePortsForView).toHaveBeenCalledWith(11);
     uninstall();
   });

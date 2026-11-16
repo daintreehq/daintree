@@ -767,6 +767,11 @@ export type WorkspaceHostRequest =
       forceRefresh?: boolean;
     }
   | { type: "invalidate-pulse-cache"; worktreeId: string }
+  // Worktree ports. The attach carries the port in its transfer list, named by
+  // the broker's token; the detach names it back, because the transfer left
+  // main a handle that can no longer close it (#17037).
+  | { type: "attach-worktree-port"; portId: number }
+  | { type: "detach-worktree-port"; portId: number }
   // Forge RPC response (main → workspace-host). Correlated to a prior
   // `forge:rpc` event by `forgeRequestId`. Carries either a successful return
   // value or an error message. See `ForgeRpcMethod` for the supported methods.

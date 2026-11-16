@@ -2,6 +2,7 @@ import type {
   WorktreePortAction,
   WorktreePortPayload,
   WorktreePortResult,
+  WorktreePortRetiredNotice,
 } from "../../shared/types/worktree-port.js";
 import { CHANNELS } from "../ipc/channels.js";
 import {
@@ -16,6 +17,8 @@ import type { PreloadIpcRenderer } from "./types.js";
 // New dedicated port for worktree data with request/response correlation.
 
 type WorktreePortEventCallback = (data: unknown) => void;
+
+const PORT_RETIRED: WorktreePortRetiredNotice["type"] = "port-retired";
 
 export class WorktreePortClient {
   private port: MessagePort | null = null;
@@ -67,6 +70,11 @@ export class WorktreePortClient {
         return;
       }
 
+      if (data.type === PORT_RETIRED) {
+        this._handlePortRetired(attachedGeneration);
+        return;
+      }
+
       // Spontaneous event from host
       if (data.type === "event" && data.event?.type) {
         const listeners = this.eventListeners.get(data.event.type);
@@ -94,7 +102,7 @@ export class WorktreePortClient {
     console.log("[Preload] Worktree port connected");
   }
 
-  private detach(): void {
+  private detach(reason = "Worktree port replaced"): void {
     if (!this.port) return;
 
     try {
@@ -108,10 +116,23 @@ export class WorktreePortClient {
     // Port replacement is a transient/recoverable condition (host restart,
     // project switch within window), not app shutdown — surface HOST_EXITED
     // so callers can retry rather than treating it as terminal.
-    this.broker.clear(encodeBrokerError(new BrokerError("HOST_EXITED", "Worktree port replaced")));
+    this.broker.clear(encodeBrokerError(new BrokerError("HOST_EXITED", reason)));
 
     this.port = null;
     this._isReady = false;
+  }
+
+  /**
+   * The host is closing this port because main retired it: the view was
+   * cached, or its port replaced or torn down. Nothing went away, so let the
+   * port go without the disconnect callbacks; main posts a fresh one when the
+   * view needs it again (#17037).
+   */
+  _handlePortRetired(generation: number): void {
+    if (generation !== this.portGeneration || !this.port) return;
+    // Bump first, as attach() does, so this close and the host's read as stale.
+    this.portGeneration += 1;
+    this.detach("Worktree port retired");
   }
 
   /**
