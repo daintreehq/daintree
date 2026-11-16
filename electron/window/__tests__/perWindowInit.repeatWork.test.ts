@@ -131,7 +131,7 @@ import {
 } from "../serviceRefs.js";
 import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
 import type { BrowserWindow } from "electron";
-import type { WindowContext } from "../WindowRegistry.js";
+import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 
 function fakeWindow(id: number): BrowserWindow {
@@ -284,13 +284,16 @@ describe("initPerWindowServices repeated work across windows", () => {
 describe("initPerWindowServices plugin menu context (#13765)", () => {
   const debounce = () => new Promise((r) => setTimeout(r, 80));
 
-  async function openFocusableWindow(id: number): Promise<{
+  async function openFocusableWindow(
+    id: number,
+    registry?: WindowRegistry
+  ): Promise<{
     win: BrowserWindow;
     focus: () => void;
     close: () => void;
   }> {
     const win = fakeWindow(id);
-    await initPerWindowServices(win, fakeContext(id), undefined);
+    await initPerWindowServices(win, fakeContext(id), registry);
     signalFirstInteractive(id);
     pluginInit.resolve();
     await settle();
@@ -358,6 +361,40 @@ describe("initPerWindowServices plugin menu context (#13765)", () => {
       expect(createApplicationMenuMock).not.toHaveBeenCalled();
     } finally {
       close();
+    }
+  });
+
+  it("rebuilds outright for tours once, by the window the menu shows, while no window is focused", async () => {
+    const opened: BrowserWindow[] = [];
+    const state: { primary: BrowserWindow | undefined } = { primary: undefined };
+    const registry = {
+      getPrimary: () => (state.primary ? { browserWindow: state.primary } : undefined),
+      all: () => opened.map((browserWindow) => ({ browserWindow })),
+    } as unknown as WindowRegistry;
+    const windows = [];
+    for (const id of [1, 2, 3]) {
+      const opening = await openFocusableWindow(id, registry);
+      opened.push(opening.win);
+      windows.push(opening);
+    }
+    state.primary = opened[1];
+    createApplicationMenuMock.mockClear();
+    rebuildMenuIfChangedMock.mockClear();
+
+    try {
+      tourListeners.forEach((listener) => listener());
+      await debounce();
+      expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([opened[1]]);
+
+      // No primary to defer to: the first window registered stands in, alone.
+      state.primary = undefined;
+      createApplicationMenuMock.mockClear();
+      tourListeners.forEach((listener) => listener());
+      await debounce();
+      expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([opened[0]]);
+      expect(rebuildMenuIfChangedMock).not.toHaveBeenCalled();
+    } finally {
+      windows.forEach(({ close }) => close());
     }
   });
 
