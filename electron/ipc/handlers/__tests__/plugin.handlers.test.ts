@@ -236,8 +236,15 @@ vi.mock("../../../services/forgeProviderRegistry.js", () => ({
 }));
 
 const mockGetFileDecorationImpls = vi.fn();
+const mockHasForgeGatedFileDecorations = vi.fn((_scope: string) => false);
 vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
+  hasForgeGatedFileDecorations: (scope: string) => mockHasForgeGatedFileDecorations(scope),
+}));
+
+const mockResolveProjectForgeProvider = vi.fn();
+vi.mock("../forgeResolution.js", () => ({
+  resolveProjectForgeProvider: (...args: unknown[]) => mockResolveProjectForgeProvider(...args),
 }));
 
 const mockAuditAppend = vi.fn();
@@ -2717,7 +2724,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
       expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
     });
@@ -2732,7 +2740,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(globalImpl.impl.provideDecorations).not.toHaveBeenCalled();
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
 
       mockGetProjectForWebContents.mockReturnValue("project-c");
@@ -2747,6 +2756,92 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({
         "a.ts": { badge: "A", tooltip: "G" },
       });
+    });
+  });
+
+  describe("forge-gated providers (#17069)", () => {
+    const github = {
+      entry: {
+        pluginId: "daintree.github",
+        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+      },
+      resolvedVia: "hostname",
+    };
+
+    beforeEach(() => {
+      mockHasForgeGatedFileDecorations.mockReset().mockReturnValue(false);
+      mockResolveProjectForgeProvider.mockReset();
+      mockGetFileDecorationImpls.mockReturnValue([]);
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+    });
+
+    it("resolves the sender project's code forge and filters activation and lookup by it", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledWith("project-a");
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.github.github"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.github.github"
+      );
+    });
+
+    it("waits for the plugin catalog before resolving, so a half-loaded registry can't decide", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      let releaseCatalog!: () => void;
+      vi.mocked(pluginService.waitForCatalog).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseCatalog = resolve;
+        })
+      );
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      const pull = getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+
+      releaseCatalog();
+      await pull;
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves no forge when the project's remote can't be read", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockRejectedValue(new Error("stale remote"));
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        null
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
+    });
+
+    it("reads no git remote when no provider for the scope is gated", async () => {
+      await getHandler()(SENDER, "worktree-files:/r", ["a.ts"]);
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("resolves no forge for a sender with no project", async () => {
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockGetProjectForWebContents.mockReturnValue(null);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
     });
   });
 });

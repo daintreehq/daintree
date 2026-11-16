@@ -41,7 +41,8 @@
     "fileDecorationProviders": [
       {
         "id": "worktree-diff-review",
-        "scopes": ["worktree-diff:*"]
+        "scopes": ["worktree-diff:*"],
+        "forgeProvider": "github"
       }
     ]
   }

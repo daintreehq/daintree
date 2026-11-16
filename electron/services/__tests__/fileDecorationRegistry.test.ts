@@ -4,6 +4,7 @@ import {
   clearFileDecorationImplRegistry,
   clearFileDecorationRegistry,
   getFileDecorationImpls,
+  hasForgeGatedFileDecorations,
   getRegisteredFileDecorationProviders,
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -26,6 +27,36 @@ function makeImpl(badge: string): FileDecorationProviderImpl {
     },
   };
 }
+
+describe("forge-gated providers (#17069)", () => {
+  beforeEach(() => {
+    registerFileDecorationProviders("acme.forge", [
+      { id: "review", scopes: ["worktree-diff:*"], forgeProvider: "acmeforge" },
+    ]);
+    registerFileDecorationProviders("acme.lint", [{ id: "lint", scopes: ["worktree-diff:*"] }]);
+    registerFileDecorationProviderImpl("acme.forge", "review", makeImpl("R"));
+    registerFileDecorationProviderImpl("acme.lint", "lint", makeImpl("L"));
+  });
+
+  const pluginsFor = (codeForgeProviderId?: string | null) =>
+    getFileDecorationImpls("worktree-diff:/repo", codeForgeProviderId).map((r) => r.pluginId);
+
+  it("serves a gated provider only in projects whose code forge is its own provider", () => {
+    expect(pluginsFor("acme.forge.acmeforge")).toEqual(["acme.forge", "acme.lint"]);
+    // Same contribution id under another plugin is a different provider.
+    expect(pluginsFor("acme.other.acmeforge")).toEqual(["acme.lint"]);
+    expect(pluginsFor(null)).toEqual(["acme.lint"]);
+    // A caller that resolved nothing gets no gated provider.
+    expect(pluginsFor()).toEqual(["acme.lint"]);
+  });
+
+  it("reports a gated provider only for the scopes it declares", () => {
+    expect(hasForgeGatedFileDecorations("worktree-diff:/repo")).toBe(true);
+    expect(hasForgeGatedFileDecorations("worktree-files:/repo")).toBe(false);
+    unregisterFileDecorationProviders("acme.forge");
+    expect(hasForgeGatedFileDecorations("worktree-diff:/repo")).toBe(false);
+  });
+});
 
 describe("fileDecorationRegistry", () => {
   it("registers manifest descriptors eagerly and lists them", () => {

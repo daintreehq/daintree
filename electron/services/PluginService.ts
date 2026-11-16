@@ -269,6 +269,7 @@ import { getHiddenSearchProviders } from "./plugin/searchProviderPreferences.js"
 import { unregisterForgeProviderImpls } from "./forgeProviderRegistry.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
+  decorationServesForge,
   scopeMatchesPattern,
   unregisterFileDecorationProviderImpls,
 } from "./fileDecorationRegistry.js";
@@ -3676,16 +3677,23 @@ export class PluginService {
    * `projectId` is the requesting view's project, and is required for the
    * same reason the handler's impl filter needs it: a plugin that project
    * hides must not be started by its file views.
+   *
+   * `codeForgeProviderId` is that project's resolved code forge: a provider
+   * gated on a forge it is not stays asleep (#17069).
    */
   async activatePluginsForFileDecorationScope(
     scope: string,
-    projectId: string | null
+    projectId: string | null,
+    codeForgeProviderId: string | null = null
   ): Promise<void> {
     if (typeof scope !== "string" || scope.length === 0) return;
     const targets: string[] = [];
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
-        if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
+        if (
+          contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern)) &&
+          decorationServesForge(pluginId, contribution, codeForgeProviderId)
+        ) {
           targets.push(pluginId);
           break;
         }

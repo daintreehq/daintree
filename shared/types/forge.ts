@@ -2097,6 +2097,13 @@ export interface FileDecorationContribution {
   id: string;
   /** Exact scope strings or `prefix:*` wildcards this provider handles. */
   scopes: string[];
+  /**
+   * The `id` of one of this plugin's own `forgeProviders`. When set, the
+   * provider is started and asked for decorations only in a project whose
+   * code forge resolves to that provider, so a forge-specific decorator
+   * stays asleep in repositories hosted somewhere else.
+   */
+  forgeProvider?: string;
 }
 
 /**

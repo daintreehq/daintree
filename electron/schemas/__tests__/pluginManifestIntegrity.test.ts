@@ -160,6 +160,27 @@ describe("forgeProvider cross-references (#10620)", () => {
     expect(issue).toBeDefined();
     expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "viewRefs", 1]);
   });
+
+  it("accepts a decoration provider gated on one of the plugin's own forge providers (#17069)", () => {
+    const result = manifestWith({
+      forgeProviders: [forgeProvider({})],
+      fileDecorationProviders: [{ id: "review", scopes: ["worktree-diff:*"], forgeProvider: "prov" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a decoration provider gated on a forge provider the plugin does not declare (#17069)", () => {
+    const result = manifestWith({
+      forgeProviders: [forgeProvider({})],
+      fileDecorationProviders: [
+        { id: "plain", scopes: ["worktree-diff:*"] },
+        { id: "review", scopes: ["worktree-diff:*"], forgeProvider: "elsewhere" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "file_decoration_forge_provider_unknown");
+    expect(issue?.path).toEqual(["contributes", "fileDecorationProviders", 1, "forgeProvider"]);
+  });
 });
 
 describe("view → panel cross-reference (#10620)", () => {

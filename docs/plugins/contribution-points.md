@@ -1943,7 +1943,8 @@ Registers a provider that decorates files (or other scoped resources) with statu
     "fileDecorationProviders": [
       {
         "id": "worktree-diff-review",
-        "scopes": ["worktree-diff:*"]
+        "scopes": ["worktree-diff:*"],
+        "forgeProvider": "github"
       }
     ]
   }
@@ -1956,6 +1957,7 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Must match the `id` passed when the provider binds at runtime. |
 | `scopes` | yes | Non-empty list of scope patterns the provider answers for: an exact scope string, or a prefix ending in `*` — `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace, and `*` alone matches every scope. A decoration pull goes to every provider with a matching pattern, activating its plugin first if needed, and their answers are merged (below). |
+| `forgeProvider` | no | The `id` of one of this plugin's own `forgeProviders`. The provider is then started and asked only for pulls from a project whose code forge resolves to that provider (by the project's override, the global default, then its remote's hostname), so a forge-specific decorator never wakes in a repository hosted elsewhere or with no remote. Naming no declared forge provider fails manifest parsing with `file_decoration_forge_provider_unknown`. |
 
 **Host-routed scopes:**
 

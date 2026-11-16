@@ -107,13 +107,16 @@ vi.mock("../forgeProviderRegistry.js", () => ({
 // Mocked so unload-cascade tests can simulate a throwing decoration unregister
 // without exercising the real (currently no-op) registry. Pre-existing tests
 // transitively touched these via unloadPlugin but never asserted call counts.
-vi.mock("../fileDecorationRegistry.js", () => ({
+vi.mock("../fileDecorationRegistry.js", async (importOriginal) => ({
   registerFileDecorationProviders: vi.fn(),
   registerFileDecorationProviderImpl: vi.fn(),
   unregisterFileDecorationProviders: vi.fn(),
   unregisterFileDecorationProviderImpls: vi.fn(),
   unregisterFileDecorationProviderImpl: vi.fn(),
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
+  // The real forge gate, so activation is filtered exactly as in production.
+  decorationServesForge: (await importOriginal<typeof import("../fileDecorationRegistry.js")>())
+    .decorationServesForge,
 }));
 
 // Mocked so MCP-server activation tests don't try to spawn real subprocesses
@@ -801,6 +804,48 @@ describe("Deferred activation — activatePlugin", () => {
     } finally {
       delete (globalThis as Record<string, unknown>).__decoratorActivated;
       __resetProjectPluginVisibilityForTesting();
+    }
+  });
+
+  it("a decoration pull wakes a forge-gated decorator only for its own forge (#17069)", async () => {
+    const projectId = "c".repeat(64);
+    const pluginDir = path.join(tmpDir, "gated-decorator");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.gated-decorator",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          forgeProviders: [{ id: "acmeforge", name: "Acme Forge", matches: ["acme.test"] }],
+          fileDecorationProviders: [{ id: "badges", scopes: ["s:1"], forgeProvider: "acmeforge" }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__gatedDecoratorActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+
+      // Another forge's project, and a project with no forge at all.
+      await service.activatePluginsForFileDecorationScope("s:1", projectId, "acme.other.gitlab");
+      await service.activatePluginsForFileDecorationScope("s:1", projectId, null);
+      expect((globalThis as Record<string, unknown>).__gatedDecoratorActivated).toBeUndefined();
+
+      await service.activatePluginsForFileDecorationScope(
+        "s:1",
+        projectId,
+        "acme.gated-decorator.acmeforge"
+      );
+      expect((globalThis as Record<string, unknown>).__gatedDecoratorActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__gatedDecoratorActivated;
     }
   });
 
