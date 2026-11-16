@@ -7,6 +7,7 @@ const chordSubscribers = new Set<() => void>();
 const overrides = new Map<string, string | undefined>();
 const displayOverrides = new Map<string, string>();
 const lastInvalidKeyRef = { current: null as string | null };
+const pendingChordRef = { current: null as string | null };
 
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
@@ -24,14 +25,14 @@ vi.mock("@/services/KeybindingService", () => ({
     }),
     getEffectiveCombo: vi.fn((actionId: string) => overrides.get(actionId)),
     getDisplayCombo: vi.fn((actionId: string) => displayOverrides.get(actionId) ?? ""),
-    getPendingChord: vi.fn(() => null),
+    getPendingChord: vi.fn(() => pendingChordRef.current),
     getLastInvalidKey: vi.fn(() => lastInvalidKeyRef.current),
   },
   normalizeKeyForBinding: (event: KeyboardEvent) => event.key,
 }));
 
 import { useEffectiveCombo, useKeybindingDisplay } from "../useKeybinding";
-import { useLastInvalidKey } from "../useGlobalKeybindings";
+import { useLastInvalidKey, usePendingChord } from "../useGlobalKeybindings";
 import { keybindingService } from "@/services/KeybindingService";
 
 function notifyAll(): void {
@@ -108,6 +109,28 @@ describe("useKeybindingDisplay", () => {
     displayOverrides.set("agent.claude", "⌘+⇧+X");
     act(() => notifyAll());
     expect(result.current).toBe("⌘+⇧+X");
+  });
+});
+
+describe("usePendingChord", () => {
+  beforeEach(() => {
+    subscribers.clear();
+    chordSubscribers.clear();
+    pendingChordRef.current = null;
+    vi.clearAllMocks();
+  });
+
+  it("follows the chord channel and ignores binding changes (#17059)", () => {
+    const { result } = renderHook(() => usePendingChord());
+    expect(subscribers.size).toBe(0);
+
+    pendingChordRef.current = "Cmd+k";
+    act(() => notifyChord());
+    expect(result.current).toBe("Cmd+k");
+
+    pendingChordRef.current = null;
+    act(() => notifyChord());
+    expect(result.current).toBeNull();
   });
 });
 

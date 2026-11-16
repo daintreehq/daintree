@@ -1125,6 +1125,20 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
     });
 
+    it("keeps the chord, and chord subscribers asleep, when the overrides are unchanged", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+      service.resolveKeybinding(cmdK());
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+
+      expect(service.getPendingChord()).not.toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
     it("tells chord subscribers when new overrides drop the pending chord", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
