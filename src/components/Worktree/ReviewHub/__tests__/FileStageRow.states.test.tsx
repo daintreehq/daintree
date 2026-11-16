@@ -34,7 +34,14 @@ const GENERATED: StagingFileEntry = {
 };
 const FILES = [SOURCE, GENERATED];
 
-function renderRow(file: StagingFileEntry, opts: { viewed?: boolean; isStaged?: boolean } = {}) {
+function renderRow(
+  file: StagingFileEntry,
+  opts: {
+    viewed?: boolean;
+    isStaged?: boolean;
+    onViewedChange?: (filePath: string, viewed: boolean) => void;
+  } = {}
+) {
   return render(
     <TooltipProvider>
       <FileStageRow
@@ -46,7 +53,7 @@ function renderRow(file: StagingFileEntry, opts: { viewed?: boolean; isStaged?: 
         onToggle={vi.fn()}
         onRowClick={vi.fn()}
         viewed={opts.viewed ?? false}
-        onViewedChange={vi.fn()}
+        onViewedChange={opts.onViewedChange ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -133,6 +140,17 @@ describe("FileStageRow — viewed dim", () => {
         expect(classesOf(node).filter(opacityClass), node.outerHTML.slice(0, 120)).toEqual([]);
       }
     }
+  });
+});
+
+describe("FileStageRow — viewed toggle", () => {
+  it("names its own file, so the list can hand every row one callback", () => {
+    const onViewedChange = vi.fn();
+    renderRow(SOURCE, { onViewedChange });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: `Mark ${SOURCE.path} as viewed` }));
+
+    expect(onViewedChange).toHaveBeenCalledWith(SOURCE.path, true);
   });
 });
 
@@ -264,6 +282,18 @@ describe("FileStageRow — row context menu", () => {
     // The ref resolves to the row itself, which is what `Open diff` hands focus
     // back to after the diff overlay closes.
     expect(seen.ref?.current).toBe(screen.getByTestId(`file-stage-row-${FILE.path}`));
+  });
+
+  it("builds the menu only once it opens", async () => {
+    const renderRowMenu = vi.fn(() => <ContextMenuItem>Row item</ContextMenuItem>);
+    renderRowWithMenu(renderRowMenu);
+
+    expect(renderRowMenu).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(screen.getByTestId(`file-stage-row-${FILE.path}`));
+    await screen.findByRole("menu");
+
+    expect(renderRowMenu).toHaveBeenCalled();
   });
 
   it("falls through to the enclosing menu when no row menu is supplied", async () => {

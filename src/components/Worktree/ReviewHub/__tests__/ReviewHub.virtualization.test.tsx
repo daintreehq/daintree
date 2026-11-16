@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import type React from "react";
 import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { StagingStatus } from "@shared/types";
@@ -272,6 +273,24 @@ vi.mock("@/components/ui/EmptyState", () => ({
     </div>
   ),
 }));
+
+/** Paths of the file rows that rendered, in order. */
+const rowRenders = vi.hoisted(() => ({ paths: [] as string[] }));
+
+vi.mock("../FileStageRow", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../FileStageRow")>();
+  const { createElement, memo } = await import("react");
+  type RowProps = React.ComponentProps<typeof actual.FileStageRow>;
+  return {
+    ...actual,
+    // The same shallow comparison as the real row's `memo`, so it records
+    // exactly the renders that one lets through.
+    FileStageRow: memo(function CountedFileStageRow(props: RowProps) {
+      rowRenders.paths.push(props.file.path);
+      return createElement(actual.FileStageRow, props);
+    }),
+  };
+});
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
@@ -746,6 +765,29 @@ describe("ReviewHub windowed file list (#12241)", () => {
     expect(screen.getByRole("button", { name: /file-000\.ts/ })).toBeTruthy();
     expect(screen.queryAllByRole("option", { name: /file-000\.ts/ })).toHaveLength(0);
   });
+
+  it.each([
+    ["static", makeLargeStatus(3, 3)],
+    ["windowed", makeLargeStatus()],
+  ] as const)(
+    "re-renders only the rows the cursor leaves and lands on in the %s list",
+    async (_path, status) => {
+      await renderLargeHub(status);
+      const press = (key: string) => act(() => void fireEvent.keyDown(document, { key }));
+      press("ArrowDown");
+      press("ArrowDown");
+      // Lets every read the open started land before counting.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      rowRenders.paths.length = 0;
+
+      press("ArrowDown");
+
+      const [, leaving, landing] = status.staged;
+      expect([...new Set(rowRenders.paths)].sort()).toEqual([leaving.path, landing.path].sort());
+    }
+  );
 
   it("opens the menu directly when the focused row is mounted", async () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 59 };

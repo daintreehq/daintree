@@ -164,6 +164,21 @@ async function fetchDiffContent(
 }
 
 /**
+ * Whether a diff of this source is kept once it lands. A base-branch key is
+ * `baseBranch + currentBranch` — branch NAMES, which are not content identity:
+ * `main` advancing produces the same key for different content, and the
+ * freshness signal can't catch it either (it reads working-tree file metadata,
+ * which is "missing" for a clean worktree). So a reopen would serve the old
+ * diff with no stale banner. The modal this replaced cached nothing here; keep
+ * it that way until we can key on commit ids. A since-review diff is
+ * uncacheable for the same reason: its mark can be replaced or cleared under an
+ * unchanged key.
+ */
+export function isCacheableDiffSource(source: DiffSubject["source"]): boolean {
+  return source !== "base-branch" && source !== "since-review";
+}
+
+/**
  * Single fetch path shared by the foreground load and the next-file prefetch:
  * cache hits resolve without dispatching and in-flight requests are deduped so
  * the two never double-spend the shared gitOps rate-limit budget. The
@@ -177,16 +192,9 @@ export function requestDiff(
   freshnessKey?: string
 ): Promise<CachedDiff | null> {
   const key = diffCacheKey(subject, ignoreWhitespace);
-  // A base-branch key is `baseBranch + currentBranch` — branch NAMES, which are
-  // not content identity: `main` advancing produces the same key for different
-  // content, and the freshness signal can't catch it either (it reads
-  // working-tree file metadata, which is "missing" for a clean worktree). So a
-  // reopen would serve the old diff with no stale banner. The modal this
-  // replaced cached nothing here; keep it that way until we can key on commit
-  // ids. In-flight dedup still applies — that window is one request's lifetime.
-  // A since-review diff is uncacheable for the same reason: its mark can be
-  // replaced or cleared under an unchanged key.
-  const cacheable = subject.source !== "base-branch" && subject.source !== "since-review";
+  // In-flight dedup still applies to an uncacheable subject — that window is
+  // one request's lifetime.
+  const cacheable = isCacheableDiffSource(subject.source);
   if (!bypassCache) {
     if (cacheable) {
       const cached = diffCache.get(key);

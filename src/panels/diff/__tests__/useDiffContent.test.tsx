@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useMemo } from "react";
-import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { DiffSubject } from "../diffContentCache";
 import { useDiffContent } from "../useDiffContent";
 
@@ -40,6 +40,20 @@ function useSubject(filePath: string): DiffSubject {
 beforeEach(() => {
   requestDiffMock.mockReset();
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Lands the current diff, then runs out the dwell the next-file prefetch waits for. */
+async function settlePrefetch(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+}
 
 describe("useDiffContent", () => {
   it("never reports one file's patch under another file's subject", async () => {
@@ -85,6 +99,48 @@ describe("useDiffContent", () => {
     const { result } = renderHook(() => useDiffContent(useSubject("a.ts")));
 
     await waitFor(() => expect(result.current.content).toBe("ERROR"));
+  });
+
+  it("prefetches the next file once the current diff has landed", async () => {
+    vi.useFakeTimers();
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+    const next: DiffSubject = {
+      source: "working-tree",
+      worktreePath: "/repo",
+      filePath: "b.ts",
+      status: "modified",
+    };
+
+    renderHook(() => useDiffContent(useSubject("a.ts"), next));
+    await settlePrefetch();
+
+    expect(requestDiffMock.mock.calls.map(([s]) => s.filePath)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it.each<DiffSubject>([
+    {
+      source: "base-branch",
+      worktreePath: "/repo",
+      filePath: "b.ts",
+      baseBranch: "main",
+      currentBranch: "feature",
+    },
+    {
+      source: "since-review",
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      filePath: "b.ts",
+      side: undefined,
+      markRevision: 1,
+    },
+  ])("never prefetches a $source diff, which the cache would not keep", async (next) => {
+    vi.useFakeTimers();
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+
+    renderHook(() => useDiffContent(useSubject("a.ts"), next));
+    await settlePrefetch();
+
+    expect(requestDiffMock.mock.calls.map(([s]) => s.filePath)).toEqual(["a.ts"]);
   });
 
   it("holds no content for a null subject", () => {

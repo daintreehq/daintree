@@ -3,6 +3,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import {
   diffCacheKey,
+  isCacheableDiffSource,
   purgeWhitespaceEntriesExcept,
   requestDiff,
   type DiffSubject,
@@ -162,6 +163,9 @@ export function useDiffContent(
 
   useEffect(() => {
     if (!nextSubject || content === undefined || content === "ERROR") return;
+    // A prefetch exists to warm the cache; a diff the cache won't keep is a
+    // `git diff` thrown away on arrival.
+    if (!isCacheableDiffSource(nextSubject.source)) return;
     const timer = window.setTimeout(() => {
       const nextFreshnessKey = worktreeStore
         ? selectDiffFreshnessKey(
