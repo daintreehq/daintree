@@ -184,6 +184,23 @@ export class AgentVersionService {
     );
   }
 
+  /**
+   * The version one copy of an agent's CLI reports, asked now and by its path,
+   * or null when it prints none. For callers keying something on the exact
+   * binary they run, which a cached or PATH-resolved reading can't promise.
+   */
+  async readVersionAt(agentId: string, path: string): Promise<string | null> {
+    const args = getEffectiveAgentConfig(agentId)?.version?.args;
+    if (!args) return null;
+    try {
+      return this.parseVersion(
+        await this.withCopyProbeSlot(() => this.withCopyProbeDeadline(path, args))
+      );
+    } catch {
+      return null;
+    }
+  }
+
   private async readCopyVersion(path: string, args: string[]): Promise<string | null> {
     try {
       return this.reportedVersion(

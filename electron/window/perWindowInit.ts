@@ -18,7 +18,6 @@ import { startScheduledRunFacts } from "../services/scheduledRuns/index.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
-import type { AgentId } from "../../shared/types/agent.js";
 import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
@@ -431,8 +430,8 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
         (await cliAvailabilityService.getSettledDetails())?.[agentId],
       // Looked up per call: each window replaces the version service, and this
       // one outlives the window that built it.
-      getCliVersion: async (agentId) =>
-        (await getAgentVersionService()?.getInstalledVersionForLaunch(agentId as AgentId)) ?? null,
+      getCliVersion: async (agentId, command) =>
+        (await getAgentVersionService()?.readVersionAt(agentId, command)) ?? null,
     });
     setAgentModelCatalogService(modelCatalogSvc);
     // Warm the cache in the background so the first renderer request hits

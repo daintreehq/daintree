@@ -143,11 +143,11 @@ interface CatalogDeps {
   /** Override for the Codex catalog disk-cache path. Defaults to `userData/codex-models.json`. */
   codexCachePath?: string;
   /**
-   * The installed version of an agent's CLI, or null when it can't be told.
+   * The version the CLI at `command` reports now, or null when it can't be told.
    * Keys the Codex catalog on disk: `--bundled` is baked into the binary, so a
    * version already seen needs no probe.
    */
-  getCliVersion?: (agentId: string) => Promise<string | null>;
+  getCliVersion?: (agentId: string, command: string) => Promise<string | null>;
   /** Override for the `agy models` disk-cache path. Defaults to `userData/antigravity-models.json`. */
   antigravityCachePath?: string;
   /**
@@ -174,6 +174,8 @@ const AGY_RETRY_MS = 60_000;
 // A missing or too-old Codex fails the same way every time; without a pause
 // each catalog read would fork it and parse its output again.
 const CODEX_RETRY_MS = 5 * 60_000;
+/** The exit status clap, Codex's argument parser, gives an unknown subcommand. */
+const CLAP_USAGE_EXIT = 2;
 
 /**
  * Resolves agent model lists and context windows at runtime against the
@@ -755,7 +757,7 @@ export class AgentModelCatalogService {
   private async readCodexIdentity(command: string): Promise<CodexIdentity | null> {
     if (!this.deps.getCliVersion) return null;
     try {
-      const version = (await this.deps.getCliVersion("codex"))?.trim();
+      const version = (await this.deps.getCliVersion("codex", command))?.trim();
       return version ? { command, version } : null;
     } catch {
       return null;
@@ -837,8 +839,9 @@ export class AgentModelCatalogService {
       // Older Codex CLIs may not support `debug models`; treat any failure
       // as a missing-source rather than escalating.
       console.warn("[AgentModelCatalogService] codex debug models --bundled failed", err);
-      // A numeric code is the CLI's own exit status: it ran and refused.
-      return typeof (err as { code?: unknown } | null)?.code === "number" ? "unsupported" : null;
+      // Exit 2 is clap rejecting the subcommand. Anything else, such as the npm
+      // launcher's exit 1 mid-reinstall, may pass and only earns the pause.
+      return (err as { code?: unknown } | null)?.code === CLAP_USAGE_EXIT ? "unsupported" : null;
     }
 
     if (!stdout.trim()) return "unsupported";

@@ -1171,6 +1171,8 @@ describe("AgentVersionService resilience", () => {
   });
 
   it("checks a bounded number of agents at once, answering each in registry order", async () => {
+    // Probes are released newest first, so results kept in completion order
+    // would come back reversed.
     const agentIds = Array.from({ length: 10 }, (_, i) => `agent-${i}`);
     (registryMock.getEffectiveAgentIds as Mock).mockReturnValue(agentIds);
     (registryMock.getEffectiveAgentConfig as Mock).mockImplementation((agentId: string) => ({
@@ -1203,7 +1205,7 @@ describe("AgentVersionService resilience", () => {
     let answered = 0;
     while (answered < agentIds.length) {
       await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
-      pending.shift()!();
+      pending.pop()!();
       answered += 1;
     }
 
@@ -1214,6 +1216,25 @@ describe("AgentVersionService resilience", () => {
     expect(versions.map((v) => [v.agentId, v.installedVersion])).toEqual(
       agentIds.map((id, i) => [id, `1.${i}.0`])
     );
+  });
+
+  it("reads the version of the exact copy asked for, past any cached reading", async () => {
+    (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+      id: "codex",
+      command: "codex",
+      version: { args: ["--version"] },
+    });
+    spawnMock.mockReset();
+    setSpawnSuccess("codex-cli 0.163.0\n");
+    const { service } = createService(async () => ({ codex: "ready" }));
+
+    await expect(service.readVersionAt("codex", "/opt/codex/bin/codex")).resolves.toBe("0.163.0");
+    setSpawnSuccess("codex-cli 0.170.0\n");
+    await expect(service.readVersionAt("codex", "/opt/codex/bin/codex")).resolves.toBe("0.170.0");
+    expect(spawnMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["/opt/codex/bin/codex", ["--version"]],
+      ["/opt/codex/bin/codex", ["--version"]],
+    ]);
   });
 
   describe("checkVersion parallelism", () => {

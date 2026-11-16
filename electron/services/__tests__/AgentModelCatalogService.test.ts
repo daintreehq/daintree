@@ -1198,7 +1198,8 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
   });
 
   const CATALOG_WITH_PROTO = [
-    ...CODEX_0_163_CATALOG,
+    { ...CODEX_0_163_CATALOG[0], max_context_window: 400_000 },
+    ...CODEX_0_163_CATALOG.slice(1),
     { slug: "__proto__", visibility: "hide", priority: 50, upgrade: { model: "gpt-6-sol" } },
   ];
 
@@ -1210,11 +1211,16 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
     return Object.assign(new Error("not found"), { code: "ENOENT" });
   }
 
+  /** Waits for the fire-and-forget write to land whole, not just for the file to exist. */
   async function waitForCodexDisk(): Promise<Record<string, unknown>> {
-    await vi.waitFor(async () => {
-      await fs.access(codexCachePath);
+    return vi.waitFor(async () => {
+      const payload = JSON.parse(await fs.readFile(codexCachePath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect(Array.isArray(payload.models)).toBe(true);
+      return payload;
     });
-    return JSON.parse(await fs.readFile(codexCachePath, "utf-8")) as Record<string, unknown>;
   }
 
   it("answers a restart from disk for the same CLI version, with no probe and the same catalog", async () => {
@@ -1236,6 +1242,7 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
 
     expect(execFileImpl).not.toHaveBeenCalled();
     expect(fromDisk).toEqual(probed);
+    expect(fromDisk.contextWindow).toBe(400_000);
     expect(Object.hasOwn(fromDisk.modelUpgrades ?? {}, "__proto__")).toBe(true);
   });
 
@@ -1261,8 +1268,34 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
     expect(result.models.map((m) => m.id)).toEqual(["gpt-7"]);
   });
 
-  it("probes past a disk file it can't read", async () => {
-    await seedCache(codexCachePath, { format: 1, version: "0.163.0", models: "nope" });
+  it.each([
+    ["a malformed field", { models: "nope" }],
+    ["an unknown format", { format: 99 }],
+  ])(
+    "probes past a disk entry for the same version with %s",
+    async (_label, corruption: Record<string, unknown>) => {
+      await new AgentModelCatalogService({
+        codexCachePath,
+        execFileImpl: mockCodexCli(CODEX_0_163_CATALOG),
+        getCliVersion: async () => "0.163.0",
+      }).getResolvedModels("codex");
+      await seedCache(codexCachePath, { ...(await waitForCodexDisk()), ...corruption });
+
+      const execFileImpl = mockCodexCli(CODEX_0_163_CATALOG);
+      const service = new AgentModelCatalogService({
+        codexCachePath,
+        execFileImpl,
+        getCliVersion: async () => "0.163.0",
+      });
+      const result = await service.getResolvedModels("codex");
+
+      expect(execFileImpl).toHaveBeenCalledTimes(1);
+      expect(result.models.map((m) => m.id)).toContain("gpt-6.1-sol");
+    }
+  );
+
+  it("probes past a disk file that isn't JSON", async () => {
+    await fs.writeFile(codexCachePath, "{not json", "utf-8");
     const execFileImpl = mockCodexCli(CODEX_0_163_CATALOG);
     const service = new AgentModelCatalogService({
       codexCachePath,
@@ -1270,10 +1303,29 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
       getCliVersion: async () => "0.163.0",
     });
 
-    const result = await service.getResolvedModels("codex");
+    await service.getResolvedModels("codex");
 
     expect(execFileImpl).toHaveBeenCalledTimes(1);
-    expect(result.models.map((m) => m.id)).toContain("gpt-6.1-sol");
+  });
+
+  it("keys the catalog on the copy it runs, asking that copy for its version", async () => {
+    const resolvedPath = "/opt/codex/bin/codex";
+    const execFileImpl = mockCodexCli(CODEX_0_163_CATALOG);
+    const getCliVersion = vi.fn(async () => "0.163.0");
+    const service = new AgentModelCatalogService({
+      codexCachePath,
+      execFileImpl,
+      getCliVersion,
+      getCliDetail: async () => ({ state: "ready", resolvedPath, via: "which" }),
+    });
+
+    await service.getResolvedModels("codex");
+
+    expect(getCliVersion).toHaveBeenCalledWith("codex", resolvedPath);
+    expect((execFileImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toBe(
+      resolvedPath
+    );
+    expect(await waitForCodexDisk()).toMatchObject({ command: resolvedPath, version: "0.163.0" });
   });
 
   it("writes nothing to disk when the CLI version can't be told", async () => {
@@ -1348,6 +1400,28 @@ describe("AgentModelCatalogService codex catalog cache (#17077)", () => {
     const upgraded = await service.getResolvedModels("codex");
     expect(execFileImpl).toHaveBeenCalledTimes(2);
     expect(upgraded.models.map((m) => m.id)).toContain("gpt-6.1-sol");
+  });
+
+  it("only pauses a version whose CLI failed some other way, then probes it again", async () => {
+    let calls = 0;
+    const execFileImpl = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw exitError(1);
+      return { stdout: JSON.stringify({ models: CODEX_0_163_CATALOG }), stderr: "" };
+    }) as unknown as ExecFn;
+    const service = new AgentModelCatalogService({
+      codexCachePath,
+      execFileImpl,
+      getCliVersion: async () => "0.163.0",
+    });
+
+    await service.getResolvedModels("codex");
+    const realNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(realNow + 6 * 60 * 1000);
+    const recovered = await service.getResolvedModels("codex");
+
+    expect(execFileImpl).toHaveBeenCalledTimes(2);
+    expect(recovered.models.map((m) => m.id)).toContain("gpt-6.1-sol");
   });
 
   it("keeps the last catalog through a paused failure", async () => {
