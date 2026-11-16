@@ -49,7 +49,10 @@ vi.mock("../../utils/logger.js", () => ({
 import { CHANNELS } from "../../ipc/channels.js";
 import { WorktreePortBroker, type WorktreePortHost } from "../WorktreePortBroker.js";
 
-type HostLike = Pick<WorkspaceHostProcess, "projectPath" | "attachWorktreePort">;
+type HostLike = Pick<
+  WorkspaceHostProcess,
+  "projectPath" | "attachWorktreePort" | "detachWorktreePort"
+>;
 type MockWebContents = EventEmitter & {
   id: number;
   isDestroyed: ReturnType<typeof vi.fn>;
@@ -64,6 +67,7 @@ function createHost(projectPath = "/tmp/project", attachResult = true): HostLike
   return {
     projectPath,
     attachWorktreePort: vi.fn(() => attachResult),
+    detachWorktreePort: vi.fn(),
   };
 }
 
@@ -827,6 +831,173 @@ describe("WorktreePortBroker re-broker", () => {
   });
 });
 
+describe("WorktreePortBroker host-side detach (#17037)", () => {
+  // The transfer to the workspace host neuters Main's port1, so closing it here
+  // reaches nothing: the host keeps posting into the view unless it is told
+  // which port to close.
+  beforeEach(() => {
+    createdChannels.length = 0;
+    nextWebContentsId = 1;
+    ipcMain.removeAllListeners();
+  });
+
+  function attachedId(host: HostLike, call = 0): number {
+    return vi.mocked(host.attachWorktreePort).mock.calls[call]![1];
+  }
+
+  it("names each transferred port with the token the renderer receives", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    expect(attachedId(host)).toBe(lastPostedToken(webContents));
+  });
+
+  it("tells the host to close a cached view's port", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    broker.closePortsForView(webContents.id);
+
+    expect(host.detachWorktreePort).toHaveBeenCalledTimes(1);
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+    broker.closePortsForView(webContents.id);
+    expect(host.detachWorktreePort).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the host to close the port of a destroyed view", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    webContents.emit("destroyed");
+
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+  });
+
+  it("tells the host to close the port a navigation retires", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+  });
+
+  it("retires only the replaced port when a view gets a fresh one from the same host", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents), { force: true });
+
+    expect(attachedId(host, 1)).not.toBe(attachedId(host, 0));
+    expect(host.detachWorktreePort).toHaveBeenCalledTimes(1);
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host, 0));
+    expect(broker.hasPort(webContents.id)).toBe(true);
+  });
+
+  it("tells the previous host to close the port when a view moves to another project", () => {
+    const broker = new WorktreePortBroker();
+    const first = createHost("/tmp/project-a");
+    const second = createHost("/tmp/project-b");
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(first), asWebContents(webContents));
+
+    broker.brokerPort(asWorkspaceHostProcess(second), asWebContents(webContents));
+
+    expect(first.detachWorktreePort).toHaveBeenCalledWith(attachedId(first));
+    expect(second.detachWorktreePort).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live port when the host refuses a replacement", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    vi.mocked(host.attachWorktreePort).mockReturnValueOnce(false);
+
+    expect(
+      broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents), { force: true })
+    ).toBe(false);
+
+    expect(host.detachWorktreePort).not.toHaveBeenCalled();
+  });
+
+  it("tells the host to close a port the renderer never received", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents({ throwOnPostMessage: true });
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(false);
+
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+  });
+
+  it("tells the host to close a released endpoint's port", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    broker.brokerEndpointPort(asWorkspaceHostProcess(host), -3, vi.fn());
+
+    broker.releaseEndpointPort(-3);
+
+    expect(host.detachWorktreePort).toHaveBeenCalledWith(attachedId(host));
+  });
+
+  it("closes every port of a restarting host before re-brokering fresh ones", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const views = [createWebContents(), createWebContents()];
+    for (const view of views) broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(view));
+
+    const closed = broker.closePortsForHost(host.projectPath);
+    broker.reBrokerForHost(asWorkspaceHostProcess(host), lookupFrom(views), closed);
+
+    const detached = vi.mocked(host.detachWorktreePort).mock.calls.map(([id]) => id);
+    expect(detached.sort()).toEqual([attachedId(host, 0), attachedId(host, 1)].sort());
+    const fresh = [attachedId(host, 2), attachedId(host, 3)];
+    expect(fresh.some((id) => detached.includes(id))).toBe(false);
+  });
+
+  it("still retires the entry when the detach throws", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    vi.mocked(host.detachWorktreePort).mockImplementation(() => {
+      throw new Error("host gone");
+    });
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+
+    broker.closePortsForView(webContents.id);
+
+    expect(broker.hasPort(webContents.id)).toBe(false);
+    expect(createdChannels[0]!.port1.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a far end that kept its port in this process without a detach", () => {
+    const broker = new WorktreePortBroker();
+    const relay: WorktreePortHost = {
+      projectPath: "remote-endpoint:ep",
+      attachWorktreePort: vi.fn(() => true),
+    };
+    const webContents = createWebContents();
+    broker.brokerPort(relay, asWebContents(webContents));
+
+    broker.closePortsForView(webContents.id);
+
+    expect(createdChannels[0]!.port1.close).toHaveBeenCalledTimes(1);
+    expect(broker.hasPort(webContents.id)).toBe(false);
+  });
+});
+
 describe("WorktreePortBroker endpoint pairs", () => {
   beforeEach(() => {
     createdChannels.length = 0;
@@ -842,7 +1013,7 @@ describe("WorktreePortBroker endpoint pairs", () => {
     expect(broker.brokerEndpointPort(asWorkspaceHostProcess(host), -3, receive)).toBe(true);
 
     const { port1, port2 } = createdChannels[0]!;
-    expect(host.attachWorktreePort).toHaveBeenCalledWith(port1);
+    expect(host.attachWorktreePort).toHaveBeenCalledWith(port1, expect.any(Number));
     expect(receive).toHaveBeenCalledWith(port2);
     expect(broker.hasPort(-3)).toBe(true);
   });
@@ -911,7 +1082,7 @@ describe("WorktreePortBroker host override", () => {
     const uninstall = broker.setHostOverride((wcId) => (wcId === remoteView.id ? relayHost : null));
 
     broker.brokerPort(asWorkspaceHostProcess(localHost), remoteView as unknown as WebContents);
-    expect(relayHost.attachWorktreePort).toHaveBeenCalledWith(createdChannels[0]!.port1);
+    expect(relayHost.attachWorktreePort).toHaveBeenCalledWith(createdChannels[0]!.port1, 1);
     expect(localHost.attachWorktreePort).not.toHaveBeenCalled();
     expect(remoteView.postMessage).toHaveBeenCalledWith("worktree-port", { token: 1 }, [
       createdChannels[0]!.port2,

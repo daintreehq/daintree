@@ -16,9 +16,12 @@ const logger = createLogger("main:WorktreePortBroker");
 /**
  * What the broker needs from the far end of a worktree port. A workspace host
  * process is one; a remote view's link relay is another, standing in for the
- * host that lives on the other machine.
+ * host that lives on the other machine. Only a far end that takes the port out
+ * of this process needs `detachWorktreePort`: one that keeps it here closes
+ * when the broker closes it.
  */
-export type WorktreePortHost = Pick<WorkspaceHostProcess, "projectPath" | "attachWorktreePort">;
+export type WorktreePortHost = Pick<WorkspaceHostProcess, "projectPath" | "attachWorktreePort"> &
+  Partial<Pick<WorkspaceHostProcess, "detachWorktreePort">>;
 
 /**
  * Picks the far end for a view whose worktree port must not come from a local
@@ -28,13 +31,16 @@ export type WorktreePortHost = Pick<WorkspaceHostProcess, "projectPath" | "attac
 export type WorktreePortHostOverride = (webContentsId: number) => WorktreePortHost | null;
 
 interface PortEntry {
-  /** The host-side port (port1). Kept for cleanup — closing it signals the host. */
+  /**
+   * The host-side port (port1). Closing it only reaches a far end that kept it
+   * in this process; a workspace host is told by `token` instead.
+   */
   hostPort: Electron.MessagePortMain;
   /** Reference to the host process that owns port1 */
   host: WorktreePortHost;
   /** The webContents.id this port pair serves */
   webContentsId: number;
-  /** Identifies this transfer in the renderer's receipt. */
+  /** Identifies this transfer in the renderer's receipt and to the host. */
   token: number;
   /**
    * True once the renderer has acknowledged attaching port2. A successful
@@ -134,12 +140,13 @@ export class WorktreePortBroker {
           : "unconfirmed";
 
     const { port1, port2 } = new MessageChannelMain();
+    const token = ++this.nextToken;
 
     // Send port1 to the workspace host (uses new worktree port protocol).
     // Attached before the existing entry is retired: a host mid-restart
     // refuses the attach, and the view has to stay in `hostToViews` for the
     // restart's re-broker to find it rather than waiting on another Retry.
-    const attached = host.attachWorktreePort(port1);
+    const attached = host.attachWorktreePort(port1, token);
     if (!attached) {
       port1.close();
       port2.close();
@@ -154,14 +161,13 @@ export class WorktreePortBroker {
     // Close existing port for this view if any (also removes old listeners)
     this.closePortsForView(wcId);
 
-    const token = ++this.nextToken;
-
     // Send port2 to the renderer — if this fails, clean up port1 on the host side
     try {
       webContents.postMessage("worktree-port", { token }, [port2]);
     } catch {
       port1.close();
       port2.close();
+      this.detachFromHost(host, token);
       logger.warn("Worktree port not brokered", {
         webContentsId: wcId,
         projectPath: host.projectPath,
@@ -259,7 +265,8 @@ export class WorktreePortBroker {
     if (handle >= 0) throw new Error("Endpoint worktree ports are keyed by a negative handle");
     this.endpointReceivers.set(handle, receive);
     const { port1, port2 } = new MessageChannelMain();
-    if (!host.attachWorktreePort(port1)) {
+    const token = ++this.nextToken;
+    if (!host.attachWorktreePort(port1, token)) {
       port1.close();
       port2.close();
       logger.warn("Worktree port not brokered", {
@@ -279,7 +286,7 @@ export class WorktreePortBroker {
       hostPort: port1,
       host,
       webContentsId: handle,
-      token: ++this.nextToken,
+      token,
       confirmed: true,
       confirmationWaiters: new Set(),
       cleanupListeners: () => port1.removeListener("close", onPortClose),
@@ -401,6 +408,7 @@ export class WorktreePortBroker {
     } catch {
       // Port may already be closed
     }
+    this.detachFromHost(entry.host, entry.token);
 
     this.ports.delete(webContentsId);
     this.settleConfirmationWaiters(entry, false);
@@ -413,6 +421,22 @@ export class WorktreePortBroker {
       if (viewSet.size === 0) {
         this.hostToViews.delete(projectPath);
       }
+    }
+  }
+
+  /**
+   * A transferred port1 is neutered here, so only the host can close its end
+   * and stop posting into a view that was cached, frozen, or destroyed.
+   */
+  private detachFromHost(host: WorktreePortHost, token: number): void {
+    try {
+      host.detachWorktreePort?.(token);
+    } catch (error) {
+      logger.warn("Worktree port detach not sent", {
+        projectPath: host.projectPath,
+        token,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

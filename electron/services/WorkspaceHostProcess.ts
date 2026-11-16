@@ -293,15 +293,31 @@ export class WorkspaceHostProcess extends EventEmitter {
   /**
    * Transfer a MessagePort for the new worktree port protocol (Phase 1).
    * Supports request/response correlation and scoped event delivery.
+   * `portId` names it for {@link detachWorktreePort}: the transfer neuters
+   * `port` here, so closing it in this process never reaches the host.
    */
-  attachWorktreePort(port: MessagePortMain): boolean {
+  attachWorktreePort(port: MessagePortMain, portId: number): boolean {
     if (!this.child || this.isDisposed) return false;
     try {
-      this.child.postMessage({ type: "attach-worktree-port" }, [port]);
+      this.child.postMessage({ type: "attach-worktree-port", portId }, [port]);
       return true;
     } catch (error) {
       console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach worktree port:`, error);
       return false;
+    }
+  }
+
+  /**
+   * Have the host close the worktree port attached as `portId`, so it stops
+   * posting into a view that was cached, frozen, or destroyed (#17037). A host
+   * that never held it (its previous process did) ignores the id.
+   */
+  detachWorktreePort(portId: number): void {
+    if (!this.child || this.isDisposed) return;
+    try {
+      this.child.postMessage({ type: "detach-worktree-port", portId });
+    } catch (error) {
+      console.error(`[WorkspaceHost:${this.serviceName}] Failed to detach worktree port:`, error);
     }
   }
 

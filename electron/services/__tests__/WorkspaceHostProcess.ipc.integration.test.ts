@@ -171,15 +171,15 @@ describe("WorkspaceHostProcess IPC contract (real worker_threads boundary)", () 
       const { MessageChannel } = await import("node:worker_threads");
       const channel = new MessageChannel();
       try {
-        const accepted = host.attachWorktreePort(channel.port2 as any);
+        const accepted = host.attachWorktreePort(channel.port2 as any, 7);
         expect(accepted).toBe(true);
 
         const attachCall = postSpy.mock.calls.find(
           (c) => (c[0] as any)?.type === "attach-worktree-port"
         );
         expect(attachCall).toBeDefined();
-        // Body holds only the type discriminator — no port reference.
-        expect(attachCall![0]).toEqual({ type: "attach-worktree-port" });
+        // Body holds the type discriminator and the port's id — no port reference.
+        expect(attachCall![0]).toEqual({ type: "attach-worktree-port", portId: 7 });
         // Transfer list (second arg) carries the port itself. This matches
         // the MessagePortMain transfer contract; mock-only tests can
         // satisfy the call shape but only a real port survives the trip
@@ -204,5 +204,40 @@ describe("WorkspaceHostProcess IPC contract (real worker_threads boundary)", () 
     } finally {
       host.dispose();
     }
+  });
+
+  it("detachWorktreePort names the port for the host to close, with nothing to transfer", async () => {
+    const host = new WorkspaceHostProcessCtor("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 60_000,
+    } as any);
+    try {
+      await host.waitForReady();
+      const postSpy = vi.spyOn(handle.fakeChild, "postMessage");
+
+      host.detachWorktreePort(7);
+
+      const detachCall = postSpy.mock.calls.find(
+        (c) => (c[0] as any)?.type === "detach-worktree-port"
+      );
+      expect(detachCall).toEqual([{ type: "detach-worktree-port", portId: 7 }]);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it("detachWorktreePort sends nothing once the host is disposed", async () => {
+    const host = new WorkspaceHostProcessCtor("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 60_000,
+    } as any);
+    await host.waitForReady();
+    const postSpy = vi.spyOn(handle.fakeChild, "postMessage");
+    host.dispose();
+    postSpy.mockClear();
+
+    host.detachWorktreePort(7);
+
+    expect(postSpy).not.toHaveBeenCalled();
   });
 });
