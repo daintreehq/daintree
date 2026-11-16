@@ -139,7 +139,14 @@ function harness(
   };
   const guest = new CoreGuest(deps);
   const install = () =>
-    guest.install({ epoch: 0, installId: 7, mode: "select", origins: "any", frameId: "main" });
+    guest.install({
+      epoch: 0,
+      installId: 7,
+      mode: "select",
+      paused: false,
+      origins: "any",
+      frameId: "main",
+    });
   const settle = async () => {
     for (let round = 0; round < 20; round += 1) await queue;
   };
