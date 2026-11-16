@@ -534,14 +534,16 @@ describe("useResolvedForgeProvider", () => {
       });
       expect(provenanceCallbacks).toHaveLength(0);
 
-      // A plugin disable could have landed unheard; the remount asks afresh.
-      const second = renderHook(() => useResolvedForgeProvider(projectId));
-      expect(resolveProviderMock).toHaveBeenCalledTimes(2);
-
+      // A plugin disable could have landed unheard, so the answer to the
+      // request that was out lands nowhere...
       await act(async () => {
         releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
       });
+      // ...and the remount asks afresh.
+      const second = renderHook(() => useResolvedForgeProvider(projectId));
       expect(second.result.current.loading).toBe(true);
+      expect(second.result.current.entry).toBeNull();
+      expect(resolveProviderMock).toHaveBeenCalledTimes(2);
       await act(async () => {
         releases[1]!({ entry: null, resolvedVia: null });
       });
@@ -549,7 +551,10 @@ describe("useResolvedForgeProvider", () => {
       expect(second.result.current.entry).toBeNull();
     });
 
-    it("abandons an unwatched project's request on a provenance change", async () => {
+    it.each([
+      ["a provenance change", () => fireProvenanceChanged()],
+      ["a remote change", (projectId: string) => fireRemoteChanged(projectId)],
+    ] as const)("abandons an unwatched project's request on %s", async (_label, invalidate) => {
       const releases: Array<(value: ResolvedForgeProvider) => void> = [];
       resolveProviderMock.mockResolvedValueOnce({ entry: null, resolvedVia: null });
       const keepAliveId = nextProjectId();
@@ -564,17 +569,50 @@ describe("useResolvedForgeProvider", () => {
       );
       const projectId = nextProjectId();
       renderHook(() => useResolvedForgeProvider(projectId)).unmount();
-      act(() => fireProvenanceChanged());
-      const callsAfterEvent = resolveProviderMock.mock.calls.length;
-
-      const remount = renderHook(() => useResolvedForgeProvider(projectId));
-      expect(resolveProviderMock.mock.calls.length).toBe(callsAfterEvent + 1);
+      act(() => invalidate(projectId));
+      // The pre-change answer lands nowhere...
       await act(async () => {
         releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
       });
-      // The pre-change answer lands nowhere.
+      const callsBeforeRemount = resolveProviderMock.mock.calls.length;
+
+      // ...so the remount neither shows it nor joins it.
+      const remount = renderHook(() => useResolvedForgeProvider(projectId));
       expect(remount.result.current.loading).toBe(true);
+      expect(remount.result.current.entry).toBeNull();
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeRemount + 1);
       keepAlive.unmount();
+    });
+
+    it("invalidates a refresh's request on an event in a later task", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: null, resolvedVia: null });
+      const projectId = nextProjectId();
+      const { result } = renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      const releases: Array<(value: ResolvedForgeProvider) => void> = [];
+      resolveProviderMock.mockImplementation(
+        () =>
+          new Promise<ResolvedForgeProvider>((resolve) => {
+            releases.push(resolve);
+          })
+      );
+      act(() => result.current.refresh());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const callsBeforeEvent = resolveProviderMock.mock.calls.length;
+
+      // The refresh's burst is over: the event must not join its request.
+      act(() => fireProvenanceChanged());
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeEvent + 1);
+      await act(async () => {
+        releases[1]!({ entry: null, resolvedVia: null });
+      });
+      await act(async () => {
+        releases[0]!({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      });
+      expect(result.current.entry).toBeNull();
     });
 
     it.each([
@@ -750,14 +788,16 @@ describe("useResolvedForgeProvider", () => {
       expect(second.result.current.loading).toBe(true);
       expect(provenanceCallbacks).toHaveLength(1);
 
-      // A response from before the reset neither joins nor answers a new consumer.
-      const callsBefore = resolveProviderMock.mock.calls.length;
-      const pending = renderHook(() => useResolvedForgeProvider(pendingProjectId));
-      expect(resolveProviderMock.mock.calls.length).toBe(callsBefore + 1);
+      // A response from before the reset neither answers nor is joined by a
+      // consumer after it.
       await act(async () => {
         releaseStale({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
       });
+      const callsBefore = resolveProviderMock.mock.calls.length;
+      const pending = renderHook(() => useResolvedForgeProvider(pendingProjectId));
       expect(pending.result.current.loading).toBe(true);
+      expect(pending.result.current.entry).toBeNull();
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBefore + 1);
     });
   });
 });
