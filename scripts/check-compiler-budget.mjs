@@ -8,15 +8,18 @@
 //
 // Tier 1 — Budget gate (this script): diffs that scan against
 //   compiler-bailout-baseline.json and fails on any per-file regression.
-//   Severity-aware (#8892): Hint-severity "Todo" noise collapses to a per-file
-//   hintCount gated by a global budget; Error+Warning bailouts are tracked
-//   verbatim in errorBailouts and gated strictly (any per-file/global increase
-//   or new strict category fails).
+//   Severity-aware (#8892): Hint-severity "Todo" bailouts collapse to a
+//   per-file hintCount gated by a global budget; Error+Warning bailouts are
+//   tracked verbatim in errorBailouts and gated strictly (any per-file/global
+//   increase or new strict category fails). A Todo is not cosmetic — the
+//   compiler abandons the whole function over it — so a per-file Hint increase
+//   is warned about by name even while the pooled total holds.
 //
-// Tier 2 — Critical-errors triage: `npm run compiler-budget:critical` filters
-//   the same scan to severity "Error", the load-bearing subset. It used to run
-//   its own Babel pass over `src/**` alone and so could not see the
-//   `plugins/builtin/*/renderer/**` files this gate tracks.
+// Tier 2 — Bailout triage: `npm run compiler-budget:critical` lists the same
+//   scan's bailouts by severity, Error first, then Warning, then Hint. It used
+//   to run its own Babel pass over `src/**` alone and so could not see the
+//   `plugins/builtin/*/renderer/**` files this gate tracks, and it used to list
+//   Errors alone, which hid nearly every abandoned component.
 //
 // The gate reads the scan's file list, not just its diagnostics, which is what
 // lets it tell three things apart that an event-keyed report cannot:
@@ -42,6 +45,7 @@ import path from "node:path";
 import {
   scanCompilerDiagnostics,
   getHintCount,
+  getHintBailouts,
   getStrictBailouts,
   HINT_CATEGORIES,
 } from "./lib/compiler-scan.mjs";
@@ -66,8 +70,8 @@ const SUMMARY_FILE = path.join(ROOT, "dist", "compiler-budget-summary.md");
 
 const COUNT_KEYS = ["success", "skip", "error", "pipeline"];
 // Per-file count keys that gate CI directly. `error` is deliberately NOT here:
-// it's the raw CompileError event count (cosmetic Hints + real Errors lumped
-// together), kept for diagnostics only. Hints gate via the global hintCount
+// it's the raw CompileError event count (Hints and Errors lumped together),
+// kept for diagnostics only. Hints gate via the global hintCount
 // budget; Error+Warning bailouts gate via the per-file/global strict check
 // below. A file that loses successes is logged but doesn't fail by itself.
 // A file *disappearing entirely* from the report after being in the baseline
@@ -101,6 +105,21 @@ export function regressedStrictCategories(entry, base) {
       regressed.push({ category, from: prior.get(category) ?? 0, to: count });
   }
   return regressed;
+}
+
+// Files whose Hint count grew against the baseline, new files with any
+// included. Warned about, never failed: the global budget is the gate, and a
+// refactor that moves a Todo between files nets to zero there. But each Todo
+// is a function the compiler gave up on, and the pooled total hides a file
+// losing its compilation whenever another file improves in the same change.
+export function hintIncreases(reportFiles, baselineFiles) {
+  const increases = [];
+  for (const [file, entry] of Object.entries(reportFiles)) {
+    const from = getHintCount(baselineFiles[file]);
+    const to = getHintCount(entry);
+    if (to > from) increases.push({ file, from, to, isNew: !baselineFiles[file] });
+  }
+  return increases.sort((a, b) => a.file.localeCompare(b.file));
 }
 
 function readJson(file, label) {
@@ -405,6 +424,7 @@ function emitSummary(
     successDrops,
     newClean,
     disappeared,
+    hintGrowth,
     hintBudgetExceeded,
     reportHintTotal,
     baselineHintTotal,
@@ -464,8 +484,17 @@ function emitSummary(
       heading: "Hint budget",
       body: [
         `- global Hint total grew: ${baselineHintTotal} → ${reportHintTotal}`,
-        `- Hint-severity bailouts are cosmetic, but new un-optimizable code likely landed.`,
+        `- each Hint is a \`Todo\` the compiler gave up on a whole function over; \`npm run compiler-budget:critical\` lists them.`,
       ],
+    });
+  }
+  if (hintGrowth.length > 0) {
+    sections.push({
+      heading: "Hint increases (warning)",
+      body: hintGrowth.map(
+        ({ file, from, to, isNew }) =>
+          `- \`${file}\` — ${isNew ? "new file, " : ""}hints ${from} → ${to}`
+      ),
     });
   }
   if (improvements.length > 0) {
@@ -591,8 +620,9 @@ async function main() {
       // New file in the report. Allowed only if it has zero gating bailouts —
       // that means zero skip/pipeline AND zero strict (Error+Warning) bailouts.
       // New-file Hints are absorbed by the global Hint budget below, not gated
-      // per-file (a brand-new component with cosmetic Todo noise shouldn't fail
-      // CI unless it pushes the whole-repo Hint total over its ceiling).
+      // per-file: a new component with a Todo fails only if it pushes the
+      // whole-repo total over its ceiling. It is warned about by name below,
+      // and never reported as clean.
       const deltas = REGRESSION_KEYS.filter((k) => entry[k] > 0).map((k) => ({
         key: k,
         from: 0,
@@ -603,7 +633,7 @@ async function main() {
       }
       if (deltas.length > 0) {
         regressions.push({ file, deltas, isNew: true });
-      } else {
+      } else if (getHintCount(entry) === 0) {
         newClean.push(file);
       }
       continue;
@@ -644,6 +674,7 @@ async function main() {
     0
   );
   const hintBudgetExceeded = reportHintTotal > baselineHintTotal;
+  const hintGrowth = hintIncreases(report, baseline);
 
   // A baseline entry with no diagnostics this run is three different events
   // wearing the same shape, and only one of them is a problem. Resolve it
@@ -681,6 +712,14 @@ async function main() {
   for (const { file, from, to } of successDrops) {
     console.log(`::notice file=${file}::compile success count dropped ${from} → ${to}`);
   }
+  for (const { file, from, to, isNew } of hintGrowth) {
+    console.log(
+      `::warning file=${file}::React Compiler gave up on more of this ${isNew ? "new " : ""}file (Todo bailouts ${from} → ${to}); each abandons the whole function`
+    );
+    for (const b of getHintBailouts(report[file]).slice(0, 3)) {
+      console.log(`   todo :${b.line ?? "?"}: ${b.reason}`);
+    }
+  }
 
   const reportStrictTotal = Object.values(report).reduce(
     (s, e) => s + getStrictBailouts(e).length,
@@ -693,6 +732,7 @@ async function main() {
     successDrops,
     newClean,
     disappeared,
+    hintGrowth,
     hintBudgetExceeded,
     reportHintTotal,
     baselineHintTotal,
@@ -763,7 +803,7 @@ async function main() {
   if (hintBudgetExceeded) {
     console.error(
       `::error::global Hint compiler bailout budget exceeded (was ${baselineHintTotal}, now ${reportHintTotal}). ` +
-        `Hint-severity bailouts are cosmetic, but the whole-repo total grew — new un-optimizable code likely landed.`
+        `Each Hint is a \`Todo\` the compiler gave up on a whole function over, and the whole-repo total grew.`
     );
   }
   const total = regressions.length + disappeared.length + (hintBudgetExceeded ? 1 : 0);
@@ -774,8 +814,8 @@ async function main() {
   if (hintBudgetExceeded) parts.push("Hint budget exceeded");
   console.error(
     `\n[check-compiler-budget] FAILED — ${total} issue(s): ${parts.join(", ")}. ` +
-      `For Error-severity diagnostics, run \`npm run compiler-budget:critical\`; Warning-severity bailouts (which also trip the strict gate) appear only in the errorBailouts detail printed above. ` +
-      `Deleted and newly-clean files retire themselves and never appear here. If the change is intentional — an unavoidable strict, skip or pipeline bailout, new cosmetic Hint noise, or a scan set that genuinely moved — run \`npm run compiler-budget:update\` to refresh the baseline.`
+      `\`npm run compiler-budget:critical\` lists every bailout by file and line, Error, Warning and Hint. ` +
+      `Deleted and newly-clean files retire themselves and never appear here. If the change is intentional — an unavoidable strict, skip or pipeline bailout, a Todo the compiler can't lower yet, or a scan set that genuinely moved — run \`npm run compiler-budget:update\` to refresh the baseline.`
   );
   // `exitCode` rather than `process.exit()`: the annotations above can be long,
   // and exiting outright can truncate buffered stdout mid-write.

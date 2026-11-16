@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyBaselineEntries,
   coverageShortfall,
+  hintIncreases,
   regressedStrictCategories,
 } from "./check-compiler-budget.mjs";
 import { isInScanSurface, toPosixRelative } from "./lib/compiler-scan-surface.mjs";
@@ -188,5 +189,32 @@ describe("scan surface", () => {
   it("normalises Windows separators so baseline keys match on either platform", () => {
     expect(toPosixRelative("src\\components\\Foo.tsx")).toBe("src/components/Foo.tsx");
     expect(isInScanSurface("src\\components\\Foo.tsx")).toBe(true);
+  });
+});
+
+describe("hintIncreases", () => {
+  // The pooled budget nets these two to zero and passes; the per-file view is
+  // what still names the file that lost its compilation.
+  it("names a file whose Hints grew while another file's shrank", () => {
+    const increases = hintIncreases(
+      { "src/worse.tsx": { hintCount: 3 }, "src/better.tsx": { hintCount: 0 } },
+      { "src/worse.tsx": { hintCount: 1 }, "src/better.tsx": { hintCount: 2 } }
+    );
+    expect(increases).toEqual([{ file: "src/worse.tsx", from: 1, to: 3, isNew: false }]);
+  });
+
+  it("names a new file that arrives with Hints", () => {
+    expect(hintIncreases({ "src/new.tsx": { hintCount: 2 } }, {})).toEqual([
+      { file: "src/new.tsx", from: 0, to: 2, isNew: true },
+    ]);
+  });
+
+  it("stays quiet for unchanged and improved files", () => {
+    expect(
+      hintIncreases(
+        { "src/same.tsx": { hintCount: 2 }, "src/fixed.tsx": { hintCount: 0 } },
+        { "src/same.tsx": { hintCount: 2 }, "src/fixed.tsx": { hintCount: 4 } }
+      )
+    ).toEqual([]);
   });
 });

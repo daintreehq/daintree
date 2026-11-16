@@ -215,7 +215,7 @@ React Compiler bailouts are tracked with two tools that share **one collector**:
 
 ```bash
 npm run compiler-budget:check     # Gate: diffs the scan against the baseline
-npm run compiler-budget:critical  # Triage: the same scan, filtered to severity "Error"
+npm run compiler-budget:critical  # Triage: every bailout in the same scan, by severity and line
 npm run compiler-budget:update    # Accept: rewrites the baseline from the scan
 ```
 
@@ -227,7 +227,7 @@ npm run compiler-budget:update    # Accept: rewrites the baseline from the scan
 
 **Severity buckets** are derived from the plugin's exported `LintRules` registry, so a plugin upgrade that recategorizes a rule reflows the gate:
 
-- **`Hint` (cosmetic `Todo` noise):** collapsed to a per-file `hintCount` and gated only by a **global budget**. Per-file churn moves freely; the whole-repo total may not grow. Entries for deleted files are excluded from that ceiling — their budget left with the code.
+- **`Hint` (`Todo`, syntax the compiler doesn't support yet):** collapsed to a per-file `hintCount` and gated only by a **global budget**. Per-file churn moves freely; the whole-repo total may not grow. Entries for deleted files are excluded from that ceiling — their budget left with the code. A `Todo` is **not cosmetic**: the compiler abandons the whole component or hook over it, exactly as over an `Error`, and emits no memoization at all. It ranks lower only because the code breaks no rule. So `check` warns by name about every file whose `Todo` count grew, including a new file, even while the pooled total holds, and never reports a new file with one as clean.
 - **`Error` + `Warning`:** tracked verbatim in `errorBailouts` and gated **strictly** — any per-file increase, any new file with a strict bailout, or any count-neutral swap to a different category fails.
 
 **A baseline entry with nothing to report is three different events**, and the gate resolves which by asking the filesystem and the scan:
@@ -246,7 +246,9 @@ The gate is **fail-closed** about its own collection. A file that cannot be read
 
 The baseline also records a **coverage** block (`discovered` / `scanned` / `filtered` / `withEvents`). It is what the collapse guard compares against; without it a silent collector is indistinguishable from a codebase that got clean.
 
-`compiler-budget:critical` exits 0 when the scan **completed**, not when it found nothing — findings may still be listed. It exits 1 only when the listing is incomplete.
+`compiler-budget:critical` lists every bailout by file and line, in three sections: `Error`, `Warning`, then `Hint`. Each `Hint` names the line of the function it cost. It exits 0 when the scan **completed**, not when it found nothing — findings may still be listed. It exits 1 only when the listing is incomplete.
+
+The components and hooks that render on every app-shell interaction (the toolbar, the project switcher's hook and its mutation hooks, and Canopy's view, card and inbox actions) are pinned at zero bailouts by `scripts/compiler-hot-surfaces.test.mjs`, which runs in the unit suite. The pooled budget can't hold them: a regression there is offset by any improvement elsewhere.
 
 `vite.config.ts` keeps a minimal `reactCompilerReportPlugin` that writes nothing and only asserts the compiler is still wired into the real build.
 

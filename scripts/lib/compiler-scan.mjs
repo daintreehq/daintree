@@ -75,13 +75,41 @@ function parserOptsFor(file) {
   return { sourceType: "module", allowAwaitOutsideFunction: true, plugins };
 }
 
+function transformOptionsFor(rel, preset) {
+  return {
+    filename: path.join(ROOT, rel),
+    babelrc: false,
+    configFile: false,
+    parserOpts: parserOptsFor(rel),
+    presets: [preset],
+  };
+}
+
+/**
+ * Every compiler event for one file, under the scan's own options and parser.
+ * For a test that pins a file's compilation without scanning the whole tree.
+ */
+export async function compilerEventsFor(rel) {
+  const events = [];
+  const { preset } = buildPreset({ logEvent: (_filename, event) => events.push(event) });
+  const source = await readFile(path.join(ROOT, rel), "utf8");
+  await babel.transformAsync(source, transformOptionsFor(rel, preset));
+  return events;
+}
+
 const SEVERITY_BY_CATEGORY = Object.fromEntries(LintRules.map((r) => [r.category, r.severity]));
 export const HINT_CATEGORIES = new Set(
   LintRules.filter((r) => r.severity === "Hint").map((r) => r.category)
 );
 
 /**
- * Split one `CompileError` event into Hint count and strict bailouts.
+ * Split one `CompileError` event into Hint (`Todo`) bailouts and strict ones.
+ *
+ * A Hint is not cosmetic. `Todo` marks syntax the compiler doesn't support
+ * yet, and it abandons the whole function over it exactly as it does over an
+ * Error: no memoization at all. It ranks lower only because the code breaks no
+ * rule. So each one keeps its reason, its line and the line of the function it
+ * cost, for triage to name.
  *
  * Exported because it is the whole severity policy, and the alternative to
  * testing it directly is a twenty-second scan of the real tree that can only
@@ -92,9 +120,10 @@ export function bucketCompileError(event) {
   const children = detailsOf(detail);
   if (children.length === 0) {
     // No detail object at all: unclassifiable, so it is counted strictly
-    // rather than written off as cosmetic.
+    // rather than pooled into the Hint budget.
     return {
       hints: 0,
+      hintBailouts: [],
       strict: [
         {
           category: "Unknown",
@@ -105,7 +134,7 @@ export function bucketCompileError(event) {
       ],
     };
   }
-  let hints = 0;
+  const hintBailouts = [];
   const strict = [];
   for (const d of children) {
     const category = String(d?.category ?? detail?.category ?? "");
@@ -113,11 +142,16 @@ export function bucketCompileError(event) {
     // throws ("Unsupported category X") for any category not in the plugin's
     // own internal switch, so reading it would crash the scan the first time an
     // upstream version emits a new one. Unknown categories default to "Error"
-    // so they land in the strict gate rather than being written off as
-    // cosmetic.
+    // so they land in the strict gate rather than the pooled Hint budget.
     const severity = SEVERITY_BY_CATEGORY[category] ?? "Error";
     if (severity === "Hint") {
-      hints++;
+      hintBailouts.push({
+        category,
+        severity,
+        reason: describe(d, detail),
+        line: lineOf(d, detail, event),
+        fnLine: event?.fnLoc?.start?.line ?? null,
+      });
     } else {
       strict.push({
         category,
@@ -127,7 +161,7 @@ export function bucketCompileError(event) {
       });
     }
   }
-  return { hints, strict };
+  return { hints: hintBailouts.length, hintBailouts, strict };
 }
 
 function emptyEntry() {
@@ -137,6 +171,8 @@ function emptyEntry() {
     error: 0,
     pipeline: 0,
     hintCount: 0,
+    // Samples, bounded like the reasons below; `hintCount` stays exact.
+    hintBailouts: [],
     errorBailouts: [],
     skipReasons: [],
     pipelineErrors: [],
@@ -182,6 +218,15 @@ function pushSample(list, value) {
   if (list.length >= MAX_SAMPLES_PER_FILE) return;
   if (list.includes(text)) return;
   list.push(text);
+}
+
+function pushHintSample(list, bailout) {
+  if (list.length >= MAX_SAMPLES_PER_FILE) return;
+  const sample = { ...bailout, reason: String(bailout.reason).slice(0, MAX_SAMPLE_LENGTH) };
+  const isRepeat = list.some(
+    (b) => b.fnLine === sample.fnLine && b.line === sample.line && b.reason === sample.reason
+  );
+  if (!isRepeat) list.push(sample);
 }
 
 function describe(d, parent) {
@@ -239,8 +284,9 @@ export async function scanCompilerDiagnostics({ onProgress } = {}) {
         }
         case "CompileError": {
           entry.error++;
-          const { hints, strict } = bucketCompileError(event);
+          const { hints, hintBailouts, strict } = bucketCompileError(event);
           entry.hintCount += hints;
+          for (const bailout of hintBailouts) pushHintSample(entry.hintBailouts, bailout);
           entry.errorBailouts.push(...strict);
           break;
         }
@@ -287,13 +333,7 @@ export async function scanCompilerDiagnostics({ onProgress } = {}) {
     scanned.push(rel);
     currentFile = rel;
     try {
-      await babel.transformAsync(source, {
-        filename: abs,
-        babelrc: false,
-        configFile: false,
-        parserOpts: parserOptsFor(rel),
-        presets: [preset],
-      });
+      await babel.transformAsync(source, transformOptionsFor(rel, preset));
     } catch (err) {
       // Never swallowed. A file that cannot be parsed is a hole in the scan,
       // and a hole that reports as "no diagnostics" is worse than a loud
@@ -367,11 +407,18 @@ function fingerprintOf(codeFilter) {
   };
 }
 
-/** Hint-severity count for a report/baseline entry. */
+/** Hint-severity (`Todo`) count for a report/baseline entry. */
 export function getHintCount(entry) {
   return typeof entry?.hintCount === "number" && Number.isFinite(entry.hintCount)
     ? entry.hintCount
     : 0;
+}
+
+/** Bounded Hint (`Todo`) samples for a report entry; a baseline carries none. */
+export function getHintBailouts(entry) {
+  return Array.isArray(entry?.hintBailouts)
+    ? entry.hintBailouts.filter((b) => b && typeof b === "object")
+    : [];
 }
 
 /** Error+Warning bailouts for a report/baseline entry. */
