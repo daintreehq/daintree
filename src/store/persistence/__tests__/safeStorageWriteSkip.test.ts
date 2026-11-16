@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PersistWriteMerge } from "../persistWriteMerge";
+import { mergeRecordByWriterDelta, type PersistWriteMerge } from "../persistWriteMerge";
 
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
@@ -55,14 +55,16 @@ describe("safe storage skips an unchanged persisted slice (#17055)", () => {
   const notes = { a: { text: "a" } };
   const order = ["a"];
   // Zustand's persist hands the adapter a fresh `{ state, version }` from
-  // `partialize` on every set(), so only the field references repeat.
-  const slice = () => ({ state: { notes, order }, version: 1 });
+  // `partialize` on every set(), and partialize often rebuilds arrays
+  // (`Array.from(set)`), so only field and item references repeat.
+  const slice = () => ({ state: { notes, order: [...order] }, version: 1 });
 
   it("plain adapter: no serialization or storage access once the slice has landed", async () => {
-    const { resetCounts, accesses } = installCountingStorage();
+    const { backing, resetCounts, accesses } = installCountingStorage();
     const { createSafeJSONStorage } = await import("../safeStorage");
     const storage = createSafeJSONStorage<Notes>();
     storage.setItem("plain", slice());
+    expect(backing.get("plain")).toBe(JSON.stringify(slice()));
 
     resetCounts();
     const stringify = vi.spyOn(JSON, "stringify");
@@ -93,6 +95,9 @@ describe("safe storage skips an unchanged persisted slice (#17055)", () => {
     const { createSafeJSONStorage } = await import("../safeStorage");
     const storage = createSafeJSONStorage<Notes>();
     storage.setItem("plain", slice());
+
+    storage.setItem("plain", { state: { notes, order: ["b"] }, version: 1 });
+    expect(JSON.parse(backing.get("plain")!).state.order).toEqual(["b"]);
 
     storage.setItem("plain", { state: { notes, order: ["a", "b"] }, version: 1 });
     expect(JSON.parse(backing.get("plain")!).state.order).toEqual(["a", "b"]);
@@ -129,6 +134,108 @@ describe("safe storage skips an unchanged persisted slice (#17055)", () => {
     expect(stringify).not.toHaveBeenCalled();
     expect(accesses()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("debounced adapter: a repeat of the queued slice keeps its original deadline", async () => {
+    vi.useFakeTimers();
+    const { backing } = installCountingStorage();
+    const { createDebouncedSafeJSONStorage } = await import("../safeStorage");
+    const storage = createDebouncedSafeJSONStorage<Notes>(300);
+
+    storage.setItem("queued", slice());
+    vi.advanceTimersByTime(150);
+    const stringify = vi.spyOn(JSON, "stringify");
+    storage.setItem("queued", slice());
+    vi.advanceTimersByTime(149);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(backing.has("queued")).toBe(false);
+
+    vi.advanceTimersByTime(1);
+    expect(stringify).toHaveBeenCalledTimes(1);
+    stringify.mockRestore();
+    expect(backing.get("queued")).toBe(JSON.stringify(slice()));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe.each([
+    ["plain", false],
+    ["debounced", true],
+  ])("%s adapter", (_kind, debounced) => {
+    type Sessions = { sessions: Record<string, { v: string }> };
+    const KEY = "sessions";
+
+    async function setup() {
+      vi.useFakeTimers();
+      const counting = installCountingStorage();
+      const { createSafeJSONStorage, createDebouncedSafeJSONStorage } =
+        await import("../safeStorage");
+      const mergeSessions: PersistWriteMerge<Sessions> = ({ baseline, onDisk, incoming }) =>
+        onDisk
+          ? {
+              state: {
+                sessions: mergeRecordByWriterDelta(
+                  baseline?.state.sessions ?? {},
+                  incoming.state.sessions,
+                  onDisk.state.sessions ?? {}
+                ),
+              },
+              version: incoming.version,
+            }
+          : incoming;
+      const options = { mergeOnWrite: mergeSessions };
+      const storage = debounced
+        ? createDebouncedSafeJSONStorage<Sessions>(300, options)
+        : createSafeJSONStorage<Sessions>(options);
+      const write = (sessions: Sessions["sessions"]) => {
+        storage.setItem(KEY, { state: { sessions }, version: 1 });
+        vi.advanceTimersByTime(300);
+      };
+      const disk = (key = KEY): Sessions["sessions"] | undefined =>
+        JSON.parse(counting.backing.get(key) ?? "null")?.state.sessions;
+      return { ...counting, storage, write, disk };
+    }
+
+    it("re-merges the same slice after a read takes a sibling's entry into the baseline", async () => {
+      const { backing, storage, write, disk } = await setup();
+      const sessions = { a: { v: "a" } };
+      void storage.getItem(KEY);
+      for (let i = 0; i < 3; i += 1) write(sessions);
+
+      backing.set(
+        KEY,
+        JSON.stringify({ state: { sessions: { ...sessions, b: { v: "b" } } }, version: 1 })
+      );
+      void storage.getItem(KEY);
+      // The same references, but `b` is now in the baseline and missing from
+      // the snapshot: a deletion the read made visible, not a repeat.
+      write(sessions);
+
+      expect(disk()).toEqual({ a: { v: "a" } });
+    });
+
+    it("retries a slice that hit the quota after an earlier one landed", async () => {
+      const { backing, storage, write, disk } = await setup();
+      const first = { a: { v: "a" } };
+      const second = { b: { v: "b" } };
+      void storage.getItem(KEY);
+      write(first);
+      write(first);
+
+      const realSetItem = localStorage.setItem.bind(localStorage);
+      const quota = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+        if (key === KEY) throw new DOMException("Quota exceeded", "QuotaExceededError");
+        realSetItem(key, value);
+      });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      write(second);
+      expect(disk()).toEqual(first);
+      expect(disk(`${KEY}.__bak`)).toEqual(first);
+
+      quota.mockRestore();
+      write(second);
+      expect(disk()).toEqual(second);
+      expect(backing.get(`${KEY}.__bak`)).toBe(backing.get(KEY));
+    });
   });
 });
 
@@ -265,6 +372,12 @@ describe("debounced safe storage defers serialization to the flush (#17055)", ()
     expect(listening.size).toBe(3);
 
     help.removeItem("help");
+    expect([...listening]).toEqual([]);
+
+    portal.setItem("portal", { state: { width: 3 }, version: 0 });
+    expect(listening.size).toBe(3);
+    window.dispatchEvent(new Event("pagehide"));
+    expect(JSON.parse(localStorage.getItem("portal")!).state.width).toBe(3);
     expect([...listening]).toEqual([]);
   });
 });

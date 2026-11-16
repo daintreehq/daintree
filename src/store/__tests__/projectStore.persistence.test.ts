@@ -251,10 +251,13 @@ describe("project-storage writes (#17055)", () => {
     setItem.mockClear();
     getItem.mockClear();
     const stringify = vi.spyOn(JSON, "stringify");
-    useProjectStore.setState({ isLoading: true });
-    useProjectStore.setState({ isLoading: false, error: "Couldn't load projects" });
-    expect(stringify).not.toHaveBeenCalled();
-    stringify.mockRestore();
+    try {
+      useProjectStore.setState({ isLoading: true });
+      useProjectStore.setState({ isLoading: false, error: "Couldn't load projects" });
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
     expect(setItem).not.toHaveBeenCalled();
     expect(getItem).not.toHaveBeenCalled();
 
