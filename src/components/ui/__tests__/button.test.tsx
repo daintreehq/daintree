@@ -24,7 +24,10 @@ describe("buttonVariants", () => {
   // A backdrop blur behind an opaque fill shows nothing and still costs an
   // offscreen pass for every pill on screen (#17074).
   it("keeps the pill unblurred while its fills are opaque surfaces", () => {
-    const tokens = buttonVariants({ variant: "pill" }).split(/\s+/);
+    // Tailwind's important marker, leading or trailing, changes nothing here.
+    const tokens = buttonVariants({ variant: "pill" })
+      .split(/\s+/)
+      .map((token) => token.replace(/(^|:)!/, "$1").replace(/!$/, ""));
     const fills = tokens
       .map((token) => /^(?:[^\s:]+:)*bg-surface-([a-z-]+)$/.exec(token)?.[1])
       .filter((name): name is string => name !== undefined);

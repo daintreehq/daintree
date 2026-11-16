@@ -479,18 +479,52 @@ describe("perfMetricsStore live capture", () => {
     expect(state().isBackgrounded).toBe(false);
     runFrames(62);
     expect(state().fps).toBeNull();
+    // 63 frames in 1008ms, counted from the resume alone.
     runFrames(1);
-    expect(state().fps).toBeGreaterThan(55);
-    expect(state().fps).toBeLessThan(70);
+    expect(state().fps).toBe(Math.round((63 * 1000) / 1008));
   });
 
-  it("schedules nothing when a store subscriber releases the capture mid-frame", () => {
+  // A store subscriber runs inside the frame that published to it, so it can
+  // release, restart or hide the capture before that frame schedules the next.
+  function onFirstReading(react: () => void) {
+    let fired = false;
+    return usePerfMetricsStore.subscribe((next) => {
+      if (fired || next.fps === null) return;
+      fired = true;
+      react();
+    });
+  }
+
+  it.each([
+    { name: "releases the capture", react: () => stopLivePerfCapture(), pending: 0 },
+    {
+      name: "restarts the capture",
+      react: () => {
+        stopLivePerfCapture();
+        startLivePerfCapture();
+      },
+      pending: 1,
+    },
+    { name: "hides the window", react: () => setHidden(true), pending: 0 },
+  ])("keeps at most one loop when a subscriber $name mid-frame", ({ react, pending }) => {
     startLivePerfCapture();
+    const off = onFirstReading(react);
+    try {
+      runFrames(63);
+      expect(frames.size).toBe(pending);
+    } finally {
+      off();
+    }
+  });
+
+  it("schedules nothing when a subscriber releases the capture as the view returns", () => {
+    startLivePerfCapture();
+    setHidden(true);
     const off = usePerfMetricsStore.subscribe((next, previous) => {
-      if (next.fps !== previous.fps && next.fps !== null) stopLivePerfCapture();
+      if (previous.isBackgrounded && !next.isBackgrounded) stopLivePerfCapture();
     });
     try {
-      runFrames(70);
+      setHidden(false);
       expect(frames.size).toBe(0);
     } finally {
       off();
