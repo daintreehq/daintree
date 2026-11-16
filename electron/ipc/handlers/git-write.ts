@@ -1330,7 +1330,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
 
     const git = await createHardenedGit(payload.cwd);
-    await scanStagedFilesForConflictMarkers(git);
+    await scanStagedFilesForConflictMarkers(git, payload.cwd);
     const result = await git.commit(payload.message.trim());
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
       playSoundFireAndForget("git-commit");
