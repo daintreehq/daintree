@@ -550,7 +550,7 @@ export function createWorkspaceFacet(
           const all = screen.text.split("\n");
           const kept = all.slice(-lines);
           result = {
-            status: "ok",
+            ...screen,
             text: kept.join("\n"),
             lineCount: kept.length,
             truncated: screen.truncated || all.length > kept.length,

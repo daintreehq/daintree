@@ -59,7 +59,7 @@ export interface TerminalInputLine {
   state: TerminalInputLineState;
   /** The box's text after the prompt glyph; the suggested text for `suggestion`, `""` for `empty` and `unknown`. */
   text: string;
-  /** `text` was cut to its first `INPUT_LINE_TEXT_MAX_CHARS` characters; never sent as `false`. */
+  /** `text` was cut to its first 200 characters (`INPUT_LINE_TEXT_MAX_CHARS`); never sent as `false`. */
   truncated?: true;
 }
 

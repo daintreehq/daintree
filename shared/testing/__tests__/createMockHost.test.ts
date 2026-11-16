@@ -2939,6 +2939,43 @@ describe("createMockHost terminals.readScreen", () => {
     host.simulateTerminalScreen("t-1", null);
     await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
   });
+
+  it("hands back a fixture's input box unchanged, whatever lines are kept", async () => {
+    const inputLine = { state: "suggestion", text: "run the gate table" } as const;
+    const host = createMockHost({
+      capabilities: ["terminal:read"],
+      terminalScreens: {
+        "t-1": {
+          status: "ok",
+          text: "⏺ Done.\n❯ run the gate table\n? for shortcuts",
+          lineCount: 3,
+          truncated: false,
+          inputLine,
+        },
+      },
+    });
+    await expect(host.terminals.readScreen("t-1", { lines: 1 })).resolves.toEqual({
+      status: "ok",
+      text: "? for shortcuts",
+      lineCount: 1,
+      truncated: true,
+      inputLine,
+    });
+    host.simulateTerminalScreen("t-2", {
+      status: "ok",
+      text: "",
+      lineCount: 0,
+      truncated: false,
+      inputLine: { state: "empty", text: "" },
+    });
+    await expect(host.terminals.readScreen("t-2")).resolves.toMatchObject({
+      inputLine: { state: "empty", text: "" },
+    });
+    expect(host.readScreenCalls.map((c) => c.result)).toMatchObject([
+      { inputLine },
+      { inputLine: { state: "empty" } },
+    ]);
+  });
 });
 
 describe("createMockHost tasks (#13819)", () => {
