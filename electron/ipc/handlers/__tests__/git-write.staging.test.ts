@@ -209,19 +209,16 @@ describe("git-write staging handlers (real git)", () => {
   });
 
   it("unstages several files, and everything, on an unborn branch", async () => {
-    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), `${name}\n`);
+    const names = ["a.txt", "b.txt", "c.txt"];
+    for (const name of names) fs.writeFileSync(path.join(repo, name), `${name}\n`);
     git(repo, "add", ".");
-    await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt"] });
+    await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "c.txt"] });
     expect(git(repo, "ls-files")).toBe("b.txt\n");
 
     await handler(CHANNELS.GIT_UNSTAGE_ALL)(null, repo);
     expect(git(repo, "ls-files")).toBe("");
-    expect(
-      fs
-        .readdirSync(repo)
-        .filter((name) => name !== ".git")
-        .sort()
-    ).toEqual(["a.txt", "b.txt"]);
+    const left = fs.readdirSync(repo).filter((name) => name !== ".git");
+    expect(left.sort()).toEqual(names);
   });
 
   it("unstages the first file of an unborn branch and leaves it on disk", async () => {

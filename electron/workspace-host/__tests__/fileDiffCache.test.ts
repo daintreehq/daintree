@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -340,6 +341,29 @@ describe("getFileDiff paging over a real repo", () => {
     );
     await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
   });
+
+  it("recomputes after a config file is rewritten and put back", async () => {
+    // Same effective config, so the same hash: only the file's stats can tell
+    // that a diff computed in between may have read something else.
+    const { offset } = await continuationAfter("a.txt", () => {
+      git(repo, "config", "diff.noprefix", "true");
+      git(repo, "config", "--unset", "diff.noprefix");
+    });
+    await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
+  });
+
+  it.skipIf(!gitListsConfigFiles || process.platform === "win32")(
+    "reuses its probe through a symlinked cwd whose gitfile is relative",
+    async () => {
+      renameSync(path.join(repo, ".git"), path.join(tmp, "meta.git"));
+      writeFileSync(path.join(repo, ".git"), "gitdir: ../meta.git\n");
+      const alias = path.join(tmp, "alias");
+      symlinkSync(repo, alias);
+      const before = probeSpawns;
+      await expectRestMatches("a.txt", 0, expectedDiff("a.txt"), { cwd: alias });
+      expect(probeSpawns - before).toBe(3);
+    }
+  );
 
   it("recomputes after a global config change", async () => {
     const globalConfig = path.join(home, ".gitconfig");

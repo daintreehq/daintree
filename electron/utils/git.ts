@@ -714,8 +714,15 @@ async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
   return resolveHeadOidFromGitDir(gitDir);
 }
 
-/** {@link resolveHeadOidFromFs} for a caller that has already resolved the git dir. */
-export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string | null> {
+/**
+ * {@link resolveHeadOidFromFs} for a caller that has already resolved the git
+ * dir, and optionally its common dir, which then stands in for the cached
+ * `commondir` pointer.
+ */
+export async function resolveHeadOidFromGitDir(
+  gitDir: string,
+  commonDirOverride?: string
+): Promise<string | null> {
   let head: string;
   try {
     head = (await readFileBounded(resolve(gitDir, "HEAD"), "utf-8")).trim();
@@ -729,7 +736,7 @@ export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string |
   // (refs/bisect, per-worktree refs) keeps the subprocess path. Malformed
   // refnames are rejected rather than resolved as paths.
   if (!refName.startsWith("refs/heads/") || !isSafeRefName(refName)) return null;
-  const commonDir = await resolveCommonDirForGitDir(gitDir);
+  const commonDir = commonDirOverride ?? (await resolveCommonDirForGitDir(gitDir));
   try {
     const loose = (await readFileBounded(resolve(commonDir, refName), "utf-8")).trim();
     return OID_RE.test(loose) ? loose : null;

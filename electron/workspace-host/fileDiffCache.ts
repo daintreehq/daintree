@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { lstat, readlink, realpath, stat } from "fs/promises";
+import { lstat, readFile, readlink, realpath, stat } from "fs/promises";
 import { homedir } from "os";
 import { join, posix, resolve } from "path";
 import type { SimpleGit } from "simple-git";
@@ -49,8 +49,8 @@ export interface GitDiffProbe {
   vars: string;
   /**
    * Where `.git` leads and the stats of every config file git reads, taken
-   * between two reads of `git var -l` that agree. Null when that can't be
-   * established, and the probe is then never reused.
+   * between two reads of `git var -l` that agree. Null when the config files
+   * can't all be named, and the probe is then never reused.
    */
   validator: string | null;
 }
@@ -110,8 +110,9 @@ function configOf(vars: string): string {
  * repository discovery consults. A `.git` directory is identified by its inode
  * (its mtime moves with every ref or index write, which other parts of the key
  * already see), a gitfile by its full stat, and either by the real path of the
- * git dir it leads to and of that dir's common dir, so a symlink or `commondir`
- * retargeted underneath an unchanged `.git` is a different repository too.
+ * git dir it leads to, which must be the probed one, as must the common dir
+ * that dir's `commondir` names: a symlink or pointer retargeted underneath an
+ * unchanged `.git` is a different repository.
  */
 async function probeValidator(
   cwd: string,
@@ -125,17 +126,28 @@ async function probeValidator(
   if (files === null) return null;
   let discovery: string;
   try {
-    const [s, found] = await Promise.all([
-      lstat(join(cwd, ".git"), { bigint: true }),
-      resolveGitDirFromFs(cwd),
+    // From the real cwd: a relative gitfile pointer is left unresolved under a
+    // symlinked path.
+    const realCwd = await realpath(cwd);
+    const [s, found, pointer] = await Promise.all([
+      lstat(join(realCwd, ".git"), { bigint: true }),
+      resolveGitDirFromFs(realCwd),
+      readFile(join(gitDir, "commondir"), "utf-8").then(
+        (text) => text.trim(),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        }
+      ),
     ]);
     if (found === null) return null;
-    const [foundReal, gitDirReal, commonDirReal] = await Promise.all([
+    const [foundReal, gitDirReal, commonDirReal, pointedReal] = await Promise.all([
       realpath(found),
       realpath(gitDir),
       realpath(commonDir),
+      realpath(pointer ? resolve(gitDir, pointer) : gitDir),
     ]);
-    if (foundReal !== gitDirReal) return null;
+    if (foundReal !== gitDirReal || pointedReal !== commonDirReal) return null;
     const entry = s.isDirectory()
       ? `d:${s.dev}:${s.ino}`
       : `f:${s.mode}:${s.ino}:${s.size}:${s.mtimeNs}`;
@@ -143,17 +155,18 @@ async function probeValidator(
   } catch {
     return null;
   }
-  const watched = [...files, join(gitDir, "commondir")];
-  const stats = await Promise.all(watched.map((path) => statKey(path)));
+  const stats = await Promise.all(files.map((path) => statKey(path)));
   if (stats.includes(null)) return null;
-  return [discovery, ...watched.map((path, i) => `${path}=${stats[i]}`)].join("|");
+  return [discovery, ...files.map((path, i) => `${path}=${stats[i]}`)].join("|");
 }
 
 /** The previous probe, when the filesystem shows nothing it read has changed. */
 async function reusableProbe(cwd: string, previous: GitDiffProbe): Promise<GitDiffProbe | null> {
   if (previous.validator === null) return null;
   const [head, validator] = await Promise.all([
-    resolveHeadOidFromGitDir(previous.gitDir),
+    // Against the probed common dir, which the validator has just confirmed,
+    // never a pointer cached from before it moved.
+    resolveHeadOidFromGitDir(previous.gitDir, previous.commonDir),
     probeValidator(cwd, previous.gitDir, previous.commonDir, previous.prefix, previous.vars),
   ]);
   return head === previous.head && validator === previous.validator ? previous : null;
@@ -180,15 +193,16 @@ async function runProbe(git: SimpleGit, cwd: string): Promise<GitDiffProbe | nul
     if (lines.length !== 6 || lines[5] !== "" || typeof vars !== "string") return null;
     const [gitDir, commonDirRaw, toplevel, prefix, head] = lines;
     const commonDir = resolve(cwd, commonDirRaw);
-    let validator = await probeValidator(cwd, gitDir, commonDir, prefix, vars);
+    const validator = await probeValidator(cwd, gitDir, commonDir, prefix, vars);
     // A config write between `git var -l` and those stats would pair the old
     // answer with the new files, an include among them. Asking again after the
     // stats closes that: the same answer means the files the stats describe are
     // the ones git read, or have moved since, which the stats then no longer
-    // match, so nothing reuses them.
+    // match, so nothing reuses them. A different answer means the config moved
+    // mid-probe, and no key is taken from it at all.
     if (validator !== null) {
       const again = await git.raw(["var", "-l"]);
-      if (typeof again !== "string" || configOf(again) !== configOf(vars)) validator = null;
+      if (typeof again !== "string" || configOf(again) !== configOf(vars)) return null;
     }
     return { gitDir, commonDir, toplevel, prefix, head, vars, validator };
   } catch {
@@ -277,7 +291,13 @@ export class FileDiffCache {
     );
     if (stats.includes(null)) return null;
     const configHash = createHash("sha256").update(configOf(vars)).digest("hex");
-    return { key: [head, entryKey, configHash, ...stats].join("|"), head, probe };
+    // The validator rides in the key too: a config file rewritten and put back
+    // between two windows hashes the same, but never stats the same.
+    return {
+      key: [head, entryKey, configHash, probe.validator ?? "", ...stats].join("|"),
+      head,
+      probe,
+    };
   }
 
   /** The probe behind a live entry, for its next freshness check to start from. */
