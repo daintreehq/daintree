@@ -3,7 +3,11 @@ import { describe, expect, it, vi, beforeAll, afterAll, afterEach } from "vitest
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 import type { PromptHistoryItem } from "@/hooks/usePromptHistoryPalette";
-import { PREVIEW_MAX_CHARS, toPromptPreview } from "@/utils/promptHistoryPreview";
+import {
+  PREVIEW_MAX_CHARS,
+  mapPreviewRangesToPrompt,
+  toPromptPreview,
+} from "@/utils/promptHistoryPreview";
 import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 
@@ -290,7 +294,10 @@ describe("PromptHistoryPalette", () => {
     seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
     const input = renderPalette();
     const describe = () =>
-      document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+      (input.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
     const before = describe();
     expect(before).toMatch(/R/);
     await act(async () => {
@@ -299,6 +306,233 @@ describe("PromptHistoryPalette", () => {
     expect(describe()).not.toBe(before);
     expect(announce).toHaveBeenCalledTimes(1);
     announce.mockRestore();
+  });
+
+  describe("selected prompt preview", () => {
+    const brief =
+      "Fix the flaky retry test\n\n- check the backoff\n- run it ten times\n\n" +
+      `${"Keep the diff small and leave the backoff alone. ".repeat(6)}final backoff sentinel`;
+    const history = {
+      [PROJECT]: [
+        entry("a", "summarise the diff", 1),
+        entry("b", brief, 2),
+        entry("c", "add a dark mode toggle", 3),
+      ],
+    };
+
+    function preview(): HTMLElement | null {
+      return document.querySelector<HTMLElement>('[role="region"][aria-label="Selected prompt"]');
+    }
+    function previewText(): string | undefined {
+      return preview()?.querySelector("p")?.textContent;
+    }
+    function marks(): string[] {
+      return [...preview()!.querySelectorAll("[data-highlight]")].map((el) => el.textContent ?? "");
+    }
+    function selectedOptionId(): string | null {
+      return document.querySelector('[role="option"][aria-selected="true"]')?.id ?? null;
+    }
+
+    it("shows the selected prompt in full with its line breaks, and follows the arrow keys", async () => {
+      seed(history);
+      const input = renderPalette();
+      expect(previewText()).toBe("summarise the diff");
+
+      const key = (k: string) =>
+        act(async () => {
+          fireEvent.keyDown(input, { key: k });
+        });
+      await key("ArrowDown");
+      expect(previewText()).toBe(brief);
+      await key("ArrowDown");
+      expect(previewText()).toBe("add a dark mode toggle");
+      await key("ArrowUp");
+      expect(previewText()).toBe(brief);
+      expect(selectedOptionId()).toBe(input.getAttribute("aria-activedescendant"));
+    });
+
+    it("follows the pointer too", async () => {
+      seed(history);
+      renderPalette();
+      const hover = (i: number) =>
+        act(async () => {
+          fireEvent.pointerMove(document.querySelectorAll('[role="option"]')[i]!);
+        });
+      await hover(2);
+      expect(previewText()).toBe("add a dark mode toggle");
+      await hover(1);
+      expect(previewText()).toBe(brief);
+      await hover(0);
+      expect(previewText()).toBe("summarise the diff");
+    });
+
+    it("marks every match of the query in the full text, and none once it is cleared", async () => {
+      seed(history);
+      const input = renderPalette();
+      await type(input, "backoff");
+      expect(previewText()).toBe(brief);
+      expect(marks()).toEqual(Array(8).fill("backoff"));
+      await type(input, "sentinel");
+      expect(marks()).toEqual(["sentinel"]);
+      await type(input, "");
+      expect(marks()).toEqual([]);
+    });
+
+    it("marks where a typo'd search matched, in the raw text", async () => {
+      seed({ [PROJECT]: [entry("a", brief, 1)] });
+      const input = renderPalette();
+      await type(input, "bakoff");
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+      expect(marks().length).toBeGreaterThan(0);
+      // Each marked fragment lies wholly inside one "backoff", never spilling over a break.
+      const text = previewText()!;
+      const occurrences = [...text.matchAll(/backoff/gi)].map((m) => [m.index, m.index + 7]);
+      let offset = 0;
+      for (const node of preview()!.querySelector("p")!.childNodes) {
+        const length = node.textContent?.length ?? 0;
+        if (node instanceof HTMLElement && node.hasAttribute("data-highlight")) {
+          expect(occurrences.some(([from, to]) => offset >= from! && offset + length <= to!)).toBe(
+            true
+          );
+        }
+        offset += length;
+      }
+    });
+
+    it("scrolls to the first match when the search starts, and back to the top on a new selection", async () => {
+      const offsetTop = vi
+        .spyOn(HTMLElement.prototype, "offsetTop", "get")
+        .mockImplementation(function (this: HTMLElement) {
+          return this.hasAttribute("data-highlight") ? 400 : 0;
+        });
+      try {
+        seed(history);
+        const input = renderPalette();
+        const scroller = document.getElementById("prompt-history-preview-scroll")!;
+        scroller.scrollTop = 0;
+        await type(input, "sentinel");
+        expect(scroller.scrollTop).toBeGreaterThan(300);
+        await type(input, "");
+        expect(scroller.scrollTop).toBe(0);
+      } finally {
+        offsetTop.mockRestore();
+      }
+    });
+
+    it("starts a newly selected prompt at the top, with the query unchanged", async () => {
+      seed(history);
+      const input = renderPalette();
+      const scroller = document.getElementById("prompt-history-preview-scroll")!;
+      scroller.scrollTop = 250;
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(scroller.scrollTop).toBe(0);
+    });
+
+    it("pages the preview with Page Up and Page Down from the search field", async () => {
+      seed(history);
+      const input = renderPalette();
+      const scroller = document.getElementById("prompt-history-preview-scroll")!;
+      Object.defineProperty(scroller, "clientHeight", { value: 200, configurable: true });
+      const scrollBy = vi.fn();
+      scroller.scrollBy = scrollBy;
+      let notCancelled = true;
+      await act(async () => {
+        notCancelled = fireEvent.keyDown(input, { key: "PageDown" });
+      });
+      expect(notCancelled).toBe(false);
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "PageUp" });
+      });
+      expect(scrollBy.mock.calls.map(([arg]) => Math.sign(arg.top))).toEqual([1, -1]);
+    });
+
+    it("names the selected prompt's own project across all projects, and how many terminals it went to", async () => {
+      useProjectStore.setState({
+        projects: [
+          { id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 },
+          { id: OTHER, name: "Helios", path: "/b", emoji: "☀️", lastOpened: 0 },
+        ],
+      });
+      seed({
+        [PROJECT]: [{ ...entry("a", "summarise the diff", 1), armedIds: ["t1", "t2", "t3"] }],
+        [OTHER]: [{ ...entry("b", "add a dark mode toggle", 2), armedIds: ["t1"] }],
+      });
+      const input = renderPalette();
+      expect(preview()?.textContent).not.toMatch(/Daintree|Helios/);
+      expect(preview()?.textContent).toContain("3 terminals");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "r", metaKey: true });
+      });
+      expect(preview()?.textContent).toContain("Daintree");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(preview()?.textContent).toContain("Helios");
+      expect(preview()?.textContent).not.toMatch(/Daintree|terminals|Sent to/);
+    });
+
+    it("keeps the project and counts in the option's accessible name", async () => {
+      useProjectStore.setState({
+        projects: [{ id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 }],
+      });
+      seed({ [PROJECT]: [{ ...entry("a", brief, 1), armedIds: ["t1", "t2"] }] });
+      const input = renderPalette();
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "r", metaKey: true });
+      });
+      const option = document.querySelector('[role="option"]')!;
+      expect(option.textContent).toMatch(/Daintree.*4 lines.*2 terminals/);
+    });
+
+    it("describes the preview from the search field, with and without a scope hint", async () => {
+      const describedBy = () =>
+        document
+          .querySelector('[role="combobox"]')!
+          .getAttribute("aria-describedby")!
+          .split(" ")
+          .map((id) => document.getElementById(id)?.textContent);
+      seed(history);
+      renderPalette();
+      expect(describedBy()).toHaveLength(2);
+      expect(describedBy().every((text) => text)).toBe(true);
+      expect(describedBy().join(" ")).toMatch(/Page Down/);
+      cleanup();
+
+      const { GLOBAL_ASSISTANT_HISTORY_ID } = await import("@/store/commandHistoryStore");
+      seed({ [GLOBAL_ASSISTANT_HISTORY_ID]: [entry("g", "which agents are waiting on me", 1)] });
+      renderPalette({ projectId: GLOBAL_ASSISTANT_HISTORY_ID });
+      expect(describedBy()).toHaveLength(1);
+      expect(describedBy()[0]).toMatch(/Page Down/);
+    });
+
+    it("is absent when nothing matches, and back once the query clears", async () => {
+      seed(history);
+      const input = renderPalette();
+      expect(preview()).not.toBeNull();
+      await type(input, "zzzzqqqq");
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(0);
+      expect(preview()).toBeNull();
+      await type(input, "");
+      expect(preview()).not.toBeNull();
+    });
+
+    it("recalls the selected prompt on Enter", async () => {
+      const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+      useTerminalInputStore.setState({ draftInputs: new Map() });
+      seed(history);
+      const input = renderPalette();
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      expect(previewText()).toBe(brief);
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(useTerminalInputStore.getState().getDraftInput("t1", PROJECT)).toBe(brief);
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+    });
   });
 
   it("clears the query on the first Escape and closes on the second", async () => {
@@ -550,5 +784,49 @@ describe("PromptHistoryRow", () => {
     const text = optionText(container);
     expect(text.indexOf("retry")).toBeGreaterThanOrEqual(0);
     expect(text.indexOf("retry")).toBeLessThan(60);
+  });
+});
+
+describe("mapPreviewRangesToPrompt", () => {
+  it("carries a range across the line break and dropped fences it was collapsed over", () => {
+    const prompt = "```ts\nretry the\nbackoff job\n```";
+    const { text } = toPromptPreview(prompt);
+    const at = text.indexOf("the backoff");
+    expect(mapPreviewRangesToPrompt(prompt, text, [[at, at + 10]])).toEqual([[12, 22]]);
+  });
+
+  it("puts the space for a line break on the break, not on the next line's first character", () => {
+    const prompt = "backoff\njob";
+    const { text } = toPromptPreview(prompt);
+    expect(mapPreviewRangesToPrompt(prompt, text, [[3, 7]])).toEqual([[3, 7]]);
+  });
+
+  it("handles CRLF breaks and leading blank lines", () => {
+    const prompt = "\r\n\r\nfix  the\r\nlogin bug";
+    const { text } = toPromptPreview(prompt);
+    const at = text.indexOf("login");
+    const [range] = mapPreviewRangesToPrompt(prompt, text, [[at, at + 4]])!;
+    const [from, to] = range!;
+    expect(prompt.slice(from, to + 1)).toBe("login");
+  });
+
+  it("marks a prompt that is nothing but fences", () => {
+    const prompt = "```\n```";
+    const { text } = toPromptPreview(prompt);
+    expect(mapPreviewRangesToPrompt(prompt, text, [[0, 2]])).toEqual([[0, 2]]);
+  });
+
+  it("returns exactly the ranges it was given, in linear time, however repetitive the prompt", () => {
+    const prompt = "x y ".repeat(5000).trim();
+    const { text } = toPromptPreview(prompt);
+    const ranges = Array.from({ length: 2000 }, (_, i): [number, number] => [i * 4, i * 4 + 2]);
+    const mapped = mapPreviewRangesToPrompt(prompt, text, ranges)!;
+    expect(mapped).toHaveLength(2000);
+    expect(mapped[1999]).toEqual([7996, 7998]);
+  });
+
+  it("gives up rather than mark the wrong text when the preview isn't this prompt's", () => {
+    expect(mapPreviewRangesToPrompt("fix the bug", "something else", [[0, 2]])).toBeUndefined();
+    expect(mapPreviewRangesToPrompt("a", "a", undefined)).toBeUndefined();
   });
 });
