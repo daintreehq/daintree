@@ -12,6 +12,11 @@ import type {
   RecipeNameCollision,
 } from "../types/index.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
+import type {
+  ProjectPortalLinkActor,
+  ProjectPortalLinkChange,
+  ProjectPortalLinksChangeResult,
+} from "../../shared/types/portal.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
@@ -2065,6 +2070,14 @@ export class ProjectStore {
 
   async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
+  }
+
+  async changePortalLinks(
+    projectId: string,
+    actor: ProjectPortalLinkActor,
+    change: ProjectPortalLinkChange
+  ): Promise<ProjectPortalLinksChangeResult> {
+    return this.settingsManager.changePortalLinks(projectId, actor, change);
   }
 
   /**

@@ -15,6 +15,14 @@ import {
 } from "./portalTabIds";
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
+import { useProjectStore } from "@/store/projectStore";
+import {
+  refreshCachedProjectPortalLinks,
+  useProjectSettingsStore,
+} from "@/store/projectSettingsStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
+import { selectViewProject } from "@/store/viewWorkspace";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
 import { PortalTabRestoreError } from "./PortalTabRestoreError";
@@ -128,10 +136,35 @@ export function PortalDock() {
     () => links.filter((l) => l.enabled).sort((a, b) => a.order - b.order),
     [links]
   );
+  // The links saved with this view's project, never another project's (#17091).
+  const viewProjectId = useProjectStore(
+    (s) => selectViewProject(getViewWorkspaceId(), s)?.id ?? null
+  );
+  const projectLinks = useProjectSettingsStore((s) =>
+    viewProjectId !== null && s.projectId === viewProjectId ? s.settings?.portalLinks : undefined
+  );
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const isBlankTab = activeTabId !== null && activeTab && !activeTab.url;
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
+  const projectSettingsCached = useProjectSettingsStore(
+    (s) => viewProjectId !== null && s.projectId === viewProjectId && s.settings !== null
+  );
+  // A link changed from another view of this project reached only that view's
+  // cache, so the launchpad reads main's list each time it is shown, and again
+  // when this view comes back with it showing.
+  const refreshProjectLinks = useCallback(() => {
+    if (viewProjectId === null) return;
+    refreshCachedProjectPortalLinks(viewProjectId).catch((error: unknown) =>
+      logError("Failed to refresh the project's Portal links", error)
+    );
+  }, [viewProjectId]);
+  useEffect(() => {
+    if (showLaunchpad && projectSettingsCached) refreshProjectLinks();
+  }, [showLaunchpad, projectSettingsCached, refreshProjectLinks]);
+  useProjectViewRevealed(refreshProjectLinks, {
+    enabled: showLaunchpad && projectSettingsCached,
+  });
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
   // Main reports history as soon as it shows a tab, which can land just ahead
@@ -583,7 +616,11 @@ export function PortalDock() {
             className="flex-1 flex flex-col min-h-0 relative"
           >
             {showLaunchpad ? (
-              <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+              <PortalLaunchpad
+                links={enabledLinks}
+                projectLinks={projectLinks}
+                onOpenUrl={handleOpenUrl}
+              />
             ) : isRestoreFailed && activeTab?.url ? (
               <PortalTabRestoreError
                 url={activeTab.url}

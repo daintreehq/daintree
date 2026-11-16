@@ -566,6 +566,12 @@ export type {
   PortalShowPayload,
   PortalCloseTabPayload,
   PortalNavigatePayload,
+  ProjectPortalLink,
+  ProjectPortalLinkActor,
+  ProjectPortalLinkChange,
+  ProjectPortalLinkRefusal,
+  ProjectPortalLinksChangePayload,
+  ProjectPortalLinksChangeResult,
 } from "./portal.js";
 
 export {

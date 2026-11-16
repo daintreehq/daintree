@@ -1833,6 +1833,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-match:take-pending-setup"]["args"]
     ): Promise<IpcInvokeMap["project-match:take-pending-setup"]["result"]>;
   };
+  projectPortalLinks: {
+    change(
+      ...args: IpcInvokeMap["project-portal-links:change"]["args"]
+    ): Promise<IpcInvokeMap["project-portal-links:change"]["result"]>;
+  };
   projectPresence: {
     getSnapshot(
       ...args: IpcInvokeMap["project-presence:get-snapshot"]["args"]

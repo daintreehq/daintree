@@ -986,6 +986,7 @@ export const CHANNEL_LOCALITY = {
   "project-match:take-pending-setup": "host",
   "project-presence:changed": "host",
   "project-presence:get-snapshot": "host",
+  "project-portal-links:change": "host",
   "project-presentation:answer-suggestion": "host",
   "project-presentation:changed": "host",
   "project-presentation:get": "host",

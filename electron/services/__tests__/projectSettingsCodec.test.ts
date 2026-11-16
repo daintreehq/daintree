@@ -40,6 +40,30 @@ describe("decode", () => {
     });
   });
 
+  it("keeps only Portal links a change could have written (#17091)", () => {
+    const result = decode({
+      runCommands: [],
+      portalLinks: [
+        { id: "a", title: "Staging", url: "https://staging.example.com", addedByAssistant: true },
+        { id: "b", title: "LAN", url: "http://10.0.0.5:8080", addedByAssistant: true },
+        { id: "a", title: "Repeat", url: "https://repeat.example.com" },
+        { id: "c", title: "Script", url: "javascript:alert(1)" },
+        { id: "d", title: "", url: "https://untitled.example.com" },
+        "https://bare.example.com",
+      ],
+    });
+    expect(result.ok && result.settings.portalLinks).toEqual([
+      {
+        id: "a",
+        title: "Staging",
+        url: "https://staging.example.com/",
+        addedByAssistant: true,
+      },
+      // The Assistant can't add a LAN address over http, so the link is the user's.
+      { id: "b", title: "LAN", url: "http://10.0.0.5:8080/" },
+    ]);
+  });
+
   it("returns empty defaults for non-object input", () => {
     expect(decode(null)).toEqual({ ok: true, settings: { runCommands: [] } });
     expect(decode(undefined)).toEqual({ ok: true, settings: { runCommands: [] } });

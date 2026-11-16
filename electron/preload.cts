@@ -84,6 +84,7 @@ import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
+import { buildProjectPortalLinksPreloadBindings } from "./ipc/handlers/projectPortalLinks.preload.js";
 import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
@@ -3325,6 +3326,8 @@ function buildElectronApi(): ElectronAPI {
     },
 
     voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
+
+    projectPortalLinks: buildProjectPortalLinksPreloadBindings(_unwrappingInvoke),
 
     recentDictations: {
       ...buildRecentDictationsPreloadBindings(_unwrappingInvoke),

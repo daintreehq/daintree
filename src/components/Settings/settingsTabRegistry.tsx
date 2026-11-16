@@ -2615,7 +2615,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
 > = {
   "project:general": {
     tabLabel: "General",
-    searchNavDescription: "Project name, emoji, color, group, icon, and dev server configuration",
+    searchNavDescription:
+      "Project name, emoji, color, group, icon, dev server and Portal links configuration",
     searchNavKeywords: [
       "project",
       "name",
@@ -2625,6 +2626,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       "icon",
       "theme",
       "dev server",
+      "portal",
     ],
     sections: [
       {
@@ -2662,6 +2664,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Dev server command",
         description: "Command to start the development server for live preview",
         keywords: ["dev", "server", "preview", "start", "command"],
+      },
+      {
+        id: "project-portal-links",
+        section: "Portal links",
+        title: "Portal links",
+        description: "Addresses offered in this project's Portal launchpad, such as staging",
+        keywords: ["portal", "links", "launchpad", "staging", "production", "dashboard", "url"],
       },
       {
         id: "project-agent-integrations",

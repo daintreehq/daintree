@@ -604,7 +604,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // over develop's 26_146): an assistant can reopen a stopped lane's kept
   // conversation. It has to say the conversation stays in its own slot, and that
   // it is refused rather than started fresh. Assistant-only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 26_400;
+  // 26_400 → 27_050 for the four `portal.projectLinks.*` tools (#17091),
+  // measured at 27_039 B (+677 over develop's 26_362): the Assistant keeps a
+  // project's launchpad links. The prose has to say the add opens nothing and
+  // is shown to the user with an Undo, that it isn't an upsert, and that a link
+  // the user added or edited is refused as theirs. Assistant-only, off the
+  // external surface.
+  const MAX_COHORT_TOTAL_BYTES = 27_050;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1678,6 +1684,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.moveTerminalsToAccount.codex": {},
       "agent.moveTerminalsToAccount.kimi": {},
       "agent.moveTerminalsToAccount.interpreter": {},
+      "portal.projectLinks.add": { title: "Staging", url: "https://staging.example.com" },
+      "portal.projectLinks.update": { id: "l-placeholder", title: "Staging" },
+      "portal.projectLinks.remove": { id: "l-placeholder" },
     };
 
     // terminal.resendLastMessage gates on `isEnabled`, which runs before the

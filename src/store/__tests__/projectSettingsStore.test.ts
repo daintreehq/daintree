@@ -11,11 +11,14 @@ vi.mock("@/clients", () => ({
     getSettings: getSettingsMock,
     detectRunners: detectRunnersMock,
   },
+  invalidateProjectSettingsCache: vi.fn(),
 }));
 
 import {
   cleanupProjectSettingsStore,
+  patchCachedProjectPortalLinks,
   patchCachedProjectSettings,
+  refreshCachedProjectPortalLinks,
   prePopulateProjectSettings,
   useProjectSettingsStore,
 } from "../projectSettingsStore";
@@ -333,6 +336,142 @@ describe("projectSettingsStore", () => {
       runCommands: [],
       devServerCommand: "pnpm dev",
       browserAllowedHosts: ["example.com"],
+    });
+  });
+
+  describe("Portal links (#17091)", () => {
+    const staging = { id: "a", title: "Staging", url: "https://staging.example.com/" };
+
+    it("keeps the cached links through settings saved from a copy without them", () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [staging] },
+      });
+
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+      });
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        portalLinks: [],
+        devServerCommand: "pnpm dev",
+      });
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+        portalLinks: [staging],
+      });
+    });
+
+    it("replaces the cached links with the list main saved, even an empty one", () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "dev", portalLinks: [staging] },
+      });
+
+      patchCachedProjectPortalLinks("project-a", [prod, staging]);
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([prod, staging]);
+
+      patchCachedProjectPortalLinks("project-b", [staging]);
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([prod, staging]);
+
+      patchCachedProjectPortalLinks("project-a", []);
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        portalLinks: [],
+      });
+    });
+
+    it("reads main's links for a launchpad, unless the cache changed while it read", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [] },
+      });
+      getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging] });
+      await refreshCachedProjectPortalLinks("project-a");
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
+
+      // A change lands while the read is out: the read predates it.
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      const refresh = refreshCachedProjectPortalLinks("project-a");
+      patchCachedProjectPortalLinks("project-a", []);
+      read.resolve({ runCommands: [], portalLinks: [staging] });
+      await refresh;
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([]);
+    });
+
+    it("keeps a links read through an unrelated settings write landing meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], portalLinks: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+
+      const refresh = refreshCachedProjectPortalLinks("project-a");
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [], portalLinks: [staging] });
+      await refresh;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        portalLinks: [staging],
+      });
+    });
+
+    it("keeps links queued during the first load over a stale copy saved meanwhile", async () => {
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      // A save built from a copy read before the link was added.
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
+    });
+
+    it("lets a revalidation keep what it read while taking links patched meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "old", portalLinks: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      read.resolve({ runCommands: [], devServerCommand: "new", portalLinks: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "new",
+        portalLinks: [staging],
+      });
+    });
+
+    it("applies links saved during the initial load once that load lands", async () => {
+      const settingsRead = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(settingsRead.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+
+      patchCachedProjectPortalLinks("project-a", [staging]);
+      settingsRead.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.portalLinks).toEqual([staging]);
     });
   });
 });

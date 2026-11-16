@@ -1117,4 +1117,106 @@ describe("ProjectSettingsManager caching", () => {
       expect((await readFromDisk()).voiceDictionary).toBeUndefined();
     });
   });
+
+  describe("changePortalLinks (#17091)", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+
+    it("adds a link to the settings on disk, keeping every other field", async () => {
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+
+      const result = await manager.changePortalLinks(projectId, "assistant", {
+        op: "add",
+        title: " Staging ",
+        url: "https://staging.example.com",
+      });
+
+      expect(result).toMatchObject({
+        saved: true,
+        link: { title: "Staging", url: "https://staging.example.com/", addedByAssistant: true },
+      });
+      const settings = await readFromDisk();
+      expect(settings.portalLinks).toEqual(result.saved ? result.links : []);
+      expect(settings.devServerCommand).toBe("dev");
+    });
+
+    it("lands two changes made at once", async () => {
+      await Promise.all([
+        manager.changePortalLinks(projectId, "user", {
+          op: "add",
+          title: "One",
+          url: "https://one.example.com",
+        }),
+        manager.changePortalLinks(projectId, "assistant", {
+          op: "add",
+          title: "Two",
+          url: "https://two.example.com",
+        }),
+      ]);
+
+      expect((await readFromDisk()).portalLinks?.map((link) => link.title)).toEqual(["One", "Two"]);
+    });
+
+    it("refuses the Assistant a link the user added, writing nothing", async () => {
+      const added = await manager.changePortalLinks(projectId, "user", {
+        op: "add",
+        title: "Prod",
+        url: "https://prod.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+
+      const removal = await manager.changePortalLinks(projectId, "assistant", {
+        op: "remove",
+        id: added.link.id,
+      });
+
+      expect(removal).toMatchObject({ saved: false, code: "not-added-by-assistant" });
+      expect((await readFromDisk()).portalLinks).toEqual(added.links);
+    });
+
+    it("keeps the stored links through saves that carry none or another list", async () => {
+      const added = await manager.changePortalLinks(projectId, "assistant", {
+        op: "add",
+        title: "Staging",
+        url: "https://staging.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        portalLinks: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+      });
+
+      expect((await readFromDisk()).portalLinks).toEqual(added.links);
+    });
+
+    it("keeps a removal through a save built from a copy read before it", async () => {
+      const added = await manager.changePortalLinks(projectId, "assistant", {
+        op: "add",
+        title: "Staging",
+        url: "https://staging.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+      const copyBeforeRemoval = await manager.getProjectSettings(projectId);
+
+      const removal = manager.changePortalLinks(projectId, "user", {
+        op: "remove",
+        id: added.link.id,
+      });
+      const smuggled = manager.saveProjectSettings(projectId, {
+        ...copyBeforeRemoval,
+        portalLinks: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+      });
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeRemoval,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([removal, smuggled, staleSave]);
+
+      const settings = await readFromDisk();
+      expect(settings.devServerCommand).toBe("pnpm dev");
+      expect(settings.portalLinks).toEqual([]);
+    });
+  });
 });

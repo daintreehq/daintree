@@ -30,6 +30,7 @@ const createMockProjectClient = () => ({
   getSettings: vi.fn().mockResolvedValue({}),
   saveSettings: vi.fn().mockResolvedValue(undefined),
   addBrowserAllowedHost: vi.fn().mockResolvedValue([]),
+  changePortalLinks: vi.fn(),
   detectRunners: vi.fn().mockResolvedValue([]),
   close: vi.fn().mockResolvedValue({ success: true }),
   sleepProject: vi

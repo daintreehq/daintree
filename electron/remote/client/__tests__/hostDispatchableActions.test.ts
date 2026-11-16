@@ -31,6 +31,12 @@ const WITHHELD_FROM_HOSTS: Record<string, string> = {
     "wakes and starts hosts for this machine's own assistants, never one a Shell's window runs on a host",
   "host.status":
     "reads hosts' projects for this machine's own assistants, never one a Shell's window runs on a host",
+  // #17091: the view ignores a host session's origin, so it is never this
+  // Shell's assistant, the only caller these keep a project's links for.
+  "portal.projectLinks.list": "keeps a project's launchpad links for this Shell's own assistant",
+  "portal.projectLinks.add": "keeps a project's launchpad links for this Shell's own assistant",
+  "portal.projectLinks.update": "keeps a project's launchpad links for this Shell's own assistant",
+  "portal.projectLinks.remove": "keeps a project's launchpad links for this Shell's own assistant",
 };
 
 const DEFAULT_SURFACE = [

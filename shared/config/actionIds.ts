@@ -580,6 +580,10 @@ export const BUILT_IN_ACTION_IDS = [
   "portal.links.toggle",
   "portal.links.reorder",
   "portal.tabs.reorder",
+  "portal.projectLinks.list",
+  "portal.projectLinks.add",
+  "portal.projectLinks.update",
+  "portal.projectLinks.remove",
   "portal.listTabs",
   "portal.toggleDevDashboard",
 
@@ -684,6 +688,12 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
+  // A project's launchpad links, held to Daintree's own assistant (#17091): a
+  // plugin wrapping them could pass off its own links as the user's.
+  "portal.projectLinks.list",
+  "portal.projectLinks.add",
+  "portal.projectLinks.update",
+  "portal.projectLinks.remove",
   // Main checks the drive lease and records the pane; nothing in its `run()` does.
   "agent.resumeOwned",
   // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
