@@ -2,7 +2,7 @@ import { memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { SortableDockItem } from "@/components/DragDrop/SortableDockItem";
+import { SortableDockItem } from "@/components/DragDrop";
 import { dockChipTitle } from "./dockChipTitle";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";

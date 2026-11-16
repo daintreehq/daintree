@@ -616,7 +616,7 @@ describe("ContentDock regression test", () => {
   // three-way ternary whose `else` branch assumed browser and would mislabel a
   // plugin panel's chip.
   it("renders non-PTY dock chips through the generic dockChipTitle path", () => {
-    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
+    const content = readFileSync(resolve(__dirname, "../ConnectedDockItem.tsx"), "utf-8");
 
     expect(content).toContain("displayTitle={dockChipTitle(terminal)}");
     // The removed branch fed browserChipTitle to the ternary's non-file else.
@@ -671,7 +671,7 @@ describe("ContentDock regression test", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
     const launchIdx = content.indexOf("<DockLaunchButton");
-    const trashIdx = content.indexOf("<TrashContainer");
+    const trashIdx = content.indexOf("<ConnectedTrashContainer");
 
     expect(launchIdx).toBeGreaterThan(0);
     expect(launchIdx).toBeLessThan(trashIdx);
