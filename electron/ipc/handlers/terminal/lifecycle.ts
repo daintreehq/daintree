@@ -1582,11 +1582,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
         try {
-          helpSessions
-            .recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
-            .catch((err) => {
-              console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
-            });
+          helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId).catch((err) => {
+            console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
+          });
         } catch (err) {
           console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
         }
