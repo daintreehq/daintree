@@ -90,7 +90,6 @@ import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
-import { isWebContentsFrozen } from "../../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
@@ -337,11 +336,13 @@ function shownViews(): number[] {
 
 /**
  * A view with nothing on screen to show a snapshot on: a cached project view,
- * which reads the current one when it is shown again, and a Canopy view whose
- * window is put away, which is handed it when the window comes back.
+ * frozen or not, which reads the current one when it is shown again, and a
+ * Canopy view whose window is put away, which is handed it when the window
+ * comes back. Not frozen on its own: a view is let out of the cache before its
+ * thaw is answered, and its reread can land in between.
  */
 function snapshotCanWait(wc: WebContents): boolean {
-  return isCachedViewWebContents(wc.id) || isWebContentsFrozen(wc) || !isViewShown(wc.id);
+  return isCachedViewWebContents(wc.id) || !isViewShown(wc.id);
 }
 
 /** Every view that can show a snapshot hears it: this machine's windows, its remote views, and its observers. */
@@ -1483,6 +1484,8 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
   viewWindows.set(viewId, win);
   if (heardWindows.has(win)) return;
   heardWindows.add(win);
+  // Put away before anything here listened: no event will say so.
+  if (isPutAway(win)) putAwayWindows.add(win);
   const holdsPanel = () => [...activeViews].some((id) => viewWindows.get(id) === win);
   const letGo = () => {
     putAwayWindows.add(win);
@@ -1499,10 +1502,17 @@ function followWindow(viewId: number, win: BrowserWindow | null): void {
     if (snapshot)
       typedSend<"canopy:snapshot-updated">(win, CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
   };
+  // Windows brings a full-screen window back from the taskbar with
+  // `enter-full-screen` and no `restore`; focus covers any other return.
+  const comeBackIfShown = () => {
+    if (!isPutAway(win)) comeBack();
+  };
   win.on("minimize", letGo);
   win.on("hide", letGo);
   win.on("restore", comeBack);
   win.on("show", comeBack);
+  win.on("enter-full-screen", comeBackIfShown);
+  win.on("focus", comeBackIfShown);
 }
 
 /**

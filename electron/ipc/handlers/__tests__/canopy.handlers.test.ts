@@ -2351,6 +2351,38 @@ describe("canopy IPC", () => {
       expect((await snapshotOf(sender)).active).toBe(true);
     });
 
+    it("counts a window already minimized when its first panel opens as put away", async () => {
+      const win = fakeWindow();
+      win.minimized = true;
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(false);
+
+      win.minimized = false;
+      win.emit("restore");
+      expect((await snapshotOf(sender)).active).toBe(true);
+    });
+
+    it.each(["enter-full-screen", "focus"] as const)(
+      "comes back on %s with no restore, once the window is in sight",
+      async (event) => {
+        const win = fakeWindow();
+        const sender = fakeSender(4);
+        state.windows.set(sender, win);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+        win.minimized = true;
+        win.emit("minimize");
+
+        win.emit(event);
+        expect((await snapshotOf(sender)).active).toBe(false);
+
+        win.minimized = false;
+        win.emit(event);
+        expect((await snapshotOf(sender)).active).toBe(true);
+        expect(sends).toHaveBeenCalledTimes(1);
+      }
+    );
+
     it("holds back no page for a panel whose window is put away", async () => {
       const win = fakeWindow();
       const sender = fakeSender(31);

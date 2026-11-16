@@ -12,7 +12,10 @@ export const AGENT_DIRECTORY_POLL_MS = 3_000;
  */
 function saysNothingNew(held: AgentDirectory | null, next: AgentDirectory): boolean {
   if (held === null) return false;
-  if (next.entries.some((entry) => (entry.confirmations?.waiting.length ?? 0) > 0)) return false;
+  const waits = next.entries.some(
+    (entry) => entry.state === "live" && (entry.confirmations?.waiting.length ?? 0) > 0
+  );
+  if (waits) return false;
   return (
     JSON.stringify({ ...held, observedAt: null }) === JSON.stringify({ ...next, observedAt: null })
   );

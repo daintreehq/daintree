@@ -161,15 +161,12 @@ describe("useCanopySeenTracking", () => {
     renderHook(() => useCanopySeenTracking());
     const hasFocus = vi.mocked(document.hasFocus);
     hasFocus.mockClear();
+    // A fresh object for each pane, as any change to one makes.
     act(() =>
-      usePanelStore.setState((state) => ({
-        panelsById: { ...state.panelsById, b: { ...state.panelsById.b, title: "renamed" } },
-      }))
+      usePanelStore.setState((state) => ({ panelsById: { ...state.panelsById, b: terminal("b") } }))
     );
     act(() =>
-      usePanelStore.setState((state) => ({
-        panelsById: { ...state.panelsById, a: { ...state.panelsById.a, title: "renamed" } },
-      }))
+      usePanelStore.setState((state) => ({ panelsById: { ...state.panelsById, a: terminal("a") } }))
     );
     expect(hasFocus).not.toHaveBeenCalled();
   });

@@ -99,11 +99,18 @@ describe("useCanopySnapshotSync", () => {
     await act(async () => reveal());
     expect(canopy.getSnapshot).toHaveBeenCalledTimes(1);
 
+    // Main lets the view out of its cache before it says so: the read on activation sees all it missed.
     act(() => cache());
     sequence = 2;
     await act(async () => activate());
-    await act(async () => reveal());
     expect(canopy.getSnapshot).toHaveBeenCalledTimes(2);
     expect(useCanopyStore.getState().mode).toBe("hidden");
+    await act(async () => reveal());
+    expect(canopy.getSnapshot).toHaveBeenCalledTimes(2);
+
+    // A return that only says it was revealed reads too.
+    act(() => cache());
+    await act(async () => reveal());
+    expect(canopy.getSnapshot).toHaveBeenCalledTimes(3);
   });
 });

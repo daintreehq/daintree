@@ -61,7 +61,9 @@ describe("useAgentDirectory", () => {
   });
 
   it("takes every read while a confirmation waits, since its expiry is held against the read's time", async () => {
-    const waiting = [{ confirmations: { waiting: [{ expiresAt: 10 }], omitted: 0 } }];
+    const waiting = [
+      { state: "live", confirmations: { waiting: [{ expiresAt: 10 }], omitted: 0 } },
+    ];
     readAgentDirectory.mockImplementation(async () => directory(++clock, waiting));
     const { result } = renderHook(() => useAgentDirectory(true));
     await act(async () => {});
