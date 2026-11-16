@@ -10,12 +10,13 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
   },
 }));
 
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   applyContextReferenceProviders,
   contextReferenceChipField,
   currentContextReferenceProvidersEffects,
+  setContextReferenceProviders,
   type ContextReferenceChipProvider,
 } from "../inputEditorExtensions/contextReferenceChip";
 import { createFileChipField } from "../inputEditorExtensions/fileChip";
@@ -81,5 +82,37 @@ describe("context reference chips (#13795)", () => {
     expect(chips(view, ".cm-context-chip")).toEqual([]);
     view.dispatch({ effects: currentContextReferenceProvidersEffects(view) });
     expect(chips(view, ".cm-context-chip")).toEqual(["Kanban@rec:1"]);
+  });
+
+  it("never reads a draft whole while no provider holds a prefix", () => {
+    const toString = vi.spyOn(Text.prototype, "toString");
+    try {
+      let state = EditorState.create({
+        doc: "see @rec:1",
+        extensions: [contextReferenceChipField],
+      });
+      const inactive = state.field(contextReferenceChipField);
+      for (const ch of " and") {
+        state = state.update({ changes: { from: state.doc.length, insert: ch } }).state;
+      }
+      state = state.update({ effects: setContextReferenceProviders.of(new Map()) }).state;
+      expect(state.field(contextReferenceChipField)).toBe(inactive);
+      expect(toString).not.toHaveBeenCalled();
+
+      state = state.update({
+        changes: { from: 0, insert: "so " },
+        effects: setContextReferenceProviders.of(KANBAN),
+      }).state;
+      expect(state.field(contextReferenceChipField).tokens.map((t) => [t.start, t.id])).toEqual([
+        [7, "1"],
+      ]);
+
+      toString.mockClear();
+      state = state.update({ effects: setContextReferenceProviders.of(new Map()) }).state;
+      expect(state.field(contextReferenceChipField).tokens).toEqual([]);
+      expect(toString).not.toHaveBeenCalled();
+    } finally {
+      toString.mockRestore();
+    }
   });
 });

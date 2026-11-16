@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { EditorState } from "@codemirror/state";
 import {
   applyForgeReferences,
@@ -54,12 +54,21 @@ export function useForgeReferenceMarks({
   paused,
   value,
 }: UseForgeReferenceMarksParams): void {
+  // How this view's draft is scanned now; its subscriptions outlive keystrokes.
+  const refreshRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     const view = editorViewRef.current;
     if (!view) return;
     if (!cwd) {
-      applyForgeReferences(view, NO_REFERENCES);
-      return;
+      // A restored draft can bring marks back; without a repository, they go.
+      const clear = () => applyForgeReferences(view, NO_REFERENCES);
+      refreshRef.current = clear;
+      const stopRescan = onForgeReferenceRescan(view, clear);
+      return () => {
+        if (refreshRef.current === clear) refreshRef.current = null;
+        stopRescan();
+      };
     }
 
     let current = true;
@@ -79,14 +88,22 @@ export function useForgeReferenceMarks({
       }, REFERENCE_LOOKUP_SETTLE_MS);
     };
 
-    refresh();
+    refreshRef.current = refresh;
     const stopRescan = onForgeReferenceRescan(view, refresh);
     const stopInvalidated = onForgeReferencesInvalidated(refresh);
     return () => {
       current = false;
+      if (refreshRef.current === refresh) refreshRef.current = null;
       clearTimeout(timer);
       stopRescan();
       stopInvalidated();
     };
-  }, [editorViewRef, terminalId, cwd, paused, value]);
+  }, [editorViewRef, terminalId, cwd, paused]);
+
+  // After the effect above, so a new view or repository is scanned once it is
+  // subscribed; every change to the draft is scanned again, and the lookup it
+  // arms waits for the draft to settle.
+  useEffect(() => {
+    refreshRef.current?.();
+  }, [value, editorViewRef, terminalId, cwd, paused]);
 }

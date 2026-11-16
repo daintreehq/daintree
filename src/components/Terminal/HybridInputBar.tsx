@@ -494,6 +494,25 @@ function standingVoiceNote(voiceId: string): VoiceScratchRefusal | VoiceFileRefe
 }
 
 /**
+ * Whether a send went through, a send that threw counting as refused. Kept out
+ * of the component: a try/catch holding a conditional bails React Compiler for
+ * all of `HybridInputBar`.
+ */
+async function sendAccepted(
+  submit: (outgoing: string, submissionToken?: string) => Promise<boolean>,
+  outgoing: string,
+  submissionToken: string | undefined
+): Promise<boolean> {
+  try {
+    return await (submissionToken === undefined
+      ? submit(outgoing)
+      : submit(outgoing, submissionToken));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether the editor holds the caret, judged by the DOM rather than by
  * `view.hasFocus` — CodeMirror reports false there whenever the window is
  * blurred, even though the editor is still `document.activeElement`.
@@ -1594,14 +1613,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         async (outgoing: string, submissionToken?: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
-          let accepted: boolean;
-          try {
-            accepted = await (submissionToken === undefined
-              ? submit(outgoing)
-              : submit(outgoing, submissionToken));
-          } catch {
-            accepted = false;
-          }
+          const accepted = await sendAccepted(submit, outgoing, submissionToken);
           if (!accepted && submitAttemptRef.current === attempt) {
             const retires = standingVoiceNote(voiceId);
             // A voice wait begun since this send went has taken the status over.
