@@ -1253,8 +1253,14 @@ describe("latest-wins snapshot delivery (#17038)", () => {
     typedBroadcastLatestWins("project:stats-updated", { p1: { n: 1 } } as never);
     sendLatestWinsToWebContents(cached.wc as never, "project:stats-updated", { p1: { n: 2 } });
     await unfreezeWebContents(cached.wc as never);
-
     expect(cached.send.mock.calls).toEqual([["project:stats-updated", { p1: { n: 2 } }]]);
+
+    cached.send.mockClear();
+    await freezeWebContents(cached.wc as never);
+    sendLatestWinsToWebContents(cached.wc as never, "project:stats-updated", { p1: { n: 3 } });
+    typedBroadcastLatestWins("project:stats-updated", { p1: { n: 4 } } as never);
+    await unfreezeWebContents(cached.wc as never);
+    expect(cached.send.mock.calls).toEqual([["project:stats-updated", { p1: { n: 4 } }]]);
   });
 
   it("holds nothing for a view the remote-bound filter withholds", async () => {

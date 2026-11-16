@@ -526,6 +526,25 @@ describe("webContentsLifecycle", () => {
         stop();
       });
 
+      it("reports no release for a thaw that a newer freeze already outranks", async () => {
+        const wc = createMockWc();
+        await freezeWebContents(asWc(wc));
+        const { seen, stop } = record();
+        const [thaw, refreeze] = queueLifecycleCommands(wc, 2);
+
+        const thawing = unfreezeWebContents(asWc(wc));
+        const refreezing = freezeWebContents(asWc(wc));
+        thaw!.resolve();
+        refreeze!.resolve();
+        await Promise.all([thawing, refreezing]);
+        expect(seen).toEqual([]);
+
+        wc.debugger.sendCommand.mockImplementation(async () => undefined);
+        await unfreezeWebContents(asWc(wc));
+        expect(seen).toEqual([[wc, false]]);
+        stop();
+      });
+
       it("reports nothing for a thaw that failed, and the next thaw releases", async () => {
         const wc = createMockWc({ attached: true });
         await freezeWebContents(asWc(wc));

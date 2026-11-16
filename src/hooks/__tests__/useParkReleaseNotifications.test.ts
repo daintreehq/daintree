@@ -30,6 +30,7 @@ type ReleasePayload = {
 };
 
 const onMock = vi.fn();
+const getSnapshotMock = vi.fn<() => Promise<unknown>>();
 let captured: ((payload: ReleasePayload) => void) | null = null;
 
 function notifyArg(n: number): NotifyArg {
@@ -72,8 +73,11 @@ describe("useParkReleaseNotifications", () => {
       return vi.fn();
     });
 
+    getSnapshotMock.mockReset();
+    getSnapshotMock.mockResolvedValue(null);
     window.electron = {
       events: { on: onMock },
+      fleet: { getSnapshot: getSnapshotMock },
     } as unknown as typeof window.electron;
   });
 
@@ -130,6 +134,8 @@ describe("useParkReleaseNotifications", () => {
       actionId: "pilot.openRun",
       actionArgs: { runId: "t1", workspaceId: "p1" },
     });
+    // The view's own snapshot named the run, so main was never asked.
+    expect(getSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("says so when the gate closed rather than finished — and still carries the note", async () => {
@@ -160,11 +166,64 @@ describe("useParkReleaseNotifications", () => {
     expect(notifyArg(0).message).toContain("kick off the release");
   });
 
-  it("degrades to a generic hand-back when the run is no longer in the snapshot", async () => {
-    const { useParkReleaseNotifications } = await load();
+  it("names a run its own snapshot hasn't caught up to from main's current one (#17038)", async () => {
+    // A frozen view hears the release before the fleet push naming the run,
+    // which waited for its thaw.
+    const { useParkReleaseNotifications, useFleetSnapshotStore } = await load();
+    getSnapshotMock.mockResolvedValue({
+      runs: [seedRun()],
+      changedAt: NOW,
+      degraded: false,
+      lastSuccessfulAt: NOW,
+    });
     renderHook(() => useParkReleaseNotifications());
 
-    act(() => {
+    await act(async () => {
+      captured!({
+        id: "t1",
+        gateRunId: "g1",
+        note: "ship it",
+        reason: "gate-ready",
+        timestamp: NOW,
+      });
+    });
+
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyArg(0).message).toContain("Fix the auth redirect");
+    expect(notifyArg(0).action).toMatchObject({
+      actionId: "pilot.openRun",
+      actionArgs: { runId: "t1", workspaceId: "p1" },
+    });
+    // The store stays the push path's; the pull only names the run.
+    expect(useFleetSnapshotStore.getState().snapshot).toBeNull();
+  });
+
+  it("still hands the run back, unnamed, when main can't be asked", async () => {
+    const { useParkReleaseNotifications } = await load();
+    getSnapshotMock.mockRejectedValue(new Error("ipc down"));
+    renderHook(() => useParkReleaseNotifications());
+
+    await act(async () => {
+      captured!({ id: "t1", gateRunId: "g1", reason: "gate-ready", timestamp: NOW });
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyArg(0).message).toContain("A parked agent");
+    expect(notifyArg(0).action).toBeUndefined();
+  });
+
+  it("degrades to a generic hand-back when the run is no longer in the snapshot", async () => {
+    const { useParkReleaseNotifications } = await load();
+    getSnapshotMock.mockResolvedValue({
+      runs: [seedRun({ runId: "other" })],
+      changedAt: NOW,
+      degraded: false,
+      lastSuccessfulAt: NOW,
+    });
+    renderHook(() => useParkReleaseNotifications());
+
+    await act(async () => {
       captured!({ id: "gone", gateRunId: "g1", reason: "gate-ready", timestamp: NOW });
     });
 

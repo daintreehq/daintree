@@ -463,9 +463,18 @@ describe("visual routing for a project whose every view is frozen (#17038)", () 
     freeze(h, ["proj-a"]);
 
     h.router.routeOutput("a1", REDRAW, undefined);
-
     expect(ipcDataFor(h, "a1")).toHaveLength(1);
+    expect(h.ipcQueue.getHiddenQueuedBytes("a1")).toBe(REDRAW_BYTES);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
     expect(notices(h)).toHaveLength(0);
+
+    // Sustained output fills the hidden budget and no further, never holding the agent.
+    runAgents(h, ["a1"], IPC_MAX_PAUSE_MS * 2);
+    expect(ipcDataFor(h, "a1")).toHaveLength(
+      Math.floor(IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES / REDRAW_BYTES)
+    );
+    expect(h.rawPauses.get("a1")).toBe(0);
+    expect(notices(h)).toHaveLength(1);
   });
 
   it("copies again once the project's views thaw", () => {
