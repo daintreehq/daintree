@@ -10,6 +10,9 @@ describe("encodeUtf8", () => {
     ["lone high surrogate", "a\ud83db"],
     ["lone low surrogate", "a\ude00b"],
     ["BOM", "﻿start"],
+    ["growing the reusable buffer", "─".repeat(6_000)],
+    ["growing it again", "😀".repeat(30_000)],
+    ["at the largest it keeps", "─".repeat((256 * 1024) / 3 - 1)],
     ["past the reusable buffer", "─".repeat(100_000)],
   ])("encodes %s exactly as Buffer does", (_name, text) => {
     const encoded = encodeUtf8(text);

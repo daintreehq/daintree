@@ -2606,7 +2606,14 @@ describe("IdentityWatcher", () => {
     });
 
     it("reads a marker-rich cursor-addressed repaint by its ends instead of stripping it", async () => {
-      const { clear, watcher } = await makeCommittedClaude();
+      const { state, clear, watcher } = await makeCommittedClaude();
+      // Nothing but prompt recognition can veto: the shell is in the
+      // foreground and the mirror shows no failure, so reading the abbreviated
+      // repaint as a prompt would demote.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 599: 42% of $0.12 > next"];
+      state.cursorLine = "│ step 599: 42% of $0.12 > next";
+      state.ptyDescendantCount = 0;
       // Ink/Ratatui style: every cell placed by CUP, `%`, `$` and `>` in the
       // text, and no line break for the trailing-line window to cut at.
       let frame = "\x1b[?2026h";
@@ -2638,6 +2645,24 @@ describe("IdentityWatcher", () => {
       state.cursorLine = "user@host:~/repo$ ";
       state.ptyDescendantCount = 0;
       watcher.observeOutput(`${frame}\r\n${COLORED_PROMPT}`);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it.each([
+      ["user@host", "user@host:~/repo$ "],
+      ["decorated", "➜  repo git:(main) ✗ "],
+    ])("demotes on a %s prompt whose line runs long with styling", async (_label, prompt) => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 299: 42% of context used", prompt];
+      state.cursorLine = prompt;
+      state.ptyDescendantCount = 0;
+
+      // Past the long-line threshold, so only its edges decide whether it is
+      // stripped whole.
+      watcher.observeOutput(`\x1b[0m`.repeat(300) + prompt);
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
       watcher.dispose();

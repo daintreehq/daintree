@@ -4,7 +4,14 @@ import { IpcQueueManager } from "../ipcQueue.js";
 import type { RendererConnection } from "../handlers/types.js";
 import type { PtyHostEvent } from "../../../shared/types/pty-host.js";
 
-function createRouter(options: { analysisEnabled?: boolean; windows?: number } = {}) {
+function createRouter(
+  options: {
+    analysisEnabled?: boolean;
+    windows?: number;
+    shownProject?: string;
+    metrics?: boolean;
+  } = {}
+) {
   const terminal = {
     id: "t1",
     projectId: "proj-a",
@@ -41,7 +48,9 @@ function createRouter(options: { analysisEnabled?: boolean; windows?: number } =
     ipcQueueManager: ipcQueue,
     rendererConnections,
     terminalWorkerConnections: new Map(),
-    windowProjectMap: new Map(),
+    windowProjectMap: new Map(
+      options.shownProject === undefined ? [] : [[9, options.shownProject] as const]
+    ),
     fallbackEligibleProjects: new Set(),
     ipcDataMirrorTerminals: new Set(),
     packetFramer: { frame } as never,
@@ -53,9 +62,9 @@ function createRouter(options: { analysisEnabled?: boolean; windows?: number } =
     recordDrop: vi.fn(),
     emitReliabilityMetric: vi.fn(),
     sendEvent,
-    metricsEnabled: () => false,
+    metricsEnabled: () => options.metrics ?? false,
   });
-  return { router, writes, frame, events };
+  return { router, writes, frame, events, ipcQueue };
 }
 
 describe("VisualOutputRouter with pre-encoded output", () => {
@@ -99,6 +108,27 @@ describe("VisualOutputRouter with pre-encoded output", () => {
 
     expect(writes.map((write) => write.mock.calls[0][3])).toEqual([false, false]);
     expect(writes.map((write) => write.mock.calls[0][1])).toEqual([encoded, encoded]);
+  });
+
+  it.each([
+    ["with its bytes", true],
+    ["without its bytes", false],
+  ])("charges IPC queues and throughput the chunk's UTF-8 length %s", (_label, withBytes) => {
+    const text = "héllo │";
+    const bytes = Buffer.byteLength(text, "utf8");
+    const encoded = withBytes ? new TextEncoder().encode(text) : undefined;
+
+    // No port and the project on screen: the primary IPC fallback carries it.
+    const primary = createRouter({ windows: 0, shownProject: "proj-a", metrics: true });
+    primary.router.routeOutput("t1", text, bytes, encoded);
+    expect(primary.ipcQueue.getQueuedBytes("t1")).toBe(bytes);
+    expect(primary.router.takeThroughputAccumulator().get("t1")?.totalBytes).toBe(bytes);
+
+    // A window shows another project: only a cached view's budgeted copy goes out.
+    const hidden = createRouter({ windows: 0, shownProject: "proj-b" });
+    hidden.router.routeOutput("t1", text, bytes, encoded);
+    expect(hidden.ipcQueue.getHiddenQueuedBytes("t1")).toBe(bytes);
+    expect(hidden.events.filter((event) => event.type === "data")).toHaveLength(1);
   });
 
   it("still encodes a string that arrives without its bytes", () => {

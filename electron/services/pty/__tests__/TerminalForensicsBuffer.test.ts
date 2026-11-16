@@ -40,6 +40,26 @@ describe("TerminalForensicsBuffer", () => {
     expect(buffer.getRecentOutput()).toBe(big.slice(-WINDOW));
   });
 
+  it("bounds what it holds between reads, however many chunks arrive", () => {
+    const buffer = new TerminalForensicsBuffer();
+    const held = buffer as unknown as { chunks: string[]; bufferedLength: number };
+    for (let i = 0; i < 50_000; i++) {
+      buffer.capture(`line ${i}\r\n`);
+      expect(held.bufferedLength).toBeLessThanOrEqual(2 * WINDOW + 20);
+    }
+    expect(held.chunks.length).toBeLessThanOrEqual(2 * WINDOW);
+    expect(buffer.getRecentOutput().endsWith("line 49999\r\n")).toBe(true);
+  });
+
+  it("decodes each byte chunk on its own, as a split character arrives", () => {
+    const buffer = new TerminalForensicsBuffer();
+    buffer.capture(new Uint8Array([0xc3]));
+    buffer.capture(new Uint8Array([0xa9]));
+    buffer.capture(new Uint8Array([0x61, 0xff, 0x62]));
+
+    expect(buffer.getRecentOutput()).toBe("\ufffd\ufffda\ufffdb");
+  });
+
   it("matches per-chunk trimming for any chunk sequence, read at any point", () => {
     const random = makeRandom(17042);
     for (let run = 0; run < 40; run++) {

@@ -393,19 +393,19 @@ describe("getTrailingNonBlankLines with prompt edges", () => {
 
   it("strips a long line whole when its end looks like a prompt", () => {
     const frame = cursorAddressedFrame(100, "\x1b[24;1Huser@host:~/repo$ ");
+    const expected = wholeChunkTailLines(frame, 4);
+    strip.mockClear();
 
-    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(
-      wholeChunkTailLines(frame, 4)
-    );
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(expected);
     expect(longestStripInput()).toBe(frame.length);
   });
 
   it("strips a long line whole when an OSC could reach into it", () => {
     const frame = `\x1b]0;open${cursorAddressedFrame(100)}`;
+    const expected = wholeChunkTailLines(frame, 4);
+    strip.mockClear();
 
-    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(
-      wholeChunkTailLines(frame, 4)
-    );
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(expected);
     expect(longestStripInput()).toBe(frame.length);
   });
 });
@@ -422,6 +422,18 @@ describe("trailingLinesStart", () => {
     }
     return 0;
   }
+
+  it("finds a line-dense tail's breaks without searching the rest", () => {
+    const text = "line\n".repeat(20_000);
+    const indexOf = vi.spyOn(String.prototype, "indexOf");
+    try {
+      // The text ends on a break, so the eighth from the end is 7 lines back.
+      expect(trailingLinesStart(text, 8)).toBe(text.length - 7 * 5);
+      expect(indexOf).not.toHaveBeenCalled();
+    } finally {
+      indexOf.mockRestore();
+    }
+  });
 
   it("finds the same window start as walking back a character at a time", () => {
     const random = mulberry32(4096);

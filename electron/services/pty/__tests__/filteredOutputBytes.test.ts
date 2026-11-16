@@ -1,8 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { filteredOutputBytesUpTo, survivingBytesLowerBound } from "../filteredOutputBytes.js";
 import { stripAnsi } from "../AgentPatternDetector.js";
 import { stripIdleTerminalSequences } from "../IdleSequenceFilter.js";
 import { stripCosmeticParticles } from "../CosmeticParticleFilter.js";
+
+vi.mock("../AgentPatternDetector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../AgentPatternDetector.js")>();
+  return { ...actual, stripAnsi: vi.fn(actual.stripAnsi) };
+});
 
 function exactBytes(data: string): number {
   return Buffer.byteLength(stripAnsi(stripIdleTerminalSequences(data)), "utf8");
@@ -193,6 +198,16 @@ describe("filteredOutputBytesUpTo", () => {
     repaint += "\x1b[?2026l";
     const withoutParticles = stripCosmeticParticles(repaint);
     expect(survivingBytesLowerBound(withoutParticles, 256)).toBe(256);
+    vi.mocked(stripAnsi).mockClear();
     expect(filteredOutputBytesUpTo(repaint, withoutParticles, 256)).toBe(256);
+    expect(stripAnsi).not.toHaveBeenCalled();
+  });
+
+  it("strips a chunk whose provable text falls short of the cap", () => {
+    const chunk = "\x1b]0;title\x1b[0m hello";
+    const expected = exactBytes(chunk);
+    vi.mocked(stripAnsi).mockClear();
+    expect(filteredOutputBytesUpTo(chunk, chunk, 256)).toBe(expected);
+    expect(stripAnsi).toHaveBeenCalledTimes(1);
   });
 });
