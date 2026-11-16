@@ -103,7 +103,7 @@ describe("main's on-demand feature boundary", () => {
     // being met by something no longer registering at all.
     for (const file of [
       "electron/services/helpSessionRuntime.ts",
-      "shared/config/voiceCorrectionConfig.ts",
+      "shared/config/voiceCorrectionPolicy.ts",
       "electron/ipc/handlers/voiceInput.ts",
       "electron/ipc/handlers/fileDocument.ts",
       "electron/ipc/handlers/plugin/diagnostics.ts",

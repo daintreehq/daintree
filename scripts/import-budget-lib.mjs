@@ -207,7 +207,7 @@ const SVELTE_PATTERNS = [
  * read), the assistant's session service, and voice cleanup with its prompts.
  * Handler registration reaches each only through an `await import()`; their
  * light halves (`pluginIdentifiers`, `helpSessionRuntime`,
- * `voiceCorrectionConfig`) are what it may load. Main's alone: the renderer
+ * `voiceCorrectionPolicy`) are what it may load. Main's alone: the renderer
  * reads voice cleanup's config for its own settings and dictation.
  */
 export const MAIN_ON_DEMAND_PATTERNS = [

@@ -689,7 +689,7 @@ describe("scanForbiddenModules", () => {
         "shared/config/voiceCorrection.ts",
         "shared/config/voiceCorrectionClaude.ts",
         "shared/config/voiceCorrectionOpenAI.ts",
-        "shared/config/voiceCorrectionConfig.ts",
+        "shared/config/voiceCorrectionPolicy.ts",
       ],
       MAIN_ON_DEMAND_PATTERNS
     );
