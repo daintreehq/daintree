@@ -289,8 +289,10 @@ describe("PromptHistoryPalette", () => {
     const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
     seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
     const input = renderPalette();
+    // The scope hint is the first of the description's ids; the preview hint follows it.
     const describe = () =>
-      document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+      document.getElementById(input.getAttribute("aria-describedby")?.split(" ")[0] ?? "")
+        ?.textContent ?? "";
     const before = describe();
     expect(before).toMatch(/R/);
     await act(async () => {
@@ -299,6 +301,88 @@ describe("PromptHistoryPalette", () => {
     expect(describe()).not.toBe(before);
     expect(announce).toHaveBeenCalledTimes(1);
     announce.mockRestore();
+  });
+
+  describe("selected prompt preview", () => {
+    const brief = "Fix the flaky retry test\n\n- check the backoff\n- run it ten times";
+
+    function preview(): HTMLElement | null {
+      return document.querySelector<HTMLElement>('[role="region"][aria-label="Selected prompt"]');
+    }
+
+    it("shows the selected prompt in full with its line breaks, and follows the selection", async () => {
+      seed({
+        [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)],
+      });
+      const input = renderPalette();
+      expect(preview()?.textContent).toContain("summarise the diff");
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      const text = preview()!.querySelector("p")!;
+      expect(text.textContent).toBe(brief);
+      expect(text.className).toContain("whitespace-pre-wrap");
+    });
+
+    it("follows the pointer too", async () => {
+      seed({
+        [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)],
+      });
+      renderPalette();
+      const options = document.querySelectorAll('[role="option"]');
+      await act(async () => {
+        fireEvent.pointerMove(options[1]!);
+      });
+      expect(preview()?.querySelector("p")?.textContent).toBe(brief);
+    });
+
+    it("marks the query's matches in the full text", async () => {
+      seed({ [PROJECT]: [entry("a", brief, 1)] });
+      const input = renderPalette();
+      await type(input, "backoff");
+      const marks = [...preview()!.querySelectorAll("[data-highlight]")].map(
+        (el) => el.textContent
+      );
+      expect(marks).toEqual(["backoff"]);
+    });
+
+    it("names the project only across all projects, and how many terminals it went to", async () => {
+      useProjectStore.setState({
+        projects: [{ id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 }],
+      });
+      seed({
+        [PROJECT]: [{ ...entry("a", "summarise the diff", 1), armedIds: ["t1", "t2", "t3"] }],
+      });
+      const input = renderPalette();
+      expect(preview()?.textContent).not.toContain("Daintree");
+      expect(preview()?.textContent).toContain("3 terminals");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "r", metaKey: true });
+      });
+      expect(preview()?.textContent).toContain("Daintree");
+    });
+
+    it("is absent when nothing matches", async () => {
+      seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
+      const input = renderPalette();
+      await type(input, "zzzzqqqq");
+      expect(preview()).toBeNull();
+    });
+
+    it("still recalls the selected prompt on Enter", async () => {
+      const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+      useTerminalInputStore.setState({ draftInputs: new Map() });
+      seed({ [PROJECT]: [entry("a", "summarise the diff", 1), entry("b", brief, 2)] });
+      const input = renderPalette();
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(useTerminalInputStore.getState().getDraftInput("t1", PROJECT)).toBe(brief);
+    });
   });
 
   it("clears the query on the first Escape and closes on the second", async () => {
