@@ -1225,6 +1225,18 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
 }
 
 /**
+ * {@link typedBroadcast} that leaves out the local views `skip` names, such as
+ * ones with nothing on screen to show it. Remote views still hear it.
+ */
+export function typedBroadcastExcept<K extends keyof IpcEventMap>(
+  skip: (wc: WebContents) => boolean,
+  channel: K,
+  payload: IpcEventMap[K]
+): void {
+  broadcastToRendererExcept(skip, channel as string, payload);
+}
+
+/**
  * {@link typedBroadcast} for state this machine owns, such as its theme: every
  * local app view hears it, cached ones included, and no remote endpoint does.
  * `exceptWebContentsId` skips the view that made the change, which already

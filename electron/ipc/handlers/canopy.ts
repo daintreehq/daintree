@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { app, webContents, type BrowserWindow } from "electron";
+import { app, webContents, type BrowserWindow, type WebContents } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
@@ -81,13 +81,16 @@ import {
   checkRateLimit,
   endpointPushTarget,
   getProjectPushTargets,
-  typedBroadcast,
+  typedBroadcastExcept,
+  typedSend,
   type ProjectPushTarget,
 } from "../utils.js";
 import type { IpcContext } from "../types.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
+import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
+import { isWebContentsFrozen } from "../../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
@@ -316,12 +319,38 @@ const watchedViews = new Map<number, () => void>();
 /** The window each of those views sits in, for its put-away events to find them. */
 const viewWindows = new Map<number, BrowserWindow>();
 const heardWindows = new WeakSet<BrowserWindow>();
+/** Those windows minimized or hidden since they were last shown: their panels are in front of no one. */
+const putAwayWindows = new WeakSet<BrowserWindow>();
 /** Canopy views of another Shell, which no broadcast reaches: told each snapshot by name. */
 const snapshotObservers = new Set<(snapshot: CanopySnapshot) => void>();
 
-/** Every view hears a snapshot: this machine's windows, its remote views, and its observers. */
+/** Whether a view can be seen: one whose window is put away can't, and a remote one has no window here. */
+function isViewShown(id: number): boolean {
+  const win = viewWindows.get(id);
+  return win === undefined || !putAwayWindows.has(win);
+}
+
+/** The views with the panel open that someone could be looking at. */
+function shownViews(): number[] {
+  return [...activeViews].filter(isViewShown);
+}
+
+/**
+ * A view with nothing on screen to show a snapshot on: a cached project view,
+ * which reads the current one when it is shown again, and a Canopy view whose
+ * window is put away, which is handed it when the window comes back.
+ */
+function snapshotCanWait(wc: WebContents): boolean {
+  return isCachedViewWebContents(wc.id) || isWebContentsFrozen(wc) || !isViewShown(wc.id);
+}
+
+/** Every view that can show a snapshot hears it: this machine's windows, its remote views, and its observers. */
 function publishSnapshot(snapshot: CanopySnapshot): void {
-  typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
+  typedBroadcastExcept<"canopy:snapshot-updated">(
+    snapshotCanWait,
+    CHANNELS.CANOPY_SNAPSHOT_UPDATED,
+    snapshot
+  );
   for (const observer of [...snapshotObservers]) {
     try {
       observer(snapshot);
@@ -447,7 +476,7 @@ function subscribeInput(): void {
  * than an ask held back for a row they can't see.
  */
 export function canopyPanelsListing(runId: string): number[] {
-  return [...activeViews].filter((view) => viewShown.get(view)?.has(runId) ?? false);
+  return shownViews().filter((view) => viewShown.get(view)?.has(runId) ?? false);
 }
 
 /**
@@ -1394,25 +1423,30 @@ function requirePtyClient() {
  * them, since that lights the toolbar and pages for every project.
  */
 function reconciledScope(): string | null {
-  const scopes = new Set([...activeViews].map((id) => viewScopes.get(id) ?? null));
+  const scopes = new Set(shownViews().map((id) => viewScopes.get(id) ?? null));
   return scopes.size === 1 ? ([...scopes][0] ?? null) : null;
 }
 
-function syncActive(): void {
+/**
+ * Reads at a panel's pace while an open panel can be seen. `immediate` is for
+ * the last one put away with its window, which no reopen is about to follow.
+ */
+function syncActive(immediate = false): void {
   const canopy = getService();
+  const open = shownViews().length > 0;
   // History pruned, or a worktree deleted, while no panel looked: an opening
   // panel sees the closes as they stand now.
-  if (activeViews.size > 0) {
+  if (open) {
     closedTrash?.refresh();
     closedTrash?.recheckWorktrees();
   }
   // Opening, scope first, so the scan the opening starts reads the right runs;
   // closing, the close first, so a wider scope starts nothing while it settles.
-  if (activeViews.size > 0) {
+  if (open) {
     canopy.setScope(reconciledScope());
     canopy.setActive(true);
   } else {
-    canopy.setActive(false);
+    canopy.setActive(false, immediate);
     canopy.setScope(reconciledScope());
   }
 }
@@ -1427,7 +1461,7 @@ function forgetView(id: number): void {
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
   // A view that went away will not bounce back, so no reopen grace either.
-  service?.setActive(activeViews.size > 0, true);
+  service?.setActive(shownViews().length > 0, true);
   service?.setScope(reconciledScope());
 }
 
@@ -1437,20 +1471,37 @@ function viewOf(ctx: IpcContext): ProjectPushTarget {
 }
 
 /**
- * A window put away lets go of the sizes its views hold. Heard once per window,
- * however many of its views open Canopy, and only once one has; the listeners
- * go with the window and find no views once Canopy is done with them.
+ * A window put away lets go of the sizes its views hold, and its open panels
+ * stop counting as open: with none left in sight, Canopy reads at the
+ * background pace and no snapshot goes to them. Shown again, its panels count
+ * once more and its view is handed the snapshot it missed. Heard once per
+ * window, however many of its views open Canopy, and only once one has; the
+ * listeners go with the window and find no views once Canopy is done with them.
  */
 function followWindow(viewId: number, win: BrowserWindow | null): void {
   if (!win) return;
   viewWindows.set(viewId, win);
   if (heardWindows.has(win)) return;
   heardWindows.add(win);
+  const holdsPanel = () => [...activeViews].some((id) => viewWindows.get(id) === win);
   const letGo = () => {
+    putAwayWindows.add(win);
     for (const [id, owner] of viewWindows) if (owner === win) releaseViewSizeHolds(id);
+    if (service && holdsPanel()) syncActive(true);
+  };
+  // `restore` and `show` can both come for one return: only the first does anything.
+  const comeBack = () => {
+    if (!putAwayWindows.delete(win)) return;
+    if (service && holdsPanel()) syncActive();
+    // Nothing to hand over before anything was started, with Canopy on: the view reads it itself.
+    const snapshot =
+      service?.getSnapshot() ?? (readCanopyMode() === "on" ? null : hiddenOrIdleSnapshot());
+    if (snapshot) typedSend<"canopy:snapshot-updated">(win, CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
   };
   win.on("minimize", letGo);
   win.on("hide", letGo);
+  win.on("restore", comeBack);
+  win.on("show", comeBack);
 }
 
 /**
