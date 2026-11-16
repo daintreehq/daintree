@@ -218,6 +218,15 @@ export const CORE_TIER_TOOLS = [
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
   "diagnostics.openReview",
+  // This project's own Portal launchpad links (#17091): the staging, production
+  // and dashboard addresses the assistant knows from the repo. Adding one opens
+  // nothing and moves no view, unlike the Portal tools kept off MCP, and the
+  // assistant can change only the links it added. Reserved to the assistant
+  // below: worker panes read untrusted repo content with nobody watching.
+  "portal.projectLinks.list",
+  "portal.projectLinks.add",
+  "portal.projectLinks.update",
+  "portal.projectLinks.remove",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -366,6 +375,11 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.status",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
+  // A project's launchpad links are the assistant's to keep (#17091).
+  "portal.projectLinks.list",
+  "portal.projectLinks.add",
+  "portal.projectLinks.update",
+  "portal.projectLinks.remove",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

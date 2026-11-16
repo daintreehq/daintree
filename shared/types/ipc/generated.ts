@@ -3710,6 +3710,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./projectMatch.js").TakePendingHostSetupPayload];
     result: import("./projectMatch.js").PendingHostSetup | null;
   };
+  "project-portal-links:change": {
+    args: [payload: import("../portal.js").ProjectPortalLinksChangePayload];
+    result: import("../portal.js").ProjectPortalLinksChangeResult;
+  };
   "project-presence:get-snapshot": {
     args: [];
     result: import("./projectPresence.js").ProjectPresenceSnapshot;

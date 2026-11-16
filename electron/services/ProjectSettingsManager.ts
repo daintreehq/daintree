@@ -14,6 +14,13 @@ import { decode, encodeEnvelope } from "./projectSettingsCodec.js";
 import { Cache } from "../utils/cache.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
+import { applyProjectPortalLinkChange } from "../../shared/utils/projectPortalLinks.js";
+import type {
+  ProjectPortalLinkActor,
+  ProjectPortalLinkChange,
+  ProjectPortalLinksChangeResult,
+} from "../../shared/types/portal.js";
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 /** How long a read that found no settings file answers for its project's alert overrides. */
@@ -356,11 +363,13 @@ export class ProjectSettingsManager {
   }
 
   /**
-   * Replaces the project's settings, except two fields a whole save can only
+   * Replaces the project's settings, except the fields a whole save can only
    * hold a stale copy of. The browser allow-list only grows: nothing removes
    * an approved host, so a save whose list lacks one that is on disk was built
-   * from a copy read before it was approved. The dictation vocabulary is kept
-   * as stored: only {@link changeVoiceDictionary} writes it.
+   * from a copy read before it was approved. The dictation vocabulary and the
+   * Portal links are kept as stored: only {@link changeVoiceDictionary} and
+   * {@link changePortalLinks} write them, and a save carrying links could
+   * otherwise change one the Assistant may not.
    */
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     return this.serializeWrite(projectId, async () => {
@@ -373,9 +382,36 @@ export class ProjectSettingsManager {
         ...settings,
         ...(browserAllowedHosts ? { browserAllowedHosts } : {}),
         voiceDictionary: saved?.voiceDictionary,
+        portalLinks: saved?.portalLinks,
       };
       if (next.voiceDictionary === undefined) delete next.voiceDictionary;
+      if (next.portalLinks === undefined) delete next.portalLinks;
       await this.writeProjectSettings(projectId, next);
+    });
+  }
+
+  /**
+   * One change to the project's Portal links, applied to the list as it is on
+   * disk at the time of the write, so two changes made at once both land and
+   * whether the Assistant may touch a link is decided against what is stored.
+   * A refused change writes nothing.
+   */
+  async changePortalLinks(
+    projectId: string,
+    actor: ProjectPortalLinkActor,
+    change: ProjectPortalLinkChange
+  ): Promise<ProjectPortalLinksChangeResult> {
+    return this.serializeWrite(projectId, async () => {
+      const settings = await this.readProjectSettings(projectId);
+      const result = applyProjectPortalLinkChange(
+        settings.portalLinks ?? [],
+        change,
+        actor,
+        randomUUID
+      );
+      if (!result.saved) return result;
+      await this.writeProjectSettings(projectId, { ...settings, portalLinks: result.links });
+      return result;
     });
   }
 

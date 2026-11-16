@@ -612,6 +612,9 @@ export const projectActionRuns = {
     delete sanitized.daintreeMcpTier;
     delete sanitized.daintreeMcpSkipConfirmations;
     delete sanitized.exposeDaintreeMcpToAgents;
+    // Changed only through the Portal link actions, which hold the Assistant
+    // to its own links; main keeps the stored list through a save anyway.
+    delete sanitized.portalLinks;
     const updated = { ...current, ...sanitized } as ProjectSettings;
     await projectClient.saveSettings(projectId, updated);
 

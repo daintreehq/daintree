@@ -1,5 +1,11 @@
 import { create, type StateCreator } from "zustand";
-import type { ProjectSettings, RunCommand } from "@shared/types";
+import type {
+  ProjectPortalLink,
+  ProjectPortalLinksChangePayload,
+  ProjectPortalLinksChangeResult,
+  ProjectSettings,
+  RunCommand,
+} from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -196,8 +202,12 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
         state.settings?.browserAllowedHosts,
         settings.browserAllowedHosts
       );
+      let next = browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings;
+      // Main keeps the stored Portal links through a whole save, so the cache
+      // keeps its own; only `patchCachedProjectPortalLinks` changes them.
+      if (state.settings) next = withPortalLinks(next, state.settings.portalLinks);
       return {
-        settings: browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings,
+        settings: next,
         detectedRunners: state.allDetectedRunners.filter(
           (d) => !savedCommandStrings.has(d.command)
         ),
@@ -275,6 +285,54 @@ export function patchCachedProjectSettings(
     return;
   }
   state.setSettings({ ...state.settings, ...patch });
+}
+
+function withPortalLinks(
+  settings: ProjectSettings,
+  portalLinks: ProjectPortalLink[] | undefined
+): ProjectSettings {
+  if (settings.portalLinks === portalLinks) return settings;
+  const next = { ...settings };
+  if (portalLinks === undefined) delete next.portalLinks;
+  else next.portalLinks = portalLinks;
+  return next;
+}
+
+/**
+ * Put the Portal links main returned from a change into the cached settings,
+ * the one way they change there: a whole-settings update keeps the cached
+ * list, since its copy may predate the change. No-op unless the store holds
+ * the project the change was for; while that project's settings are still
+ * loading, the list waits for the load to land.
+ */
+export function patchCachedProjectPortalLinks(
+  projectId: string,
+  portalLinks: ProjectPortalLink[]
+): void {
+  const state = useProjectSettingsStore.getState();
+  if (state.projectId !== projectId) return;
+  settingsRevision++;
+  if (!state.settings) {
+    const queued = patchesAwaitingLoad.get(projectId) ?? [];
+    queued.push({ patch: { portalLinks }, revision: settingsRevision });
+    patchesAwaitingLoad.set(projectId, queued);
+    return;
+  }
+  useProjectSettingsStore.setState({
+    settings: withPortalLinks(state.settings, portalLinks),
+  });
+}
+
+/**
+ * One change to a project's Portal links through main, the list's only
+ * writer, with the list it saved put into the cached settings.
+ */
+export async function changeProjectPortalLinks(
+  payload: ProjectPortalLinksChangePayload
+): Promise<ProjectPortalLinksChangeResult> {
+  const result = await projectClient.changePortalLinks(payload);
+  if (result.saved) patchCachedProjectPortalLinks(payload.projectId, result.links);
+  return result;
 }
 
 /** Cleanup function for project switch */

@@ -15,6 +15,10 @@ import {
 } from "./portalTabIds";
 import { PortalDefaultNewTabSubmenu } from "./PortalDefaultNewTabSubmenu";
 import { PortalLaunchpad } from "./PortalLaunchpad";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { selectViewProject } from "@/store/viewWorkspace";
 import { DevServerDashboard } from "./DevServerDashboard";
 import { PortalTabSkeleton } from "./PortalTabSkeleton";
 import { PortalTabRestoreError } from "./PortalTabRestoreError";
@@ -127,6 +131,13 @@ export function PortalDock() {
   const enabledLinks = useMemo(
     () => links.filter((l) => l.enabled).sort((a, b) => a.order - b.order),
     [links]
+  );
+  // The links saved with this view's project, never another project's (#17091).
+  const viewProjectId = useProjectStore(
+    (s) => selectViewProject(getViewWorkspaceId(), s)?.id ?? null
+  );
+  const projectLinks = useProjectSettingsStore((s) =>
+    viewProjectId !== null && s.projectId === viewProjectId ? s.settings?.portalLinks : undefined
   );
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -583,7 +594,11 @@ export function PortalDock() {
             className="flex-1 flex flex-col min-h-0 relative"
           >
             {showLaunchpad ? (
-              <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+              <PortalLaunchpad
+                links={enabledLinks}
+                projectLinks={projectLinks}
+                onOpenUrl={handleOpenUrl}
+              />
             ) : isRestoreFailed && activeTab?.url ? (
               <PortalTabRestoreError
                 url={activeTab.url}

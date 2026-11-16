@@ -27,6 +27,7 @@ import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
 import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
+import type { ProjectPortalLink } from "./portal.js";
 
 /**
  * Project lifecycle status:
@@ -987,6 +988,12 @@ export interface ProjectSettings {
    */
   voiceDictionary?: VoiceDictionaryEntry[];
   /**
+   * Links shown in this project's Portal launchpad, in order. Main owns every
+   * write (`project:change-portal-links`); a settings save keeps what is
+   * stored rather than the copy it carries.
+   */
+  portalLinks?: ProjectPortalLink[];
+  /**
    * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened, and read issues and PRs
@@ -1052,6 +1059,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
   voiceDictionary: "shareable",
+  portalLinks: "local",
   daintreeMcpTier: "local",
   daintreeMcpSkipConfirmations: "local",
   exposeDaintreeMcpToAgents: "local",
@@ -1084,6 +1092,8 @@ export type ProjectSettingsAgentExposure = "exposed" | "internal";
  *   writes to block self-elevation; it should not be readable either) and
  *   `browserAllowedHosts`, which is the browser panel's approval list.
  * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
+ * - Fields with an agent surface of their own: `portalLinks`, read and changed through the
+ *   `portal.projectLinks.*` actions, which hold the Assistant to the links it added.
  * - Deprecated aliases normalized away on read.
  *
  * Accepted residual exposure: `runCommands`, `devServerCommand` and `terminalSettings`
@@ -1127,6 +1137,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
   voiceDictionary: "internal",
+  portalLinks: "internal",
   daintreeMcpTier: "internal",
   daintreeMcpSkipConfirmations: "internal",
   exposeDaintreeMcpToAgents: "internal",

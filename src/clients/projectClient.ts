@@ -11,6 +11,8 @@ import type {
   RecipeNameCollision,
   TerminalSnapshot,
   TabGroup,
+  ProjectPortalLinksChangePayload,
+  ProjectPortalLinksChangeResult,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type {
@@ -286,6 +288,18 @@ export const projectClient = {
   saveSettings: (projectId: string, settings: ProjectSettings): Promise<void> => {
     invalidateProjectSettingsCache(projectId);
     return window.electron.project.saveSettings(projectId, settings);
+  },
+
+  changePortalLinks: async (
+    payload: ProjectPortalLinksChangePayload
+  ): Promise<ProjectPortalLinksChangeResult> => {
+    invalidateProjectSettingsCache(payload.projectId);
+    try {
+      return await window.electron.projectPortalLinks.change(payload);
+    } finally {
+      // A read that landed while Main was writing may hold the file from before.
+      invalidateProjectSettingsCache(payload.projectId);
+    }
   },
 
   addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {

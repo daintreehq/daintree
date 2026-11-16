@@ -580,6 +580,10 @@ export const BUILT_IN_ACTION_IDS = [
   "portal.links.toggle",
   "portal.links.reorder",
   "portal.tabs.reorder",
+  "portal.projectLinks.list",
+  "portal.projectLinks.add",
+  "portal.projectLinks.update",
+  "portal.projectLinks.remove",
   "portal.listTabs",
   "portal.toggleDevDashboard",
 
