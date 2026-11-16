@@ -1401,7 +1401,8 @@ describe("terminalSessionPersistence", () => {
       expect(shutdownFlush.dirs).toHaveLength(1);
     });
 
-    it("still flushes a background write that lands while an older durable one syncs", async () => {
+    // Windows has no directory sync to hold the durable write in.
+    posixIt("flushes a background write that overtakes a durable one's sync", async () => {
       const sessionPath = getSessionPath("term-overtaken")!;
       let release!: () => void;
       let reached!: () => void;
