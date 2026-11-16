@@ -3,7 +3,7 @@
  *
  * Wraps setupTerminalStoreListeners for cleaner hook usage.
  * Cross-store coordination (focus tracking, removal cleanup) is handled
- * by the renderer store orchestrator initialized in main.tsx.
+ * by the renderer store orchestrator initialized in the project shell.
  */
 
 import { useEffect } from "react";

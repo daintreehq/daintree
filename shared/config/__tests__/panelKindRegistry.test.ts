@@ -31,6 +31,7 @@ import {
   type PanelKindConfig,
   type PersistedPanelKindRef,
 } from "../panelKindRegistry.js";
+import { PROJECT_SHELL_SOURCE } from "../projectShell.js";
 
 describe("panelKindRegistry metadata", () => {
   it("dev-preview does not use terminal UI", () => {
@@ -448,11 +449,13 @@ describe("getFirstRenderPreloadSeeds", () => {
     clearPanelKindRegistry();
   });
 
-  it("is the app root alone — restored panel chunks are warmed from the boot payload", () => {
+  it("is the project shell and the app root — restored panel chunks are warmed from the boot payload", () => {
     const preloadSeeds = getFirstRenderPreloadSeeds();
     // Every boot pays for the static preload set, so no session-dependent panel
-    // chunk may ride in it; the renderer preloads only the restored kinds.
-    expect(preloadSeeds).toEqual([FIRST_RENDER_ROOT_SEED]);
+    // chunk may ride in it; the renderer preloads only the restored kinds. The
+    // shell is an entry index.html never references, so without the seed its
+    // closure would load in a waterfall after the HTML entry inserts it.
+    expect(preloadSeeds).toEqual([PROJECT_SHELL_SOURCE, FIRST_RENDER_ROOT_SEED]);
     for (const panelSeed of getFirstRenderSeeds()) {
       expect(preloadSeeds).not.toContain(panelSeed);
     }
