@@ -8,9 +8,8 @@ const streams = [process.stdout, process.stderr];
 let before: ErrorListener[][];
 
 function added(): ErrorListener[][] {
-  return streams.map(
-    (stream, i) =>
-      (stream.listeners("error") as ErrorListener[]).filter((l) => !before[i].includes(l))
+  return streams.map((stream, i) =>
+    (stream.listeners("error") as ErrorListener[]).filter((l) => !before[i].includes(l))
   );
 }
 

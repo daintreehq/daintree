@@ -33,7 +33,11 @@ const BOOT_MODULES = [
   "electron/ipc/channels.ts",
 ];
 
-const PACKAGES = { zod: /node_modules\/zod\//, conf: /node_modules\/conf\//, semver: /node_modules\/semver\// };
+const PACKAGES = {
+  zod: /node_modules\/zod\//,
+  conf: /node_modules\/conf\//,
+  semver: /node_modules\/semver\//,
+};
 
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
 

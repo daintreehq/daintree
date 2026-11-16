@@ -900,9 +900,9 @@ describe("reset-data", () => {
       path.join("/tmp/test-appdata", "compile-cache"),
       expect.anything()
     );
-    expect(
-      electronMock.app.setPath.mock.calls.filter(([key]) => key === "userData")
-    ).toHaveLength(1);
+    expect(electronMock.app.setPath.mock.calls.filter(([key]) => key === "userData")).toHaveLength(
+      1
+    );
   });
 
   it("does not wipe when neither trigger is present", async () => {
