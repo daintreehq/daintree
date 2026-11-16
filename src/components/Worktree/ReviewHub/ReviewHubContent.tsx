@@ -1296,8 +1296,12 @@ export function ReviewHubContent({
     }
   }, [worktreePath, refresh, debouncedBgRefreshRef]);
 
-  const handleContinueOperation = useCallback(
-    async function continueOperation(): Promise<void> {
+  // Each handler retries itself from its own error banner. A named function
+  // expression referenced from inside its own body is a declaration the React
+  // Compiler cannot hoist, and it abandons the whole component over it, so the
+  // recursion goes through a local const instead.
+  const handleContinueOperation = useCallback((): Promise<void> => {
+    const continueOperation = async (): Promise<void> => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
@@ -1311,35 +1315,40 @@ export function ReviewHubContent({
         });
         throw err;
       }
-    },
-    [worktreePath, refresh, debouncedBgRefreshRef]
-  );
+    };
+    return continueOperation();
+  }, [worktreePath, refresh, debouncedBgRefreshRef]);
 
   const handleOpenInEditor = useCallback(
-    async function openInEditor(args: string | { path: string; line?: number }): Promise<void> {
-      setActionError(null);
-      const filePath = typeof args === "string" ? args : args.path;
-      const line = typeof args === "string" ? undefined : args.line;
-      try {
+    (args: string | { path: string; line?: number }): Promise<void> => {
+      const openInEditor = async (): Promise<void> => {
+        setActionError(null);
+        const filePath = typeof args === "string" ? args : args.path;
+        const line = typeof args === "string" ? undefined : args.line;
+        // Built before the try: the compiler rejects conditionals and optional
+        // chaining inside one. Read at click time rather than subscribing —
+        // without it the main process never loads the project's preferred-editor
+        // setting.
         const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
         const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
         const payload: { path: string; line?: number; projectId?: string } = {
           path: `${base}/${tail}`,
-          // Read at click time rather than subscribing — without it the main
-          // process never loads the project's preferred-editor setting.
           projectId: useProjectStore.getState().currentProject?.id,
         };
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }
-        announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
-      } catch (err) {
-        setActionError({
-          title: "Couldn't open file in editor",
-          detail: formatErrorMessage(err, "Failed to open file in editor"),
-          retry: () => void openInEditor(args),
-        });
-      }
+        try {
+          announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
+        } catch (err) {
+          setActionError({
+            title: "Couldn't open file in editor",
+            detail: formatErrorMessage(err, "Failed to open file in editor"),
+            retry: () => void openInEditor(),
+          });
+        }
+      };
+      return openInEditor();
     },
     [worktreePath]
   );
