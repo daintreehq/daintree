@@ -27,6 +27,25 @@ const BACKGROUND_LOW_WATERMARK_BYTES = 16 * 1024;
 const BACKGROUND_COALESCE_CAP_BYTES = 32 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
+const INK_ERASE_LINE_BYTES = Uint8Array.from(INK_ERASE_LINE_PATTERN, (c) => c.charCodeAt(0));
+
+function bytesInclude(data: Uint8Array, pattern: Uint8Array): boolean {
+  const first = pattern[0]!;
+  const last = data.length - pattern.length;
+  for (let i = data.indexOf(first); i !== -1 && i <= last; i = data.indexOf(first, i + 1)) {
+    let j = 1;
+    while (j < pattern.length && data[i + j] === pattern[j]) j++;
+    if (j === pattern.length) return true;
+  }
+  return false;
+}
+
+// The pattern is ASCII, so a byte maps to the code unit it would decode to
+// whenever it can be part of a match. That lets one lookback string carry a
+// straddling match across string and byte chunks alike.
+function bytesToLatin1(data: Uint8Array): string {
+  return String.fromCharCode(...data);
+}
 
 // Default-on, opt-out build-time flag (mirrors DAINTREE_DISABLE_WEBGL in
 // TerminalWebGLManager). When enabled, a background (non-focused) terminal's
@@ -283,19 +302,27 @@ export class TerminalOutputIngestService {
     queue.ranges.push(range);
     queue.queuedBytes += bytes;
 
-    const stringData = typeof data === "string" ? data : "";
-    if (stringData) {
+    if (bytes > 0) {
       // Scan the chunk and the boundary window separately — concatenating
       // recentChars with the full chunk would flatten a copy of the entire
       // chunk just to find an 8-char pattern. A straddling occurrence uses at
       // most the first pattern-length-minus-one chars of the new chunk.
-      const boundary = queue.recentChars + stringData.slice(0, INK_ERASE_LINE_PATTERN.length - 1);
-      const containsInkErase =
-        stringData.includes(INK_ERASE_LINE_PATTERN) || boundary.includes(INK_ERASE_LINE_PATTERN);
+      const headLength = INK_ERASE_LINE_PATTERN.length - 1;
+      let containsInkErase: boolean;
+      let head: string;
+      let tail: string;
+      if (typeof data === "string") {
+        containsInkErase = data.includes(INK_ERASE_LINE_PATTERN);
+        head = data.slice(0, headLength);
+        tail = data.slice(-IPC_LOOKBACK_CHARS);
+      } else {
+        containsInkErase = bytesInclude(data, INK_ERASE_LINE_BYTES);
+        head = bytesToLatin1(data.subarray(0, headLength));
+        tail = bytesToLatin1(data.subarray(-IPC_LOOKBACK_CHARS));
+      }
+      containsInkErase ||= (queue.recentChars + head).includes(INK_ERASE_LINE_PATTERN);
       queue.recentChars =
-        stringData.length >= IPC_LOOKBACK_CHARS
-          ? stringData.slice(-IPC_LOOKBACK_CHARS)
-          : (queue.recentChars + stringData).slice(-IPC_LOOKBACK_CHARS);
+        bytes >= IPC_LOOKBACK_CHARS ? tail : (queue.recentChars + tail).slice(-IPC_LOOKBACK_CHARS);
 
       if (containsInkErase && !queue.drainScheduled) {
         queue.drainScheduled = true;

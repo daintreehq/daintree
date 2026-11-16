@@ -353,6 +353,130 @@ describe("TerminalOutputIngestService", () => {
     vi.useRealTimers();
   });
 
+  describe("ink erase-line coalescing for MessagePort byte chunks", () => {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const written = (mock: ReturnType<typeof vi.fn>) =>
+      mock.mock.calls.map(([, data]) =>
+        typeof data === "string" ? data : decoder.decode(data as Uint8Array)
+      );
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("defers a byte chunk that contains the whole pattern", () => {
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal);
+
+      service.bufferData("term-1", encoder.encode("é frame\x1b[2K\x1b[1Anext"));
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      service.bufferData("term-1", encoder.encode(" ✓ done"));
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal.mock.calls[0]![2]).toBe(2);
+      expect(written(writeToTerminal)).toEqual(["é frame\x1b[2K\x1b[1Anext ✓ done"]);
+    });
+
+    it("defers when the pattern straddles two byte chunks", () => {
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal);
+
+      service.bufferData("term-1", encoder.encode("─".repeat(20) + "\x1b[2K\x1b"));
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      service.notifyWriteComplete("term-1", 100);
+
+      service.bufferData("term-1", encoder.encode("[1Acontent"));
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(0);
+      expect(written(writeToTerminal)).toEqual(["─".repeat(20) + "\x1b[2K\x1b", "[1Acontent"]);
+    });
+
+    it("defers when the pattern straddles a string chunk and a byte chunk", () => {
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal);
+
+      service.bufferData("term-1", "status\x1b[2K");
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      service.notifyWriteComplete("term-1", 100);
+
+      service.bufferData("term-1", encoder.encode("\x1b[1Acontent"));
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(2);
+    });
+
+    it("drains a byte chunk without the pattern immediately", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal);
+
+      service.bufferData("term-1", encoder.encode("\x1b[2Kplain \x1b[1Bline"));
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal.mock.calls[0]![2]).toBe(1);
+      expect(written(writeToTerminal)).toEqual(["\x1b[2Kplain \x1b[1Bline"]);
+    });
+
+    const bytes = (s: string) => encoder.encode(s);
+    // A view whose buffer holds bytes on both sides of it.
+    const view = (before: string, inside: string, after: string) =>
+      bytes(before + inside + after).subarray(before.length, before.length + inside.length);
+
+    const cases: Array<{ name: string; chunks: Array<string | Uint8Array>; deferred: boolean }> = [
+      { name: "at index 0", chunks: [bytes("\x1b[2K\x1b[1Arest")], deferred: true },
+      { name: "at the very end", chunks: [bytes("frame\x1b[2K\x1b[1A")], deferred: true },
+      { name: "after a false start", chunks: [bytes("\x1b[2K\x1b[2K\x1b[1A")], deferred: true },
+      { name: "a near miss", chunks: [bytes("\x1b[2K\x1b[1B\x1b[2K\x1b[1")], deferred: false },
+      {
+        name: "inside an offset view",
+        chunks: [view("abc", "\x1b[2K\x1b[1A", "def")],
+        deferred: true,
+      },
+      {
+        name: "outside an offset view only",
+        chunks: [view("\x1b[2K\x1b[1A", "plain", "\x1b[2K\x1b[1A")],
+        deferred: false,
+      },
+      {
+        name: "across three short chunks",
+        chunks: [bytes("\x1b[2"), bytes("K\x1b"), bytes("[1A")],
+        deferred: true,
+      },
+      {
+        name: "across an empty chunk",
+        chunks: [bytes("\x1b[2K"), bytes(""), bytes("\x1b[1A")],
+        deferred: true,
+      },
+      { name: "from bytes into a string", chunks: [bytes("x\x1b[2K\x1b["), "1Ay"], deferred: true },
+      { name: "from a string into bytes", chunks: ["x\x1b[2K", bytes("\x1b[1Ay")], deferred: true },
+    ];
+    for (const { name, chunks, deferred } of cases) {
+      it(`${deferred ? "defers" : "does not defer"} a pattern ${name}`, () => {
+        vi.useFakeTimers();
+        const writeToTerminal = vi.fn();
+        const service = new TerminalOutputIngestService(writeToTerminal);
+        for (const chunk of chunks.slice(0, -1)) service.bufferData("term-1", chunk);
+        const before = writeToTerminal.mock.calls.length;
+
+        const last = chunks[chunks.length - 1]!;
+        service.bufferData("term-1", last);
+        expect(writeToTerminal).toHaveBeenCalledTimes(deferred ? before : before + 1);
+
+        vi.advanceTimersByTime(0);
+        expect(writeToTerminal).toHaveBeenCalledTimes(before + 1);
+        expect(writeToTerminal.mock.lastCall![1]).toBe(last);
+        expect(writeToTerminal.mock.lastCall![2]).toBe(1);
+      });
+    }
+  });
+
   it("notifyParsed triggers drain when buffered data exists and under high watermark", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);

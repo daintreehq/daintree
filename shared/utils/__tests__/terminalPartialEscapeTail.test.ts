@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import headless, { type Terminal as HeadlessTerminal } from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import { PARSER_GROUND, PartialEscapeTracker } from "../terminalPartialEscapeTail.js";
@@ -89,6 +89,24 @@ const CASES: Record<string, { stream: string; split: number; titleOnSource?: boo
   },
   "lone ESC": { stream: "hello \x1b[31mRED", split: "hello \x1b".length },
   "cursor position": { stream: "hello \x1b[2;3Hworld", split: "hello \x1b[2;".length },
+  // xterm's decoder discards U+FEFF before its parser...
+  "BOM inside a CSI": {
+    stream: "hello \x1b\ufeff[31mRED",
+    split: "hello \x1b\ufeff[3".length,
+  },
+  "BOM inside an OSC title": {
+    stream: "hello \x1b]0;ti\ufefftle\x07world",
+    split: "hello \x1b]0;ti\ufeff".length,
+  },
+  // ...except as the unit a high surrogate takes for its partner.
+  "BOM after a lone surrogate in an OSC title": {
+    stream: "hello \x1b]0;a\ud800\ufeffb\x07world",
+    split: "hello \x1b]0;a\ud800\ufeff".length,
+  },
+  "BOM after a surrogate that took a NUL": {
+    stream: "hello \x1b]0;a\ud800\0\ufeffb\x07world",
+    split: "hello \x1b]0;a\ud800\0\ufeff".length,
+  },
 };
 
 describe("PartialEscapeTracker", () => {
@@ -136,6 +154,82 @@ describe("PartialEscapeTracker", () => {
     const tracker = new PartialEscapeTracker();
     tracker.feed("\x1b]0;title\x1b");
     expect(tracker.tail).toBe("\x1b");
+  });
+
+  it("leaves a discarded U+FEFF out of the tail", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feed("\x1b]0;ti\ufefftle");
+    expect(tracker.tail).toBe("\x1b]0;title");
+  });
+
+  // Replay would discard a wrongly kept U+FEFF again, so check the tails.
+  for (const [writes, tail] of [
+    [["\x1b]0;a\ud800", "\ufeffb"], "\x1b]0;a\ud800\ufeffb"],
+    [["\x1b]0;a\ud800\ud800", "\ufeffb"], "\x1b]0;a\ud800\ud800b"],
+    [["\x1b]0;a", "\ud800", "\ud800", "\ufeffb"], "\x1b]0;a\ud800\ud800b"],
+    [["\x1b]0;a", "\ud800", "", "\ufeffb"], "\x1b]0;a\ud800\ufeffb"],
+  ] as const) {
+    it(`keeps a U+FEFF only as a held surrogate's partner: ${JSON.stringify(writes)}`, () => {
+      const tracker = new PartialEscapeTracker();
+      for (const chunk of writes) tracker.feed(chunk);
+      expect(tracker.tail).toBe(tail);
+    });
+  }
+
+  // The source decodes each write as it comes, holding a high surrogate that
+  // ends one for the next.
+  for (const writes of [
+    ["\x1b]0;a\ud800", "\ufeffb"],
+    ["\x1b]0;a\ud800", "\0\ufeffb"],
+    ["\x1b]0;a\ud800\0", "\ufeffb"],
+    ["\x1b]0;a\ud800", "", "\ufeffb"],
+    ["\x1b]0;a\ud800\ud800", "\ufeffb"],
+    ["\x1b]0;a", "\ud800", "\ud800", "\ufeffb"],
+  ]) {
+    it(`restores a title written as ${JSON.stringify(writes)} the same as uninterrupted playback`, async () => {
+      const source = makeTerminal();
+      const tracker = new PartialEscapeTracker();
+      for (const chunk of writes) {
+        await write(source.term, chunk);
+        tracker.feed(chunk);
+      }
+      const dest = makeTerminal();
+      const title = trackTitle(dest.term);
+      await write(dest.term, PARSER_GROUND + source.addon.serialize() + (tracker.tail ?? ""));
+      await write(dest.term, "\x07world");
+      expect(observe(dest.term, title())).toEqual(
+        await uninterrupted(writes.join("") + "\x07world")
+      );
+    });
+  }
+
+  for (const [name, stream] of [
+    ["OSC", "\x1b]0;" + "p".repeat(5000)],
+    ["DCS", "\x1bP1$q" + "m".repeat(5000)],
+    ["APC", "\x1b_G" + "x".repeat(5000)],
+  ] as const) {
+    it(`keeps a ${name} payload between the header and string caps whole`, () => {
+      const fromString = new PartialEscapeTracker();
+      fromString.feed(stream);
+      const fromBytes = new PartialEscapeTracker();
+      fromBytes.feedBytes(new TextEncoder().encode(stream));
+      expect(fromString.tail).toBe(stream);
+      expect(fromBytes.tail).toBe(stream);
+    });
+  }
+
+  it("checks a header against its own cap however the input is split", () => {
+    const stream = "\x1bP" + "1".repeat(9000) + "qpayload";
+    const whole = new PartialEscapeTracker();
+    whole.feed(stream);
+    const bytes = new PartialEscapeTracker();
+    bytes.feedBytes(new TextEncoder().encode(stream));
+    const split = new PartialEscapeTracker();
+    split.feed(stream.slice(0, 5000));
+    split.feed(stream.slice(5000));
+    expect(whole.tail).toBe("\x1bP0?");
+    expect(bytes.tail).toBe(whole.tail);
+    expect(split.tail).toBe(whole.tail);
   });
 
   it("drops the pending sequence on CAN and SUB", () => {
@@ -236,5 +330,109 @@ describe("PartialEscapeTracker byte input", () => {
     tracker.feedBytes(encoder.encode("\x1b]0;ti"));
     tracker.feedBytes(encoder.encode("tle"));
     expect(tracker.tail).toBe("\x1b]0;title");
+  });
+
+  function decodedBytesWhile(fn: () => void): number {
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    try {
+      fn();
+      return decode.mock.calls.reduce(
+        (sum, [input]) => sum + ((input as Uint8Array | undefined)?.byteLength ?? 0),
+        0
+      );
+    } finally {
+      decode.mockRestore();
+    }
+  }
+
+  it("does not decode the plain output after a sequence that finished", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feedBytes(encoder.encode("\x1b[3"));
+    expect(tracker.tail).toBe("\x1b[3");
+
+    const chunk = encoder.encode("\x1b[0m" + "x".repeat(64 * 1024));
+    const decoded = decodedBytesWhile(() => tracker.feedBytes(chunk));
+    expect(tracker.tail).toBe("");
+    expect(decoded).toBeGreaterThan(0);
+    expect(decoded).toBeLessThan(chunk.byteLength / 64);
+
+    // The same plain run with a sequence left open at its end still tracks it.
+    tracker.feedBytes(encoder.encode("\x1b[0m" + "x".repeat(64 * 1024) + "\x1b[3"));
+    expect(tracker.tail).toBe("\x1b[3");
+  });
+
+  it("stops decoding a carried-over sequence once it finishes", () => {
+    const tracker = new PartialEscapeTracker();
+    tracker.feedBytes(encoder.encode("\x1b]0;ti"));
+    expect(tracker.tail).toBe("\x1b]0;ti");
+
+    const chunk = encoder.encode("tle\x07" + "y".repeat(64 * 1024));
+    const decoded = decodedBytesWhile(() => tracker.feedBytes(chunk));
+    expect(tracker.tail).toBe("");
+    expect(decoded).toBeGreaterThan(0);
+    expect(decoded).toBeLessThan(chunk.byteLength / 64);
+
+    // A continuation without its terminator stays pending, all of it.
+    tracker.feedBytes(encoder.encode("\x1b]0;ti"));
+    tracker.feedBytes(encoder.encode("tle" + "y".repeat(1000)));
+    expect(tracker.tail).toBe("\x1b]0;title" + "y".repeat(1000));
+  });
+
+  const wholeDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
+  it("decodes a long pending string window by window as the whole chunk would", () => {
+    const bom = [0xef, 0xbb, 0xbf];
+    const stray = new Array<number>(700).fill(0x80);
+    for (let pad = 0; pad < 4; pad++) {
+      for (const [opener, closer] of [
+        ["\x1b]0;", "\x07after"],
+        ["\x1bP1$q", ""],
+        ["\x1b_G", ""],
+      ] as const) {
+        // Some of the BOMs land at window starts.
+        const body = "a".repeat(pad) + "é€😀\ufeff".repeat(400);
+        const bytes = Uint8Array.from([
+          ...encoder.encode(opener + body),
+          ...bom,
+          ...stray,
+          ...encoder.encode(body + closer),
+        ]);
+        const fromBytes = new PartialEscapeTracker();
+        fromBytes.feedBytes(bytes);
+        const fromString = new PartialEscapeTracker();
+        fromString.feed(wholeDecoder.decode(bytes));
+        expect(fromBytes.tail, `${JSON.stringify(opener)} pad ${pad}`).toBe(fromString.tail);
+      }
+    }
+  });
+
+  it("decodes malformed UTF-8 at every window boundary as the whole chunk would", () => {
+    const samples: number[][] = [
+      [0xe2, 0x82], // truncated
+      [0xc0, 0xaf], // overlong
+      [0xed, 0xa0, 0x80], // encoded surrogate
+      [0xf4, 0x90, 0x80, 0x80], // past U+10FFFF
+      [0xf0, 0x9f, 0x98, 0x80], // valid 4-byte
+      [0xef, 0xbb, 0xbf], // BOM
+      new Array<number>(1100).fill(0x80), // stray run longer than the next window
+    ];
+    const opener = encoder.encode("\x1b]0;");
+    for (const boundary of [256, 256 + 512]) {
+      for (const sample of samples) {
+        for (let at = boundary - 5; at <= boundary + 1; at++) {
+          const bytes = Uint8Array.from([
+            ...opener,
+            ...new Array<number>(at - opener.length).fill(0x61),
+            ...sample,
+            ...encoder.encode("tail"),
+          ]);
+          const fromBytes = new PartialEscapeTracker();
+          fromBytes.feedBytes(bytes);
+          const fromString = new PartialEscapeTracker();
+          fromString.feed(wholeDecoder.decode(bytes));
+          expect(fromBytes.tail, `${sample.length} bytes at ${at}`).toBe(fromString.tail);
+        }
+      }
+    }
   });
 });

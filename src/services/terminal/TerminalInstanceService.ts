@@ -2054,6 +2054,7 @@ class TerminalInstanceService {
   }
 
   getCachedSelection(id: string): string {
+    this.instances.get(id)?.syncCachedSelection?.();
     return this.cachedSelections.get(id) ?? "";
   }
 
