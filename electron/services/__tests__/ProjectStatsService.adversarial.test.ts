@@ -1377,6 +1377,13 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
 
     expect(lastPayload().p1).not.toHaveProperty("assistantState");
     expect(helpSessionMock.isPanelVisible).not.toHaveBeenCalled();
+
+    // The same assistant, once the service has loaded, is reported.
+    const { helpSessionService } = await import("../HelpSessionService.js");
+    publishHelpSessionService(helpSessionService);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantState).toBe("working");
     svc.stop();
   });
 

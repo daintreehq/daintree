@@ -185,8 +185,10 @@ import {
   HelpSessionService,
   assistantAgentDirKey,
   codexTrustArgs,
+  helpSessionService,
   projectRuleRoots,
 } from "../HelpSessionService.js";
+import { loadedHelpSessionService } from "../helpSessionRuntime.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
 import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../shared/types/replyWait.js";
@@ -250,6 +252,12 @@ function stripManagedAddenda(content: string): string {
     .replace(/\n*<!-- DAINTREE_RUNBOOKS_START -->[\s\S]*?<!-- DAINTREE_RUNBOOKS_END -->\n*/, "")
     .replace(/\n+$/, "");
 }
+
+describe("HelpSessionService module", () => {
+  it("publishes its singleton for code that reads it without loading it", () => {
+    expect(loadedHelpSessionService()).toBe(helpSessionService);
+  });
+});
 
 describe("HelpSessionService", () => {
   let tmpRoot: string;

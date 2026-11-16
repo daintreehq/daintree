@@ -1280,18 +1280,28 @@ describe("initGlobalServices task ordering", () => {
     resetHelpSessionRuntimeForTests();
     const { helpSessionService } = await import("../../services/HelpSessionService.js");
     const startOrphanSweep = vi.mocked(helpSessionService.startOrphanSweep);
+    const setPendingHibernationStore = vi.mocked(helpSessionService.setPendingHibernationStore);
     startOrphanSweep.mockClear();
+    setPendingHibernationStore.mockClear();
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
 
     await initGlobalServices(fakeRegistry);
+    // This task waits on the pending-hibernation store's load, so the store
+    // is ready, and still not handed over, once it returns.
+    await registeredTaskRuns.get("assistant-update-resume")?.();
     expect(setMcpRegistry).not.toHaveBeenCalled();
     expect(setProjectMetadataReader).not.toHaveBeenCalled();
     expect(startOrphanSweep).not.toHaveBeenCalled();
+    expect(setPendingHibernationStore).not.toHaveBeenCalled();
 
     publishHelpSessionService(helpSessionService);
     expect(setMcpRegistry).toHaveBeenCalledWith(fakeRegistry);
     expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
     expect(startOrphanSweep).toHaveBeenCalledTimes(1);
+    expect(setPendingHibernationStore).toHaveBeenCalledTimes(1);
+    expect(setPendingHibernationStore).toHaveBeenCalledWith(
+      expect.objectContaining({ takeResumeAtLaunch: expect.any(Function) })
+    );
   });
 
   it("skips MCP-related tasks when no windowRegistry is supplied", async () => {

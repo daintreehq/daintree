@@ -1162,9 +1162,15 @@ describe("ajv loading (#17024)", () => {
   const ajvRequires = () => requiredIds.filter((id) => id === "ajv" || id === "ajv-formats");
 
   it("requires ajv and its formats only for the first action input schema validated", async () => {
+    // A fresh evaluation, watched from before it starts: a require at module
+    // load would otherwise have run before this test, unseen.
+    vi.resetModules();
     requiredIds.length = 0;
+    const { PluginService: FreshPluginService } = await import("../PluginService.js");
+    expect(ajvRequires()).toEqual([]);
+
     await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
-    const service = new PluginService(tmpDir);
+    const service = new FreshPluginService(tmpDir);
     await service.initialize();
     const plain = vi.fn().mockResolvedValue("ok");
     service.registerHandler("acme.test-plugin", "raw-channel", plain);

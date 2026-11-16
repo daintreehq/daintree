@@ -12,6 +12,20 @@ import {
 const STARTUP_ENTRIES = ["electron/bootstrap.ts", "electron/main.ts"];
 
 /**
+ * What boot imports dynamically before the first window is interactive: host
+ * services wire PluginService and the port broker, and Remote Hosts, on in
+ * every build, starts once the launch settles. PluginService and Remote Hosts'
+ * plugin parity still reach the manifest schema, which plugin hydration reads
+ * at startup; neither may reach the rest.
+ */
+const EARLY_DYNAMIC_ROOTS = [
+  "electron/services/PluginService.ts",
+  "electron/services/WorktreePortBroker.ts",
+  "electron/remote/boot.ts",
+];
+const NOT_EARLY = MAIN_ON_DEMAND_PATTERNS.filter(({ label }) => label !== "Plugin manifest schema");
+
+/**
  * Main's boot registers every IPC handler, and a static import in any of them
  * evaluates whatever it reaches before the first window is interactive
  * (#17024). The plugin manifest schema, the assistant's session service and
@@ -63,6 +77,16 @@ describe("main's on-demand feature boundary", () => {
   it("reaches none of them from the startup graph", () => {
     for (const entry of STARTUP_ENTRIES) expect(eager.has(entry), entry).toBe(true);
     expect(scanForbiddenModules(eager, MAIN_ON_DEMAND_PATTERNS)).toEqual([]);
+  });
+
+  it("reaches neither the session service nor voice cleanup from what boot imports early", () => {
+    const inputs = new Set(Object.keys(metafile.inputs));
+    const early = new Set(eager);
+    for (const root of EARLY_DYNAMIC_ROOTS) {
+      expect(inputs.has(root), root).toBe(true);
+      for (const file of walkEagerGraph(metafile, root)) early.add(file);
+    }
+    expect(scanForbiddenModules(early, NOT_EARLY)).toEqual([]);
   });
 
   it("keeps the light halves startup reads them through on the startup graph", () => {

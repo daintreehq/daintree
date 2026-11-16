@@ -45,6 +45,7 @@ describe("helpSessionRuntime", () => {
     publishHelpSessionService(loaded);
     const apply = vi.fn();
     whenHelpSessionServiceLoads(apply);
+    expect(apply).toHaveBeenCalledTimes(1);
     expect(apply).toHaveBeenCalledWith(loaded);
   });
 

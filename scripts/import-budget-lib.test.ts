@@ -684,9 +684,11 @@ describe("scanForbiddenModules", () => {
         "electron/services/HelpSessionService.ts",
         "electron/services/helpSessionRuntime.ts",
         "electron/services/VoiceCorrectionService.ts",
+        "electron/services/voiceCleanupClaude.ts",
         "electron/services/voiceOpeningCommand.ts",
         "shared/config/voiceCorrection.ts",
         "shared/config/voiceCorrectionClaude.ts",
+        "shared/config/voiceCorrectionOpenAI.ts",
         "shared/config/voiceCorrectionConfig.ts",
       ],
       MAIN_ON_DEMAND_PATTERNS
@@ -697,10 +699,12 @@ describe("scanForbiddenModules", () => {
       { file: "electron/schemas/plugin/providers.ts", label: "Plugin manifest schema" },
       { file: "electron/schemas/pluginManifestAdvisories.ts", label: "Plugin manifest schema" },
       { file: "electron/services/HelpSessionService.ts", label: "HelpSessionService" },
+      { file: "electron/services/voiceCleanupClaude.ts", label: "Voice cleanup" },
       { file: "electron/services/VoiceCorrectionService.ts", label: "Voice cleanup" },
       { file: "electron/services/voiceOpeningCommand.ts", label: "Voice cleanup" },
       { file: "shared/config/voiceCorrection.ts", label: "Voice cleanup" },
       { file: "shared/config/voiceCorrectionClaude.ts", label: "Voice cleanup" },
+      { file: "shared/config/voiceCorrectionOpenAI.ts", label: "Voice cleanup" },
     ]);
   });
 

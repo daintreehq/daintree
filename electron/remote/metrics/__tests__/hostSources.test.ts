@@ -107,6 +107,18 @@ vi.mock("../../../services/projectAgentCounts.js", async (importOriginal) => {
 import { createHostSampleSources, observeAgents } from "../hostSources.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const WORKING = {
   id: "t1",

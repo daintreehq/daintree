@@ -182,6 +182,18 @@ import { HostRegistry } from "../../client/HostRegistry.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { IDLE_RELEASE_MS, RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { TransportError } from "../../client/transport.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
