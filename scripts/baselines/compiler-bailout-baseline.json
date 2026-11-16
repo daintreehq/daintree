@@ -4,9 +4,9 @@
     "collectorRevision": 1,
     "versions": {
       "babel-plugin-react-compiler": "1.0.0",
-      "@babel/core": "7.29.7",
-      "@vitejs/plugin-react": "6.1.2",
-      "glob": "13.0.6"
+      "@babel/core": "7.29.13",
+      "@vitejs/plugin-react": "6.2.1",
+      "glob": "14.0.3"
     },
     "options": {
       "compilationMode": "infer",
@@ -32,10 +32,10 @@
     "hintCategories": ["Todo"]
   },
   "coverage": {
-    "discovered": 2904,
-    "scanned": 2897,
-    "filtered": 7,
-    "withEvents": 1568
+    "discovered": 3223,
+    "scanned": 3217,
+    "filtered": 6,
+    "withEvents": 1755
   },
   "files": {
     "packages/tour/src/kit/TourCanvas.tsx": {
@@ -159,11 +159,11 @@
       "pipelineErrors": []
     },
     "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 7,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 7,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -268,6 +268,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "plugins/builtin/jira/renderer/components/JiraSettingsTab.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "plugins/builtin/markdown-editor/renderer/MarkdownEditorStatusBar.tsx": {
       "success": 1,
       "skip": 0,
@@ -299,6 +309,26 @@
       "pipelineErrors": []
     },
     "src/ModalHostLayer.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/canopyWindow/CanopyPluginSupport.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/canopyWindow/CanopyWindowRoot.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -429,7 +459,7 @@
       "pipelineErrors": []
     },
     "src/components/Canopy/CanopyAssistantList.tsx": {
-      "success": 2,
+      "success": 5,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -448,12 +478,32 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Canopy/CanopyCard.tsx": {
+    "src/components/Canopy/CanopyBulkTrashDialog.tsx": {
       "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyCard.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyDetailSplit.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -464,6 +514,16 @@
       "error": 0,
       "pipeline": 0,
       "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyGlobalAssistant.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -479,7 +539,7 @@
       "pipelineErrors": []
     },
     "src/components/Canopy/CanopyHostPicker.tsx": {
-      "success": 6,
+      "success": 7,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -490,6 +550,26 @@
     },
     "src/components/Canopy/CanopyListColumn.tsx": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyOffer.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyPaneOffer.tsx": {
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -510,6 +590,26 @@
     },
     "src/components/Canopy/CanopyPlace.tsx": {
       "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyPluginSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopyPluginView.tsx": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -549,6 +649,16 @@
       "pipelineErrors": []
     },
     "src/components/Canopy/CanopyStatusBar.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/CanopySurface.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -599,11 +709,11 @@
       "pipelineErrors": []
     },
     "src/components/Canopy/CanopyView.tsx": {
-      "success": 5,
+      "success": 6,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -618,12 +728,22 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Canopy/useCanopyInboxActions.ts": {
-      "success": 0,
+    "src/components/Canopy/canopyPluginViews.ts": {
+      "success": 1,
       "skip": 0,
-      "error": 3,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 3,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Canopy/useCanopyInboxActions.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -688,7 +808,7 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Canopy/useCanopyRowsViewed.ts": {
+    "src/components/Canopy/useCanopyKeyboardPlace.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -730,6 +850,63 @@
     },
     "src/components/CopyTree/CopyTreeRecentsPanel.tsx": {
       "success": 5,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Decisions/DecisionMarkdown.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Decisions/DecisionQuestionDialog.tsx": {
+      "success": 6,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Decisions/DecisionQuestionHost.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Decisions/DecisionsAttentionDialog.tsx": {
+      "success": 7,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [
+        {
+          "category": "PreserveManualMemo",
+          "severity": "Error",
+          "reason": "Existing memoization could not be preserved",
+          "line": 680
+        }
+      ],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Decisions/DecisionsAttentionHost.tsx": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -849,7 +1026,7 @@
       "pipelineErrors": []
     },
     "src/components/DevPreview/DevPreviewTools.tsx": {
-      "success": 8,
+      "success": 9,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -979,6 +1156,16 @@
       "pipelineErrors": []
     },
     "src/components/DevPreview/useDevPreviewViewport.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/DevPreview/useGuestHistorySnapshot.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -1258,6 +1445,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/DragDrop/useNestedDragGuard.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/ErrorBoundary/ErrorBoundary.tsx": {
       "success": 1,
       "skip": 0,
@@ -1289,11 +1486,11 @@
       "pipelineErrors": []
     },
     "src/components/Errors/ErrorBanner.tsx": {
-      "success": 2,
+      "success": 1,
       "skip": 0,
-      "error": 0,
+      "error": 1,
       "pipeline": 0,
-      "hintCount": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -1309,7 +1506,7 @@
       "pipelineErrors": []
     },
     "src/components/EventInspector/EventFilters.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -1728,6 +1925,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Fleet/useFleetPendingConfirm.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Fleet/useFleetRibbonFlashes.ts": {
       "success": 1,
       "skip": 0,
@@ -1739,6 +1946,16 @@
       "pipelineErrors": []
     },
     "src/components/Fleet/useFleetWorktreeScope.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Fleet/useRetainedDialog.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -1851,9 +2068,19 @@
     "src/components/HelpPanel/GlobalAssistantPane.tsx": {
       "success": 0,
       "skip": 0,
-      "error": 2,
+      "error": 1,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/HelpPanel/GlobalAssistantTerminal.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -1989,7 +2216,7 @@
       "pipelineErrors": []
     },
     "src/components/HelpPanel/NewSessionWithAgentLabel.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -2279,7 +2506,7 @@
       "pipelineErrors": []
     },
     "src/components/Hosts/HostChip.tsx": {
-      "success": 5,
+      "success": 8,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -2478,8 +2705,38 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Hosts/hostList.ts": {
+    "src/components/Hosts/cloud/cloudHostsState.ts": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Hosts/cloud/useCloudLifecycleNews.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Hosts/cloud/useCloudMachineActions.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Hosts/hostList.ts": {
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -2551,9 +2808,9 @@
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx": {
       "success": 0,
       "skip": 0,
-      "error": 4,
+      "error": 3,
       "pipeline": 0,
-      "hintCount": 4,
+      "hintCount": 3,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -2568,8 +2825,18 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Layout/AccountSwitchNotice.tsx": {
+      "success": 4,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Layout/AgentButton.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -2808,6 +3075,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Layout/ForgeStatsPlaceholder.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Layout/ForgeStatsToolbarButton.tsx": {
       "success": 1,
       "skip": 0,
@@ -2919,7 +3196,7 @@
       "pipelineErrors": []
     },
     "src/components/Layout/PluginTrayButton.tsx": {
-      "success": 8,
+      "success": 9,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3061,9 +3338,9 @@
     "src/components/Layout/Toolbar.tsx": {
       "success": 2,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -3119,7 +3396,7 @@
       "pipelineErrors": []
     },
     "src/components/Layout/ToolbarOverflowMenu.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3149,7 +3426,7 @@
       "pipelineErrors": []
     },
     "src/components/Layout/ToolbarProjectPill.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3240,6 +3517,16 @@
     },
     "src/components/Layout/__bench__/dockSubscribers.bench.tsx": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Layout/dockFocusHandoff.tsx": {
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3379,7 +3666,7 @@
       "pipelineErrors": []
     },
     "src/components/Layout/useOverflowBadgeSeverity.ts": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3498,6 +3785,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Markdown/MarkdownFindBar.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Markdown/MarkdownTable.tsx": {
       "success": 4,
       "skip": 0,
@@ -3568,8 +3865,18 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Markdown/useRenderedFind.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/McpConfirmDialog.tsx": {
-      "success": 13,
+      "success": 14,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3599,7 +3906,7 @@
       "pipelineErrors": []
     },
     "src/components/Notifications/NotificationCenterEntry.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3629,7 +3936,7 @@
       "pipelineErrors": []
     },
     "src/components/Notifications/notificationSource.ts": {
-      "success": 6,
+      "success": 7,
       "skip": 0,
       "error": 1,
       "pipeline": 0,
@@ -3738,8 +4045,18 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Panel/PanelHeader.tsx": {
+    "src/components/Panel/PanelEmojiDialog.tsx": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Panel/PanelHeader.tsx": {
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3838,6 +4155,36 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Panel/gridGroupAttention.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Panel/gridGroupTabReorder.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Panel/usePanelFailureEdge.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Panel/usePanelRootFocus.ts": {
       "success": 1,
       "skip": 0,
@@ -3859,6 +4206,16 @@
       "pipelineErrors": []
     },
     "src/components/PanelPalette/PanelPalette.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Persona/PersonaEmojiButton.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -3948,18 +4305,28 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Plugin/PluginArchiveInstallConfirmDialog.tsx": {
-      "success": 4,
+    "src/components/Plugin/LazyPluginHostedView.tsx": {
+      "success": 1,
       "skip": 0,
-      "error": 2,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Plugin/PluginArchiveInstallConfirmDialog.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
     },
     "src/components/Plugin/PluginCapabilityConfirmDialog.tsx": {
-      "success": 2,
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -3970,6 +4337,16 @@
     },
     "src/components/Plugin/PluginCatalog.tsx": {
       "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Plugin/PluginCommunityBrowse.tsx": {
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -4068,6 +4445,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Plugin/PluginInstallConfirmDialog.tsx": {
+      "success": 5,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Plugin/PluginInstallProgressBanner.tsx": {
       "success": 1,
       "skip": 0,
@@ -4150,6 +4537,16 @@
     },
     "src/components/Plugin/PluginPerformanceTab.tsx": {
       "success": 5,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Plugin/PluginPresetGrants.tsx": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -4408,6 +4805,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Plugin/ProjectPluginUnsavedDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Plugin/ProjectSurfaceConsentNotice.tsx": {
       "success": 1,
       "skip": 0,
@@ -4528,12 +4935,22 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Plugin/usePluginCatalogBrowse.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Plugin/usePluginManager.ts": {
       "success": 0,
       "skip": 0,
-      "error": 10,
+      "error": 13,
       "pipeline": 0,
-      "hintCount": 10,
+      "hintCount": 13,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -4554,6 +4971,16 @@
       "error": 0,
       "pipeline": 0,
       "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Plugin/useProjectPluginUnsavedGuard.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -5308,6 +5735,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Portal/NativeViewMenuActionItem.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Portal/PortalCloseConfirmDialog.tsx": {
       "success": 3,
       "skip": 0,
@@ -5379,7 +5816,7 @@
       "pipelineErrors": []
     },
     "src/components/Portal/PortalToolbar.tsx": {
-      "success": 3,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5394,6 +5831,16 @@
       "error": 1,
       "pipeline": 0,
       "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Portal/useNativeViewMenu.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -5421,9 +5868,9 @@
     "src/components/Project/CloneRepoDialog.tsx": {
       "success": 0,
       "skip": 0,
-      "error": 1,
+      "error": 2,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 2,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -5539,7 +5986,17 @@
       "pipelineErrors": []
     },
     "src/components/Project/ProcessesDialog.tsx": {
-      "success": 6,
+      "success": 5,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Project/ProjectCloneView.tsx": {
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5564,6 +6021,16 @@
       "error": 2,
       "pipeline": 0,
       "hintCount": 2,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Project/ProjectGroupSettingsRow.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -5608,6 +6075,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Project/ProjectSchedulesTab.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 4,
+      "pipeline": 0,
+      "hintCount": 4,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Project/ProjectSleepConfirmDialog.tsx": {
       "success": 5,
       "skip": 0,
@@ -5629,7 +6106,17 @@
       "pipelineErrors": []
     },
     "src/components/Project/ProjectSwitcherConfirmDialogs.tsx": {
-      "success": 2,
+      "success": 3,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Project/ProjectSwitcherModalLayer.tsx": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5769,7 +6256,7 @@
       "pipelineErrors": []
     },
     "src/components/Project/projectDialogFields.tsx": {
-      "success": 5,
+      "success": 6,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5789,7 +6276,7 @@
       "pipelineErrors": []
     },
     "src/components/Pulse/ProjectPulseStrip.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5849,7 +6336,7 @@
       "pipelineErrors": []
     },
     "src/components/QuickSwitcher/QuickSwitcherItem.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5869,7 +6356,7 @@
       "pipelineErrors": []
     },
     "src/components/Recovery/CrashRecoveryDialog.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 2,
       "pipeline": 0,
@@ -5899,7 +6386,7 @@
       "pipelineErrors": []
     },
     "src/components/Recovery/HostConnectionBanner.tsx": {
-      "success": 2,
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -5934,6 +6421,16 @@
       "error": 2,
       "pipeline": 0,
       "hintCount": 2,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Recovery/OnlineOnlyFilesBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -6038,12 +6535,212 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Schedules/CadencePicker.tsx": {
+      "success": 3,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/RunGlyph.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleBaseBranch.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleEditor.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 2,
+      "pipeline": 0,
+      "hintCount": 2,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleEditorDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleEditorHost.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleList.tsx": {
+      "success": 6,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleOsJobStatus.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleRunConfirmDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleRuns.tsx": {
+      "success": 6,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/ScheduleSwitches.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useLastRuns.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useProjectSchedules.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useScheduleLaunchOptions.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useScheduleOsJob.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useScheduleRuns.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Schedules/useWorktreeChoices.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/AddAccountDialog.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/AddPresetDialog.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
       "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/AgentAccountsSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/AgentCliCopiesSection.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 2,
+      "pipeline": 0,
+      "hintCount": 2,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -6079,7 +6776,7 @@
       "pipelineErrors": []
     },
     "src/components/Settings/AgentQuotaSection.tsx": {
-      "success": 5,
+      "success": 7,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -6129,6 +6826,16 @@
       "pipelineErrors": []
     },
     "src/components/Settings/AgentScopeEditor/FallbackChainEditor.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/AgentScopeEditor/PresetAccountRow.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -6198,12 +6905,32 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/Assistant/AssistantConfirmationExceptions.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/Assistant/AssistantExternalClientsSection.tsx": {
       "success": 0,
       "skip": 0,
       "error": 1,
       "pipeline": 0,
       "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Assistant/AssistantIdentitySection.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -6358,6 +7085,486 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/Decisions/DecisionsAgentsSection.tsx": {
+      "success": 4,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsConnectionSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsConsentDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDataSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDeleteLocalDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDeleteRelayDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDevicesAndHosts.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDevicesSection.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDisclosure.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsDisconnectDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsEncryptionSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsExportDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsHostsSection.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsModelClearDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsModelConsentDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsModelReport.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsModelSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsPairingDialog.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsPolicySection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsQuestionsSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRecoveryKit.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRelayDeploy.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRelayRemove.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRelaySetup.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRelayUpdate.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRemoveRelayDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsRevokeDeviceDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsSettingsTab.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsSetupCheck.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsTerminalSnapshotsConsentDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/DecisionsVoiceSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/PairingQrCode.tsx": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/relayUpdate.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisions.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsAttentionCount.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsData.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsDevices.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsHosts.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsKeyActions.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsModel.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsPairing.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsPolicy.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useDecisionsTerminalSnapshots.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useGuidedTerminalPlacement.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useRecoveryKit.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useRelayCheck.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useRelayIdentity.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Decisions/useSetupCheck.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/DeviceAnswerGroup.tsx": {
       "success": 2,
       "skip": 0,
@@ -6401,9 +7608,9 @@
     "src/components/Settings/EditorIntegrationTab.tsx": {
       "success": 0,
       "skip": 0,
-      "error": 3,
+      "error": 5,
       "pipeline": 0,
-      "hintCount": 3,
+      "hintCount": 5,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -6518,6 +7725,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/Hosts/AddCloudHostDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/Hosts/AddHostDialog.tsx": {
       "success": 6,
       "skip": 0,
@@ -6560,6 +7777,36 @@
     },
     "src/components/Settings/Hosts/ChangeHostTargetDialog.tsx": {
       "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Hosts/CloudMachineSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Hosts/CloudProvidersSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Hosts/ConnectCloudAccountDialog.tsx": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -6658,6 +7905,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/Hosts/HostWakeSetup.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/Hosts/HostWorkSettingsPage.tsx": {
       "success": 3,
       "skip": 0,
@@ -6688,6 +7945,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/Hosts/RemoveCloudHostDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/Hosts/SettingsMachinePicker.tsx": {
       "success": 2,
       "skip": 0,
@@ -6699,6 +7966,16 @@
       "pipelineErrors": []
     },
     "src/components/Settings/Hosts/SshRefusalHelp.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/Hosts/hostBringBack.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -6809,7 +8086,7 @@
       "pipelineErrors": []
     },
     "src/components/Settings/KeyboardShortcutsTab.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 1,
       "pipeline": 0,
@@ -7121,10 +8398,23 @@
     "src/components/Settings/SettingsDialog.tsx": {
       "success": 19,
       "skip": 0,
-      "error": 0,
+      "error": 2,
       "pipeline": 0,
       "hintCount": 0,
-      "errorBailouts": [],
+      "errorBailouts": [
+        {
+          "category": "Immutability",
+          "severity": "Error",
+          "reason": "This value cannot be modified",
+          "line": 716
+        },
+        {
+          "category": "Immutability",
+          "severity": "Error",
+          "reason": "This value cannot be modified",
+          "line": 994
+        }
+      ],
       "skipReasons": [],
       "pipelineErrors": []
     },
@@ -7398,6 +8688,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/UserPromptTemplatesSection.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/VoiceDictionaryPage.tsx": {
       "success": 3,
       "skip": 0,
@@ -7498,7 +8798,27 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Settings/settingsDeepLink.ts": {
+      "success": 3,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Settings/settingsSearchUtils.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Settings/telemetryDisclosure.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -7599,6 +8919,16 @@
       "pipelineErrors": []
     },
     "src/components/Setup/InstallBlock.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Setup/InstallCommandRows.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -7918,7 +9248,27 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Terminal/AgentCompletionBanner.tsx": {
+    "src/components/Terminal/AccountHeadroomHint.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/AgentAltScreenBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/AgentContextUsageChip.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -8158,12 +9508,22 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/Terminal/HybridInputBar.tsx": {
-      "success": 2,
+    "src/components/Terminal/HeldComposerSend.tsx": {
+      "success": 0,
       "skip": 0,
-      "error": 0,
+      "error": 2,
       "pipeline": 0,
-      "hintCount": 0,
+      "hintCount": 2,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/HybridInputBar.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -8179,11 +9539,11 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/LauncherQuickActions.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -8236,6 +9596,16 @@
       "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": ["Skipped due to '[object Object]' directive."],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/PresetSwitchRefusedBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
       "pipelineErrors": []
     },
     "src/components/Terminal/ProjectHomeNav.tsx": {
@@ -8299,7 +9669,7 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -8338,8 +9708,48 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/RelayDeployBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/RelayRemovalBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/RelayUpdateBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/RestartOnAccount.tsx": {
+      "success": 5,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/RestartOnPreset.tsx": {
-      "success": 4,
+      "success": 5,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -8478,6 +9888,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/TerminalDecisionsChip.tsx": {
+      "success": 4,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/TerminalDestructiveActionConfirmDialog.tsx": {
       "success": 3,
       "skip": 0,
@@ -8529,7 +9949,7 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/TerminalIcon.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -8628,6 +10048,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/TerminalScheduleChip.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/TerminalScratchpad.tsx": {
       "success": 1,
       "skip": 0,
@@ -8649,11 +10079,11 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/TerminalSearchBar.tsx": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -8669,6 +10099,16 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/TerminalSubmitStatusBanner.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/TerminalWhenDoneBadge.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -8779,11 +10219,11 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/contentGridTips.tsx": {
-      "success": 2,
+      "success": 1,
       "skip": 0,
-      "error": 0,
+      "error": 1,
       "pipeline": 0,
-      "hintCount": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -8840,6 +10280,16 @@
     },
     "src/components/Terminal/contextMenu/useTerminalMenuCommands.ts": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/gridPanelSelection.ts": {
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -8908,6 +10358,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/hooks/useComposerDiffNotes.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/hooks/useComposerMeasure.ts": {
       "success": 1,
       "skip": 0,
@@ -8959,19 +10419,12 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/hooks/useEditorDomHandlers.ts": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
       "hintCount": 0,
-      "errorBailouts": [
-        {
-          "category": "Refs",
-          "severity": "Error",
-          "reason": "Cannot access refs during render",
-          "line": 67
-        }
-      ],
+      "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
     },
@@ -8996,6 +10449,16 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/hooks/useEditorScrollEdges.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/hooks/useFleetMembership.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -9046,11 +10509,11 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/hooks/usePasteExtensions.ts": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 2,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -9105,6 +10568,26 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/stableGridTabs.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/uploads/FolderUploadQuestion.tsx": {
+      "success": 6,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/uploads/HeldBackAttachmentsBanner.tsx": {
       "success": 1,
       "skip": 0,
@@ -9126,7 +10609,7 @@
       "pipelineErrors": []
     },
     "src/components/Terminal/uploads/PendingUploadChips.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -9175,6 +10658,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Terminal/useAgentAltScreenBanner.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Terminal/useContentGridContext.tsx": {
       "success": 0,
       "skip": 1,
@@ -9185,7 +10678,27 @@
       "skipReasons": ["Skipped due to '[object Object]' directive."],
       "pipelineErrors": []
     },
-    "src/components/Terminal/useReviewDialogOpenForWorktree.ts": {
+    "src/components/Terminal/useGridGroupAmbientState.ts": {
+      "success": 3,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/useRelayRemoval.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Terminal/useScrollbackRestoreRestart.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -9255,16 +10768,6 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/components/TerminalPalette/NewTerminalPalette.tsx": {
-      "success": 1,
-      "skip": 0,
-      "error": 0,
-      "pipeline": 0,
-      "hintCount": 0,
-      "errorBailouts": [],
-      "skipReasons": [],
-      "pipelineErrors": []
-    },
     "src/components/TerminalRecipe/RecipeConflictDialog.tsx": {
       "success": 2,
       "skip": 0,
@@ -9286,7 +10789,7 @@
       "pipelineErrors": []
     },
     "src/components/TerminalRecipe/RecipeImportDialog.tsx": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
       "error": 1,
       "pipeline": 0,
@@ -9306,6 +10809,16 @@
       "pipelineErrors": []
     },
     "src/components/TerminalRecipe/RecipeRunConfirmDialog.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/TerminalRecipe/RecipeStepEnvironment.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -9596,11 +11109,11 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/DiffViewer.tsx": {
-      "success": 5,
+      "success": 7,
       "skip": 0,
-      "error": 2,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -9758,9 +11271,9 @@
     "src/components/Worktree/ReviewHub/ConflictPanel.tsx": {
       "success": 2,
       "skip": 0,
-      "error": 4,
+      "error": 3,
       "pipeline": 0,
-      "hintCount": 4,
+      "hintCount": 3,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -9826,7 +11339,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/ReviewHub/PrStatusChip.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -9856,11 +11369,11 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 2,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -9895,8 +11408,28 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Worktree/ReviewHub/ReviewThreadsHandoff.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Worktree/ReviewHub/SinceReviewPanel.tsx": {
       "success": 6,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Worktree/ReviewHub/useNewPRLink.ts": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -9986,7 +11519,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/ScrollIndicator.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -9996,7 +11529,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeBulkRemoveDialog.tsx": {
-      "success": 8,
+      "success": 9,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10176,7 +11709,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeCard/WorktreeActivityChip.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10196,11 +11729,11 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -10246,7 +11779,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10366,7 +11899,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeDensitySubmenu.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10396,7 +11929,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeMenuItems.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10416,7 +11949,7 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/WorktreeOverviewRow.tsx": {
-      "success": 4,
+      "success": 5,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10435,8 +11968,18 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Worktree/WorktreeResourceTeardownConfirmDialog.tsx": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Worktree/WorktreeSelector.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10457,6 +12000,16 @@
     },
     "src/components/Worktree/__bench__/branchFilter.bench.tsx": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Worktree/diffNoteDrafts.ts": {
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -10496,6 +12049,16 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/hooks/useFirstAgentOptions.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Worktree/hooks/useIssuePromptContext.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -10555,6 +12118,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/Worktree/useDiffNoteGutterKeys.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/Worktree/useFittedBranchName.ts": {
       "success": 2,
       "skip": 0,
@@ -10566,6 +12139,16 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/useStagedDiffRows.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Worktree/useStagedMarkdownBlocks.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -10656,6 +12239,16 @@
       "pipelineErrors": []
     },
     "src/components/Worktree/views/ExistingBranchPicker.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/Worktree/views/IssuePromptToggle.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -10835,6 +12428,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/components/icons/brands/BeadsIcon.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/components/icons/brands/BiomeIcon.tsx": {
       "success": 1,
       "skip": 0,
@@ -10926,6 +12529,16 @@
       "pipelineErrors": []
     },
     "src/components/icons/brands/CursorIcon.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/icons/brands/DecisionsIcon.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -11106,6 +12719,16 @@
       "pipelineErrors": []
     },
     "src/components/icons/brands/JestIcon.tsx": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/components/icons/brands/JiraIcon.tsx": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -11616,11 +13239,11 @@
       "pipelineErrors": []
     },
     "src/components/ui/AppDialog.tsx": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
-      "error": 1,
+      "error": 2,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 2,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -11766,7 +13389,7 @@
       "pipelineErrors": []
     },
     "src/components/ui/FactSeparator.tsx": {
-      "success": 1,
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -11866,7 +13489,7 @@
       "pipelineErrors": []
     },
     "src/components/ui/PaneState.tsx": {
-      "success": 3,
+      "success": 4,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -12326,11 +13949,11 @@
       "pipelineErrors": []
     },
     "src/components/ui/select.tsx": {
-      "success": 10,
+      "success": 9,
       "skip": 0,
-      "error": 0,
+      "error": 1,
       "pipeline": 0,
-      "hintCount": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -12486,6 +14109,16 @@
       "pipelineErrors": []
     },
     "src/hooks/app/useCanopyDoubleShift.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/app/useCanopyOfferShown.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -12685,6 +14318,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/app/useOnlineOnlyFilesSync.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/app/usePaletteWiring.ts": {
       "success": 1,
       "skip": 0,
@@ -12835,6 +14478,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/app/useWindowGlobalAssistantPanel.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 2,
+      "pipeline": 0,
+      "hintCount": 2,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/app/useWorktreeCustomTitlesSync.ts": {
       "success": 1,
       "skip": 0,
@@ -12898,29 +14551,29 @@
     "src/hooks/projectSwitcher/useProjectSwitcherHydration.ts": {
       "success": 0,
       "skip": 0,
-      "error": 1,
+      "error": 2,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 2,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
     },
     "src/hooks/projectSwitcher/useProjectSwitcherProjectMutations.ts": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 3,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 3,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
     },
     "src/hooks/projectSwitcher/useProjectSwitcherScratchMutations.ts": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 2,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 2,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -12931,6 +14584,26 @@
       "error": 0,
       "pipeline": 0,
       "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/terminal/useHomeTerminalPlacement.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/terminal/useInstallCommandRunner.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -12975,7 +14648,27 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useAgentAccountHeadroom.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useAgentClusters.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useAgentContextUsage.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -13125,6 +14818,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useClaudeUsage.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useCodexQuota.ts": {
       "success": 1,
       "skip": 0,
@@ -13186,6 +14889,16 @@
       "pipelineErrors": []
     },
     "src/hooks/useDebounce.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useDecisionsOn.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -13535,6 +15248,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useHeldComposerSendBridge.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useHelpSessionLiveStatus.ts": {
       "success": 1,
       "skip": 0,
@@ -13685,6 +15408,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useLatestGetter.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useLayoutState.ts": {
       "success": 1,
       "skip": 0,
@@ -13718,9 +15451,9 @@
     "src/hooks/useMcpBridge.ts": {
       "success": 0,
       "skip": 0,
-      "error": 1,
+      "error": 2,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 2,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -13765,12 +15498,12 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/hooks/useNewTerminalPalette.ts": {
-      "success": 0,
+    "src/hooks/useNow.ts": {
+      "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -14125,6 +15858,26 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useProjectCloneJob.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useProjectCreationGroup.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useProjectHealth.ts": {
       "success": 0,
       "skip": 0,
@@ -14235,6 +15988,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/usePromptTemplates.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useQuickCreatePalette.ts": {
       "success": 0,
       "skip": 0,
@@ -14316,11 +16079,11 @@
       "pipelineErrors": []
     },
     "src/hooks/useResolvedForgeProvider.ts": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -14395,7 +16158,7 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/hooks/useRunHandBackState.ts": {
+    "src/hooks/useRunFleetBand.ts": {
       "success": 4,
       "skip": 0,
       "error": 0,
@@ -14406,6 +16169,46 @@
       "pipelineErrors": []
     },
     "src/hooks/useRunParkState.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useRunSessionPresentation.ts": {
+      "success": 3,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useScheduledRunFinishBridge.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useScheduledRunInboxBridge.ts": {
+      "success": 0,
+      "skip": 0,
+      "error": 1,
+      "pipeline": 0,
+      "hintCount": 1,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useScheduledRunLaunchBridge.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -14585,6 +16388,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useStoppedLoadFocus.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useStoreUpdateListener.ts": {
       "success": 1,
       "skip": 0,
@@ -14666,7 +16479,17 @@
       "pipelineErrors": []
     },
     "src/hooks/useTerminalSelectors.ts": {
-      "success": 11,
+      "success": 10,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useTerminalWhenDoneBridge.ts": {
+      "success": 1,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -14895,7 +16718,27 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/hooks/useWorktreeDiskUsage.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/hooks/useWorktreePalette.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/hooks/useWorktreeRecipes.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
@@ -14916,7 +16759,7 @@
       "pipelineErrors": []
     },
     "src/hooks/useWorktreeTerminals.ts": {
-      "success": 2,
+      "success": 3,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -14945,8 +16788,18 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
-    "src/lib/lazyWithPreload.tsx": {
+    "src/lib/keyboardLayout.ts": {
       "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/lib/lazyWithPreload.tsx": {
+      "success": 2,
       "skip": 0,
       "error": 0,
       "pipeline": 0,
@@ -15186,11 +17039,11 @@
       "pipelineErrors": []
     },
     "src/panels/file-browser/FileBrowserPane.tsx": {
-      "success": 0,
+      "success": 1,
       "skip": 0,
-      "error": 1,
+      "error": 0,
       "pipeline": 0,
-      "hintCount": 1,
+      "hintCount": 0,
       "errorBailouts": [],
       "skipReasons": [],
       "pipelineErrors": []
@@ -15622,6 +17475,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/store/assistantIdentityStore.ts": {
+      "success": 2,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/store/fileDocumentStore.ts": {
       "success": 2,
       "skip": 0,
@@ -15682,6 +17545,16 @@
       "skipReasons": [],
       "pipelineErrors": []
     },
+    "src/store/pluginRuntimeStore.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
     "src/store/pluginToolbarBadgeStore.ts": {
       "success": 1,
       "skip": 0,
@@ -15693,6 +17566,16 @@
       "pipelineErrors": []
     },
     "src/store/pluginToolbarStateStore.ts": {
+      "success": 1,
+      "skip": 0,
+      "error": 0,
+      "pipeline": 0,
+      "hintCount": 0,
+      "errorBailouts": [],
+      "skipReasons": [],
+      "pipelineErrors": []
+    },
+    "src/store/scheduleNamesStore.ts": {
       "success": 1,
       "skip": 0,
       "error": 0,
