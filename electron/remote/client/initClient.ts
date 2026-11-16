@@ -866,6 +866,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
   const sleep = getSystemSleepService();
   const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
+  let clientName: string | null = null;
   const manager = new RemoteHostManager({
     registry,
     createTransport: (descriptor) => {
@@ -890,7 +891,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     client: {
       // Per launch: a session only resumes within one run of this app.
       clientId: crypto.randomUUID(),
-      clientName: machineDisplayName(),
+      // Read when a host first needs it, not at launch: on a Mac it is a
+      // synchronous subprocess, and a launch with no hosts never needs it (#17027).
+      get clientName() {
+        return (clientName ??= machineDisplayName());
+      },
       deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",

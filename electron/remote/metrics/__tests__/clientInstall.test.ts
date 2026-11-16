@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { HostAttentionEvent } from "../../../../shared/types/ipc/hostMetrics.js";
 
 const mocks = vi.hoisted(() => ({
-  clientOptions: null as null | { deliverAttention(event: unknown): boolean },
+  clientOptions: null as null | {
+    deliverAttention(event: unknown): boolean;
+    figuresDemand?: { followed(): boolean; onChange(listener: () => void): () => void };
+  },
   windows: [] as unknown[],
   focusOrder: [] as unknown[],
   banner: vi.fn(),
@@ -10,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../client.js", () => ({
   HostMetricsClient: class {
-    constructor(options: { deliverAttention(event: unknown): boolean }) {
+    constructor(options: NonNullable<typeof mocks.clientOptions>) {
       mocks.clientOptions = options;
     }
     start() {}
@@ -36,6 +39,10 @@ vi.mock("../hostOps.js", () => ({
 }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
+import {
+  _resetHostFiguresDemandForTesting,
+  setHostFiguresFollowed,
+} from "../../../services/hostFiguresDemand.js";
 import { installHostMetricsClient, type HostNotice } from "../clientInstall.js";
 
 interface FakeWindow {
@@ -109,7 +116,27 @@ beforeEach(() => {
   install();
 });
 
-afterEach(() => dispose());
+afterEach(() => {
+  dispose();
+  _resetHostFiguresDemandForTesting();
+});
+
+describe("installHostMetricsClient figures demand", () => {
+  it("hands the client what this machine's views follow, demand from before it started included", () => {
+    dispose();
+    setHostFiguresFollowed(11, true);
+    install();
+    const demand = mocks.clientOptions!.figuresDemand!;
+    expect(demand.followed()).toBe(true);
+
+    const heard = vi.fn();
+    const off = demand.onChange(heard);
+    setHostFiguresFollowed(11, false);
+    expect(demand.followed()).toBe(false);
+    expect(heard).toHaveBeenCalledTimes(1);
+    off();
+  });
+});
 
 describe("installHostMetricsClient attention delivery", () => {
   it("leaves a focused window's notice to its toast, with no banner", () => {

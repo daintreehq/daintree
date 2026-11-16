@@ -5,6 +5,10 @@ import type {
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  areHostFiguresFollowed,
+  onHostFiguresDemandChange,
+} from "../../services/hostFiguresDemand.js";
 import { createLogger } from "../../utils/logger.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
@@ -132,6 +136,7 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
     manager: options.manager,
     registry: options.registry,
     localLoop: getLocalSummaryLoop(),
+    figuresDemand: { followed: areHostFiguresFollowed, onChange: onHostFiguresDemandChange },
     emit(event) {
       for (const wc of getAllAppWebContents()) sendTo(wc, event);
     },

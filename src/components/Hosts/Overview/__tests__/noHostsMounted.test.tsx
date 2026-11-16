@@ -45,6 +45,7 @@ describe("with no host added", () => {
         connect,
         get: () => undefined,
         connectionState: () => ({ status: "disconnected" }),
+        onStateChange: () => () => {},
         onSessionOpened: () => () => {},
       },
       registry: { list: () => registry, get: () => null, onChange: () => () => {} },

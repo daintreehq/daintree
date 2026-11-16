@@ -978,6 +978,9 @@ export interface GeneratedElectronAPI {
     processInventory(
       ...args: IpcInvokeMap["host-metrics:process-inventory"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:process-inventory"]["result"]>;
+    setFollowing(
+      ...args: IpcInvokeMap["host-metrics:set-following"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:set-following"]["result"]>;
     submitFleet(
       ...args: IpcInvokeMap["host-metrics:submit-fleet"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:submit-fleet"]["result"]>;

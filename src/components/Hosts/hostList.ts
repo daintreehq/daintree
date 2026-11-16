@@ -166,6 +166,16 @@ function applyMetricsEvent(event: HostMetricsEvent): void {
   applySummary(event.summary);
 }
 
+type HostMetricsApi = NonNullable<NonNullable<typeof window.electron>["hostMetrics"]>;
+
+/** Main samples this machine's own load beside other hosts only while a view follows the figures. */
+function announceFollowing(api: HostMetricsApi, following: boolean): void {
+  if (typeof api.setFollowing !== "function") return;
+  void api
+    .setFollowing({ following })
+    .catch((error: unknown) => logWarn("[Hosts] Couldn't update host figures demand", { error }));
+}
+
 /**
  * Follow host summaries into the list and the sparklines' history. Seeds once
  * remote hosts are actually in use, so a machine with none reads nothing.
@@ -176,6 +186,7 @@ function followFigures(): () => void {
   const current = ++figuresGeneration;
   const live = () => current === figuresGeneration;
   const off = api.onEvent(applyMetricsEvent);
+  announceFollowing(api, true);
   const seed = () =>
     api
       .getSnapshots()
@@ -196,6 +207,7 @@ function followFigures(): () => void {
   return () => {
     figuresGeneration += 1;
     off();
+    announceFollowing(api, false);
   };
 }
 
