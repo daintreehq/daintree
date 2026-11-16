@@ -208,6 +208,13 @@ export const CHANNEL_LOCALITY = {
   "clipboard:write-image": "shell",
   "clipboard:write-selection": "shell",
   "clipboard:write-text": "shell",
+  // Runs execute in this machine's own views and are held by its main (#17085).
+  "bulk-worktree-runs:changed": "shell",
+  "bulk-worktree-runs:command": "shell",
+  "bulk-worktree-runs:commanded": "shell",
+  "bulk-worktree-runs:dismiss": "shell",
+  "bulk-worktree-runs:list": "shell",
+  "bulk-worktree-runs:publish": "shell",
   "codex:find-sessions": "host",
   "codex:list-subagents": "host",
   "codex:match-restore-sessions": "host",

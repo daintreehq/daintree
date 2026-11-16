@@ -43,3 +43,4 @@ export { agentDefaultsClient } from "./agentDefaultsClient";
 export { agentToolbarPinsClient } from "./agentToolbarPinsClient";
 export { projectPresenceClient } from "./projectPresenceClient";
 export { watchdogClient } from "./watchdogClient";
+export { bulkWorktreeRunsClient } from "./bulkWorktreeRunsClient";

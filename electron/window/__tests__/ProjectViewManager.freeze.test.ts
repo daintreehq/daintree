@@ -144,6 +144,11 @@ import {
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
 import {
+  BulkWorktreeRunRegistry,
+  _resetBulkWorktreeRunHoldsForTests,
+} from "../../services/BulkWorktreeRunRegistry.js";
+import type { BulkWorktreeRunSnapshot } from "../../../shared/types/ipc/bulkWorktreeRuns.js";
+import {
   CACHED_VIEW_FLUSH_TIMEOUT_MS,
   _resetCachedViewFlushForTests,
   recordCachedViewFlushArmed,
@@ -172,6 +177,28 @@ function createMockWindow() {
       removeChildView: vi.fn(),
     },
     webContents: createMockWebContents(),
+  };
+}
+
+function liveBulkRun(runId: string): BulkWorktreeRunSnapshot {
+  return {
+    runId,
+    projectId: "proj-a",
+    mode: "issue",
+    phase: "running",
+    items: [{ number: 1, title: "Issue 1", stage: "worktree-creating", attempt: 1 }],
+    startedAt: 0,
+    updatedAt: 0,
+    controllable: true,
+  };
+}
+
+/** Holds the view as a live bulk run does; the returned function ends the run. */
+function runBulkCreationIn(webContentsId: number): () => void {
+  const registry = new BulkWorktreeRunRegistry({ broadcast: () => {}, sendCommand: () => true });
+  registry.publish(webContentsId, "proj-a", liveBulkRun("run-1"));
+  return () => {
+    registry.publish(webContentsId, "proj-a", { ...liveBulkRun("run-1"), phase: "done" });
   };
 }
 
@@ -282,6 +309,35 @@ describe("ProjectViewManager — efficiency freeze", () => {
     // The renderer schedules its idle GC on that signal (lesson #4684).
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
     expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
+  });
+
+  describe("a view running a bulk worktree creation (#17085)", () => {
+    afterEach(() => _resetBulkWorktreeRunHoldsForTests());
+
+    it("isn't frozen as the user leaves it", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      runBulkCreationIn(initialWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+    });
+
+    it("is skipped by the batch freeze, and frozen once the run ends", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const endRun = runBulkCreationIn(initialWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+      // The run's end freezes it on its own, with no sweep to wait for.
+      endRun();
+      vi.advanceTimersByTime(0);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
   });
 
   describe("a view a dictation still needs (#14773)", () => {

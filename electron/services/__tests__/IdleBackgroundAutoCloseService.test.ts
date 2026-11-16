@@ -323,6 +323,7 @@ function makePvm(
     getOutgoingBridgeProjectId: () => outgoingId,
     isMcpDispatchProtected: (projectId: string) => mcpDispatchFor.has(projectId),
     isDictationHeld: (projectId: string) => dictationFor.has(projectId),
+    isBulkWorktreeRunHeld: () => false,
   } as unknown as ProjectViewManager;
 }
 
@@ -1131,6 +1132,7 @@ describe("IdleBackgroundAutoCloseService", () => {
         getOutgoingBridgeProjectId: () => null,
         isMcpDispatchProtected: () => false,
         isDictationHeld: () => false,
+        isBulkWorktreeRunHeld: () => false,
       } as unknown as ProjectViewManager;
       const service = makeService();
       // A healthy PVM marks active-1 as foreground; the throwing one must not

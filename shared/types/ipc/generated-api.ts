@@ -82,6 +82,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:restart-in-safe-mode"]["args"]
     ): Promise<IpcInvokeMap["app:restart-in-safe-mode"]["result"]>;
   };
+  bulkWorktreeRuns: {
+    command(
+      ...args: IpcInvokeMap["bulk-worktree-runs:command"]["args"]
+    ): Promise<IpcInvokeMap["bulk-worktree-runs:command"]["result"]>;
+    dismiss(
+      ...args: IpcInvokeMap["bulk-worktree-runs:dismiss"]["args"]
+    ): Promise<IpcInvokeMap["bulk-worktree-runs:dismiss"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["bulk-worktree-runs:list"]["args"]
+    ): Promise<IpcInvokeMap["bulk-worktree-runs:list"]["result"]>;
+    publish(
+      ...args: IpcInvokeMap["bulk-worktree-runs:publish"]["args"]
+    ): Promise<IpcInvokeMap["bulk-worktree-runs:publish"]["result"]>;
+  };
   canopy: {
     answer(
       ...args: IpcInvokeMap["canopy:answer"]["args"]

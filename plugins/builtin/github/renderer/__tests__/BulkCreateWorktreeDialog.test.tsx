@@ -218,6 +218,7 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
     recipeSelectionTouchedRef: { current: false },
+    markRecipeSelectionTouched: vi.fn(),
     selectedRecipe:
       mockSelectedRecipeId && mockSelectedRecipeId !== "__clone_layout__"
         ? { name: "Test Recipe", terminals: [{}] }
@@ -314,6 +315,18 @@ vi.mock("@/lib/utils", () => ({
 }));
 
 import { BulkCreateWorktreeDialog } from "../components/BulkCreateWorktreeDialog";
+import {
+  _resetBulkCreateRunsForTests,
+  useBulkCreateRunStore,
+} from "../components/bulkCreateRunner";
+
+/** Mid-run, the footer's Cancel stops the run; closing the dialog doesn't. */
+async function clickCancelRun() {
+  await act(async () => {
+    screen.getByTestId("bulk-create-cancel-run-button").click();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
 
 async function advanceTimersGradually(totalMs: number, stepMs = 100) {
   for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
@@ -380,6 +393,8 @@ beforeAll(() => whenPluginUiReady(), 30_000);
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
+  // Runs outlive the dialog by design, so each test starts with none.
+  _resetBulkCreateRunsForTests();
   setupWorktreeCreateMocks();
   mockTerminals = [];
   mockSelectedRecipeId = null;
@@ -687,7 +702,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
   });
 
-  it("allows create after cancel while in-flight tasks are pending", async () => {
+  it("allows a new run once a cancelled one is acknowledged", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -699,25 +714,34 @@ describe("BulkCreateWorktreeDialog", () => {
     const onClose = vi.fn();
     const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
 
-    // Start the batch
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Cancel before in-flight tasks resolve — guard must be released by handleClose
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
-    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    // Reopening while the cancel drains shows that run, not a fresh form.
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} isOpen={false} onClose={onClose} />);
+    });
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+    });
+    expect(screen.getByText("Cancelling\u2026")).toBeTruthy();
+
+    await act(async () => {
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(screen.getByText("Creation cancelled")).toBeTruthy();
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-done-button").click();
+    });
     await act(async () => {
       rerender(<BulkCreateWorktreeDialog {...defaultProps} isOpen={false} onClose={onClose} />);
     });
 
-    // Reset mocks for the second run
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
 
@@ -725,7 +749,6 @@ describe("BulkCreateWorktreeDialog", () => {
       rerender(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
     });
 
-    // Create should work again — guard was released by handleClose
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
@@ -1037,7 +1060,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.queryByText(/failed/)).toBeNull();
   });
 
-  it("stops processing items when dialog is closed during execution", async () => {
+  it("stops queued items on an explicit cancel and reports the ones already underway", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -1064,18 +1087,14 @@ describe("BulkCreateWorktreeDialog", () => {
     // never starts.
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
-    // Close the dialog before remaining items finish
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
-    expect(onClose).toHaveBeenCalled();
+    // The dialog stays to report the cancel; the creates already sent can't
+    // be called back, so the run waits for them.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText("Cancelling\u2026")).toBeTruthy();
+    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
 
-    // Resolving the in-flight items after cancel must not trigger item 4 —
-    // runIdRef has been bumped so the stale handlers exit early.
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       resolvers[1]?.(createdWorktree("wt-2"));
@@ -1084,7 +1103,22 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
-    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+    expect(screen.getByText("Creation cancelled")).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
+    // The three that landed are reported as created; the queued one never started.
+    expect(screen.getAllByText("Cancelled after its worktree was created")).toHaveLength(3);
+    expect(screen.getAllByText("Cancelled")).toHaveLength(1);
+    // The summary counts the worktrees that exist, and nothing still spins.
+    expect(screen.getByText(/3 of 4 created/)).toBeTruthy();
+    expect(screen.getByText(/4 cancelled/)).toBeTruthy();
+    expect(document.querySelectorAll(".animate-spin")).toHaveLength(0);
+    const run = Object.values(useBulkCreateRunStore.getState().runs)[0]!;
+    expect(run.progress.items.get(4)?.worktreeId).toBeUndefined();
+    expect([1, 2, 3].map((n) => run.progress.items.get(n)?.worktreeId)).toEqual([
+      "wt-1",
+      "wt-2",
+      "wt-3",
+    ]);
   });
 
   it("does not run the recipe for an item whose worktree lands after cancel", async () => {
@@ -1116,13 +1150,7 @@ describe("BulkCreateWorktreeDialog", () => {
     const startedCreates = mockWorktreeCreate.mock.calls.length;
     expect(startedCreates).toBeGreaterThan(0);
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     // The creates were already past the point of no return — let them land.
     await act(async () => {
@@ -1138,7 +1166,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(startedCreates);
   });
 
-  it("reports the worktrees a cancel left behind", async () => {
+  it("reports the worktrees a cancel left behind once the work underway settles", async () => {
     const { notify: mockNotify } = await import("@/lib/notify");
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
@@ -1150,7 +1178,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     const props = {
       ...defaultProps,
-      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
+      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4), makeIssue(5)],
     };
     render(<BulkCreateWorktreeDialog {...props} />);
 
@@ -1158,40 +1186,38 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Land one worktree so the snapshot has both a created and an in-flight count.
+    // Land one worktree, which lets a fourth item start; the fifth stays queued.
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
+    expect(resolvers).toHaveLength(4);
 
-    const stillCreating = resolvers.length - 1;
+    await clickCancelRun();
 
+    // Nothing is reported until the creates already underway settle.
+    expect(mockNotify).not.toHaveBeenCalled();
+
+    // Two of the three still underway land; the run waits for the third.
     await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mockNotify).not.toHaveBeenCalled();
+    await act(async () => {
+      resolvers[3]?.(createdWorktree("wt-4"));
+      await vi.advanceTimersByTimeAsync(1000);
     });
 
+    expect(mockNotify).toHaveBeenCalledTimes(1);
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "warning",
-        message: expect.stringContaining(
-          `1 of ${props.selectedIssues.length} worktrees created`
-        ) as unknown as string,
+        message: `4 of ${props.selectedIssues.length} worktrees created.`,
       })
     );
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining(`${stillCreating} already underway`) as unknown as string,
-      })
-    );
-
-    await act(async () => {
-      resolvers.slice(1).forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 2}`)));
-      await vi.advanceTimersByTimeAsync(1000);
-    });
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(4);
   });
 
   it("stays silent when a cancel lands before any worktree is underway", async () => {
@@ -1222,13 +1248,7 @@ describe("BulkCreateWorktreeDialog", () => {
     );
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     // Nothing escaped, so the close is its own confirmation — no toast.
     expect(mockNotify).not.toHaveBeenCalled();
@@ -1240,7 +1260,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
   });
 
-  it("stops the batch when the dialog unmounts without going through Cancel", async () => {
+  it("keeps the batch going when the dialog closes, and shows it again on reopen", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ index: 0, terminalId: "t-1" }],
@@ -1255,7 +1275,7 @@ describe("BulkCreateWorktreeDialog", () => {
     );
 
     // Four items against concurrency 3 leaves one in the backlog, so the
-    // unmount has to both stop the running items and drop the queued one.
+    // close lands with work both running and queued.
     const props = {
       ...defaultProps,
       selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
@@ -1265,25 +1285,38 @@ describe("BulkCreateWorktreeDialog", () => {
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
-    const startedCreates = mockWorktreeCreate.mock.calls.length;
-    expect(startedCreates).toBeGreaterThan(0);
-    expect(startedCreates).toBeLessThan(props.selectedIssues.length);
-
-    // The parent drops the dialog (ProjectDialogHost renders it only while open),
-    // bypassing handleClose entirely.
+    // The parent drops the dialog (ProjectDialogHost renders it only while open).
     await act(async () => {
       unmount();
       await vi.advanceTimersByTimeAsync(0);
     });
 
     await act(async () => {
-      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      resolvers.slice(0, 3).forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The queued item still starts once a slot frees.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(4);
+
+    // Reopening mid-run shows the live run, not a fresh form, and follows it.
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(screen.getByText("Creating worktrees\u2026")).toBeTruthy();
+    expect(screen.getByText(/3 of 4 created/)).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-cancel-run-button")).toBeTruthy();
+
+    await act(async () => {
+      resolvers[3]?.(createdWorktree("wt-4"));
       await vi.advanceTimersByTimeAsync(5000);
     });
 
-    expect(mockRunRecipeWithResults).not.toHaveBeenCalled();
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(startedCreates);
+    expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(4);
+    const runs = Object.values(useBulkCreateRunStore.getState().runs);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.progress.phase).toBe("done");
+    expect(screen.getByText(/4 of 4 created/)).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
   });
 
   it("does not focus a clone-layout panel spawned into a cancelled run", async () => {
@@ -1310,13 +1343,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockAddPanel).toHaveBeenCalled();
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     await act(async () => {
       releasePanel("clone-terminal-id");
@@ -1354,13 +1381,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     await act(async () => {
       releaseRecipe({ spawned: [{ index: 0, terminalId: "t-1" }], failed: [] });
@@ -1394,14 +1415,8 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/2 failed/)).toBeTruthy();
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
 
-    // Dismissal is unblocked again, so the user isn't trapped.
-    const onCloseSpy = vi.fn();
-    cleanup();
-    render(<BulkCreateWorktreeDialog {...props} onClose={onCloseSpy} />);
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    // The user isn't trapped: the ended run closes like any other.
+    const onCloseSpy = props.onClose;
     await act(async () => {
       screen
         .getByTestId("bulk-create-worktree-dialog")
@@ -1423,8 +1438,8 @@ describe("BulkCreateWorktreeDialog", () => {
     const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
     render(<BulkCreateWorktreeDialog {...props} />);
 
-    // The header X is unlabelled and correctly disappears mid-run; only the
-    // footer's ordering is what Cancel's hit area depends on.
+    // The header X is unlabelled; only the footer's ordering is what Cancel's
+    // hit area depends on.
     const footerLabels = () =>
       screen
         .getAllByRole("button")
@@ -1436,10 +1451,13 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Cancel must not inherit the CTA's slot once the run commits.
+    // Cancel must not inherit the CTA's slot once the run commits; it only
+    // changes to say it now stops the run.
     const confirmButton = screen.getByTestId("bulk-create-confirm-button");
     expect(confirmButton.getAttribute("aria-disabled")).toBe("true");
-    expect(footerLabels()).toEqual(footerOrderBefore);
+    expect(footerLabels()).toEqual(
+      footerOrderBefore.map((label) => (label === "Cancel" ? "Cancel run" : label))
+    );
 
     // A stray second click on the now-disabled CTA starts nothing.
     await act(async () => {
@@ -1454,7 +1472,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
   });
 
-  it("blocks Escape and backdrop dismissal while executing", async () => {
+  it("lets Escape and the backdrop close the dialog mid-run without stopping the run", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -1472,30 +1490,28 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     const dialog = screen.getByTestId("bulk-create-worktree-dialog");
-    expect(dialog.dataset.dismissible).toBe("false");
+    expect(dialog.dataset.dismissible).toBe("true");
 
     await act(async () => {
-      dialog.click();
       dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
     });
+    expect(onClose).toHaveBeenCalledTimes(1);
 
-    expect(onClose).not.toHaveBeenCalled();
-
-    // The footer Cancel remains the deliberate way out.
     await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
+      dialog.click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(onClose).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(1000);
     });
+
+    const run = Object.values(useBulkCreateRunStore.getState().runs)[0]!;
+    expect(run.progress.phase).toBe("done");
+    expect(run.progress.items.get(1)?.stage).toBe("succeeded");
   });
 
   it("keeps completed items visible after worktreeMap updates during execution", async () => {
@@ -1657,12 +1673,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Cancel while pre-query is still pending.
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     // Reject the pending pre-query after the cancel has bumped runIdRef.
     await act(async () => {
@@ -1670,10 +1681,12 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(onClose).toHaveBeenCalled();
-    // No stale dispatches — the done button never appears, no error rows
-    // bleed into the closed dialog, and no worktree.create was triggered.
-    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+    // No stale dispatches — the rejection shows as no error row, and no
+    // worktree.create was triggered. The run ends cancelled, not failed.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText("IPC failure after cancel")).toBeNull();
+    expect(screen.getByText("Creation cancelled")).toBeTruthy();
+    expect(screen.getAllByText("Cancelled")).toHaveLength(3);
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
   });
 
@@ -2197,18 +2210,29 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
 
     // Cancel before backoff expires.
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await clickCancelRun();
 
     // Drain remaining backoff window — the stale-run guard must short-circuit
     // the loop before another IPC call goes out.
     await advanceTimersGradually(35000);
 
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it("still assigns when the dialog closes before its identity lookup answers", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    // The dialog's lookup never answers; the run's own one does.
+    mockGetCurrentUser.mockImplementationOnce(() => new Promise(() => {}));
+    mockGetCurrentUser.mockImplementation(async () => ({ login: "octocat" }));
+
+    const { unmount } = render(<BulkCreateWorktreeDialog {...assignProps} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      unmount();
+    });
+    await advanceTimersGradually(1000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "octocat");
   });
 
   it("accounts mixed assignment outcomes correctly in a 3-item batch", async () => {

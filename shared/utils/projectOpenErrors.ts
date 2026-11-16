@@ -164,6 +164,8 @@ export function getProjectHeldElsewhereMessage(
       return `${subject}, which is still saving its changes. Try again in a moment.`;
     case "dictation":
       return `${subject}, where dictation is still running. Try again once it stops.`;
+    case "worktree-creation":
+      return `${subject}, where worktrees are still being created. Try again once they finish.`;
     case "unavailable":
       return `${subject} and is still busy there. Try again in a moment.`;
   }

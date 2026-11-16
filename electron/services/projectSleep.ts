@@ -65,7 +65,7 @@ export type SleepProjectOptions =
 type PolicyRefusal = ViewRefusal | "ineligible" | PanelRecoveryHold;
 
 /** What a project's view is doing that an automatic teardown waits out. */
-type ViewRefusal = "mcp-dispatch" | "dictation";
+type ViewRefusal = "mcp-dispatch" | "dictation" | "worktree-creation";
 
 export type SleepProjectOutcome =
   | ({ status: "slept" } & ProjectSleepResult)
@@ -77,6 +77,8 @@ export type SleepProjectOutcome =
        * `mcp-dispatch`: an MCP dispatch is waiting on one of its views.
        * `dictation`: a dictation session, or the cleanup after its stop, still
        * needs one of its views.
+       * `worktree-creation`: a bulk worktree creation still runs in one of its
+       * views (#17085).
        * `ineligible`: the policy said no at a later check.
        * `panel-unrecoverable` / `panel-unknown`: a view holds work recovery
        * storage would not bring back, or could not say whether it does.
@@ -447,6 +449,7 @@ function viewRefusal(projectId: string, provider: ProjectViewManagersProvider): 
     try {
       if (manager.isMcpDispatchProtected(projectId)) return "mcp-dispatch";
       if (manager.isDictationHeld(projectId)) return "dictation";
+      if (manager.isBulkWorktreeRunHeld(projectId)) return "worktree-creation";
     } catch {
       return "mcp-dispatch";
     }

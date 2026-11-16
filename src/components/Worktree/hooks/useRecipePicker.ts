@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { TerminalRecipe } from "@/types";
 
 export const CLONE_LAYOUT_ID = "__clone_layout__";
@@ -33,6 +33,8 @@ export interface UseRecipePickerResult {
   recipePickerOpen: boolean;
   setRecipePickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   recipeSelectionTouchedRef: React.MutableRefObject<boolean>;
+  /** Records a pick the user made, so a later default doesn't replace it. */
+  markRecipeSelectionTouched: () => void;
   selectedRecipe: TerminalRecipe | undefined;
 }
 
@@ -146,12 +148,19 @@ export function useRecipePicker({
     [selectedRecipeId, startingLayoutRecipes]
   );
 
+  // A caller writing the ref from its own callback is a mutation of a hook's
+  // return value as far as React Compiler can tell; here it is a known ref.
+  const markRecipeSelectionTouched = useCallback(() => {
+    recipeSelectionTouchedRef.current = true;
+  }, []);
+
   return {
     selectedRecipeId,
     setSelectedRecipeId,
     recipePickerOpen,
     setRecipePickerOpen,
     recipeSelectionTouchedRef,
+    markRecipeSelectionTouched,
     selectedRecipe,
   };
 }

@@ -28,6 +28,7 @@ import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isBulkWorktreeRunViewHeld } from "../services/BulkWorktreeRunRegistry.js";
 import { isCachedViewFlushPending, sendViewCached } from "../services/cachedViewFlush.js";
 import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
@@ -177,6 +178,8 @@ export function deactivateEntry(
       // A dictation started here still captures its audio in this renderer,
       // and its cleanup writes into its draft (#14773).
       const dictating = isDictationViewHeld(vc);
+      // A bulk worktree creation running there would stall mid-batch (#17085).
+      const creatingWorktrees = isBulkWorktreeRunViewHeld(vc);
       // A flush the cached edge just started runs sequential IPC a freeze would
       // cut short; the manager freezes the view once it settles (#15633).
       const flushing = isCachedViewFlushPending(vc);
@@ -186,6 +189,7 @@ export function deactivateEntry(
         !mcp.unknown &&
         !remoteAssistant &&
         !dictating &&
+        !creatingWorktrees &&
         !flushing
       ) {
         void freezeWebContents(vc);

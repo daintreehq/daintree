@@ -162,6 +162,22 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "bulk-worktree-runs:command": {
+    args: [command: { runId: string; kind: "cancel" | "retry-failed" }];
+    result: import("./bulkWorktreeRuns.js").BulkWorktreeRunCommandResult;
+  };
+  "bulk-worktree-runs:dismiss": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "bulk-worktree-runs:list": {
+    args: [];
+    result: import("./bulkWorktreeRuns.js").BulkWorktreeRunSnapshot[];
+  };
+  "bulk-worktree-runs:publish": {
+    args: [snapshot: import("./bulkWorktreeRuns.js").BulkWorktreeRunSnapshot];
+    result: void;
+  };
   "canopy-host:assistant-invoke": {
     args: [
       consumer: string,
@@ -4126,12 +4142,12 @@ export interface GeneratedIpcInvokeMap {
               | "failed"
               | "skipped"
               | "cancelled"
-              | "exited"
               | "done"
+              | "interrupted"
+              | "exited"
               | "needs-you"
               | "replaced"
-              | "lost"
-              | "interrupted";
+              | "lost";
             evidence:
               | {
                   kind: "handback";
@@ -4248,12 +4264,12 @@ export interface GeneratedIpcInvokeMap {
               | "failed"
               | "skipped"
               | "cancelled"
-              | "exited"
               | "done"
+              | "interrupted"
+              | "exited"
               | "needs-you"
               | "replaced"
-              | "lost"
-              | "interrupted";
+              | "lost";
             evidence:
               | {
                   kind: "handback";

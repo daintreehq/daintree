@@ -19,6 +19,7 @@ import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
 import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isBulkWorktreeRunViewHeld } from "../services/BulkWorktreeRunRegistry.js";
 import { isCachedViewFlushPending } from "../services/cachedViewFlush.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import {
@@ -545,6 +546,11 @@ export function evictStaleViews(
   // own within a few seconds.
   const flushHeldProjectIds = new Set<string>();
 
+  // Views running a bulk worktree creation (#17085): tearing one down leaves
+  // the batch half made. Excluded outright like a dictation; the hold lifts
+  // when the run ends and lapses on its own if the view stops reporting.
+  const bulkRunHeldProjectIds = new Set<string>();
+
   // Views whose renderer says it holds work its teardown would lose (#14095):
   // the same answer automatic Sleep asks for (`readPanelRecoveryHold`), pushed
   // by the renderer as it changes so this synchronous pass can read it. A cap
@@ -586,6 +592,10 @@ export function evictStaleViews(
       }
       if (isCachedViewFlushPending(entry.view.webContents)) {
         flushHeldProjectIds.add(id);
+        continue;
+      }
+      if (isBulkWorktreeRunViewHeld(entry.view.webContents)) {
+        bulkRunHeldProjectIds.add(id);
         continue;
       }
       if (!pressurePass && isPanelRecoveryHeldReported(entry.view.webContents)) {
@@ -885,6 +895,7 @@ export function evictStaleViews(
       mcpLeasedProjectIds.size > 0 ||
       dictationHeldProjectIds.size > 0 ||
       flushHeldProjectIds.size > 0 ||
+      bulkRunHeldProjectIds.size > 0 ||
       recoveryHeldProjectIds.size > 0)
   ) {
     // `overflow` counts views over `baseMax`, the cap before the assistant
@@ -921,6 +932,10 @@ export function evictStaleViews(
         : {}),
       // Present only while a cached-edge flush holds a view (#15633).
       ...(flushHeldProjectIds.size > 0 ? { flushHeldProjectIds: [...flushHeldProjectIds] } : {}),
+      // Present only while a bulk worktree creation holds a view (#17085).
+      ...(bulkRunHeldProjectIds.size > 0
+        ? { bulkRunHeldProjectIds: [...bulkRunHeldProjectIds] }
+        : {}),
       // Present only when a view is waiting on its own unsaved work (#14095).
       ...(recoveryHeldProjectIds.size > 0
         ? { recoveryHeldProjectIds: [...recoveryHeldProjectIds] }
