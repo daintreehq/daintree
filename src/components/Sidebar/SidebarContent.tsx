@@ -134,7 +134,7 @@ const WORKTREE_SKELETON_CARDS = [
   { id: "d", titleWidth: "36%", subtitleWidth: "48%" },
 ] as const;
 
-interface SidebarVirtuosoContext {
+export interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   keyboardCursorId: string | null;
@@ -198,7 +198,8 @@ function computeSidebarItemKey(_index: number, item: SidebarFlatItem): string {
   return item.id;
 }
 
-function renderSidebarFlatItem(
+/** @internal Exported for the row-render test; Virtuoso is its only caller. */
+export function renderSidebarFlatItem(
   _index: number,
   item: SidebarFlatItem,
   context: SidebarVirtuosoContext

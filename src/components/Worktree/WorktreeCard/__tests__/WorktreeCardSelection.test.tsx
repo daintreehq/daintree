@@ -71,8 +71,14 @@ vi.mock("@/hooks/app/useWorktreeDevServerSession", () => ({
   useWorktreeDevServerSession: () => undefined,
 }));
 
+const pluginMenuReads = vi.hoisted(() => ({
+  calls: [] as Array<{ location: string; ctx: unknown }>,
+}));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({
-  usePluginContextMenuItems: () => [],
+  usePluginContextMenuItems: (location: string, ctx: unknown) => {
+    pluginMenuReads.calls.push({ location, ctx });
+    return [];
+  },
 }));
 
 vi.mock("@/hooks/useForgeTooltip", () => {
@@ -237,6 +243,7 @@ function selectTextOf(node: Node) {
 
 beforeEach(() => {
   dispatch.mockClear();
+  pluginMenuReads.calls = [];
   mockTerminals = [SESSION];
   renderDialogLayer = () => null;
   deleteDialogOpen = false;
@@ -548,5 +555,39 @@ describe("WorktreeCard delete Retry", () => {
     act(() => store.setState({ deletingIds: new Set([WORKTREE.id]) }));
 
     expect(deleteDialogOpen).toBe(false);
+  });
+});
+
+// #17072 — every sidebar card carries a closed context menu and a closed ⋯
+// menu; their plugin rows are read only once one of them opens.
+describe("WorktreeCard plugin menu items", () => {
+  it("reads nothing while both menus are closed", () => {
+    renderCard({ isActive: false });
+    expect(pluginMenuReads.calls).toEqual([]);
+  });
+
+  it("reads this worktree's items when the context menu opens", () => {
+    renderCard({ isActive: false });
+    act(() => {
+      fireEvent.contextMenu(card());
+    });
+    expect(pluginMenuReads.calls.length).toBeGreaterThan(0);
+    expect(pluginMenuReads.calls.at(-1)).toEqual({
+      location: "worktree",
+      ctx: { worktreeId: WORKTREE.id },
+    });
+  });
+
+  it("reads this worktree's items when the More actions menu opens", () => {
+    renderCard({ isActive: false });
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    act(() => {
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    expect(pluginMenuReads.calls.at(-1)).toEqual({
+      location: "worktree",
+      ctx: { worktreeId: WORKTREE.id },
+    });
   });
 });
