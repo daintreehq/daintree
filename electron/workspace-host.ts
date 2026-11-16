@@ -40,7 +40,6 @@ import {
   closeAllParcelWatcherSubscriptions,
   getParcelWatcherLifecycleStats,
 } from "./utils/parcelWatcherBackend.js";
-import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { WorktreePortRegistry } from "./workspace-host/worktreePortRegistry.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
@@ -114,7 +113,7 @@ const DIRECT_RENDERER_EVENTS = new Set([
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
-  fanoutEventToWorktreePorts(worktreePorts.ports, event);
+  worktreePorts.fanout(event);
 }
 
 async function handleWorktreePortRequest(
@@ -341,7 +340,7 @@ async function handleWorktreePortRequest(
   }
 }
 
-function attachWorktreePort(newPort: MessagePort, portId: number | undefined): void {
+function attachWorktreePort(newPort: MessagePort, portId: number): void {
   newPort.start();
   worktreePorts.add(newPort, portId);
   workspaceService.resetEmitGate();
@@ -377,7 +376,7 @@ function attachWorktreePort(newPort: MessagePort, portId: number | undefined): v
   // so this line never existed in a packaged build — the one place it was
   // needed to tell a brokered port from a missing one (#11922).
   logInfo("[WorkspaceHost] Worktree port attached", {
-    portId: portId ?? null,
+    portId,
     activePorts: worktreePorts.ports.length,
   });
 }
@@ -530,10 +529,14 @@ port.on("message", async (rawMsg: any) => {
   // Handle MessagePort transfers (worktree-specific port with request/response correlation)
   const transferredPorts = rawMsg?.ports || [];
   if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
-    attachWorktreePort(
-      transferredPorts[0] as MessagePort,
-      typeof msg.portId === "number" ? msg.portId : undefined
-    );
+    const transferred = transferredPorts[0] as MessagePort;
+    if (typeof msg.portId === "number") {
+      attachWorktreePort(transferred, msg.portId);
+    } else {
+      // A port main cannot name is one it could never retire.
+      transferred.close();
+      console.warn("[WorkspaceHost] Refused a worktree port without an id");
+    }
     return;
   }
   if (msg?.type === "detach-worktree-port") {

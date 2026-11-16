@@ -107,6 +107,21 @@ describe("fanoutEventToPorts", () => {
     expect(logger.error).toHaveBeenCalledTimes(3);
   });
 
+  it("reports each dropped port before closing it, and only dropped ones", () => {
+    const good = makePort();
+    const bad = makePort(true);
+    const ports = [good, bad];
+    const order: string[] = [];
+    bad.close.mockImplementation(() => order.push("close"));
+    const onDropped = vi.fn(() => order.push("dropped"));
+
+    fanoutEventToPorts(ports, { type: "worktree-update" }, { error: vi.fn() }, onDropped);
+
+    expect(onDropped).toHaveBeenCalledTimes(1);
+    expect(onDropped).toHaveBeenCalledWith(bad);
+    expect(order).toEqual(["dropped", "close"]);
+  });
+
   it("swallows errors thrown by close() itself", () => {
     const bad = makePort(true);
     bad.close = vi.fn(() => {

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { fanoutEventToPorts } from "../worktreePortFanout.js";
 import { WorktreePortRegistry } from "../worktreePortRegistry.js";
 
 function makePort(options: { throwOnPost?: boolean; throwOnClose?: boolean } = {}) {
@@ -19,7 +18,7 @@ function makePort(options: { throwOnPost?: boolean; throwOnClose?: boolean } = {
 
 type Port = ReturnType<typeof makePort>;
 
-function attach(registry: WorktreePortRegistry<Port>, port: Port, portId?: number): void {
+function attach(registry: WorktreePortRegistry<Port>, port: Port, portId: number): void {
   registry.add(port, portId);
   port.onClose.add(() => registry.forget(port));
 }
@@ -36,7 +35,7 @@ describe("WorktreePortRegistry", () => {
 
     expect(retired.close).toHaveBeenCalledTimes(1);
     expect(registry.ports).toEqual([live]);
-    fanoutEventToPorts(registry.ports, { type: "worktree-update" });
+    registry.fanout({ type: "worktree-update" });
     expect(retired.postMessage).not.toHaveBeenCalled();
     expect(live.postMessage).toHaveBeenCalledTimes(1);
     expect(live.close).not.toHaveBeenCalled();
@@ -65,15 +64,34 @@ describe("WorktreePortRegistry", () => {
     expect(port.close).toHaveBeenCalledTimes(1);
   });
 
-  it("forgets the id of a port the fan-out dropped after a failed post", () => {
+  it("forgets the id of a port the fan-out dropped, even when its close never fires", () => {
     const registry = new WorktreePortRegistry<Port>();
-    const broken = makePort({ throwOnPost: true });
+    const broken = makePort({ throwOnPost: true, throwOnClose: true });
+    const healthy = makePort();
     attach(registry, broken, 3);
+    attach(registry, healthy, 4);
 
-    fanoutEventToPorts(registry.ports, { type: "worktree-update" }, { error: vi.fn() });
+    registry.fanout({ type: "worktree-update" }, { error: vi.fn() });
 
-    expect(registry.ports).toEqual([]);
+    expect(registry.ports).toEqual([healthy]);
+    expect(healthy.postMessage).toHaveBeenCalledTimes(1);
     expect(registry.detach(3)).toBe(false);
+  });
+
+  it("closes the port an id named before when the id is reused", () => {
+    const registry = new WorktreePortRegistry<Port>();
+    const first = makePort();
+    const second = makePort();
+    attach(registry, first, 6);
+
+    attach(registry, second, 6);
+
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(registry.ports).toEqual([second]);
+    // The first port's late close cannot take the name from its replacement.
+    first.close();
+    expect(registry.detach(6)).toBe(true);
+    expect(second.close).toHaveBeenCalledTimes(1);
   });
 
   it("detaches only once, even when the port's close re-enters the registry", () => {
@@ -92,16 +110,6 @@ describe("WorktreePortRegistry", () => {
     attach(registry, port, 11);
 
     expect(registry.detach(11)).toBe(true);
-    expect(registry.ports).toEqual([]);
-  });
-
-  it("keeps an unnamed port in the fan-out until it closes", () => {
-    const registry = new WorktreePortRegistry<Port>();
-    const port = makePort();
-    attach(registry, port);
-
-    expect(registry.ports).toEqual([port]);
-    port.close();
     expect(registry.ports).toEqual([]);
   });
 });

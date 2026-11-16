@@ -1,4 +1,4 @@
-import type { FanoutPort } from "./worktreePortFanout.js";
+import { fanoutEventToPorts, type FanoutLogger, type FanoutPort } from "./worktreePortFanout.js";
 
 /**
  * The workspace host's live worktree ports. Main's broker names each one when
@@ -7,13 +7,16 @@ import type { FanoutPort } from "./worktreePortFanout.js";
  * instead, and only the host can actually close it (#17037).
  */
 export class WorktreePortRegistry<TPort extends FanoutPort> {
-  /** The fan-out list. `fanoutEventToPorts` splices a port whose post throws. */
+  /** In attach order; only the registry and its fan-out change it. */
   readonly ports: TPort[] = [];
   private readonly byId = new Map<number, TPort>();
 
-  add(port: TPort, portId: number | undefined): void {
+  add(port: TPort, portId: number): void {
+    // The broker never reuses a token, but a name must keep meaning one port.
+    const previous = this.byId.get(portId);
+    if (previous && previous !== port) this.detach(portId);
     this.ports.push(port);
-    if (portId !== undefined) this.byId.set(portId, port);
+    this.byId.set(portId, port);
   }
 
   /** Drop a port that closed from either side. */
@@ -45,5 +48,10 @@ export class WorktreePortRegistry<TPort extends FanoutPort> {
       // Already closed; it is out of the fan-out either way.
     }
     return true;
+  }
+
+  /** Post `event` to every port, forgetting any the post fails on. */
+  fanout(event: unknown, logger?: FanoutLogger): void {
+    fanoutEventToPorts(this.ports, event, logger, (port) => this.forget(port));
   }
 }

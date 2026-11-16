@@ -967,6 +967,32 @@ describe("WorktreePortBroker host-side detach (#17037)", () => {
     expect(fresh.some((id) => detached.includes(id))).toBe(false);
   });
 
+  it("tells each host to close its ports on dispose", () => {
+    const broker = new WorktreePortBroker();
+    const first = createHost("/tmp/project-a");
+    const second = createHost("/tmp/project-b");
+    broker.brokerPort(asWorkspaceHostProcess(first), asWebContents(createWebContents()));
+    broker.brokerEndpointPort(asWorkspaceHostProcess(second), -2, vi.fn());
+
+    broker.dispose();
+
+    expect(first.detachWorktreePort).toHaveBeenCalledWith(attachedId(first));
+    expect(second.detachWorktreePort).toHaveBeenCalledWith(attachedId(second));
+  });
+
+  it("sends no detach when a confirmed port is reused", () => {
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    sendAck(webContents, { token: lastPostedToken(webContents) });
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents))).toBe(true);
+
+    expect(host.attachWorktreePort).toHaveBeenCalledTimes(1);
+    expect(host.detachWorktreePort).not.toHaveBeenCalled();
+  });
+
   it("still retires the entry when the detach throws", () => {
     const broker = new WorktreePortBroker();
     const host = createHost();

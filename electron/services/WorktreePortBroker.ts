@@ -177,9 +177,10 @@ export class WorktreePortBroker {
     }
 
     // Lifecycle listeners (stored for cleanup to prevent accumulation).
-    // port1.on("close") covers host-side shutdown/transfer paths where the
-    // renderer-side webContents events don't fire; closePortsForView is
-    // already idempotent via the map-deletion guard.
+    // port1.on("close") covers a far end that kept port1 in this process (a
+    // remote view's relay) closing it; a port transferred to a workspace host
+    // is neutered here and reports nothing. closePortsForView is idempotent
+    // via the map-deletion guard.
     const onDestroyed = () => {
       this.closePortsForView(wcId);
     };
