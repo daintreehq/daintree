@@ -70,14 +70,15 @@ function eagerClosure(entry: string): { files: Set<string>; problems: string[] }
 }
 
 describe("window roles evaluate only their own bootstrap", () => {
-  it.each(["src/main.tsx", "src/surfaceHost/SurfaceHostRoot.tsx", "src/canopyWindow/CanopyWindowRoot.tsx"])(
-    "%s reaches no project-only module",
-    (entry) => {
-      const { files, problems } = eagerClosure(entry);
-      expect(problems).toEqual([]);
-      expect(PROJECT_ONLY.filter((file) => files.has(file))).toEqual([]);
-    }
-  );
+  it.each([
+    "src/main.tsx",
+    "src/surfaceHost/SurfaceHostRoot.tsx",
+    "src/canopyWindow/CanopyWindowRoot.tsx",
+  ])("%s reaches no project-only module", (entry) => {
+    const { files, problems } = eagerClosure(entry);
+    expect(problems).toEqual([]);
+    expect(PROJECT_ONLY.filter((file) => files.has(file))).toEqual([]);
+  });
 
   it("the project shell reaches every project-only module", () => {
     // Proves the walk follows aliases far enough to see these modules at all,

@@ -176,9 +176,9 @@ describe("findEntryKey", () => {
         ...makeManifest(),
       })
     ).toBe("index.html");
-    expect(
-      findEntryKey({ "src/projectWindow/projectShell.tsx": shell, ...makeManifest() })
-    ).toBe("index.html");
+    expect(findEntryKey({ "src/projectWindow/projectShell.tsx": shell, ...makeManifest() })).toBe(
+      "index.html"
+    );
   });
 
   it("skips the raw-view SDK hooks facade entry, by name or by file", () => {

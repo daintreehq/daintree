@@ -365,7 +365,9 @@ export default defineConfig(({ command, mode }) => {
                   if (isPluginUiSourceModule(id)) return false;
                   if (isPluginSdkReactSourceModule(id)) return false;
                   const posixId = id.split(path.sep).join("/");
-                  return !posixId.endsWith("src/main.tsx") && !posixId.endsWith(PROJECT_SHELL_SOURCE);
+                  return (
+                    !posixId.endsWith("src/main.tsx") && !posixId.endsWith(PROJECT_SHELL_SOURCE)
+                  );
                 },
                 priority: 1,
                 maxSize: 400_000,

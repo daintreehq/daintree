@@ -6,7 +6,10 @@ import {
   projectShellChunkPlugin,
   rewriteProjectShellPlaceholder,
 } from "./vite-project-shell.ts";
-import { PROJECT_SHELL_CHUNK_NAME, PROJECT_SHELL_SOURCE } from "../../shared/config/projectShell.ts";
+import {
+  PROJECT_SHELL_CHUNK_NAME,
+  PROJECT_SHELL_SOURCE,
+} from "../../shared/config/projectShell.ts";
 
 const REPO = path.resolve(import.meta.dirname, "../..");
 const SHELL_FILE = "assets/project-shell-Ab3_x-9Z.js";

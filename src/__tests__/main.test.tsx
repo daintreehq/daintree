@@ -16,10 +16,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/trustedTypesPolicy", () => ({}));
 vi.mock("../lib/canvasFontWhitespaceShim", () => ({}));
 vi.mock("../index.css", () => ({}));
-vi.mock(
-  "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url",
-  () => ({ default: "/fonts/jetbrains-mono-latin-400-normal.woff2" })
-);
+vi.mock("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url", () => ({
+  default: "/fonts/jetbrains-mono-latin-400-normal.woff2",
+}));
 vi.mock("react-dom/client", () => ({ createRoot: mocks.createRoot }));
 vi.mock("../theme/applyAppTheme", () => ({ applyDefaultAppTheme: vi.fn() }));
 vi.mock("../lib/scrollbarGutter", () => ({

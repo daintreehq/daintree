@@ -53,7 +53,8 @@ function loadProjectShell(): void {
   script.src = PROJECT_SHELL_URL;
   script.addEventListener(
     "error",
-    () => reportBootstrapFailure(new Error(`Couldn't load the project shell (${PROJECT_SHELL_URL})`)),
+    () =>
+      reportBootstrapFailure(new Error(`Couldn't load the project shell (${PROJECT_SHELL_URL})`)),
     { once: true }
   );
   document.head.append(script);
