@@ -368,8 +368,9 @@ describe("WorkspaceService.getFileDiff", () => {
     async (status) => {
       const { lstat, readlink, readFile } = await import("fs/promises");
       const link = { isSymbolicLink: () => true, isDirectory: () => false, size: 37 };
-      // Once for the size gate, once for the read.
+      // Once for the size gate, once for the freshness key, once for the read.
       vi.mocked(lstat)
+        .mockResolvedValueOnce(link as never)
         .mockResolvedValueOnce(link as never)
         .mockResolvedValueOnce(link as never);
       vi.mocked(readlink).mockResolvedValueOnce("/home/me/.config/Daintree/config.json" as never);
@@ -392,6 +393,7 @@ describe("WorkspaceService.getFileDiff", () => {
     vi.mocked(stat).mockResolvedValue({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
     const link = { isSymbolicLink: () => true, isDirectory: () => false, size: 7 };
     vi.mocked(lstat)
+      .mockResolvedValueOnce(link as never)
       .mockResolvedValueOnce(link as never)
       .mockResolvedValueOnce(link as never);
 

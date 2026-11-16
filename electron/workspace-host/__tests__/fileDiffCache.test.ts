@@ -42,9 +42,15 @@ function content(tag: string, count = 400): string {
 type DiffResult = Extract<WorkspaceHostEvent, { type: "get-file-diff-result" }>;
 
 // Counts the `git diff` processes the service spawns, which is the cost the
-// cache exists to avoid. simple-git's ESM build binds `spawn` by name.
+// cache exists to avoid, and the `rev-parse` + `var` pair behind each
+// freshness probe. simple-git's ESM build binds `spawn` by name.
 let diffSpawns = 0;
+let probeSpawns = 0;
 const originalSpawn = childProcess.spawn;
+
+// Git 2.42+ names the config files it reads in `git var -l`, which is what
+// lets a continuation reuse its probe instead of spawning one per window.
+const gitListsConfigFiles = /^GIT_CONFIG_GLOBAL=/m.test(git(os.tmpdir(), "var", "-l"));
 
 describe("getFileDiff paging over a real repo", () => {
   let tmp: string;
@@ -52,9 +58,25 @@ describe("getFileDiff paging over a real repo", () => {
   let service: WorkspaceService;
   let last: DiffResult | null;
 
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeAll(async () => {
+    // The service's git reads the user's global config, which the hardened env
+    // can't redirect: point it at a home of the test's own, with no system file.
+    home = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-home-")));
+    for (const key of ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "GIT_CONFIG_NOSYSTEM"]) {
+      savedEnv[key] = process.env[key];
+    }
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
     (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
       if (Array.isArray(args[1]) && args[1].includes("diff")) diffSpawns++;
+      if (Array.isArray(args[1]) && (args[1].includes("rev-parse") || args[1].includes("var"))) {
+        probeSpawns++;
+      }
       return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
     }) as typeof originalSpawn;
     syncBuiltinESMExports();
@@ -68,9 +90,15 @@ describe("getFileDiff paging over a real repo", () => {
     (childProcess as { spawn: typeof originalSpawn }).spawn = originalSpawn;
     syncBuiltinESMExports();
     service.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
   });
 
   beforeEach(() => {
+    rmSync(path.join(home, ".gitconfig"), { force: true });
     tmp = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-cache-")));
     repo = path.join(tmp, "repo");
     git(tmp, "init", "-q", "-b", "main", repo);
@@ -173,19 +201,61 @@ describe("getFileDiff paging over a real repo", () => {
       pages++;
     }
     expect(pages).toBeGreaterThan(10);
-    // First window, then the cache fill.
+    // Both on the first window: the unpinned diff that turned out not to fit,
+    // then the one pinned to the freshness key that fills the cache.
     expect(diffSpawns - before).toBe(2);
   });
 
-  it("never caches from a first-window read", async () => {
+  it("fills the cache from a first window that does not fit", async () => {
     const set = vi.spyOn(FileDiffCache.prototype, "set");
     try {
       const result = await page("a.txt", 0);
       expect(result.truncated).toBe(true);
+      expect(set).toHaveBeenCalledTimes(1);
+      const before = diffSpawns;
+      await page("a.txt", result.nextOffset!);
+      expect(diffSpawns).toBe(before);
+    } finally {
+      set.mockRestore();
+    }
+  });
+
+  it("keeps a first read that fits one window free of freshness probes", async () => {
+    const set = vi.spyOn(FileDiffCache.prototype, "set");
+    const diffsBefore = diffSpawns;
+    const probesBefore = probeSpawns;
+    try {
+      const result = await page("a.txt", 0, { maxBytes: 1_000_000 });
+      expect(result.truncated).toBe(false);
+      expect(diffSpawns - diffsBefore).toBe(1);
+      expect(probeSpawns).toBe(probesBefore);
       expect(set).not.toHaveBeenCalled();
     } finally {
       set.mockRestore();
     }
+  });
+
+  it.skipIf(!gitListsConfigFiles)("probes freshness once for a whole paged read", async () => {
+    const before = probeSpawns;
+    let offset: number | null = 0;
+    let pages = 0;
+    while (offset !== null) {
+      offset = (await page("a.txt", offset)).nextOffset;
+      pages++;
+    }
+    expect(pages).toBeGreaterThan(10);
+    // One `rev-parse` and one `var -l`, from the first window's cache fill.
+    expect(probeSpawns - before).toBe(2);
+  });
+
+  it("probes every window again once an include could pull in any file", async () => {
+    git(repo, "config", "include.path", path.join(tmp, "extra.gitconfig"));
+    const before = probeSpawns;
+    const first = await page("a.txt", 0);
+    const second = await page("a.txt", first.nextOffset!);
+    await page("a.txt", second.nextOffset!);
+    expect(probeSpawns - before).toBe(6);
+    await expectRestMatches("a.txt", 0, expectedDiff("a.txt"));
   });
 
   it("recomputes after the worktree file changes", async () => {
@@ -214,6 +284,24 @@ describe("getFileDiff paging over a real repo", () => {
       git(repo, "config", "diff.noprefix", "true")
     );
     await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
+  });
+
+  it("recomputes after a global config change", async () => {
+    await continuationAfter("a.txt", () =>
+      writeFileSync(path.join(home, ".gitconfig"), "[diff]\n\tnoprefix = true\n")
+    );
+  });
+
+  it("recomputes after HEAD moves in a linked worktree", async () => {
+    const linked = path.join(tmp, "linked");
+    git(repo, "worktree", "add", "-q", "-b", "side", linked);
+    writeFileSync(path.join(linked, "a.txt"), content("new"));
+    const { result } = await continuationAfter(
+      "a.txt",
+      () => git(linked, "commit", "-q", "-am", "take it"),
+      { cwd: linked }
+    );
+    expect(result).toMatchObject({ diff: "NO_CHANGES", totalBytes: 0 });
   });
 
   it("recomputes after a .gitattributes change alters how git renders the diff", async () => {
