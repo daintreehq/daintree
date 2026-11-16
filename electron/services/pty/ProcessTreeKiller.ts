@@ -48,10 +48,7 @@ interface EscalationGroup {
   burst: KillBurst;
   delayMs: number;
   timer: NodeJS.Timeout | null;
-  members: Map<
-    object,
-    { freshAfter: number; run: (readCensus: () => KillCensus | null) => void }
-  >;
+  members: Map<object, { freshAfter: number; run: (readCensus: () => KillCensus | null) => void }>;
 }
 
 /**
@@ -98,11 +95,7 @@ function currentKillBurst(lineage: LineageKillSource): KillBurst {
 function readSharedCensus(lineage: LineageKillSource, freshAfter: number): KillCensus | null {
   const burst = currentKillBurst(lineage);
   const latest = burst.latest;
-  if (
-    latest &&
-    latest.seq > freshAfter &&
-    Date.now() - latest.atMs <= SHARED_CENSUS_MAX_AGE_MS
-  ) {
+  if (latest && latest.seq > freshAfter && Date.now() - latest.atMs <= SHARED_CENSUS_MAX_AGE_MS) {
     return latest.census;
   }
   const atMs = Date.now();
