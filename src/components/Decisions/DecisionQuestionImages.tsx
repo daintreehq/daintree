@@ -150,7 +150,12 @@ function ImageTile({
               src={load.url}
               alt=""
               draggable={false}
-              onError={onUndecodable}
+              onError={() => {
+                // The button goes with the image; keep a keyboard user's focus where it was.
+                const stage = stageRef.current;
+                if (stage?.contains(document.activeElement)) stage.focus({ preventScroll: true });
+                onUndecodable();
+              }}
               className="max-h-full max-w-full object-contain"
             />
           </button>

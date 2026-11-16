@@ -299,6 +299,18 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("keeps focus on a thumbnail's place when it turns out not to draw", async () => {
+    openView();
+    const button = await screen.findByRole("button", { name: "Open Before image 1" });
+    button.focus();
+    const stage = button.parentElement!;
+
+    fireEvent.error(button.querySelector("img")!);
+
+    await waitFor(() => expect(tiles()[0]!.textContent).toContain("couldn't be drawn"));
+    expect(document.activeElement).toBe(stage);
+  });
+
   it("closes back to the question on Escape, leaving the question open", async () => {
     openView();
     await openImage("Before image 1");
