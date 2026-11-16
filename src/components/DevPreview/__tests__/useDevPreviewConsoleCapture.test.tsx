@@ -245,6 +245,30 @@ describe("useDevPreviewConsoleCapture", () => {
     expect(live?.args[0]).toMatchObject({ objectId: "second-guest-obj" });
   });
 
+  it("stops offering rows an earlier run of the same capture received (#17067)", async () => {
+    usePanelStore.setState({
+      panelsById: { [PANE_ID]: { id: PANE_ID } as unknown as PtyPanelData },
+    });
+    const webview = makeWebviewElement();
+    const { rerender } = renderHook(
+      ({ ready, evicted }: { ready: boolean; evicted: boolean }) =>
+        useDevPreviewConsoleCapture(PANE_ID, webview, ready, evicted),
+      { initialProps: { ready: false, evicted: false } }
+    );
+    addRowViaCb(
+      row({ id: 1, paneId: PANE_ID, args: [{ type: "object", objectId: "obj-1", preview: "{}" }] })
+    );
+    // A re-run keeps capturing the same guest; nothing arrives after it.
+    rerender({ ready: true, evicted: false });
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(2));
+
+    rerender({ ready: true, evicted: true });
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledTimes(1));
+
+    const [kept] = useConsoleCaptureStore.getState().getMessages(PANE_ID);
+    expect(kept?.args[0]).toMatchObject({ objectId: "" });
+  });
+
   it("stops capture when the panel becomes evicted", async () => {
     const webview = makeWebviewElement();
     const { rerender } = renderHook(

@@ -183,7 +183,10 @@ export function ObjectInspector({
   const staleTooltip = useRowFocusTooltip();
   const disclosureRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
-  /** The console row holding this value, while focus is on one of its controls. */
+  /**
+   * The console row holding this value, while focus is anywhere inside it — its
+   * own controls or a nested value's, which go with it.
+   */
   const focusedRowRef = useRef<HTMLElement | null>(null);
   const trackFocus = useCallback((event: FocusEvent<HTMLElement>) => {
     focusedRowRef.current = event.currentTarget.closest<HTMLElement>("[data-console-row]");
@@ -308,13 +311,11 @@ export function ObjectInspector({
   }
 
   return (
-    <span className="inline">
+    <span className="inline" onFocus={trackFocus} onBlur={forgetFocus}>
       <button
         ref={disclosureRef}
         type="button"
         onClick={() => void handleExpand()}
-        onFocus={trackFocus}
-        onBlur={forgetFocus}
         aria-expanded={isExpanded}
         aria-controls={isExpanded && properties ? propertiesId : undefined}
         aria-busy={isLoading || undefined}
@@ -337,8 +338,6 @@ export function ObjectInspector({
             ref={retryRef}
             type="button"
             onClick={() => void handleExpand()}
-            onFocus={trackFocus}
-            onBlur={forgetFocus}
             className={cn(DISCLOSURE_TOGGLE_CLASS, "min-h-6 -my-1")}
           >
             Retry

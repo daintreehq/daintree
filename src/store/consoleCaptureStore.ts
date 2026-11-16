@@ -158,7 +158,7 @@ export function flushConsoleCaptureBuffer(): void {
       const liveStart = combined.length - MAX_LIVE_OBJECT_ROWS;
       for (let i = Math.max(0, existing.length - MAX_LIVE_OBJECT_ROWS); i < liveStart; i++) {
         const msg = combined[i];
-        if (!inspected?.has(msg.id)) combined[i] = withoutHandles(msg);
+        if (msg !== undefined && !inspected?.has(msg.id)) combined[i] = withoutHandles(msg);
       }
       let evicted: ConsoleMessage[] = EMPTY_MESSAGES;
       if (combined.length > MAX_MESSAGES) {
@@ -300,9 +300,10 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
     flushConsoleCaptureBuffer();
     mapPaneMessages(paneId, (messages) => {
       const index = messages.findIndex((msg) => msg.id === rowId);
-      if (index === -1) return null;
-      const stripped = withoutHandles(messages[index]);
-      if (stripped === messages[index]) return null;
+      const row = messages[index];
+      if (row === undefined) return null;
+      const stripped = withoutHandles(row);
+      if (stripped === row) return null;
       const next = messages.slice();
       next[index] = stripped;
       return next;

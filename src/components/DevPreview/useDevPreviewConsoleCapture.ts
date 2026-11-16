@@ -69,6 +69,11 @@ export function useDevPreviewConsoleCapture(
   const currentGenerationRef = useRef(0);
   const activeCaptureTokenRef = useRef<symbol | null>(null);
   const capturedWebContentsIdRef = useRef<number | null>(null);
+  // The newest row this mount has received. Row ids only grow, and a mount
+  // stops hearing rows before any later mount of the pane starts, so a stop
+  // releases exactly the rows up to here. Kept across effect re-runs: a re-run
+  // that keeps capturing the same guest hands its rows on to the next stop.
+  const lastRowIdRef = useRef(-1);
   const [capturedWebContentsId, setCapturedWebContentsId] = useState<number | null>(null);
   const [guestRevision, setGuestRevision] = useState(0);
 
@@ -126,13 +131,10 @@ export function useDevPreviewConsoleCapture(
     safeFireAndForget(started, { context: "Starting dev-preview console capture" });
 
     const store = useConsoleCaptureStore.getState();
-    // Row ids only grow, and this capture stops hearing rows before any later
-    // mount of the pane starts: everything up to here is this capture's.
-    let lastRowId = -1;
 
     const offMessage = window.electron.webview.onConsoleMessage((row) => {
       if (row.paneId !== paneId) return;
-      lastRowId = row.id;
+      lastRowIdRef.current = row.id;
       if (
         isViteHmrFailureMessage(row.summaryText) &&
         row.navigationGeneration >= currentGenerationRef.current
@@ -171,7 +173,10 @@ export function useDevPreviewConsoleCapture(
           // Stopping releases every handle main holds for this pane on this
           // guest; the rows stay on screen as previews. A remount may already
           // be capturing, so only the rows this capture delivered are touched.
-          if (lastRowId >= 0) useConsoleCaptureStore.getState().releaseHandles(paneId, lastRowId);
+          const throughRowId = lastRowIdRef.current;
+          if (throughRowId >= 0) {
+            useConsoleCaptureStore.getState().releaseHandles(paneId, throughRowId);
+          }
           return window.electron.webview.stopConsoleCapture(webContentsId, paneId);
         });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });

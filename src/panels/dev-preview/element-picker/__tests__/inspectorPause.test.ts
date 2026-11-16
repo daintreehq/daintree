@@ -74,6 +74,28 @@ async function bound() {
   await vi.waitFor(() => expect(controller?.getSnapshot().binding.status).toBe("bound"));
 }
 
+/** Hold the next bind until the test lets it land. */
+function deferBind(): () => void {
+  let finish: () => void = () => {};
+  host.picker.bind.mockImplementationOnce(
+    (request) =>
+      new Promise((resolve) => {
+        finish = () =>
+          resolve({
+            sessionId: "session-1",
+            panelId: request.panelId,
+            projectId: "p1",
+            documentEpoch: 0,
+            mode: request.mode ?? "select",
+            guestReady: false,
+            droppedMessages: 0,
+            suspended: false,
+          });
+      })
+  );
+  return () => finish();
+}
+
 function pauses(): boolean[] {
   return host.preview.setPaused.mock.calls.map(([request]) => request.paused);
 }
@@ -147,23 +169,7 @@ describe("Element Picker pausing out of sight (#17067)", () => {
   });
 
   it("holds a cached view's freeze for a bind on its way, then pauses what it bound", async () => {
-    let finishBind: () => void = () => {};
-    host.picker.bind.mockImplementationOnce(
-      (request) =>
-        new Promise((resolve) => {
-          finishBind = () =>
-            resolve({
-              sessionId: "session-1",
-              panelId: request.panelId,
-              projectId: "p1",
-              documentEpoch: 0,
-              mode: request.mode ?? "select",
-              guestReady: false,
-              droppedMessages: 0,
-              suspended: false,
-            });
-        })
-    );
+    const finishBind = deferBind();
     const lifecycle = open(true);
     await vi.waitFor(() => expect(host.picker.bind).toHaveBeenCalled());
 
@@ -171,12 +177,50 @@ describe("Element Picker pausing out of sight (#17067)", () => {
     const flush = Promise.resolve(lifecycle.cache()).then(() => {
       flushed = true;
     });
+    // Main reports the view cached right after the flush starts.
+    lifecycle.set(false);
     await Promise.resolve();
     expect(flushed).toBe(false);
 
     finishBind();
     await flush;
     expect(pauses()).toEqual([true]);
+  });
+
+  it("waits out a bind that replaced the one it was waiting for", async () => {
+    const finishFirst = deferBind();
+    const finishSecond = deferBind();
+    const lifecycle = open(true);
+    await vi.waitFor(() => expect(host.picker.bind).toHaveBeenCalledTimes(1));
+    let flushed = false;
+    const flush = Promise.resolve(lifecycle.cache()).then(() => {
+      flushed = true;
+    });
+    lifecycle.set(false);
+
+    void controller!.connect();
+    finishFirst();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+
+    finishSecond();
+    await flush;
+    expect(pauses()).toEqual([true]);
+  });
+
+  it("leaves a preview the user came back to during the bind running", async () => {
+    const finishBind = deferBind();
+    const lifecycle = open(true);
+    await vi.waitFor(() => expect(host.picker.bind).toHaveBeenCalled());
+    const flush = lifecycle.cache();
+    lifecycle.set(false);
+    lifecycle.set(true);
+
+    finishBind();
+    await flush;
+
+    expect(pauses()).toEqual([]);
   });
 
   it("sends a change again after one the host could not apply", async () => {

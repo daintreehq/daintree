@@ -239,6 +239,23 @@ describe("ObjectInspector released values (#17067)", () => {
     expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
   });
 
+  it("hands focus to the row when a focused nested value goes with its parent", async () => {
+    getConsoleProperties.mockResolvedValue({
+      properties: [
+        prop("child", { value: { type: "object", objectId: "child-obj", preview: "{b: 2}" } }),
+      ],
+    });
+    const { container } = renderRow();
+    fireEvent.click(screen.getByRole("button", { name: /\{a: 1\}/ }));
+    const child = await screen.findByRole("button", { name: /\{b: 2\}/ });
+    child.focus();
+
+    act(() => useConsoleCaptureStore.getState().releaseRowHandles("pane-1", 3));
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
+  });
+
   it("shows a released value as its preview, with no control, and says why", async () => {
     useConsoleCaptureStore.getState().releaseRowHandles("pane-1", 3);
     renderRow();

@@ -670,16 +670,24 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Main holds a cached view's freeze until this settles. It waits for a bind
-   * on its way — a frozen view could not hear the reply — then sends the
-   * pause. Sending is enough: main applies it to the page whether or not this
-   * view is frozen by then, and a page that is frozen itself (parked in the
-   * dock) must not hold up the view's freeze.
+   * Main holds a cached view's freeze until this settles. It waits for any bind
+   * on its way, a replacement included — a frozen view could not hear the
+   * reply — then sends the pause. Sending is enough: main applies it to the
+   * page whether or not this view is frozen by then, and a page that is frozen
+   * itself (parked in the dock) must not hold up the view's freeze.
+   *
+   * The flush runs before the view reads as cached, so with nothing to wait
+   * for the pause is forced. After a wait the view's state has caught up, and
+   * may say the user is already back.
    */
   private async pauseBeforeFreeze(): Promise<void> {
-    const pending = this.bindInFlight;
-    if (pending) await pending.catch(() => undefined);
-    this.syncPause(true);
+    let waited = false;
+    for (let pending = this.bindInFlight; pending !== null; pending = this.bindInFlight) {
+      waited = true;
+      await pending.catch(() => undefined);
+      if (this.disposed || this.bindInFlight === pending) break;
+    }
+    this.syncPause(waited ? this.wantsPause() : true);
   }
 
   /**
