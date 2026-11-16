@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
-import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -1060,7 +1060,7 @@ describe("PanelHeader", () => {
       expect(findMenuButton("Move to new worktree…")).toBeUndefined();
     });
 
-    it("opens the picker once the menu has closed, without moving anything", () => {
+    it("opens the picker once the menu has closed, without moving anything", async () => {
       placePanelIn("w-a");
       mockWorktreeIds = ["w-a", "w-b"];
       render(<PanelHeader {...makeProps()} />);
@@ -1070,6 +1070,8 @@ describe("PanelHeader", () => {
       expect(picker()).toBeNull();
 
       expect(finishMenuClose()).toBe(true);
+      // The picker's chunk loads on demand, so it mounts a tick after the close.
+      await waitFor(() => expect(picker()).not.toBeNull());
       expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
       expect(picker()?.getAttribute("data-current-worktree-id")).toBe("w-a");
       expect(mockDispatch).not.toHaveBeenCalled();
@@ -1096,14 +1098,14 @@ describe("PanelHeader", () => {
       expect(picker()).toBeNull();
     });
 
-    it("closes an open picker when the header goes on to another panel", () => {
+    it("closes an open picker when the header goes on to another panel", async () => {
       // A picker opened for one panel must never move another.
       placePanelIn("w-a");
       mockWorktreeIds = ["w-a", "w-b"];
       const { rerender } = render(<PanelHeader {...makeProps()} />);
       fireEvent.click(findMenuButton("Move to worktree…")!);
       finishMenuClose();
-      expect(picker()).not.toBeNull();
+      await waitFor(() => expect(picker()).not.toBeNull());
 
       rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
       expect(picker()).toBeNull();

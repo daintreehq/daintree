@@ -7,7 +7,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import {
   VOICE_RECENT_PROMPTS_MAX,
   VOICE_RECENT_PROMPT_MAX_CHARS,
-} from "@shared/config/voiceRecentPrompts";
+} from "@shared/config/voiceCorrectionPolicy";
 
 const MAX_HISTORY_SIZE = 100;
 // Terminals with sends on record. A closed pane clears its own; this bounds the

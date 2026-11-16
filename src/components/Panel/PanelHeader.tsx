@@ -109,6 +109,7 @@ import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
+import { LazyMoveToWorktreePicker as MoveToWorktreePicker } from "./lazyMoveToWorktreePicker";
 import {
   getRegisteredTourIdsSnapshot,
   subscribeToTourRegistry,
@@ -173,12 +174,7 @@ const CONTROL_ICON = "[&_svg]:size-3.5 focus-visible:-outline-offset-2";
  */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
-// Loaded on demand: every pane has a header, and these only matter once the
-// overflow menu offers them.
-const MoveToWorktreePicker = lazyWithPreload(
-  () => import("./MoveToWorktreePicker"),
-  (mod) => mod.MoveToWorktreePicker
-);
+// Loaded on demand, as the move picker is: every pane has a header.
 const PanelEmojiDialog = lazyWithPreload(
   () => import("./PanelEmojiDialog"),
   (mod) => mod.PanelEmojiDialog
@@ -732,8 +728,8 @@ function PanelHeaderComponent({
     if (pendingEmojiPanelId !== null) {
       if (pendingEmojiPanelId !== id) return;
       // The dialog focuses its own search field and hands focus back to the
-      // button when it closes.
-      event.preventDefault();
+      // button when it closes. Still loading, the button holds focus meanwhile.
+      if (PanelEmojiDialog.isLoaded()) event.preventDefault();
       setHasOpenedEmojiDialog(true);
       setEmojiDialogPanelId(id);
       return;
@@ -742,8 +738,9 @@ function PanelHeaderComponent({
     pendingMovePickerRef.current = null;
     if (pendingPanelId === null || pendingPanelId !== id) return;
     // The picker takes focus into its search field; returning it to the
-    // button first would only flash a ring on the way.
-    event.preventDefault();
+    // button first would only flash a ring on the way. Still loading, the
+    // button holds focus until the picker mounts and takes it.
+    if (MoveToWorktreePicker.isLoaded()) event.preventDefault();
     setHasOpenedMovePicker(true);
     setMovePickerPanelId(id);
   };
