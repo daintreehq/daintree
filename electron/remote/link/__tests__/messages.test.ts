@@ -44,6 +44,23 @@ const hostSummary = (extra: object) =>
   ).body as HostMetricsSummary;
 
 describe("link messages", () => {
+  it("frames a structured message's encoded body without copying it", () => {
+    const frame = messageToFrame({
+      lane: Lane.CONTROL,
+      kind: ControlKind.PING,
+      body: { sentAt: 12, nonce: 3 },
+    });
+    const wire = encodeFrame(frame);
+
+    expect(wire.buffer).toBe(frame.payload.buffer);
+    const [decoded] = new FrameDecoder().push(wire);
+    expect(frameToMessage(decoded!)).toEqual({
+      lane: Lane.CONTROL,
+      kind: ControlKind.PING,
+      body: { sentAt: 12, nonce: 3 },
+    });
+  });
+
   it("carries a summary's CPU scale and clusters, and one from a host that sends none", () => {
     const cpu = {
       cpuLogicalCoreCount: 14,

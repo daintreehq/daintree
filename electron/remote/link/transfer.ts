@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { BULK_CHUNK_BYTES, Lane } from "./frames.js";
+import { BULK_CHUNK_BYTES, Lane, allocFramePayload } from "./frames.js";
 import {
   BulkKind,
   type LinkMessage,
@@ -144,14 +144,16 @@ export async function fileTransferSource(filePath: string): Promise<TransferSour
       size,
       sha256: hash.digest("hex"),
       read: async (offset, length) => {
-        const out = Buffer.alloc(length);
+        // Every byte is read before it is returned, so the chunk skips the
+        // zero fill, and a whole one frames without a copy.
+        const out = allocFramePayload(length);
         let got = 0;
         while (got < length) {
           const { bytesRead } = await handle.read(out, got, length - got, offset + got);
           if (bytesRead === 0) break;
           got += bytesRead;
         }
-        return out.subarray(0, got);
+        return got === length ? out : out.subarray(0, got);
       },
       close: () => handle.close(),
     };
