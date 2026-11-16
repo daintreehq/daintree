@@ -38,15 +38,23 @@ export const useLayoutApplyConfirmStore = create<LayoutApplyConfirmState>((set, 
   },
 }));
 
-let cancelEpoch = 0;
+let cancelCount = 0;
+let cancelledAllAt = 0;
+const cancelledLayoutAt = new Map<string, number>();
+
+/** A point in the cancellation history, for {@link layoutApplyCancelledSince}. */
+export function layoutApplyCancelMark(): number {
+  return cancelCount;
+}
 
 /**
- * Moves on every cancellation. A caller that awaits between resolving a layout
- * and raising its request compares it across the wait: a cancellation that
- * landed meanwhile had no request to decline, so the caller declines instead.
+ * Whether a cancellation naming this layout (or every layout) landed after
+ * `mark`. A caller that awaits between resolving a layout and raising its
+ * request checks it across the wait: a cancellation that landed meanwhile had
+ * no request to decline, so the caller declines instead.
  */
-export function layoutApplyCancelEpoch(): number {
-  return cancelEpoch;
+export function layoutApplyCancelledSince(layoutId: string, mark: number): boolean {
+  return cancelledAllAt > mark || (cancelledLayoutAt.get(layoutId) ?? 0) > mark;
 }
 
 /**
@@ -55,7 +63,9 @@ export function layoutApplyCancelEpoch(): number {
  * ids, every request is declined.
  */
 export function cancelLayoutApplyConfirmations(layoutIds?: ReadonlySet<string>): void {
-  cancelEpoch++;
+  cancelCount++;
+  if (layoutIds === undefined) cancelledAllAt = cancelCount;
+  else for (const id of layoutIds) cancelledLayoutAt.set(id, cancelCount);
   const { current, queue } = useLayoutApplyConfirmStore.getState();
   const cancelled = (item: PendingLayoutApplyConfirm) =>
     layoutIds === undefined || layoutIds.has(item.layoutId);

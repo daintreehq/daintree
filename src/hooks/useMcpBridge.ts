@@ -1619,6 +1619,11 @@ export function useMcpBridge(): void {
               // confirmation has settled: the evidence an approval is checked
               // against must be the answer the approver was last shown.
               let previewGeneration = 0;
+              // Whether any fetch landed. A preset write is approved only on a
+              // preview its approver actually read: its argument summary
+              // collapses `env` to `<object>`, so a preview that never loaded
+              // leaves nothing to have consented to.
+              let previewDelivered = false;
               let lastPreview: McpConfirmPreviewPatch | undefined;
               const runPreview = (target: McpConfirmPreviewTarget) => {
                 const generation = ++previewGeneration;
@@ -1632,6 +1637,7 @@ export function useMcpBridge(): void {
                       approvedPush: shown,
                     }) => {
                       if (disposed || generation !== previewGeneration) return;
+                      previewDelivered = true;
                       approvedTypedNameTarget = typedNameTarget;
                       approvedRecipeRun = offered;
                       approvedPush = shown;
@@ -1893,7 +1899,9 @@ export function useMcpBridge(): void {
               // check: with no preview, the approval covers no change.
               if (isAgentPresetMutationAction(actionId)) {
                 const shown =
-                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
+                  previewTarget?.kind === "agentPreset" && (previewDelivered || !hasAsyncPreview)
+                    ? previewTarget.mutation
+                    : undefined;
                 const [{ agentPresetMutationFingerprint }, now] = await Promise.all([
                   import("@/services/actions/definitions/agentPresetMutation"),
                   planPresetWriteHere(actionId, args, context),

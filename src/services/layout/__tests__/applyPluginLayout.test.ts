@@ -542,6 +542,16 @@ describe("applyPluginLayout", () => {
       expect(dispatch).not.toHaveBeenCalled();
     });
 
+    it("keeps a confirmation when only another layout is withdrawn meanwhile", async () => {
+      const pending = applyPluginLayout("acme.workspace", userCtx);
+      cancelLayoutApplyConfirmations(new Set(["acme.other"]));
+      await confirmationShown();
+
+      expect(useLayoutApplyConfirmStore.getState().current?.layoutName).toBe("Workspace");
+      useLayoutApplyConfirmStore.getState().resolveCurrent(false);
+      expect(await pending).toEqual({ status: "cancelled" });
+    });
+
     it("refuses a recipe a team recipe now shadows", async () => {
       getRecipeById.mockReturnValue({ ...pairRecipe, id: "team-pair", origin: undefined });
       await expect(applyPluginLayout("acme.workspace", userCtx)).rejects.toThrow(/isn't available/);
