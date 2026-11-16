@@ -2948,7 +2948,9 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    function holdNextPass(revalidate: { mockImplementationOnce: (fn: () => Promise<void>) => void }) {
+    function holdNextPass(revalidate: {
+      mockImplementationOnce: (fn: () => Promise<void>) => void;
+    }) {
       let release: () => void = () => {};
       revalidate.mockImplementationOnce(
         () =>

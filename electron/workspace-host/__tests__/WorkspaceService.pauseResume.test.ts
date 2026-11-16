@@ -429,6 +429,40 @@ describe("WorkspaceService PR polling under the power policy (#17060)", () => {
     expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("runs an owed settings refresh only after the latest restart's check", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishFirstCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.setWorkspacePowerPolicy(DEEP);
+    const finishSecondCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+
+    finishFirstCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    finishSecondCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("teardown drops an owed settings refresh whose restart check is still running", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.dispose();
+    finishCheck();
+    await flush();
+
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+  });
+
   it("holds credential changes while off screen and replays the latest per provider", () => {
     service.setWorkspacePowerPolicy(DEEP);
     vi.clearAllMocks();

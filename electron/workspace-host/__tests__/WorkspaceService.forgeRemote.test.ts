@@ -1297,6 +1297,40 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
     });
 
+    it("an owed settings refresh waits for a later resume's settle (#17060)", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.setWorkspacePowerPolicy(OFF_SCREEN_POLICY);
+      service.updateForgeSettings({
+        forgeProviderOverride: GITHUB_PROVIDER_ID,
+        forgeDefaultProviderId: null,
+        forgeRemote: null,
+      });
+      mockPullRequestService.refresh.mockClear();
+      let finishCheck: () => void = () => {};
+      mockPullRequestService.start
+        .mockReturnValueOnce(
+          new Promise<void>((resolve) => {
+            finishCheck = resolve;
+          })
+        )
+        .mockResolvedValueOnce(undefined);
+
+      service.setWorkspacePowerPolicy(ON_SCREEN_POLICY);
+      service.pause();
+      const releases = holdConfigStats();
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      finishCheck();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    });
+
     it("a settle superseded by a pause does not restart PR polling in the next cycle", async () => {
       registerMonitor("/test/main", { isMainWorktree: true });
       await seedBaseline([]);

@@ -573,6 +573,9 @@ export class WorkspaceService {
   // A forge-settings change held back the same way. Owed as a full refresh:
   // only that re-detects worktrees resolved against the previous provider.
   private settingsRefreshOwed = false;
+  // Bumped by each restart that would run the owed refresh, and by a project
+  // switch or teardown, so only the latest restart's continuation may run it.
+  private owedRefreshGeneration = 0;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -5529,19 +5532,20 @@ export class WorkspaceService {
     for (const [providerId, credentials] of deferred) {
       this.updateForgeCredentials(providerId, credentials);
     }
-    const refreshOwed = this.settingsRefreshOwed;
-    this.settingsRefreshOwed = false;
     const restarted = this.prService.resume();
-    if (!refreshOwed) return;
+    if (!this.settingsRefreshOwed) return;
     // After the restart's own check, which would otherwise re-resolve worktrees
     // from the caches the refresh is clearing and leave it nothing to detect.
-    const projectId = this.projectId;
+    // Still owed if PR work stopped or began settling again meanwhile: the next
+    // restart runs it.
+    const generation = ++this.owedRefreshGeneration;
     void restarted
       .catch(() => {})
       .then(() => {
-        if (this.projectId !== projectId) return;
-        if (this.appliedPermissions.status) void pullRequestService.refresh();
-        else this.settingsRefreshOwed = true;
+        if (generation !== this.owedRefreshGeneration || !this.settingsRefreshOwed) return;
+        if (!this.appliedPermissions.status || this.pendingResumeSettle) return;
+        this.settingsRefreshOwed = false;
+        void pullRequestService.refresh();
       });
   }
 
@@ -5566,8 +5570,12 @@ export class WorkspaceService {
     // A backgrounded or off-screen host re-resolves when its poller restarts;
     // refreshing now would query the forge for a project nothing is showing
     // (#12519).
-    if (this.appliedPermissions.status) void pullRequestService.refresh();
-    else this.settingsRefreshOwed = true;
+    if (this.appliedPermissions.status) {
+      this.settingsRefreshOwed = false;
+      void pullRequestService.refresh();
+    } else {
+      this.settingsRefreshOwed = true;
+    }
     this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 
@@ -5673,6 +5681,7 @@ export class WorkspaceService {
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
     this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5843,6 +5852,7 @@ export class WorkspaceService {
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
     this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
     this.resourceActionExecutor.dispose();
     this.attachmentService.dispose();
     this.setupCoordinator.dispose();
