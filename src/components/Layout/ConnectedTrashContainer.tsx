@@ -1,8 +1,18 @@
-import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
+import { useStabilizer } from "@/hooks/useStabilizedSelector";
+import { parkedPanelsEquivalent } from "./dockPanelParkedSnapshot";
 import { TrashContainer } from "./TrashContainer";
+
+function trashedPanelsEquivalent(
+  a: Record<string, PanelInstance>,
+  b: Record<string, PanelInstance>
+): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((id) => b[id] !== undefined && parkedPanelsEquivalent(a[id]!, b[id]));
+}
 
 /**
  * The trash tray with its panels resolved from the store here rather than in
@@ -11,19 +21,18 @@ import { TrashContainer } from "./TrashContainer";
  */
 export function ConnectedTrashContainer({ compact }: { compact?: boolean }) {
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
-  // Values are the actual store panel references (not freshly constructed), so
-  // `useShallow` bails unless the trashed set — or a trashed panel's reference —
-  // actually changes, rather than on every unrelated status-buffer flush (#10908).
-  const trashedPanelsById = usePanelStore(
-    useShallow((state) => {
-      const result: Record<string, PanelInstance> = {};
-      for (const trashed of state.trashedTerminals.values()) {
-        const panel = state.panelsById[trashed.id];
-        if (panel) result[trashed.id] = panel;
-      }
-      return result;
-    })
-  );
+  // A trashed agent still streams, and every flush replaces its record. The
+  // tray reads titles, kind and worktree — none of which the status buffer
+  // writes — so a record that differs only by those writes is the same row.
+  const stabilize = useStabilizer<Record<string, PanelInstance>>();
+  const trashedPanelsById = usePanelStore((state) => {
+    const result: Record<string, PanelInstance> = {};
+    for (const trashed of state.trashedTerminals.values()) {
+      const panel = state.panelsById[trashed.id];
+      if (panel) result[trashed.id] = panel;
+    }
+    return stabilize(result, trashedPanelsEquivalent);
+  });
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({

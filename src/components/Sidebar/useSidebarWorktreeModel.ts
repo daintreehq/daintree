@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo } from "react";
-import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
+import { shallow } from "zustand/shallow";
+import { useStabilizer } from "@/hooks/useStabilizedSelector";
 import { useShallow } from "zustand/react/shallow";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
@@ -18,6 +19,7 @@ import {
   type FilterState,
 } from "@/lib/worktreeFilters";
 import { usePanelStore } from "@/store";
+import type { AgentState } from "@shared/types/agent";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { DeletedWorktree } from "@/store/worktreeStore";
@@ -26,11 +28,7 @@ import {
   DELETED_WORKTREE_GROUP_THRESHOLD,
 } from "@/store/worktreeStore";
 import type { WorktreeState } from "@/types";
-import {
-  selectSidebarPanelMaps,
-  sidebarPanelMapsEqual,
-  computePanelStateByWorktree,
-} from "./sidebarPanelDerivation";
+import { selectSidebarPanelMaps, computePanelStateByWorktree } from "./sidebarPanelDerivation";
 import {
   buildSidebarFlatItems,
   filterSidebarWorktrees,
@@ -155,8 +153,24 @@ export function useSidebarWorktreeModel({
   // `sidebarPanelDerivation.ts`) — none of which the buffer writes — so
   // `useShallow` bails on buffer flushes and re-renders fire only on real
   // structural, agent-state, or fleet-eligibility changes.
+  // Each map is held on its own, so a change to one (a fleet-eligibility flip)
+  // leaves the others' references, and everything derived from them, alone.
+  const stabilizeVisible = useStabilizer<Record<string, 1>>();
+  const stabilizeAgentState = useStabilizer<Record<string, AgentState>>();
+  const stabilizeAgentIds = useStabilizer<Record<string, 1>>();
+  const stabilizeEligible = useStabilizer<Record<string, string>>();
   const { visiblePanelIds, agentStateByPanelId, agentPanelIds, fleetEligibleWorktreeById } =
-    useStabilizedSelector(usePanelStore, selectSidebarPanelMaps, sidebarPanelMapsEqual);
+    usePanelStore(
+      useShallow((state) => {
+        const maps = selectSidebarPanelMaps(state);
+        return {
+          visiblePanelIds: stabilizeVisible(maps.visiblePanelIds, shallow),
+          agentStateByPanelId: stabilizeAgentState(maps.agentStateByPanelId, shallow),
+          agentPanelIds: stabilizeAgentIds(maps.agentPanelIds, shallow),
+          fleetEligibleWorktreeById: stabilizeEligible(maps.fleetEligibleWorktreeById, shallow),
+        };
+      })
+    );
   const panelStateByWorktree = useMemo(
     () =>
       computePanelStateByWorktree(

@@ -7,7 +7,6 @@ import {
   selectSidebarFleetEligibleWorktreeById,
   computePanelStateByWorktree,
   selectSidebarPanelMaps,
-  sidebarPanelMapsEqual,
   type SidebarPanelDerivationState,
 } from "../sidebarPanelDerivation";
 
@@ -343,18 +342,5 @@ describe("selectSidebarPanelMaps (#17053)", () => {
     expect(maps.agentStateByPanelId).toEqual(selectSidebarAgentStateByPanelId(state));
     expect(maps.agentPanelIds).toEqual(selectSidebarAgentPanelIds(state));
     expect(maps.fleetEligibleWorktreeById).toEqual(selectSidebarFleetEligibleWorktreeById(state));
-  });
-
-  it("is equal across a rewritten record, and differs on a real state change", () => {
-    const before = selectSidebarPanelMaps(stateOf([agentPanel({ id: "a" })]));
-    const flushed = selectSidebarPanelMaps(
-      stateOf([agentPanel({ id: "a", activityHeadline: "Reading" } as Partial<PanelInstance>)])
-    );
-    const changed = selectSidebarPanelMaps(
-      stateOf([agentPanel({ id: "a", agentState: "waiting" })])
-    );
-
-    expect(sidebarPanelMapsEqual(before, flushed)).toBe(true);
-    expect(sidebarPanelMapsEqual(before, changed)).toBe(false);
   });
 });

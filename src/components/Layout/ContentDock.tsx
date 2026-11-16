@@ -23,7 +23,7 @@ import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import { isDockPanel, type DockPanelData } from "@shared/types/panel";
 import { ConnectedDockItem } from "./ConnectedDockItem";
 import { ConnectedTrashContainer } from "./ConnectedTrashContainer";
-import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
+import { useStabilizer } from "@/hooks/useStabilizedSelector";
 import { WaitingContainer } from "./WaitingContainer";
 import { UnreadContainer } from "./UnreadContainer";
 import { ErrorsContainer } from "./ErrorsContainer";
@@ -129,10 +129,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // consumes, so that memo held the pre-drag order and every dock reorder snapped
   // back (#11873). Everything here consumes its inputs for real, so the compiler
   // keeps them in the cache key.
-  const dockItems = useStabilizedSelector(
-    usePanelStore,
-    (state) => selectDockRenderDescriptors(state, activeWorktreeId, helpTerminalIdList),
-    dockRenderDescriptorsEqual
+  const stabilizeDockItems = useStabilizer<DockRenderDescriptor[]>();
+  const dockItems = usePanelStore((state) =>
+    stabilizeDockItems(
+      selectDockRenderDescriptors(state, activeWorktreeId, helpTerminalIdList),
+      dockRenderDescriptorsEqual
+    )
   );
 
   // Chips that would read the same get the time their session started. Resolved

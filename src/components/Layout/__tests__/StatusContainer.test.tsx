@@ -6,10 +6,13 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { StatusContainer, type StatusContainerConfig } from "../StatusContainer";
 import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
-const terminalState = vi.hoisted(() => ({ terminals: [] as unknown[] }));
+const terminalState = vi.hoisted(() => ({ terminals: [] as unknown[], liveArgs: [] as boolean[] }));
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useErrorTerminals: () => terminalState.terminals,
+  useErrorTerminals: (live: boolean) => {
+    terminalState.liveArgs.push(live);
+    return terminalState.terminals;
+  },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -81,6 +84,13 @@ function makeTerminal(id: string, title: string, worktreeId: string): PtyPanelDa
 }
 
 describe("StatusContainer", () => {
+  it("reads its members as a count while its popover is closed (#17053)", () => {
+    terminalState.liveArgs.length = 0;
+    render(<StatusContainer config={config} />);
+    expect(terminalState.liveArgs.length).toBeGreaterThan(0);
+    expect(terminalState.liveArgs.every((live) => live === false)).toBe(true);
+  });
+
   it("splits rows by worktree and names the worktree only under other worktrees", () => {
     terminalState.terminals = [
       makeTerminal("t1", "Local", "wt-1"),

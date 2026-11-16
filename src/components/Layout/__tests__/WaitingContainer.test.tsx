@@ -18,12 +18,16 @@ const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
 let mockTerminals: PtyPanelData[] = [];
+const liveArgs: boolean[] = [];
 let mockTabGroups = new Map<string, TabGroup>();
 let mockPluginRows: PluginAttentionRow[] = [];
 const openPluginPanelMock = vi.fn((_panelId: string) => Promise.resolve(true));
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useFleetBandTerminals: () => mockTerminals,
+  useFleetBandTerminals: (bands: unknown, live: boolean) => {
+    liveArgs.push(live);
+    return mockTerminals;
+  },
 }));
 
 vi.mock("@/hooks/usePluginPanelAttentionRows", () => ({
@@ -280,6 +284,13 @@ function focusInsideBackstopDialog() {
 }
 
 describe("WaitingContainer", () => {
+  it("reads its members as a count while its popover is closed (#17053)", () => {
+    liveArgs.length = 0;
+    render(<WaitingContainer />);
+    expect(liveArgs.length).toBeGreaterThan(0);
+    expect(liveArgs.every((live) => live === false)).toBe(true);
+  });
+
   it("stays mounted but hidden when there are no waiting terminals", () => {
     // The pill keeps its DOM node so the .dock-status-pill CSS can run the
     // display/opacity exit transition; visibility is gated by data-visible.

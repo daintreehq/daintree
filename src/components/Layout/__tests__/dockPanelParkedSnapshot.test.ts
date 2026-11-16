@@ -20,7 +20,7 @@ describe("parkedPanelsEquivalent", () => {
     const before = panel({ runtimeStatus: "running" });
     const after = panel({
       activityHeadline: "Reading",
-      activityStatus: "busy",
+      activityStatus: "working",
       activityType: "interactive",
       lastCommand: "ls",
       flowStatus: "paused-backpressure",

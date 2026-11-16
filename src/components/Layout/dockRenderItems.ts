@@ -265,11 +265,11 @@ export function selectDockRenderDescriptors(
 // nothing; compare every field, `panelIds` element by element.
 function dockGroupsEqual(a: TabGroup, b: TabGroup): boolean {
   if (a === b) return true;
-  const keys = Object.keys(a) as (keyof TabGroup)[];
+  const keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
   for (const key of keys) {
     if (key === "panelIds") continue;
-    if (a[key] !== b[key]) return false;
+    if (Reflect.get(a, key) !== Reflect.get(b, key)) return false;
   }
   if (a.panelIds.length !== b.panelIds.length) return false;
   for (let i = 0; i < a.panelIds.length; i++) {

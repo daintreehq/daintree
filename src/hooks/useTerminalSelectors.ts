@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { shallow } from "zustand/shallow";
-import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
+import { useStabilizer } from "@/hooks/useStabilizedSelector";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -109,18 +109,24 @@ function closedPanelsEquivalent(a: readonly PanelInstance[], b: readonly PanelIn
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    const left = a[i]! as PanelInstance & Partial<PtyPanelData>;
-    const right = b[i]! as PanelInstance & Partial<PtyPanelData>;
+    const left = a[i]!;
+    const right = b[i]!;
     if (left === right) continue;
     if (
       left.id !== right.id ||
       left.worktreeId !== right.worktreeId ||
       left.kind !== right.kind ||
-      left.location !== right.location ||
-      left.agentState !== right.agentState ||
-      left.waitingReason !== right.waitingReason ||
-      left.isRestarting !== right.isRestarting ||
-      (left.runtimeStatus === "exited") !== (right.runtimeStatus === "exited")
+      left.location !== right.location
+    ) {
+      return false;
+    }
+    const leftPty = isPtyPanel(left) ? left : undefined;
+    const rightPty = isPtyPanel(right) ? right : undefined;
+    if (
+      leftPty?.agentState !== rightPty?.agentState ||
+      leftPty?.waitingReason !== rightPty?.waitingReason ||
+      leftPty?.isRestarting !== rightPty?.isRestarting ||
+      (leftPty?.runtimeStatus === "exited") !== (rightPty?.runtimeStatus === "exited")
     ) {
       return false;
     }
@@ -145,21 +151,19 @@ export function useFleetBandTerminals(bands: ReadonlySet<FleetBand>, live = true
   const worktreeIds = useWorktreeIds();
   const runIds = useFleetBandRunIds(bands);
 
-  return useStabilizedSelector(
-    usePanelStore,
-    (state) => {
-      if (runIds.size === 0) return EMPTY_TERMINALS;
-      const out: PtyPanelData[] = [];
-      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
-        if (!runIds.has(panel.id)) continue;
-        if (!isPtyPanel(panel)) continue;
-        if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
-        out.push(panel);
-      }
-      return out;
-    },
-    listEquality<PtyPanelData>(live)
-  );
+  const stabilize = useStabilizer<PtyPanelData[]>();
+  const isEqual = listEquality<PtyPanelData>(live);
+  return usePanelStore((state) => {
+    if (runIds.size === 0) return EMPTY_TERMINALS;
+    const out: PtyPanelData[] = [];
+    for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+      if (!runIds.has(panel.id)) continue;
+      if (!isPtyPanel(panel)) continue;
+      if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
+      out.push(panel);
+    }
+    return stabilize(out, isEqual);
+  });
 }
 
 /**
@@ -200,26 +204,24 @@ export function useDemandTerminalCount(): number {
 export function useErrorTerminals(live = true): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
 
-  return useStabilizedSelector(
-    usePanelStore,
-    (state) => {
-      const out: PtyPanelData[] = [];
-      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
-        if (!isPtyPanel(panel)) continue;
-        if (panel.agentState !== "exited") continue;
-        if (typeof panel.exitCode !== "number" || panel.exitCode === 0) continue;
-        // isTerminalVisible rejects trash/background/excluded/orphaned;
-        // isTerminalErrorClusterEligible adds the dock-location exclusion.
-        // Without the orphan gate, clicking an entry from a deleted worktree
-        // would call selectWorktree() on a stale ID and persist it.
-        if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
-        if (!isTerminalErrorClusterEligible(panel)) continue;
-        out.push(panel);
-      }
-      return out;
-    },
-    listEquality<PtyPanelData>(live)
-  );
+  const stabilize = useStabilizer<PtyPanelData[]>();
+  const isEqual = listEquality<PtyPanelData>(live);
+  return usePanelStore((state) => {
+    const out: PtyPanelData[] = [];
+    for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
+      if (!isPtyPanel(panel)) continue;
+      if (panel.agentState !== "exited") continue;
+      if (typeof panel.exitCode !== "number" || panel.exitCode === 0) continue;
+      // isTerminalVisible rejects trash/background/excluded/orphaned;
+      // isTerminalErrorClusterEligible adds the dock-location exclusion.
+      // Without the orphan gate, clicking an entry from a deleted worktree
+      // would call selectWorktree() on a stale ID and persist it.
+      if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
+      if (!isTerminalErrorClusterEligible(panel)) continue;
+      out.push(panel);
+    }
+    return stabilize(out, isEqual);
+  });
 }
 
 /**
@@ -230,20 +232,18 @@ export function useErrorTerminals(live = true): PtyPanelData[] {
 export function useBackgroundedTerminals(live = true): PanelInstance[] {
   const worktreeIds = useWorktreeIds();
 
-  return useStabilizedSelector(
-    usePanelStore,
-    (state) => {
-      const out: PanelInstance[] = [];
-      for (const id of state.panelIds) {
-        const panel = state.panelsById[id];
-        if (panel?.location !== "background") continue;
-        if (isTerminalOrphaned(panel, worktreeIds)) continue;
-        out.push(panel);
-      }
-      return out;
-    },
-    listEquality<PanelInstance>(live)
-  );
+  const stabilize = useStabilizer<PanelInstance[]>();
+  const isEqual = listEquality<PanelInstance>(live);
+  return usePanelStore((state) => {
+    const out: PanelInstance[] = [];
+    for (const id of state.panelIds) {
+      const panel = state.panelsById[id];
+      if (panel?.location !== "background") continue;
+      if (isTerminalOrphaned(panel, worktreeIds)) continue;
+      out.push(panel);
+    }
+    return stabilize(out, isEqual);
+  });
 }
 
 export function useConflictedWorktrees(): WorktreeSnapshot[] {

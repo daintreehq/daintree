@@ -9,7 +9,7 @@ import {
   DragHandleProvider,
   type DragHandleContextValue,
 } from "@/components/DragDrop/DragHandleContext";
-import { useStabilizedSelector } from "@/hooks/useStabilizedSelector";
+import { useStabilizer } from "@/hooks/useStabilizedSelector";
 import { parkedPanelsEquivalent } from "./dockPanelParkedSnapshot";
 
 interface DockPanelPortalEntryProps {
@@ -35,18 +35,15 @@ export const DockPanelPortalEntry = memo(function DockPanelPortalEntry({
   onPopoverClose,
   onAddTab,
 }: DockPanelPortalEntryProps) {
-  const terminal = useStabilizedSelector(
-    usePanelStore,
-    (state) => {
-      const panel = state.panelsById[panelId];
-      return panel && isDockPanel(panel) ? panel : undefined;
-    },
-    (a, b) => {
+  const stabilize = useStabilizer<DockPanelData | undefined>();
+  const terminal = usePanelStore((state) => {
+    const panel = state.panelsById[panelId];
+    return stabilize(panel && isDockPanel(panel) ? panel : undefined, (a, b) => {
       if (a === b) return true;
       if (isActive || !a || !b) return false;
       return parkedPanelsEquivalent(a, b);
-    }
-  );
+    });
+  });
   // Only single panels (not in an explicit group) get onAddTab; multi-panel
   // groups handle tabs via DockedTabGroup. A selector, so the answer follows
   // the group rather than whatever this entry last rendered with.

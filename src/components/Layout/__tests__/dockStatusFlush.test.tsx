@@ -85,7 +85,7 @@ describe("closed pill lists across status flushes (#17053)", () => {
     render(<Probe live={false} />);
     const settled = renders;
 
-    seed([backgrounded("a"), backgrounded("b"), backgrounded("c")]);
+    act(() => seed([backgrounded("a"), backgrounded("b"), backgrounded("c")]));
 
     expect(renders).toBeGreaterThan(settled);
     expect(latest.map((p) => p.id)).toEqual(["a", "b", "c"]);

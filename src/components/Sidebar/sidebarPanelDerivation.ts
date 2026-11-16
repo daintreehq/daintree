@@ -3,7 +3,6 @@ import type { AgentState } from "@shared/types/agent";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { isAgentTerminalFleetEligible } from "@/store/fleetEligibility";
-import { shallow } from "zustand/shallow";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
 // Per-worktree rollups consumed by the sidebar (terminal counts + agent-state
@@ -184,8 +183,7 @@ export interface SidebarPanelMaps {
 /**
  * The four flat maps in one pass, so a store notify costs one scan of
  * `panelsById` and one of `panelIds` instead of four. Each map is built by the
- * same rules as its single-purpose selector above, and each is compared on its
- * own so an unchanged map keeps its reference (#17053).
+ * same rules as its single-purpose selector above (#17053).
  */
 export function selectSidebarPanelMaps(state: SidebarPanelDerivationState): SidebarPanelMaps {
   const visiblePanelIds: Record<string, 1> = {};
@@ -205,13 +203,4 @@ export function selectSidebarPanelMaps(state: SidebarPanelDerivationState): Side
     agentPanelIds,
     fleetEligibleWorktreeById: selectSidebarFleetEligibleWorktreeById(state),
   };
-}
-
-export function sidebarPanelMapsEqual(a: SidebarPanelMaps, b: SidebarPanelMaps): boolean {
-  return (
-    shallow(a.visiblePanelIds, b.visiblePanelIds) &&
-    shallow(a.agentStateByPanelId, b.agentStateByPanelId) &&
-    shallow(a.agentPanelIds, b.agentPanelIds) &&
-    shallow(a.fleetEligibleWorktreeById, b.fleetEligibleWorktreeById)
-  );
 }
