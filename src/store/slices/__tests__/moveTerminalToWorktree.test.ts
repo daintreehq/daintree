@@ -1,7 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
@@ -83,8 +84,13 @@ describe("moveTerminalToWorktree", () => {
       commandQueue: [],
     });
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a", focusedWorktreeId: "wt-a" });
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "wt-a", restoreWorktreeId: null }));
     vi.clearAllMocks();
     vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
   });
 
   it("keeps a docked terminal in the dock of the target worktree (#14966)", () => {
@@ -129,7 +135,23 @@ describe("moveTerminalToWorktree", () => {
     expect(moved?.location).toBe("grid");
     expect(moved?.isVisible).toBe(true);
     expect(panelPersistence.save).toHaveBeenCalledTimes(1);
-    // All terminals stay VISIBLE - we don't background for reliability
+    // The target worktree is not the active one, so the moved terminal is off
+    // screen and must not be promoted.
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t1",
+      TerminalRefreshTier.BACKGROUND
+    );
+    expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalledWith(
+      "t1",
+      TerminalRefreshTier.VISIBLE
+    );
+  });
+
+  it("promotes a terminal moved into the active worktree grid", () => {
+    setTerminals([createMockTerminal("t1", "wt-b", "grid")]);
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
+
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
       TerminalRefreshTier.VISIBLE
@@ -156,7 +178,7 @@ describe("moveTerminalToWorktree", () => {
     expect(panelPersistence.save).toHaveBeenCalledTimes(1);
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
-      TerminalRefreshTier.VISIBLE
+      TerminalRefreshTier.BACKGROUND
     );
   });
 
@@ -204,6 +226,43 @@ describe("moveTerminalToWorktree", () => {
     expect(movedGroup?.worktreeId).toBe("wt-b");
 
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledTimes(3);
+    for (const id of ["t1", "t2", "t3"]) {
+      expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+        id,
+        TerminalRefreshTier.BACKGROUND
+      );
+    }
+  });
+
+  it("promotes only the active tab when a group moves into the active worktree", () => {
+    const t1 = createMockTerminal("t1", "wt-b", "grid");
+    const t2 = createMockTerminal("t2", "wt-b", "grid");
+    setTerminals([t1, t2]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-b",
+            activeTabId: "t2",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t2",
+      TerminalRefreshTier.VISIBLE
+    );
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t1",
+      TerminalRefreshTier.BACKGROUND
+    );
   });
 
   it("re-files the run on the pty-host record so the fleet palette regroups it", () => {

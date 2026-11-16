@@ -3894,6 +3894,7 @@ class TerminalInstanceService {
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
     this.hiddenSkipRepaints.delete(id);
+    this.projectSwitchRedrawQueue.delete(id);
     this.cwdProviders.delete(id);
     this.cachedSelections.delete(id);
     this.rendererPolicy.clearTierState(id);

@@ -173,7 +173,7 @@ describe("Tab Group Worktree Invariant", () => {
       expect(group1?.worktreeId).toBe("wt-a");
     });
 
-    it("applies renderer policy to all panels in moved group", () => {
+    it("promotes only the active tab of a moved group", () => {
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
@@ -189,7 +189,7 @@ describe("Tab Group Worktree Invariant", () => {
       );
       expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
         "t2",
-        TerminalRefreshTier.VISIBLE
+        TerminalRefreshTier.BACKGROUND
       );
     });
   });
