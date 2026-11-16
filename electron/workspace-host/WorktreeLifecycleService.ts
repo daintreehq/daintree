@@ -18,6 +18,7 @@ import type {
   WorktreeLifecyclePhase,
   WorktreeLifecyclePhaseCategory,
   WorktreeLifecycleState,
+  WorktreeLifecycleStatus,
   WorktreeTeardownPhasePreview,
   WorktreeTeardownPreview,
 } from "../../shared/types/worktree.js";
@@ -36,6 +37,13 @@ import {
 } from "./lifecycleCommandTrust.js";
 
 const OUTPUT_TAIL_BYTES = 8192;
+// How much recent output a tail is scrubbed from: far more than the tail, so a
+// secret the scrub's own window cuts through sits well before what is shown.
+const TAIL_SCRUB_WINDOW_CHARS = 65_536;
+// How far before that window a key block's BEGIN line is looked for: as far as
+// `scrubSecrets`' key-block pattern itself reaches, its longest header included.
+const KEY_BLOCK_LOOKBACK_CHARS = 100_000 + 128;
+const LIVE_OUTPUT_INTERVAL_MS = 500;
 const FAILURE_SUMMARY_SCAN_CHARS = 4096;
 const MAX_FAILURE_SUMMARY_CHARS = 500;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -164,6 +172,12 @@ export interface RunCommandsOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   onProgress: (commandIndex: number, totalCommands: number, command: string) => void;
+  /**
+   * Called with the scrubbed tail of everything the run has printed so far, at
+   * most every {@link LIVE_OUTPUT_INTERVAL_MS} while output arrives and never
+   * once `runCommands` has settled. The final tail is the result's `output`.
+   */
+  onOutput?: (output: string) => void;
   /**
    * When set, the full scrubbed output for this run is persisted to a new file
    * inside this directory. The returned `RunCommandsResult.logPath` is the
@@ -513,6 +527,7 @@ export class WorktreeLifecycleService {
       cwd,
       env,
       onProgress,
+      onOutput,
       timeoutMs = DEFAULT_TIMEOUT_MS,
       signal,
       logDir,
@@ -526,9 +541,79 @@ export class WorktreeLifecycleService {
     const outputChunks: string[] = [];
     const deadline = Date.now() + timeoutMs;
 
+    let live = onOutput !== undefined;
+    let liveTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastLiveOutput = "";
+    const publishLiveOutput = () => {
+      liveTimer = undefined;
+      if (!live) return;
+      const output = liveOutputTail(outputChunks);
+      if (output === lastLiveOutput) return;
+      lastLiveOutput = output;
+      onOutput?.(output);
+    };
+    const onData = live
+      ? () => {
+          if (live && liveTimer === undefined) {
+            liveTimer = setTimeout(publishLiveOutput, LIVE_OUTPUT_INTERVAL_MS);
+          }
+        }
+      : undefined;
+    // Stopped before the log write, so no running update can land after the
+    // caller has published the run's outcome.
+    const settle = (): Promise<string | undefined> => {
+      live = false;
+      clearTimeout(liveTimer);
+      return this.persistRunLog(outputChunks, logDir);
+    };
+
+    try {
+      return await this.runCommandsInSequence(commands, {
+        cwd,
+        env,
+        onProgress,
+        signal,
+        deadline,
+        outputChunks,
+        onData,
+        settle,
+        readFailureSummary,
+      });
+    } finally {
+      live = false;
+      clearTimeout(liveTimer);
+    }
+  }
+
+  private async runCommandsInSequence(
+    commands: string[],
+    run: {
+      cwd: string;
+      env: Record<string, string>;
+      onProgress: RunCommandsOptions["onProgress"];
+      signal: AbortSignal | undefined;
+      deadline: number;
+      outputChunks: string[];
+      onData: (() => void) | undefined;
+      settle: () => Promise<string | undefined>;
+      readFailureSummary: boolean;
+    }
+  ): Promise<RunCommandsResult> {
+    const {
+      cwd,
+      env,
+      onProgress,
+      signal,
+      deadline,
+      outputChunks,
+      onData,
+      settle,
+      readFailureSummary,
+    } = run;
+
     for (let i = 0; i < commands.length; i++) {
       if (signal?.aborted) {
-        const logPath = await this.persistRunLog(outputChunks, logDir);
+        const logPath = await settle();
         return {
           success: false,
           output: tailOutput(outputChunks, logPath),
@@ -544,7 +629,7 @@ export class WorktreeLifecycleService {
       const remainingMs = deadline - Date.now();
 
       if (remainingMs <= 0) {
-        const logPath = await this.persistRunLog(outputChunks, logDir);
+        const logPath = await settle();
         return {
           success: false,
           output: tailOutput(outputChunks, logPath),
@@ -567,11 +652,12 @@ export class WorktreeLifecycleService {
         env,
         remainingMs,
         outputChunks,
-        signal
+        signal,
+        onData
       );
 
       if (result.aborted) {
-        const logPath = await this.persistRunLog(outputChunks, logDir);
+        const logPath = await settle();
         return {
           success: false,
           output: tailOutput(outputChunks, logPath),
@@ -584,7 +670,7 @@ export class WorktreeLifecycleService {
       }
 
       if (!result.success) {
-        const logPath = await this.persistRunLog(outputChunks, logDir);
+        const logPath = await settle();
         // A timed-out command can still print after the timeout marker, while
         // it is being killed; its summary would describe a run that didn't end.
         const failureSummary =
@@ -604,7 +690,7 @@ export class WorktreeLifecycleService {
       }
     }
 
-    const logPath = await this.persistRunLog(outputChunks, logDir);
+    const logPath = await settle();
     return {
       success: true,
       output: tailOutput(outputChunks, logPath),
@@ -620,7 +706,8 @@ export class WorktreeLifecycleService {
     env: Record<string, string>,
     timeoutMs: number,
     outputChunks: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onData?: () => void
   ): Promise<{
     success: boolean;
     timedOut?: boolean;
@@ -714,10 +801,12 @@ export class WorktreeLifecycleService {
 
       child.stdout?.on("data", (chunk: Buffer) => {
         outputChunks.push(chunk.toString());
+        onData?.();
       });
 
       child.stderr?.on("data", (chunk: Buffer) => {
         outputChunks.push(chunk.toString());
+        onData?.();
       });
 
       child.on("error", (err) => {
@@ -1150,13 +1239,18 @@ export class WorktreeLifecycleService {
       ctx.projectEnvVars
     );
 
+    const startedAt = Date.now();
+    // This run's own, so a status poll that takes the slot between commands
+    // can't take what the run has printed with it.
+    let liveOutput: string | undefined;
     monitor.setLifecycleStatus({
       phase: "setup",
       state: "running",
       commandIndex: 0,
       totalCommands: commands.length,
       currentCommand: commands[0],
-      startedAt: Date.now(),
+      startedAt,
+      commandStartedAt: startedAt,
     });
     ctx.emitUpdate(monitor);
 
@@ -1166,20 +1260,31 @@ export class WorktreeLifecycleService {
       readFailureSummary: true,
       onProgress: (commandIndex, totalCommands, command) => {
         const m = ctx.getMonitor(worktreeId);
-        if (m) {
+        // A later setup (an environment switch starts one without stopping
+        // this) holds the slot: its commands are what the worktree is running.
+        if (m && !heldByAnotherRun(m.lifecycleStatus, "setup", startedAt)) {
           m.setLifecycleStatus({
             phase: "setup",
             state: "running",
             commandIndex,
             totalCommands,
             currentCommand: command,
-            startedAt: m.lifecycleStatus?.startedAt ?? Date.now(),
+            startedAt,
+            commandStartedAt: Date.now(),
+            ...(liveOutput !== undefined ? { output: liveOutput } : {}),
           });
           ctx.emitUpdate(m);
         }
       },
+      onOutput: (output) => {
+        liveOutput = output;
+        const m = ctx.getMonitor(worktreeId);
+        if (m && publishRunningOutput(m, "setup", startedAt, output)) ctx.emitUpdate(m);
+      },
     });
 
+    // Written whoever holds the slot: the coordinator reads this run's outcome
+    // back from it the moment the run returns.
     const finalMonitor = ctx.getMonitor(worktreeId);
     if (finalMonitor) {
       finalMonitor.setLifecycleStatus({
@@ -1193,7 +1298,7 @@ export class WorktreeLifecycleService {
           result.error !== undefined && result.failureSummary !== undefined
             ? `${result.failureSummary} (${result.error})`
             : result.error,
-        startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
+        startedAt,
         completedAt: Date.now(),
       });
       ctx.emitUpdate(finalMonitor);
@@ -1711,20 +1816,129 @@ function readSetupFailureSummary(chunks: string[]): string | undefined {
     : summary.join("");
 }
 
-function tailOutput(chunks: string[], logPath?: string): string {
-  const full = chunks.join("");
-  const buf = Buffer.from(full, "utf-8");
-  if (buf.length <= OUTPUT_TAIL_BYTES) {
-    return scrubSecrets(full);
+/**
+ * The end of a run's output, scrubbed BEFORE it is cut: a cut through a token
+ * leaves a remainder no pattern recognises. Only a bounded window of recent
+ * output is scrubbed, and where the window's own start cuts something in two,
+ * the part it would keep is dropped rather than shown: the rest of a line,
+ * whose pattern may need the part before it, or the rest of a key block, whose
+ * body is only recognised beside its BEGIN line.
+ */
+function recentOutput(chunks: string[]): {
+  text: string;
+  skippedChunks: number;
+  trimmedBytes: number;
+} {
+  const wanted = TAIL_SCRUB_WINDOW_CHARS + KEY_BLOCK_LOOKBACK_CHARS;
+  let start = chunks.length;
+  let chars = 0;
+  while (start > 0 && chars < wanted) {
+    start--;
+    chars += chunks[start].length;
   }
+  const joined = chunks.slice(start).join("");
+  if (start === 0 && joined.length <= TAIL_SCRUB_WINDOW_CHARS) {
+    return { text: joined, skippedChunks: 0, trimmedBytes: 0 };
+  }
+
+  const windowStart = joined.length - TAIL_SCRUB_WINDOW_CHARS;
+  // Markers that start before the window, including one the window's start
+  // cuts through.
+  const blockStart = joined.lastIndexOf("-----BEGIN ", windowStart - 1);
+  let keepFrom: number;
+  if (blockStart !== -1 && blockStart > joined.lastIndexOf("-----END ", windowStart - 1)) {
+    const blockEnd = joined.indexOf("-----END ", blockStart);
+    keepFrom = blockEnd === -1 ? joined.length : lineEndFrom(joined, blockEnd);
+  } else {
+    const lineStart = /[\r\n]/.test(joined[windowStart - 1] ?? "");
+    keepFrom = lineStart ? windowStart : lineEndFrom(joined, windowStart);
+  }
+  return {
+    text: joined.slice(keepFrom),
+    skippedChunks: start,
+    trimmedBytes: Buffer.byteLength(joined.slice(0, keepFrom), "utf-8"),
+  };
+}
+
+/** Just past the line break at or after `from`, or the end when no line breaks there. */
+function lineEndFrom(text: string, from: number): number {
+  const rest = text.slice(from).search(/[\r\n]/);
+  return rest === -1 ? text.length : from + rest + 1;
+}
+
+function scrubbedTail(text: string): { tail: string; overflowBytes: number } {
+  const scrubbed = scrubSecrets(text);
+  const buf = Buffer.from(scrubbed, "utf-8");
+  if (buf.length <= OUTPUT_TAIL_BYTES) return { tail: scrubbed, overflowBytes: 0 };
   // Byte-accurate slice: matches the named cap (`*_BYTES`) for multibyte
   // content. A cut mid-codepoint produces a leading U+FFFD in the tail snippet
   // — acceptable since the persisted log file is the authoritative artifact.
-  const tail = buf.subarray(buf.length - OUTPUT_TAIL_BYTES).toString("utf-8");
-  const dropped = buf.length - OUTPUT_TAIL_BYTES;
+  return {
+    tail: buf.subarray(buf.length - OUTPUT_TAIL_BYTES).toString("utf-8"),
+    overflowBytes: buf.length - OUTPUT_TAIL_BYTES,
+  };
+}
+
+function tailOutput(chunks: string[], logPath?: string): string {
+  const { text, skippedChunks, trimmedBytes } = recentOutput(chunks);
+  const { tail, overflowBytes } = scrubbedTail(text);
+  let omittedBytes = trimmedBytes + overflowBytes;
+  for (let i = 0; i < skippedChunks; i++) omittedBytes += Buffer.byteLength(chunks[i], "utf-8");
+  if (omittedBytes === 0) return tail;
   const where = logPath ? `full log: ${logPath}` : "full log unavailable";
-  const marker = `...(truncated — omitted ${dropped} bytes; ${where})\n`;
-  return scrubSecrets(marker + tail);
+  return `...(truncated — omitted ${omittedBytes} bytes; ${where})\n${tail}`;
+}
+
+/**
+ * Where the output a running command has printed can be shown up to. A line
+ * still arriving can hold the start of a token that no pattern matches until
+ * the rest lands, and a key block is only recognised once its END line is in,
+ * so both wait until they are complete.
+ */
+function settledOutputEnd(text: string): number {
+  const end = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
+  const settled = text.slice(0, end);
+  const keyBlock = settled.lastIndexOf("-----BEGIN ");
+  if (keyBlock !== -1 && settled.indexOf("-----END ", keyBlock) === -1) return keyBlock;
+  return end;
+}
+
+// Called twice a second on a run that may have printed megabytes, so it never
+// walks the whole history: the marker says output was left out, not how much.
+function liveOutputTail(chunks: string[]): string {
+  const { text, skippedChunks, trimmedBytes } = recentOutput(chunks);
+  const { tail, overflowBytes } = scrubbedTail(text.slice(0, settledOutputEnd(text)));
+  const omitted = skippedChunks > 0 || trimmedBytes > 0 || overflowBytes > 0;
+  return omitted ? `...(earlier output omitted)\n${tail}` : tail;
+}
+
+/** The slot shows another run of the same phase running, one that started at another time. */
+function heldByAnotherRun(
+  status: WorktreeLifecycleStatus | undefined,
+  phase: WorktreeLifecyclePhase,
+  startedAt: number
+): boolean {
+  return status?.phase === phase && status.state === "running" && status.startedAt !== startedAt;
+}
+
+/**
+ * Put a run's live output on the monitor's lifecycle slot, only while the slot
+ * still holds that run: the same phase, running, from the same start. Another
+ * phase, or another run of the same phase, that has taken the slot keeps it.
+ * Returns whether the slot changed.
+ */
+export function publishRunningOutput(
+  monitor: WorktreeMonitor,
+  phase: WorktreeLifecyclePhase,
+  startedAt: number,
+  output: string
+): boolean {
+  const status = monitor.lifecycleStatus;
+  if (status?.phase !== phase || status.state !== "running" || status.startedAt !== startedAt) {
+    return false;
+  }
+  monitor.setLifecycleStatus({ ...status, output });
+  return true;
 }
 
 function describeConfigSource(resolved: ResolvedLifecycleConfig): LifecycleCommandSource {

@@ -49,8 +49,16 @@ export interface WorktreeLifecycleStatus {
   currentCommand?: string;
   commandIndex?: number;
   totalCommands?: number;
+  /**
+   * The scrubbed end of what the run's commands printed (at most 8 KiB). While
+   * the run is `running` it is what they have printed so far, a little behind
+   * the commands themselves: a line still being written is held back until it
+   * ends, so a secret arriving in pieces is only ever shown scrubbed.
+   */
   output?: string;
   startedAt: number;
+  /** When the command named by `commandIndex` started, while the run is `running`. */
+  commandStartedAt?: number;
   completedAt?: number;
   error?: string;
   /**
@@ -441,6 +449,14 @@ export interface Worktree {
 
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /**
+   * The last setup run that finished (succeeded, failed or timed out), with its
+   * output. `lifecycleStatus` is one slot every later phase takes over — an
+   * environment's status check every poll — so this is where a finished
+   * setup's output stays readable. Held in memory by the monitor.
+   */
+  setupRun?: WorktreeLifecycleStatus;
 
   /**
    * How far post-create initialization has got. Absent for a worktree this

@@ -311,6 +311,7 @@ export class WorktreeMonitor {
   // Extra state
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  private _setupRun: WorktreeLifecycleStatus | undefined;
   private _setupStatus: WorktreeSetupStatus | undefined;
   // Accumulated per-phase teardown results. Lifecycle owned by
   // WorktreeLifecycleService.runLifecycleTeardown (cleared at run start, upserted
@@ -682,6 +683,9 @@ export class WorktreeMonitor {
       },
       get lifecycleStatus() {
         return monitor._lifecycleStatus;
+      },
+      get setupRun() {
+        return monitor._setupRun;
       },
       get setupStatus() {
         return monitor._setupStatus;
@@ -1347,6 +1351,10 @@ export class WorktreeMonitor {
     return this._lifecycleStatus;
   }
 
+  get setupRun(): WorktreeLifecycleStatus | undefined {
+    return this._setupRun;
+  }
+
   get setupStatus(): WorktreeSetupStatus | undefined {
     return this._setupStatus;
   }
@@ -1461,6 +1469,12 @@ export class WorktreeMonitor {
 
   setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
     this._lifecycleStatus = status;
+    if (
+      status?.phase === "setup" &&
+      (status.state === "success" || status.state === "failed" || status.state === "timed-out")
+    ) {
+      this._setupRun = status;
+    }
   }
 
   /**

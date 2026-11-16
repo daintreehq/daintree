@@ -3,12 +3,14 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
+import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isCardContentEvent } from "../cardClickTarget";
 import { actionService } from "@/services/ActionService";
 import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import {
@@ -847,5 +849,282 @@ describe("WorktreeDetailsSection forge avatar lookup", () => {
       cwd: authored.path,
       enabled: true,
     });
+  });
+});
+
+describe("WorktreeDetailsSection — what a running lifecycle phase is doing (#17115)", () => {
+  const NOW = 1_000_000;
+
+  function runningSetup(overrides: Partial<WorktreeLifecycleStatus> = {}): WorktreeLifecycleStatus {
+    return {
+      phase: "setup",
+      state: "running",
+      commandIndex: 0,
+      totalCommands: 2,
+      currentCommand: "node scripts/link-shared-node-modules.mjs",
+      startedAt: NOW - 65_000,
+      commandStartedAt: NOW - 42_000,
+      output: "Shared node_modules is behind package-lock.json.\nRefreshing it with npm ci\n",
+      ...overrides,
+    };
+  }
+
+  const succeededRun: WorktreeLifecycleStatus = {
+    phase: "setup",
+    state: "success",
+    totalCommands: 2,
+    startedAt: NOW - 90_000,
+    completedAt: NOW - 30_000,
+    output: "Refreshing it with npm ci\nadded 1200 packages\n",
+  };
+
+  /**
+   * The section on a card that selects on a click into its content, by the
+   * card's own filter, with the select overlay a sidebar card hands focus to.
+   */
+  function card(worktree: WorktreeState, onCardClick: () => void, isExpanded = false) {
+    return (
+      <div data-worktree-row="">
+        <button type="button" data-card-select-overlay="" aria-label="Select worktree" />
+        <div onClick={(event) => isCardContentEvent(event) && onCardClick()}>
+          <TooltipProvider>
+            <WorktreeDetailsSection
+              {...baseProps}
+              worktree={worktree}
+              isExpanded={isExpanded}
+              isLifecycleRunning={worktree.lifecycleStatus?.state === "running"}
+              lifecycleLabel={
+                worktree.lifecycleStatus?.state === "running"
+                  ? `Running setup: ${worktree.lifecycleStatus.currentCommand ?? ""}`
+                  : undefined
+              }
+            />
+          </TooltipProvider>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRunning(status: WorktreeLifecycleStatus, onCardClick = vi.fn()) {
+    const view = render(card({ ...baseWorktree, lifecycleStatus: status }, onCardClick));
+    // Past the gate that keeps a quick run from adding a row at all.
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    return view;
+  }
+
+  function runRow(): HTMLElement {
+    return screen.getByTestId("worktree-lifecycle-run");
+  }
+
+  function openDisclosure(details: HTMLDetailsElement) {
+    act(() => {
+      details.open = true;
+      fireEvent(details, new Event("toggle"));
+    });
+  }
+
+  function disclosureOf(element: HTMLElement): HTMLDetailsElement {
+    const details = element.closest("details") ?? element.querySelector("details");
+    if (!(details instanceof HTMLDetailsElement)) throw new Error("no disclosure");
+    return details;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says which command of how many is running, and for how long, without being opened", () => {
+    renderRunning(runningSetup());
+
+    expect(runRow().textContent).toContain("Command 1 of 2");
+    expect(runRow().textContent).toContain("42s");
+
+    // A second at a time: each tick re-arms the next from its own render.
+    for (let second = 0; second < 3; second++) {
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+    }
+    expect(runRow().textContent).toContain("45s");
+  });
+
+  it("restarts the clock when the next command starts, and moves on to minutes past one", () => {
+    const view = renderRunning(runningSetup());
+
+    view.rerender(
+      card(
+        {
+          ...baseWorktree,
+          lifecycleStatus: runningSetup({
+            commandIndex: 1,
+            currentCommand: "npm run build",
+            commandStartedAt: NOW + 400,
+          }),
+        },
+        vi.fn()
+      )
+    );
+    expect(runRow().textContent).toContain("Command 2 of 2");
+    expect(runRow().textContent).toMatch(/· 0s$/);
+
+    for (let second = 0; second < 61; second++) {
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+    }
+    expect(runRow().textContent).toContain("1m");
+  });
+
+  it("opens onto the command and what it has printed, and keeps up while open", () => {
+    const view = renderRunning(runningSetup());
+    expect(screen.queryByRole("region", { name: "Setup output" })).toBeNull();
+
+    openDisclosure(disclosureOf(runRow()));
+    expect(
+      screen.getByText("node scripts/link-shared-node-modules.mjs", { selector: "code" })
+    ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "Shared node_modules is behind package-lock.json.\nRefreshing it with npm ci\n"
+    );
+
+    view.rerender(
+      card(
+        {
+          ...baseWorktree,
+          lifecycleStatus: runningSetup({
+            output: "Refreshing it with npm ci\nadded 1200 packages\n",
+          }),
+        },
+        vi.fn()
+      )
+    );
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "Refreshing it with npm ci\nadded 1200 packages\n"
+    );
+  });
+
+  it("shows a progress bar's latest state, not every state it drew", () => {
+    renderRunning(runningSetup({ output: "fetching\n10%\r55%\r90%\r\n" }));
+
+    openDisclosure(disclosureOf(runRow()));
+
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "fetching\n90%\n"
+    );
+  });
+
+  it("says when the command has printed nothing yet", () => {
+    renderRunning(runningSetup({ output: undefined }));
+
+    openDisclosure(disclosureOf(runRow()));
+
+    expect(screen.getByText("No output yet")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Setup output" })).toBeNull();
+  });
+
+  it("never selects the card for a click on the disclosure or in its log", () => {
+    const onCardClick = vi.fn();
+    renderRunning(runningSetup(), onCardClick);
+    openDisclosure(disclosureOf(runRow()));
+
+    fireEvent.click(runRow().querySelector("summary")!);
+    fireEvent.click(screen.getByRole("region", { name: "Setup output" }));
+
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the card when the run settles under a reader's focus", () => {
+    const view = renderRunning(runningSetup());
+    openDisclosure(disclosureOf(runRow()));
+    act(() => {
+      screen.getByRole("region", { name: "Setup output" }).focus();
+    });
+
+    view.rerender(card({ ...baseWorktree, lifecycleStatus: succeededRun }, vi.fn()));
+
+    expect(screen.queryByTestId("worktree-lifecycle-run")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Select worktree" }));
+  });
+
+  it("adds no row for a status check, which comes and goes on a timer", () => {
+    renderRunning({ phase: "resource-status", state: "running", startedAt: NOW, output: "ok" });
+
+    expect(screen.queryByTestId("worktree-lifecycle-run")).toBeNull();
+  });
+
+  it("adds no row for a setup that is over before the gate opens", () => {
+    const view = render(card({ ...baseWorktree, lifecycleStatus: runningSetup() }, vi.fn()));
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    view.rerender(card({ ...baseWorktree, lifecycleStatus: succeededRun }, vi.fn()));
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(screen.queryByTestId("worktree-lifecycle-run")).toBeNull();
+  });
+
+  it("keeps a successful setup's output in Details after a status check takes the slot", () => {
+    const worktree: WorktreeState = {
+      ...baseWorktree,
+      lifecycleStatus: { phase: "resource-status", state: "success", startedAt: NOW },
+      setupRun: succeededRun,
+    };
+    const view = render(card(worktree, vi.fn()));
+    expect(screen.queryByText("Setup output")).toBeNull();
+
+    view.rerender(card(worktree, vi.fn(), true));
+    openDisclosure(disclosureOf(screen.getByText("Setup output")));
+
+    expect(screen.getByRole("region", { name: "Setup output" }).textContent).toBe(
+      "Refreshing it with npm ci\nadded 1200 packages\n"
+    );
+  });
+
+  it("offers no earlier output while setup runs again, nor for a run that did not succeed", () => {
+    const view = render(
+      card(
+        { ...baseWorktree, lifecycleStatus: runningSetup(), setupRun: succeededRun },
+        vi.fn(),
+        true
+      )
+    );
+    expect(screen.queryByText("Setup output")).toBeNull();
+
+    view.rerender(
+      card(
+        {
+          ...baseWorktree,
+          lifecycleStatus: { phase: "resource-status", state: "success", startedAt: NOW },
+          setupRun: { ...succeededRun, state: "failed" },
+        },
+        vi.fn(),
+        true
+      )
+    );
+    expect(screen.queryByText("Setup output")).toBeNull();
+
+    // A retry whose slot a status check took mid-run is still a running setup.
+    view.rerender(
+      card(
+        {
+          ...baseWorktree,
+          lifecycleStatus: { phase: "resource-status", state: "success", startedAt: NOW },
+          setupStatus: { state: "running", stage: "setup-script", startedAt: NOW },
+          setupRun: succeededRun,
+        },
+        vi.fn(),
+        true
+      )
+    );
+    expect(screen.queryByText("Setup output")).toBeNull();
   });
 });

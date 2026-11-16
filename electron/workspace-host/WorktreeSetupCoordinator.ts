@@ -121,6 +121,10 @@ export class WorktreeSetupCoordinator {
   // Monitors whose approved setup is already being resumed, so a second
   // approval arriving meanwhile does not run it again once the first settles.
   private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
+  // What the setup script last printed, by incarnation. The plugin steps that
+  // follow it take over its slot, and so do auto-provision and a retry that
+  // resumes at the steps, so the steps can't read it back from there.
+  private setupScriptOutput = new WeakMap<WorktreeMonitor, string>();
   // The plugin setup steps main last listed for this project (#13807), so a
   // card's approval flag can count them without a round trip per worktree.
   private pluginSetupSteps: WorktreeSetupStepDescriptor[] = [];
@@ -306,6 +310,17 @@ export class WorktreeSetupCoordinator {
 
     // Read immediately, before auto-provision can overwrite the slot.
     const settled = this.host.getMonitor(worktreeId)?.lifecycleStatus;
+    if (monitorAtStart && this.host.getMonitor(worktreeId) === monitorAtStart) {
+      if (
+        settled?.phase === "setup" &&
+        settled.state !== "running" &&
+        settled.output !== undefined
+      ) {
+        this.setupScriptOutput.set(monitorAtStart, settled.output);
+      } else {
+        this.setupScriptOutput.delete(monitorAtStart);
+      }
+    }
     if (settled?.phase === "setup" && settled.state !== "success") {
       if (settled.state === "failed" || settled.state === "timed-out") {
         recordAwaitingApproval(false);
@@ -442,6 +457,10 @@ export class WorktreeSetupCoordinator {
     };
     if (!isLive()) return { outcome: cancelledOutcome };
 
+    // The steps are part of the same setup as the script, and take over the
+    // slot its result is read from: its output stays with them.
+    const scriptOutput = this.setupScriptOutput.get(monitor);
+
     // Registered before the first await, so a delete that starts while the
     // steps are still being listed cancels them too.
     const controller = new AbortController();
@@ -521,11 +540,14 @@ export class WorktreeSetupCoordinator {
           }
           ranAny = true;
           steps[index] = { ...steps[index], state: "running" };
+          const stepStartedAt = Date.now();
           monitor.setLifecycleStatus({
             phase: "setup",
             state: "running",
             currentCommand: `${step.label} (${step.pluginName})`,
-            startedAt: Date.now(),
+            startedAt: stepStartedAt,
+            commandStartedAt: stepStartedAt,
+            ...(scriptOutput !== undefined ? { output: scriptOutput } : {}),
           });
           publish();
           let result: WorktreeSetupStepRunOutcome;
@@ -635,6 +657,7 @@ export class WorktreeSetupCoordinator {
               : "failed",
         startedAt,
         completedAt: Date.now(),
+        ...(scriptOutput !== undefined ? { output: scriptOutput } : {}),
         ...(!outcome.ok && "error" in outcome ? { error: outcome.error } : {}),
       });
       this.host.emitUpdate(monitor);
