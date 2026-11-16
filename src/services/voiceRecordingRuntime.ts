@@ -5,7 +5,7 @@ import { isDragCancelEscape } from "@/lib/dragCancelEscape";
 import { keybindingService } from "@/services/KeybindingService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { logDebug, logWarn } from "@/utils/logger";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import type { VoiceSendOptions, voiceRecordingService } from "./VoiceRecordingService";
 
 // The recording service is one of the renderer's largest chunks, and voice
@@ -56,9 +56,7 @@ export function loadVoiceRecordingService(
 }
 
 function logLoadFailure(error: unknown): void {
-  logWarn(`${LOG_PREFIX} Couldn't load voice dictation`, {
-    error: formatErrorMessage(error, "Voice dictation failed to load"),
-  });
+  logWarn(`${LOG_PREFIX} Couldn't load voice dictation`, voiceErrorLogFields(error));
 }
 
 /**
@@ -239,9 +237,7 @@ export function startVoiceRecordingRuntime(): () => void {
         stopWatching();
         if (generation !== requestedAt) {
           loaded.refreshConfiguration().catch((error: unknown) => {
-            logDebug(`${LOG_PREFIX} Couldn't read voice settings`, {
-              error: formatErrorMessage(error, "Voice settings read failed"),
-            });
+            logDebug(`${LOG_PREFIX} Couldn't read voice settings`, voiceErrorLogFields(error));
           });
         }
       },
@@ -262,9 +258,7 @@ export function startVoiceRecordingRuntime(): () => void {
         if (isVoiceInputConfigured(settings)) load(settings);
       })
       .catch((error: unknown) => {
-        logDebug(`${LOG_PREFIX} Couldn't read voice settings`, {
-          error: formatErrorMessage(error, "Voice settings read failed"),
-        });
+        logDebug(`${LOG_PREFIX} Couldn't read voice settings`, voiceErrorLogFields(error));
       });
   };
 
