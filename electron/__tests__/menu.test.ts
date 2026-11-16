@@ -52,9 +52,11 @@ const menuItemRegistry = vi.hoisted(() => new Map<string, { label: string; enabl
 // while the menu it installed is still the application menu.
 const applicationMenu = vi.hoisted(() => ({
   installed: null as { getMenuItemById: (id: string) => unknown } | null,
-  create: () => ({
-    getMenuItemById: (id: string) => menuItemRegistry.get(id) ?? null,
-  }),
+  // Its own items: a later build's never show through a menu built before it.
+  create: () => {
+    const items = new Map(menuItemRegistry);
+    return { getMenuItemById: (id: string) => items.get(id) ?? null };
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -173,6 +175,12 @@ vi.mock("../services/ProjectSwitchStatusTiming.js", () => ({
 vi.mock("../../shared/config/agentRegistry.js", () => ({
   AGENT_REGISTRY: {},
   getEffectiveRegistry: vi.fn(() => ({})),
+}));
+
+const keybindingOverrides = vi.hoisted(() => ({ current: {} as Record<string, string[]> }));
+vi.mock("../services/keybindingOverridesStore.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/keybindingOverridesStore.js")>()),
+  getValidatedOverrides: () => ({ ...keybindingOverrides.current }),
 }));
 
 vi.mock("../services/CliAvailabilityService.js", () => ({}));
@@ -3365,6 +3373,8 @@ describe("a build that would install the menu already there (#17040)", () => {
   });
 
   afterEach(() => {
+    keybindingOverrides.current = {};
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
     vi.mocked(getEffectiveRegistry).mockReturnValue({});
     vi.mocked(getPluginMenuItems).mockReturnValue([]);
     vi.mocked(getPluginTours).mockReturnValue([]);
@@ -3373,7 +3383,7 @@ describe("a build that would install the menu already there (#17040)", () => {
     projectStoreMock.getProjectById.mockReturnValue(null);
   });
 
-  it("builds once across a cold boot whose CLI check and plugin catalog change nothing", () => {
+  it("builds once when asked three times with nothing changed, as a cold boot's builds are", () => {
     vi.mocked(getEffectiveRegistry).mockReturnValue({
       claude: { id: "claude", name: "Claude" },
     } as never);
@@ -3417,6 +3427,40 @@ describe("a build that would install the menu already there (#17040)", () => {
     expect(builds()).toBe(1);
     expect(menuItemRegistry.get("file-project-settings")?.enabled).toBe(true);
     expect(menuItemRegistry.get("file-close-project")?.enabled).toBe(true);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    createApplicationMenu(win);
+
+    expect(builds()).toBe(1);
+    expect(menuItemRegistry.get("file-project-settings")?.enabled).toBe(false);
+    expect(menuItemRegistry.get("file-close-project")?.enabled).toBe(false);
+  });
+
+  it("disables Close Window in place once the app is windowless", () => {
+    windowRefMock.getWindowRegistry.mockReturnValue({ getPrimary: () => ({ services: {} }) });
+    createApplicationMenu(win);
+    expect(menuItemRegistry.get("file-close-window")?.enabled).toBe(true);
+
+    windowRefMock.getWindowRegistry.mockReturnValue({ getPrimary: () => undefined });
+    createApplicationMenu(win);
+
+    expect(builds()).toBe(1);
+    expect(menuItemRegistry.get("file-close-window")?.enabled).toBe(false);
+  });
+
+  it("rebuilds when a keybinding override moves a menu accelerator, and only then", () => {
+    createApplicationMenu(win);
+    const before = findMenuItem(capturedTemplate, "View", "Toggle Sidebar")?.accelerator;
+
+    keybindingOverrides.current = { "nav.toggleSidebar": ["Cmd+Shift+Y"] };
+    createApplicationMenu(win);
+    expect(builds()).toBe(2);
+    const after = findMenuItem(capturedTemplate, "View", "Toggle Sidebar")?.accelerator;
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+
+    createApplicationMenu(win);
+    expect(builds()).toBe(2);
   });
 
   it("rebuilds when Open Recent changes", () => {
@@ -3429,7 +3473,9 @@ describe("a build that would install the menu already there (#17040)", () => {
     });
     projectStoreMock.getAllProjects.mockReturnValue([project("a", 2), project("b", 1)]);
     createApplicationMenu(win);
-    createApplicationMenu(win); // reopening the most recent project reorders nothing
+    // Reopening the most recent project moves its timestamp, not its place.
+    projectStoreMock.getAllProjects.mockReturnValue([project("a", 5), project("b", 1)]);
+    createApplicationMenu(win);
     expect(builds()).toBe(1);
 
     projectStoreMock.getAllProjects.mockReturnValue([project("a", 2), project("b", 3)]);
@@ -3500,16 +3546,24 @@ describe("a build that would install the menu already there (#17040)", () => {
     expect(builds()).toBe(4);
   });
 
-  it("rebuilds once the menu it installed is no longer the application menu", () => {
+  it.each([
+    ["cleared", () => null],
+    ["replaced by another", () => applicationMenu.create()],
+  ])("rebuilds once the menu it installed has been %s", (_case, displace) => {
     createApplicationMenu(win);
-    applicationMenu.installed = null;
+    const foreign = displace();
+    applicationMenu.installed = foreign;
 
     createApplicationMenu(win);
     expect(builds()).toBe(2);
+    expect(Menu.getApplicationMenu()).not.toBe(foreign);
 
-    applicationMenu.installed = null;
+    applicationMenu.installed = displace();
     rebuildApplicationMenuIfStale(win);
     expect(builds()).toBe(3);
+    expect(Menu.getApplicationMenu()).toBe(
+      vi.mocked(Menu.buildFromTemplate).mock.results.at(-1)?.value
+    );
   });
 
   it("tries again after a build that failed to install", () => {
@@ -3518,13 +3572,65 @@ describe("a build that would install the menu already there (#17040)", () => {
       { pluginId: "acme", item: { label: "Acme Panel", actionId: "acme.one", location: "view" } },
     ] as never);
 
+    const installed = Menu.getApplicationMenu();
+    const installedItem = installed?.getMenuItemById("file-close-window");
+    expect(installedItem).toBeTruthy();
+
     vi.mocked(Menu.setApplicationMenu).mockImplementationOnce(() => {
       throw new Error("native menu install failed");
     });
     expect(() => createApplicationMenu(win)).toThrow("native menu install failed");
+    expect(Menu.getApplicationMenu()).toBe(installed);
+    expect(Menu.getApplicationMenu()?.getMenuItemById("file-close-window")).toBe(installedItem);
 
     createApplicationMenu(win);
     expect(builds()).toBe(3);
     expect(findMenuItem(capturedTemplate, "View", "Acme Panel")).toBeDefined();
+    expect(Menu.getApplicationMenu()).toBe(
+      vi.mocked(Menu.buildFromTemplate).mock.results.at(-1)?.value
+    );
+  });
+
+  it("opens a project already first in Open Recent without rebuilding", async () => {
+    const PROJECT = { id: "project-a", path: "/repos/alpha" };
+    const manager = {
+      switchTo: vi.fn(async () => ({
+        view: { webContents: { isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      })),
+      getActiveProjectId: vi.fn(() => PROJECT.id),
+      getOutgoingBridgeProjectId: vi.fn(() => null),
+      getAllViews: vi.fn(() => []),
+      getActiveView: vi.fn(() => null),
+      setPendingFocusIntent: vi.fn(),
+      releaseCachedView: vi.fn(() => true),
+    };
+    const targetWindow = { id: 7, isDestroyed: () => false, getTitle: () => "alpha" };
+    const context = {
+      windowId: 7,
+      browserWindow: targetWindow,
+      services: { projectViewManager: manager },
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) => (id === 7 ? context : undefined),
+      getPrimary: () => context,
+      all: () => [context],
+    });
+    projectStoreMock.addProject.mockResolvedValue(PROJECT);
+    projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, status: "active" });
+    projectStoreMock.getAllProjects.mockReturnValue([
+      { ...PROJECT, name: "alpha", emoji: "📁", lastOpened: 2 },
+    ]);
+    resetProjectHistory(7);
+    try {
+      const target = targetWindow as unknown as Electron.BrowserWindow;
+      createApplicationMenu(target);
+      await handleDirectoryOpen(PROJECT.path, target);
+      await handleDirectoryOpen(PROJECT.path, target);
+
+      expect(builds()).toBe(1);
+    } finally {
+      disposeProjectHistory(7);
+    }
   });
 });

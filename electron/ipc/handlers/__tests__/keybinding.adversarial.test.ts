@@ -353,6 +353,63 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
     expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["set", () => setOverride(["Cmd+Shift+B"])],
+    [
+      "remove",
+      () => getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "nav.toggleSidebar"),
+    ],
+    ["reset-all", () => getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent())],
+    [
+      "import",
+      () => {
+        dialogMock.showOpenDialog.mockResolvedValue({
+          canceled: false,
+          filePaths: ["/tmp/x.json"],
+        });
+        fsMock.readFile.mockResolvedValue("{}");
+        profileIoMock.importProfile.mockReturnValue({
+          ok: true,
+          overrides: { "nav.toggleSidebar": ["Cmd+I"] },
+          applied: 1,
+          skipped: 0,
+          errors: [],
+        });
+        return getHandler(CHANNELS.KEYBINDING_IMPORT_PROFILE)(fakeEvent());
+      },
+    ],
+  ])("rebuilds the application menu after a %s on its own", async (_name, write) => {
+    cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
+
+    await write();
+    await rebuildSettles();
+
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no window is left", [] as unknown[]],
+    ["another window is left", [{ isDestroyed: () => false }]],
+  ])(
+    "rebuilds only for a live window when the registration window closes as menu.js loads and %s",
+    async (_case, survivors) => {
+      let destroyed = false;
+      const win = { isDestroyed: () => destroyed } as unknown as Electron.BrowserWindow;
+      const { BrowserWindow } = await import("electron");
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue(survivors as never);
+      cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
+      await setOverride(["Cmd+Shift+B"]);
+
+      vi.advanceTimersByTime(100);
+      destroyed = true;
+      await rebuildSettles();
+
+      expect(menuMock.createApplicationMenu.mock.calls.map(([w]) => w)).toEqual(
+        survivors.length > 0 ? [survivors[0]] : []
+      );
+    }
+  );
+
   it("waits for writes to pause before rebuilding", async () => {
     cleanup = registerKeybindingHandlers({ mainWindow: liveWindow() } as never);
 
@@ -410,6 +467,7 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
 
     await getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES)(fakeEvent());
     await getHandler(CHANNELS.KEYBINDING_EXPORT_PROFILE)(fakeEvent());
+    await rebuildSettles();
 
     expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
   });

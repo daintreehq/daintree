@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
   execFileMock,
@@ -175,10 +175,23 @@ function probeCount(): number {
   );
 }
 
+/** Windows openWindow opened, closed after each test so none keeps listening into the next. */
+const openWindows: BrowserWindow[] = [];
+
+function closeOpenWindows(): void {
+  for (const win of openWindows.splice(0)) {
+    vi.mocked(win.once)
+      .mock.calls.filter(([name]) => String(name) === "closed")
+      .forEach(([, listener]) => (listener as () => void)());
+  }
+}
+
 async function openWindow(id: number, opts: { settlePlugins?: boolean } = {}): Promise<WindowWork> {
   const probesBefore = probeCount();
   const menusBefore = createApplicationMenuMock.mock.calls.length;
-  await initPerWindowServices(fakeWindow(id), fakeContext(id), undefined);
+  const win = fakeWindow(id);
+  openWindows.push(win);
+  await initPerWindowServices(win, fakeContext(id), undefined);
   if (id === 1) {
     signalFirstInteractive(1);
     await settle();
@@ -209,6 +222,8 @@ describe("initPerWindowServices repeated work across windows", () => {
     pathScanMock.mockClear();
     createApplicationMenuMock.mockClear();
   });
+
+  afterEach(closeOpenWindows);
 
   it("probes every agent CLI and rebuilds the menu twice for the first window only", async () => {
     const first = await openWindow(1, { settlePlugins: true });
@@ -393,8 +408,52 @@ describe("initPerWindowServices plugin menu context (#13765)", () => {
       await debounce();
       expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([opened[0]]);
       expect(rebuildMenuIfChangedMock).not.toHaveBeenCalled();
+
+      // A destroyed window is never elected, primary or first registered.
+      Object.assign(opened[0]!, { isDestroyed: () => true });
+      state.primary = opened[0];
+      createApplicationMenuMock.mockClear();
+      tourListeners.forEach((listener) => listener());
+      await debounce();
+      expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([opened[1]]);
     } finally {
       windows.forEach(({ close }) => close());
+    }
+  });
+
+  it("still rebuilds for a tour change once the window elected for it closes first", async () => {
+    const opened: BrowserWindow[] = [];
+    const state: { primary: BrowserWindow | undefined } = { primary: undefined };
+    const registry = {
+      getPrimary: () => (state.primary ? { browserWindow: state.primary } : undefined),
+      all: () => opened.map((browserWindow) => ({ browserWindow })),
+    } as unknown as WindowRegistry;
+    const first = await openFocusableWindow(1, registry);
+    const second = await openFocusableWindow(2, registry);
+    opened.push(first.win, second.win);
+    state.primary = second.win;
+    createApplicationMenuMock.mockClear();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The first window's timer is already running when the tours change, so
+      // it fires before the elected second window's and has to leave it.
+      first.focus();
+      vi.advanceTimersByTime(25);
+      tourListeners.forEach((listener) => listener());
+      vi.advanceTimersByTime(30);
+      expect(createApplicationMenuMock).not.toHaveBeenCalled();
+
+      // The second window closes before its timer fires; the first takes over.
+      second.close();
+      opened.pop();
+      state.primary = first.win;
+      notifyProjectPresenceChanged();
+      vi.advanceTimersByTime(60);
+      expect(createApplicationMenuMock.mock.calls.map(([w]) => w)).toEqual([first.win]);
+    } finally {
+      vi.useRealTimers();
+      first.close();
     }
   });
 
