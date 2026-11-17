@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@shared/types/project";
 
@@ -227,6 +227,8 @@ describe("SettingsDialog closed over an Integrations draft", () => {
     // A test that fails mid-way must not leave the project's write queue blocked
     // behind a write it held.
     afterEach(() => {
+      // Unmounted first, so a released write can't start another from a live page.
+      cleanup();
       held.forEach((write) => write.resolve());
       held = [];
     });

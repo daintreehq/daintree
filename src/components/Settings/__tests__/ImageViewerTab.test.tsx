@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useContext, type ContextType } from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { SettingsFlushContext, SettingsFlushProvider } from "../SettingsFlushRegistry";
 import { useProjectStore } from "@/store/projectStore";
@@ -236,6 +236,8 @@ describe("ImageViewerTab flushed by a close", () => {
     // A test that fails mid-way must not leave the project's write queue blocked
     // behind the Save it held.
     afterEach(() => {
+      // Unmounted first, so the released Save can't start another from a live page.
+      cleanup();
       settle?.resolve();
       settle = undefined;
     });
