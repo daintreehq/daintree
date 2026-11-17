@@ -1261,8 +1261,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
-// Remote Hosts doesn't exist on Windows, so neither does its action. U sits
-// beside the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
+// Every platform is a Shell, so every platform has the action. U sits beside
+// the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
 const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "host.switch",
@@ -1453,9 +1453,7 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
  * the host OS it runs on.
  */
 export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
-  const bindings = isWindows
-    ? [...CORE_KEYBINDINGS]
-    : [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
+  const bindings = [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
   if (!isWindows && !isLinux) return bindings;
   const replacements = isLinux
     ? // Linux first: the first match wins, and Linux overrides the shared dictation key.
