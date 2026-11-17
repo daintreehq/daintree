@@ -29,7 +29,12 @@ describe("ListSkeleton onset gate", () => {
       vi.advanceTimersByTime(UI_SKELETON_GATE_MS);
     });
     expect(getByRole("status").getAttribute("aria-label")).toBe("Loading events");
-    expect(container.querySelectorAll("[data-skeleton-bone]").length).toBe(5);
+    const bones = container.querySelectorAll("[data-skeleton-bone]");
+    expect(bones.length).toBe(5);
+    for (const bone of bones) {
+      expect(bone.classList.contains("animate-pulse-immediate")).toBe(true);
+      expect(bone.classList.contains("animate-pulse-delayed")).toBe(false);
+    }
   });
 
   it("never paints when unmounted inside the threshold", () => {
@@ -37,10 +42,9 @@ describe("ListSkeleton onset gate", () => {
     act(() => {
       vi.advanceTimersByTime(UI_SKELETON_GATE_MS - 50);
     });
+    expect(container.querySelector("[data-skeleton-bone]")).toBeNull();
     unmount();
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
+    expect(vi.getTimerCount()).toBe(0);
     expect(container.querySelector("[data-skeleton-bone]")).toBeNull();
   });
 });

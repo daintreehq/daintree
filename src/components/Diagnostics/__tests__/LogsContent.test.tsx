@@ -385,7 +385,7 @@ describe("LogsContent — first-read skeleton onset", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS * 3);
     });
-    expect(queryByTestId("virtuoso")).not.toBeNull();
+    expect(queryByTestId("virtuoso")?.getAttribute("data-count")).toBe("1");
     expect(queryByRole("status")).toBeNull();
   });
 });
