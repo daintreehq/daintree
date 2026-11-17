@@ -6,6 +6,7 @@ import { render, screen, cleanup, act, fireEvent, within } from "@testing-librar
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { UI_SKELETON_FLOOR_MS, UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -1375,11 +1376,14 @@ describe("NewWorktreeDialog — branch list cache", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the skeleton on first-ever open while branches load", async () => {
+  it("shows the skeleton on first-ever open once the load outlasts the onset gate", async () => {
     mockListBranches.mockReturnValue(new Promise(() => {}));
     renderDialog();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
     expect(screen.queryByTestId("branch-name-input")).toBeNull();
   });
 
@@ -1529,8 +1533,122 @@ describe("NewWorktreeDialog — branch list cache", () => {
         rawData: null,
       },
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
+    expect(screen.queryByTestId("branch-name-input")).toBeNull();
+  });
+});
+
+describe("NewWorktreeDialog — branch loading skeleton timing", () => {
+  const STEP_MS = 10;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    delete document.body.dataset.performanceMode;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function resolveBranchesAfter(ms: number) {
+    mockListBranches.mockImplementation(
+      () => new Promise<BranchInfo[]>((resolve) => setTimeout(() => resolve(TEST_BRANCHES), ms))
+    );
+  }
+
+  const skeleton = () => screen.queryByRole("status", { name: "Loading branches" });
+  const branchInput = () => screen.queryByTestId("branch-name-input");
+
+  /** Steps the clock, recording each step whether the skeleton and the form were mounted. */
+  async function sample(totalMs: number) {
+    const frames: { at: number; skeleton: boolean; form: boolean }[] = [];
+    for (let at = STEP_MS; at <= totalMs; at += STEP_MS) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+      });
+      frames.push({ at, skeleton: skeleton() !== null, form: branchInput() !== null });
+    }
+    return frames;
+  }
+
+  it("never mounts the skeleton when branches resolve inside the onset gate", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    renderDialog();
+
+    expect(skeleton()).toBeNull();
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(frames.filter((f) => f.skeleton)).toEqual([]);
+    expect(frames.find((f) => f.form)?.at).toBeLessThanOrEqual(UI_SKELETON_GATE_MS);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("holds a skeleton that crossed the gate for the display floor, then focuses the form", async () => {
+    // Resolves just after the skeleton appears: without the floor it would
+    // mount and tear down within a frame or two.
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + 10 * STEP_MS);
+
+    const shown = frames.filter((f) => f.skeleton);
+    expect(shown.length).toBeGreaterThan(0);
+    const firstShown = shown[0].at;
+    const lastShown = shown[shown.length - 1].at;
+    expect(firstShown).toBeGreaterThanOrEqual(UI_SKELETON_GATE_MS);
+    expect(lastShown - firstShown + STEP_MS).toBeGreaterThanOrEqual(UI_SKELETON_FLOOR_MS);
+    // Never both, never neither once shown: the skeleton hands straight to the form.
+    expect(frames.some((f) => f.skeleton && f.form)).toBe(false);
+    expect(frames.filter((f) => f.at > firstShown && !f.skeleton && !f.form)).toEqual([]);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("holds Cmd/Ctrl+Enter back while the floor keeps the skeleton up", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    // A submit that got through would validate the empty name and leave its
+    // error waiting on the form.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    await sample(UI_SKELETON_FLOOR_MS);
+    expect(branchInput()).not.toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(screen.queryByRole("alert")).not.toBeNull();
+  });
+
+  it("swaps the skeleton out as soon as branches resolve in performance mode", async () => {
+    document.body.dataset.performanceMode = "true";
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(frames.some((f) => f.skeleton)).toBe(true);
+    const lastShown = frames.filter((f) => f.skeleton).at(-1)!.at;
+    expect(lastShown).toBeLessThan(UI_SKELETON_GATE_MS + 4 * STEP_MS);
+    expect(document.activeElement).toBe(branchInput());
   });
 });
 
