@@ -12,7 +12,7 @@ const { notifyMock, updateBadgeMock, clearFaviconMock, updateFaviconMock, counts
     updateBadgeMock: vi.fn(),
     clearFaviconMock: vi.fn(),
     updateFaviconMock: vi.fn(),
-    counts: { waitingCount: 0 },
+    counts: { waitingPanelIds: [] as string[] },
     getInRepoMock: vi.fn(),
   }));
 
@@ -56,7 +56,7 @@ vi.mock("@/services/FaviconBadgeService", () => ({
   clearFaviconBadge: clearFaviconMock,
 }));
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useTerminalNotificationCounts: () => ({ waitingCount: counts.waitingCount }),
+  useTerminalNotificationPanelIds: () => counts.waitingPanelIds,
 }));
 
 Object.defineProperty(window, "electron", {
@@ -84,7 +84,7 @@ describe("focus-driven work benchmark", () => {
     updateBadgeMock.mockClear();
     clearFaviconMock.mockClear();
     updateFaviconMock.mockClear();
-    counts.waitingCount = 0;
+    counts.waitingPanelIds = [];
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -179,21 +179,21 @@ describe("focus-driven work benchmark", () => {
       act(() => {
         window.dispatchEvent(new Event("blur"));
       });
-      counts.waitingCount = 2;
+      counts.waitingPanelIds = ["t-1", "t-2"];
       rerender();
       act(() => {
         vi.advanceTimersByTime(400);
       });
-      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingCount: 2 });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-1", "t-2"] });
       expect(updateFaviconMock).toHaveBeenCalledWith(2);
 
-      counts.waitingCount = 0;
+      counts.waitingPanelIds = [];
       updateBadgeMock.mockClear();
       act(() => {
         window.dispatchEvent(new Event("focus"));
       });
       expect(updateBadgeMock).toHaveBeenCalledTimes(1);
-      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingCount: 0 });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: [] });
       expect(clearFaviconMock).toHaveBeenCalledTimes(1);
 
       act(() => {
@@ -202,6 +202,33 @@ describe("focus-driven work benchmark", () => {
       });
       expect(updateBadgeMock).toHaveBeenCalledTimes(1);
       expect(clearFaviconMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a swap of waiting panes at the same count", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-1"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-1"] });
+
+      // Main counts a pane once with a question waiting in it, so which pane matters.
+      counts.waitingPanelIds = ["t-2"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-2"] });
+      expect(updateBadgeMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

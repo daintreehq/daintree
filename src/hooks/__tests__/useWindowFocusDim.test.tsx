@@ -8,8 +8,9 @@ vi.mock("@/services/FaviconBadgeService", () => ({
   clearFaviconBadge: vi.fn(),
 }));
 
+const { noWaitingPanes } = vi.hoisted(() => ({ noWaitingPanes: [] as string[] }));
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useTerminalNotificationCounts: () => ({ waitingCount: 0 }),
+  useTerminalNotificationPanelIds: () => noWaitingPanes,
 }));
 
 // Stub window.electron.notification.updateBadge

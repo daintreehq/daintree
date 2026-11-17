@@ -18,10 +18,26 @@ import {
 } from "../window/windowTitle.js";
 import { readUserPresence, type UserPresence } from "./userPresence.js";
 import { CHANNELS } from "../ipc/channels.js";
-import type { DecisionQuestionReference } from "../../shared/types/decisionsQuestion.js";
+import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionReference,
+} from "../../shared/types/decisionsQuestion.js";
 
 export interface NotificationState {
-  waitingCount: number;
+  /** The panes this view counts as agents waiting on the person, by panel id. */
+  waitingPanelIds: readonly string[];
+}
+
+/** A pane named by the workspace its view holds it under and its panel (terminal) id. */
+function paneKey(workspaceKey: string, panelId: string): string {
+  return `${workspaceKey}\0${panelId}`;
+}
+
+/** What each window's title and the Dock badge count. */
+interface WaitingTally {
+  byWindow: Map<number, number>;
+  total: number;
 }
 
 export interface WatchNotificationContext {
@@ -166,6 +182,18 @@ class NotificationService {
   private notificationsByReplaceKey = new Map<string, Notification>();
   /** Closable banners on remote Shells, by id, oldest first. */
   private remoteBanners = new Map<string, RemoteBanner>();
+  /**
+   * Each pane holding a Decisions question that waits on the person (#17233),
+   * by `paneKey(projectId, terminalId)`, to its project id. Empty while
+   * Decisions is off, which leaves every count as the agents' alone.
+   */
+  private questionPanes: ReadonlyMap<string, string> = new Map();
+  /** This service lifetime's watch of the question list; a stale import finds it replaced. */
+  private questionWatch: object | null = null;
+  private offDecisionQuestions: (() => void) | null = null;
+  /** Held only while a question waits, since only then does where projects are open move a count. */
+  private offProjectPresence: (() => void) | null = null;
+  private presenceRecountPending = false;
 
   private remoteSink: RemoteNotificationSink | null = null;
 
@@ -272,6 +300,70 @@ class NotificationService {
     for (const ctx of registry.all()) {
       this.attachWindowListeners(ctx);
     }
+    this.watchDecisionQuestions();
+  }
+
+  /**
+   * Questions waiting on the person count until they are answered, declined,
+   * withdrawn or expire, focus or not (#17233). Read from the list Decisions
+   * publishes for main (#17229), imported on demand so Decisions adds nothing
+   * to startup; the list is empty while Decisions is off.
+   */
+  private watchDecisionQuestions(): void {
+    if (this.questionWatch !== null) return;
+    const watch = {};
+    this.questionWatch = watch;
+    void import("./decisionsQuestionList.js").then(
+      ({ getDecisionQuestionList, onDecisionQuestionsChanged }) => {
+        if (this.questionWatch !== watch) return;
+        this.offDecisionQuestions = onDecisionQuestionsChanged((list) =>
+          this.noteDecisionQuestions(list)
+        );
+        this.noteDecisionQuestions(getDecisionQuestionList());
+      },
+      (err) => console.warn("[NotificationService] failed to load the question list:", err)
+    );
+  }
+
+  /** Counts each pane with a question waiting on the person once, however many it holds. */
+  private noteDecisionQuestions(list: DecisionQuestionList): void {
+    const panes = new Map<string, string>();
+    for (const question of list.questions) {
+      if (question.standing.kind !== "waiting") continue;
+      const { projectId, terminalId } = question.reference;
+      panes.set(paneKey(projectId, terminalId), projectId);
+    }
+    const previous = this.questionPanes;
+    if (panes.size === previous.size && [...panes.keys()].every((key) => previous.has(key))) {
+      return;
+    }
+    this.questionPanes = panes;
+    this.watchProjectPresence(panes.size > 0);
+    this.applyNotifications();
+  }
+
+  /**
+   * A question counts in the title of each window holding a view of its
+   * project, so a view opened, restored or evicted moves it without an agent
+   * report or a question changing. Recounted once the mutation that reported
+   * it has finished, since the listener runs inside it.
+   */
+  private watchProjectPresence(on: boolean): void {
+    if (on && this.offProjectPresence === null) {
+      const watch = this.questionWatch;
+      this.offProjectPresence = onProjectPresenceChanged(() => {
+        if (this.presenceRecountPending) return;
+        this.presenceRecountPending = true;
+        queueMicrotask(() => {
+          this.presenceRecountPending = false;
+          if (this.questionWatch !== watch || this.questionPanes.size === 0) return;
+          this.applyNotifications();
+        });
+      });
+    } else if (!on && this.offProjectPresence !== null) {
+      this.offProjectPresence();
+      this.offProjectPresence = null;
+    }
   }
 
   updateNotifications(ownerWebContentsId: NotificationOwnerId, state: NotificationState): void {
@@ -301,18 +393,15 @@ class NotificationService {
     if (!this.registry) return;
 
     this.pruneDeadOwners();
-    const countsByWindow = this.countsByWindow();
+    const { byWindow, total } = this.tally();
 
-    let totalWaiting = 0;
     for (const ctx of this.registry.all()) {
-      const waitingCount = countsByWindow.get(ctx.windowId) ?? 0;
-      totalWaiting += waitingCount;
-      this.writeTitle(ctx, waitingCount);
+      this.writeTitle(ctx, byWindow.get(ctx.windowId) ?? 0);
     }
     notifyWindowTitlesChanged();
 
     if (process.platform === "darwin") {
-      app.setBadgeCount(totalWaiting);
+      app.setBadgeCount(total);
     }
   }
 
@@ -329,9 +418,9 @@ class NotificationService {
   refreshTitles(): void {
     if (!this.registry) return;
 
-    const countsByWindow = this.countsByWindow();
+    const { byWindow } = this.tally();
     for (const ctx of this.registry.all()) {
-      this.writeTitle(ctx, countsByWindow.get(ctx.windowId) ?? 0);
+      this.writeTitle(ctx, byWindow.get(ctx.windowId) ?? 0);
     }
     notifyWindowTitlesChanged();
   }
@@ -359,16 +448,77 @@ class NotificationService {
     }
   }
 
-  private countsByWindow(): Map<number, number> {
-    const counts = new Map<number, number>();
-    if (!this.registry) return counts;
+  /**
+   * Each pane waiting on the person once: an agent seen waiting, or a
+   * Decisions question waiting (#17233), and a pane that is both counts once.
+   * A window's title counts its own views' agents and the questions of every
+   * project it holds a view of, active or cached; the Dock counts every pane
+   * once, so a question whose project is open nowhere still reaches it, and
+   * one open in two windows counts once there. With no question waiting this
+   * is each window's sum of its owners' agents, as it always was.
+   */
+  private tally(): WaitingTally {
+    const byWindow = new Map<number, number>();
+    if (!this.registry) return { byWindow, total: 0 };
+
+    const questions = this.questionPanes;
+    const views = questions.size > 0 ? this.viewsByWindow() : null;
+    let total = questions.size;
 
     for (const [ownerId, state] of this.statesByOwner) {
       const ctx = this.registry.getByWebContentsId(ownerId);
       if (!ctx || ctx.browserWindow.isDestroyed()) continue;
-      counts.set(ctx.windowId, (counts.get(ctx.windowId) ?? 0) + state.waitingCount);
+      const workspaceKey = views?.get(ctx.windowId)?.workspaceOfOwner.get(ownerId);
+      let count = 0;
+      for (const panelId of state.waitingPanelIds) {
+        if (workspaceKey !== undefined && questions.has(paneKey(workspaceKey, panelId))) continue;
+        count += 1;
+      }
+      total += count;
+      byWindow.set(ctx.windowId, (byWindow.get(ctx.windowId) ?? 0) + count);
     }
-    return counts;
+
+    for (const [windowId, { workspaces }] of views ?? []) {
+      let count = 0;
+      for (const projectId of questions.values()) {
+        if (workspaces.has(projectId)) count += 1;
+      }
+      if (count > 0) byWindow.set(windowId, (byWindow.get(windowId) ?? 0) + count);
+    }
+    return { byWindow, total };
+  }
+
+  /**
+   * The workspaces each live window holds a view of, and which workspace each
+   * of its views' renderers shows. A host-qualified view's key never matches
+   * a question, which names a project of this computer's.
+   */
+  private viewsByWindow(): Map<
+    number,
+    { workspaces: Set<string>; workspaceOfOwner: Map<NotificationOwnerId, string> }
+  > {
+    const byWindow = new Map<
+      number,
+      { workspaces: Set<string>; workspaceOfOwner: Map<NotificationOwnerId, string> }
+    >();
+    for (const ctx of this.registry?.all() ?? []) {
+      if (ctx.browserWindow.isDestroyed()) continue;
+      const workspaces = new Set<string>();
+      const workspaceOfOwner = new Map<NotificationOwnerId, string>();
+      try {
+        for (const entry of ctx.services.projectViewManager?.getAllViews() ?? []) {
+          const contents = entry.view.webContents;
+          if (contents.isDestroyed()) continue;
+          workspaces.add(entry.projectId);
+          workspaceOfOwner.set(contents.id, entry.projectId);
+        }
+      } catch {
+        // A window tearing down can throw from any of these reads; it holds nothing then.
+        continue;
+      }
+      byWindow.set(ctx.windowId, { workspaces, workspaceOfOwner });
+    }
+    return byWindow;
   }
 
   /**
@@ -826,6 +976,12 @@ class NotificationService {
     this.detachAllWindowListeners();
     this.clearNotifications();
     this.statesByOwner.clear();
+
+    this.questionWatch = null;
+    this.offDecisionQuestions?.();
+    this.offDecisionQuestions = null;
+    this.watchProjectPresence(false);
+    this.questionPanes = new Map();
 
     for (const notification of this.activeNotifications) {
       notification.removeAllListeners();

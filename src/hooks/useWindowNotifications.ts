@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { updateFaviconBadge, clearFaviconBadge } from "@/services/FaviconBadgeService";
-import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
+import { useTerminalNotificationPanelIds } from "@/hooks/useTerminalSelectors";
 
 const DEBOUNCE_MS = 300;
 const FOCUS_BLUR_DEBOUNCE_MS = 150;
 
+/** One report's panes, in order, as a comparable key; panel ids never hold a NUL. */
+function panesKey(panelIds: readonly string[]): string {
+  return panelIds.join("\0");
+}
+
 export function useWindowNotifications(): void {
-  const prevWaitingRef = useRef(0);
+  // The panes last reported, so a swap at the same count (one pane stops
+  // waiting as another starts) still reaches main, which counts each pane
+  // once with any Decisions question waiting in it (#17233).
+  const prevWaitingKeyRef = useRef("");
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -17,7 +25,7 @@ export function useWindowNotifications(): void {
   const faviconBadgedRef = useRef(false);
   const [blurTime, setBlurTime] = useState<number | null>(null);
 
-  const { waitingCount } = useTerminalNotificationCounts(blurTime);
+  const waitingPanelIds = useTerminalNotificationPanelIds(blurTime);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -35,7 +43,7 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
       }
 
-      prevWaitingRef.current = 0;
+      prevWaitingKeyRef.current = "";
 
       if (faviconBadgedRef.current) {
         faviconBadgedRef.current = false;
@@ -44,7 +52,7 @@ export function useWindowNotifications(): void {
 
       if (sentBadgeCountRef.current !== 0 && window.electron?.notification?.updateBadge) {
         sentBadgeCountRef.current = 0;
-        window.electron.notification.updateBadge({ waitingCount: 0 });
+        window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
     };
 
@@ -76,8 +84,10 @@ export function useWindowNotifications(): void {
   }, []);
 
   useEffect(() => {
-    if (prevWaitingRef.current !== waitingCount) {
-      prevWaitingRef.current = waitingCount;
+    const key = panesKey(waitingPanelIds);
+    if (prevWaitingKeyRef.current !== key) {
+      prevWaitingKeyRef.current = key;
+      const waitingCount = waitingPanelIds.length;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -89,7 +99,7 @@ export function useWindowNotifications(): void {
 
         if (window.electron?.notification?.updateBadge) {
           sentBadgeCountRef.current = waitingCount;
-          window.electron.notification.updateBadge({ waitingCount });
+          window.electron.notification.updateBadge({ waitingPanelIds });
         }
 
         if (!windowFocusedRef.current) {
@@ -103,7 +113,7 @@ export function useWindowNotifications(): void {
         }
       }, DEBOUNCE_MS);
     }
-  }, [waitingCount]);
+  }, [waitingPanelIds]);
 
   useEffect(() => {
     return () => {
@@ -113,7 +123,7 @@ export function useWindowNotifications(): void {
       }
 
       if (window.electron?.notification?.updateBadge) {
-        window.electron.notification.updateBadge({ waitingCount: 0 });
+        window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
       clearFaviconBadge();
     };

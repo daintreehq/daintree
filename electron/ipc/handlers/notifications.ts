@@ -37,6 +37,22 @@ async function getAgentNotificationService(): Promise<AgentNotificationSingleton
   return cachedAgentNotificationService;
 }
 
+/** More waiting panes than any view holds: a report past it is cut, never trusted whole. */
+const MAX_WAITING_PANELS = 1000;
+
+/** A view's report of its waiting panes, each id once; null when it isn't one. */
+function readNotificationState(raw: unknown): NotificationState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const ids: unknown = (raw as { waitingPanelIds?: unknown }).waitingPanelIds;
+  if (!Array.isArray(ids)) return null;
+  const waitingPanelIds = new Set<string>();
+  for (const id of ids) {
+    if (waitingPanelIds.size >= MAX_WAITING_PANELS) break;
+    if (typeof id === "string" && id.length > 0) waitingPanelIds.add(id);
+  }
+  return { waitingPanelIds: [...waitingPanelIds] };
+}
+
 let cachedAllowedSoundFiles: AllowedSoundFilesSet | null = null;
 async function allowedSoundFiles(): Promise<AllowedSoundFilesSet> {
   if (!cachedAllowedSoundFiles) {
@@ -135,10 +151,9 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     return ownerId;
   };
 
-  const handleNotificationUpdate = (
-    event: Electron.IpcMainEvent,
-    state: NotificationState
-  ): void => {
+  const handleNotificationUpdate = (event: Electron.IpcMainEvent, raw: unknown): void => {
+    const state = readNotificationState(raw);
+    if (state === null) return;
     notificationService.updateNotifications(trackOwner(event.sender), state);
   };
 

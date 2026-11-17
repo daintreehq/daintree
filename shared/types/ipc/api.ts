@@ -1713,8 +1713,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openLogs(): Promise<void>;
   };
   notification: {
-    /** Update window title and dock badge based on terminal attention state */
-    updateBadge(state: { waitingCount: number }): void;
+    /**
+     * Update window title and dock badge from the panes this view counts as
+     * agents waiting on the person, by panel id; main counts each once with
+     * any Decisions question waiting in the same pane.
+     */
+    updateBadge(state: { waitingPanelIds: string[] }): void;
     /** Get notification settings */
     getSettings(): Promise<NotificationSettings>;
     /** Update notification settings (partial update) */

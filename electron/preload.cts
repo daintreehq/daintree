@@ -2606,7 +2606,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Notification API
     notification: {
-      updateBadge: (state: { waitingCount: number }) =>
+      updateBadge: (state: { waitingPanelIds: string[] }) =>
         ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
       getSettings: (): Promise<{
         enabled: boolean;

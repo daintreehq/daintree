@@ -2083,7 +2083,7 @@ export interface IpcEventMap {
   "sound:cancel": void;
 
   // Notification events
-  "notification:update": { waitingCount: number };
+  "notification:update": { waitingPanelIds: string[] };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
   "notification:show-toast": MainProcessToastPayload;
 
