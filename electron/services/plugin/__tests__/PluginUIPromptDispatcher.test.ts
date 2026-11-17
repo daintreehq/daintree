@@ -40,6 +40,8 @@ const webContentsMock = vi.hoisted(() => {
 const registryMock = vi.hoisted(() => ({
   getWebContentsForProject: vi.fn((_projectId: string): unknown[] => []),
   isCachedViewWebContents: vi.fn((_id: number): boolean => false),
+  // Ambient targeting reads a view's host from its project key (#17214).
+  getProjectForWebContents: vi.fn((_id: number): string | null => null),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, webContents: webContentsMock }));
@@ -50,6 +52,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWebContentsForProject: registryMock.getWebContentsForProject,
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
+  getProjectForWebContents: registryMock.getProjectForWebContents,
 }));
 
 import {
