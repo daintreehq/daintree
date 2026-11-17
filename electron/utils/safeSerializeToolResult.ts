@@ -13,7 +13,7 @@
  * SDK's `types.js` (full zod schema construction at module init) — keeping the
  * serializer standalone keeps that cost off first paint.
  */
-function serialize(value: unknown, indent: number): string {
+function serializeJson(value: unknown, indent: number): string | undefined {
   // The ancestor chain, not every object ever visited: a set that only grows
   // marks a value referenced twice in *sibling* branches as "[Circular]" even
   // though nothing is cyclic, and that placeholder string then lands where a
@@ -21,7 +21,7 @@ function serialize(value: unknown, indent: number): string {
   const ancestors: object[] = [];
 
   try {
-    const serialized = JSON.stringify(
+    return JSON.stringify(
       value,
       function (this: unknown, _key: string, currentValue: unknown) {
         if (typeof currentValue === "bigint") {
@@ -54,14 +54,14 @@ function serialize(value: unknown, indent: number): string {
       },
       indent
     );
-
-    if (serialized !== undefined) {
-      return serialized;
-    }
   } catch {
-    // Fall through to string coercion.
+    return undefined;
   }
+}
 
+function serialize(value: unknown, indent: number): string {
+  const serialized = serializeJson(value, indent);
+  if (serialized !== undefined) return serialized;
   try {
     return String(value);
   } catch {
@@ -78,6 +78,15 @@ function serialize(value: unknown, indent: number): string {
  */
 export function safeSerializeToolResult(value: unknown): string {
   return serialize(value, 2);
+}
+
+/**
+ * The 2-space-indented form, or `undefined` where {@link safeSerializeToolResult}
+ * would fall back to string coercion: for a reader that promises JSON, where a
+ * coerced `toString()` could pass for a complete result.
+ */
+export function trySafeSerializeToolResult(value: unknown): string | undefined {
+  return serializeJson(value, 2);
 }
 
 /**

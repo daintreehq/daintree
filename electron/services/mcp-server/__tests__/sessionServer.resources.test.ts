@@ -248,8 +248,11 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       expect(parsed.nextCursor).toBe("cursor-2");
       expect(parsed.hasMore).toBe(true);
       expect(parsed.totalCount).toBe(900);
-      expect(parsed.truncated).toMatchObject({
+      expect(parsed.truncated).toEqual({
+        maxBytes: RESOURCE_TEXT_MAX_BYTES,
+        originalBytes: Buffer.byteLength(JSON.stringify(page), "utf8"),
         omitted: { items: items.length - parsed.items.length },
+        note: expect.stringContaining("nextCursor"),
       });
     });
 
@@ -295,8 +298,51 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       // The newest days are the ones kept.
       expect(parsed.heatmap).toEqual(heatmap.slice(-parsed.heatmap.length));
       expect(parsed.recentCommits).toEqual(recentCommits);
-      expect(parsed.truncated).toMatchObject({
+      expect(parsed.truncated).toEqual({
+        maxBytes: RESOURCE_TEXT_MAX_BYTES,
+        originalBytes: Buffer.byteLength(JSON.stringify(pulse), "utf8"),
         omitted: { heatmap: heatmap.length - parsed.heatmap.length },
+      });
+    });
+
+    it("drops a pulse's oldest days before its newest commits, then its oldest commits", async () => {
+      const heatmap = Array.from({ length: 60 }, (_, i) => ({
+        date: `2026-09-${String(i).padStart(2, "0")}`,
+        count: i % 3,
+        level: i % 5,
+      }));
+      // Newest first, as `git log` lists them; together far past the cap.
+      const recentCommits = Array.from({ length: 10 }, (_, i) => ({
+        sha: `${i}`.padStart(40, "c"),
+        subject: `Commit ${i} ${"ß".repeat(3_000)}`,
+        timestamp: 1_700_000_000_000 - i,
+      }));
+      const pulse = {
+        worktreeId: "wt-1",
+        worktreePath: "/repo",
+        mainBranch: "main",
+        rangeDays: 60,
+        generatedAt: 1_700_000_000_000,
+        heatmap,
+        commitsInRange: 10,
+        activeDays: 10,
+        projectAgeDays: 90,
+        recentCommits,
+      };
+
+      const text = await readText("daintree://worktree/wt-1/pulse", pulse);
+
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const parsed = JSON.parse(text);
+      const keptCommits = parsed.recentCommits.length;
+      const keptDays = parsed.heatmap.length;
+      expect(keptCommits).toBeGreaterThan(0);
+      expect(keptCommits).toBeLessThan(recentCommits.length);
+      expect(parsed.recentCommits).toEqual(recentCommits.slice(0, keptCommits));
+      expect(parsed.heatmap).toEqual(heatmap.slice(heatmap.length - keptDays));
+      expect(parsed.truncated.omitted).toEqual({
+        recentCommits: recentCommits.length - keptCommits,
+        ...(keptDays < heatmap.length ? { heatmap: heatmap.length - keptDays } : {}),
       });
     });
   });
