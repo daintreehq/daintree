@@ -26,6 +26,7 @@ let panelState: {
   backendStatus: string;
 };
 let armedIds: Set<string>;
+let crossHostTargets: { key: string }[];
 let screenReaderEnabled: boolean;
 let activePaletteId: string | null;
 let workspaceId: string | null;
@@ -42,7 +43,9 @@ vi.mock("@/store", () => ({
 }));
 
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: { getState: () => ({ armedIds }) },
+  useFleetArmingStore: { getState: () => ({ armedIds, crossHostTargets }) },
+  selectIsLocalFleetComposing: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size > 0 && s.armedIds.size + s.crossHostTargets.length >= 2,
 }));
 
 vi.mock("@/store/screenReaderStore", () => ({
@@ -130,6 +133,7 @@ describe("useTypeAnywhere", () => {
     Element.prototype.scrollIntoView = vi.fn();
     setPanels([agentPanel("a1")]);
     armedIds = new Set();
+    crossHostTargets = [];
     screenReaderEnabled = false;
     activePaletteId = null;
     workspaceId = "proj";
@@ -248,6 +252,26 @@ describe("useTypeAnywhere", () => {
 
       expect(e.defaultPrevented).toBe(false);
       expect(draftOf("a1")).toBe("");
+    });
+
+    it("refuses while an armed agent broadcasts with another host's agent (#17182)", () => {
+      armedIds = new Set(["a1"]);
+      crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+      renderHook(() => useTypeAnywhere());
+
+      const e = press("h");
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+    });
+
+    it("still rescues while only another host's agents are armed — none is typed into here", () => {
+      crossHostTargets = [{ key: "host-fleet:studio:r-1" }, { key: "host-fleet:studio:r-2" }];
+      renderHook(() => useTypeAnywhere());
+
+      press("h");
+
+      expect(draftOf("a1")).toBe("h");
     });
 
     it("still rescues when a single agent is armed — that is a preview, not a broadcast", () => {

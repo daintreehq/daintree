@@ -48,12 +48,14 @@ export function paneHandoffHeading(
 export function readDraftTargetInputs(): DraftTargetInputs {
   const panelState = usePanelStore.getState();
   const inputState = useTerminalInputStore.getState();
+  const arming = useFleetArmingStore.getState();
   return {
     panelsById: panelState.panelsById,
     backendStatus: panelState.backendStatus,
     hybridInputEnabled: inputState.hybridInputEnabled,
     voiceSubmittingIds: inputState.voiceSubmittingPanels,
-    armedIds: useFleetArmingStore.getState().armedIds,
+    armedIds: arming.armedIds,
+    crossHostTargetCount: arming.crossHostTargets.length,
   };
 }
 

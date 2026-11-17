@@ -2346,6 +2346,29 @@ describe("rendererStoreOrchestrator", () => {
       expect(releaseSpy).toHaveBeenCalledTimes(1);
       releaseSpy.mockRestore();
     });
+
+    it("keeps a pane's held draft while another host's agent keeps it in the fleet (#17182)", async () => {
+      const useFleetArmingStore = await armWithHeldDraft();
+      const remote = "host-fleet:studio:r-1";
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: remote,
+        hostId: "studio",
+        hostName: "Studio",
+        terminalId: "r-1",
+        title: "remote",
+      });
+
+      useFleetArmingStore.getState().disarmId("agent-a");
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("shared");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.get("agent-b")?.draft).toBe(
+        "b's own"
+      );
+      expect(useTerminalInputStore.getState().fleetDraftHolds.has("agent-a")).toBe(false);
+
+      useFleetArmingStore.getState().disarmCrossHostTarget(remote);
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
   });
 
   describe("fleet failure auto-clear (issue #9923)", () => {

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store";
 import { exitProjectHome } from "@/store/storeAccessors";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectIsLocalFleetComposing, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -157,9 +157,9 @@ export function useTypeAnywhere(): void {
       if (useScreenReaderStore.getState().resolvedScreenReaderEnabled()) return;
 
       // A live broadcast means a routed draft could silently fan out to every
-      // armed agent. One armed id is only a preview, matching the threshold
-      // `tryFleetBroadcastFromEditor` uses.
-      if (useFleetArmingStore.getState().armedIds.size >= 2) return;
+      // armed agent, another host's included. One member is only a preview,
+      // matching the threshold `tryFleetBroadcastFromEditor` uses.
+      if (selectIsLocalFleetComposing(useFleetArmingStore.getState())) return;
 
       const workspaceId = getViewWorkspaceId();
       if (workspaceId === null) return;

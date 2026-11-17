@@ -35,7 +35,7 @@ const { asStore, panelState, inputState, fleetState, projectState, panelSelector
       bumpExternalDraftRevision: vi.fn(),
       recordLastTypedAgentTarget: vi.fn(),
     },
-    fleetState: { armedIds: new Set<string>() },
+    fleetState: { armedIds: new Set<string>(), crossHostTargets: [] as { key: string }[] },
     projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
     // Holds the hook's selector already bound to the live panel state, so a
     // test can re-read the verdict without restating the store's shape.
@@ -55,7 +55,11 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(inputState) }));
-vi.mock("@/store/fleetArmingStore", () => ({ useFleetArmingStore: asStore(fleetState) }));
+vi.mock("@/store/fleetArmingStore", () => ({
+  useFleetArmingStore: asStore(fleetState),
+  selectIsLocalFleetComposing: (s: typeof fleetState) =>
+    s.armedIds.size > 0 && s.armedIds.size + s.crossHostTargets.length >= 2,
+}));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: asStore(projectState) }));
 
 const { showLocatorMock, announceMock } = vi.hoisted(() => ({
@@ -111,6 +115,7 @@ beforeEach(() => {
   inputState.lastTypedAgentTarget = null;
   inputState.getDraftInput.mockReturnValue("");
   fleetState.armedIds = new Set();
+  fleetState.crossHostTargets = [];
   projectState.currentProject = { id: "proj-1" };
   seedPanels(agentPanel("t-1"));
 });
@@ -184,6 +189,34 @@ describe("useInsertFileReference — target resolution", () => {
 
     fleetState.armedIds = new Set(["t-1"]);
     expect(renderHook(() => useInsertFileReference()).result.current.canInsert).toBe(true);
+  });
+
+  it("refuses while one armed agent broadcasts with another host's agent (#17182)", () => {
+    fleetState.armedIds = new Set(["t-1"]);
+    fleetState.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+    expect(renderHook(() => useInsertFileReference()).result.current.canInsert).toBe(false);
+  });
+
+  it("still inserts while only another host's agents are armed — none is typed into here", () => {
+    fleetState.crossHostTargets = [
+      { key: "host-fleet:studio:r-1" },
+      { key: "host-fleet:studio:r-2" },
+    ];
+    expect(renderHook(() => useInsertFileReference()).result.current.canInsert).toBe(true);
+  });
+
+  it("refuses at click time once another host's agent joins the lone armed pane", () => {
+    fleetState.armedIds = new Set(["t-1"]);
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.canInsert).toBe(true);
+    const insert = result.current.insert;
+
+    fleetState.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+    act(() => {
+      expect(insert("/repo/a.ts")).toBe(false);
+    });
+    expect(inputState.setDraftInput).not.toHaveBeenCalled();
+    expect(showLocatorMock).toHaveBeenCalledWith(expect.objectContaining({ kind: "file-refused" }));
   });
 });
 
@@ -387,7 +420,7 @@ describe("useInsertFileReference — refusal reasons", () => {
       hybridInputEnabled: true,
       voiceSubmittingIds: new Set<string>(),
       lastTypedAgentTarget: null,
-      armedCount: 0,
+      fleetComposing: false,
     });
 
     const before = resolveInsertTarget(inputs(agentPanel("t-1"), agentPanel("t-2")));

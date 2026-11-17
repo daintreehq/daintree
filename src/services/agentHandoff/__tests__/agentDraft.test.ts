@@ -31,7 +31,7 @@ const { asStore, panelState, inputState, fleetState, projectState, drafts } = vi
       }),
       bumpExternalDraftRevision: vi.fn(),
     },
-    fleetState: { armedIds: new Set<string>() },
+    fleetState: { armedIds: new Set<string>(), crossHostTargets: [] as unknown[] },
     projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
   };
 });
@@ -79,6 +79,7 @@ beforeEach(() => {
   panelState.backendStatus = "connected";
   inputState.hybridInputEnabled = true;
   fleetState.armedIds = new Set();
+  fleetState.crossHostTargets = [];
   useTypingLocatorStore.setState({ message: null, revision: 0 });
 });
 
@@ -119,6 +120,21 @@ describe("draftAgentContext", () => {
     const message = useTypingLocatorStore.getState().message;
     expect(message?.kind).toBe("draft-refused");
     expect(message?.lead).toContain("locked");
+  });
+
+  it("refuses an agent armed beside another host's agent (#17182)", () => {
+    setPanels(agentPanel("a"));
+    fleetState.armedIds = new Set(["a"]);
+    expect(draftAgentContext("a", { text: "body" })).toEqual({
+      status: "drafted",
+      terminalId: "a",
+    });
+
+    fleetState.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+    expect(draftAgentContext("a", { text: "body" })).toEqual({
+      status: "refused",
+      reason: "fleet-armed",
+    });
   });
 
   it("refuses a plain shell rather than typing into it", () => {

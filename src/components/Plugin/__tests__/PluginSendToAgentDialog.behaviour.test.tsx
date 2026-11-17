@@ -100,6 +100,7 @@ vi.mock("@/services/agentHandoff/agentDraft", () => ({
     hybridInputEnabled: true,
     voiceSubmittingIds: new Set(),
     armedIds: new Set(),
+    crossHostTargetCount: 0,
   }),
 }));
 vi.mock("@/services/agentHandoff/launchForHandoff", async (importOriginal) => ({

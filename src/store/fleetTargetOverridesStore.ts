@@ -78,9 +78,11 @@ export function __resetFleetTargetOverridesStoreForTesting(): void {
 
 /**
  * Per-target overrides pruning subscription. Wires `useFleetArmingStore`
- * changes into this store so a pane that leaves the armed set (manual disarm,
- * or auto-prune of a trashed/exited terminal) also loses any per-target payload
- * override or skip flag it carried. `disarmId` only mutates the arming store,
+ * changes into this store so a target that leaves the fleet (manual disarm,
+ * auto-prune of a trashed/exited terminal, or another host's agent dropped)
+ * also loses any per-target payload override or skip flag it carried. Another
+ * host's agent is keyed by its host-qualified key beside this view's panes, so
+ * its entries outlive changes to the local armed set (#17182). `disarmId` only mutates the arming store,
  * and none of the lifecycle-edge `clear()` calls fire when the drafting popover
  * stays open — so without this reconciliation a disarmed-then-rearmed pane keeps
  * a stale `skippedIds` entry and is silently excluded from the next broadcast
@@ -95,7 +97,14 @@ export function __resetFleetTargetOverridesStoreForTesting(): void {
  * destroy → mutate → re-init) get pruned on re-registration.
  */
 export function subscribeFleetTargetOverridesPruning(): () => void {
-  function pruneAgainst(nextArmed: Set<string>): void {
+  function fleetTargetIds(state: ReturnType<typeof useFleetArmingStore.getState>) {
+    if (state.crossHostTargets.length === 0) return state.armedIds;
+    const ids = new Set(state.armedIds);
+    for (const target of state.crossHostTargets) ids.add(target.key);
+    return ids;
+  }
+
+  function pruneAgainst(nextArmed: ReadonlySet<string>): void {
     const state = useFleetTargetOverridesStore.getState();
     const { payloadOverrides, skippedIds } = state;
 
@@ -109,7 +118,7 @@ export function subscribeFleetTargetOverridesPruning(): () => void {
       return;
     }
 
-    // Per-pane removal — drop overrides/skips for ids no longer armed. Only
+    // Per-target removal — drop overrides/skips for ids no longer armed. Only
     // allocate a replacement container when that field actually loses an entry,
     // so subscribers watching the untouched field keep their ref-equality fast
     // path (mirrors the identity-preserving updates in this store's actions).
@@ -136,13 +145,11 @@ export function subscribeFleetTargetOverridesPruning(): () => void {
     useFleetTargetOverridesStore.setState(patch);
   }
 
-  let prevArmed = useFleetArmingStore.getState().armedIds;
-  pruneAgainst(prevArmed);
+  pruneAgainst(fleetTargetIds(useFleetArmingStore.getState()));
 
-  return useFleetArmingStore.subscribe((state) => {
-    const nextArmed = state.armedIds;
-    if (prevArmed === nextArmed) return;
-    prevArmed = nextArmed;
-    pruneAgainst(nextArmed);
+  return useFleetArmingStore.subscribe((state, prev) => {
+    if (state.armedIds === prev.armedIds && state.crossHostTargets === prev.crossHostTargets)
+      return;
+    pruneAgainst(fleetTargetIds(state));
   });
 }

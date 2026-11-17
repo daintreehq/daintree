@@ -25,12 +25,13 @@ import { pluralize } from "@/lib/pluralize";
 
 export function FleetDraftingPill(): ReactElement | null {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
+  const crossHostTargets = useFleetArmingStore((s) => s.crossHostTargets);
   // What Enter will actually reach: the armed panes that pass the same
-  // eligibility gate the broadcast applies at dispatch, minus this pane. A
-  // membership count here overstated the fan-out whenever an armed pane had
-  // lost its PTY or had its input locked.
+  // eligibility gate the broadcast applies at dispatch, minus this pane, and
+  // every armed agent on another host. A membership count here overstated the
+  // fan-out whenever an armed pane had lost its PTY or had its input locked.
   const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
-  const peerCount = usePanelStore((state) => {
+  const localPeerCount = usePanelStore((state) => {
     let n = 0;
     for (const id of armOrder) {
       if (id === state.focusedId) continue;
@@ -40,6 +41,10 @@ export function FleetDraftingPill(): ReactElement | null {
     }
     return n;
   });
+  let peerCount = localPeerCount;
+  for (const target of crossHostTargets) {
+    if (!skippedIds.has(target.key)) peerCount += 1;
+  }
 
   // Previews rebuild on each keystroke, but locking a peer changes nothing the
   // composer sees, so rebuild them here or the rows go stale until the next one.

@@ -1,7 +1,7 @@
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -15,12 +15,12 @@ import { panelHasComposer } from "@/components/Terminal/terminalComposer";
 export function resolveDictationTarget(panelId: string): VoiceRecordingTarget | null {
   const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel) return null;
-  const armed = useFleetArmingStore.getState().armedIds;
+  const arming = useFleetArmingStore.getState();
   if (
     !panelHasComposer(panel, {
       hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-      isFleetArmed: armed.has(panelId),
-      fleetSize: armed.size,
+      isFleetArmed: arming.armedIds.has(panelId),
+      fleetSize: selectFleetMemberCount(arming),
     })
   ) {
     return null;

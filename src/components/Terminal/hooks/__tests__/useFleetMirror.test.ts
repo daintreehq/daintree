@@ -88,6 +88,16 @@ describe("useFleetMirror", () => {
 
   const draftOf = (id: string) => useTerminalInputStore.getState().getDraftInput(id, "proj-1");
 
+  const REMOTE = "host-fleet:studio:r-1";
+  const armRemote = (key = REMOTE) =>
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key,
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: key.slice(key.lastIndexOf(":") + 1),
+      title: "remote",
+    });
+
   it("primary pushes draft to other armed panes", () => {
     useFleetArmingStore.getState().armIds(["term-1", "term-2", "term-3"]);
 
@@ -154,6 +164,51 @@ describe("useFleetMirror", () => {
     expect(draftOf("term-3")).toBe("test draft");
   });
 
+  it("publishes the preview from a primary whose only peer is on another host (#17182)", () => {
+    useFleetArmingStore.getState().armIds(["term-1"]);
+    armRemote();
+
+    const hook = render({ isFleetPrimary: true, value: "remote draft" });
+
+    expect(setDraft).toHaveBeenCalledWith("remote draft");
+    expect(useTerminalInputStore.getState().draftInputs.size).toBe(0);
+    expect([...useTerminalInputStore.getState().fleetDraftHolds.values()]).toEqual([
+      { terminalId: "term-1", draft: null },
+    ]);
+    act(() => {
+      expect(hook.result.current.mirrorDraft("typed")).toBe(true);
+    });
+  });
+
+  it("pushes nothing from a lone pane once its peer on another host leaves", () => {
+    useFleetArmingStore.getState().armIds(["term-1"]);
+    armRemote();
+    const hook = render({ isFleetPrimary: true, value: "draft" });
+
+    act(() => {
+      useFleetArmingStore.getState().disarmCrossHostTarget(REMOTE);
+    });
+    act(() => {
+      expect(hook.result.current.mirrorDraft("typed")).toBe(false);
+    });
+  });
+
+  it("rebuilds the preview when another host's agents join or leave mid-draft", () => {
+    useFleetArmingStore.getState().armIds(["term-1"]);
+    armRemote();
+    render({ isFleetPrimary: true, value: "same draft" });
+    setDraft.mockClear();
+
+    act(() => armRemote("host-fleet:studio:r-2"));
+    expect(setDraft).toHaveBeenCalledTimes(1);
+    expect(setDraft).toHaveBeenLastCalledWith("same draft");
+
+    act(() => {
+      useFleetArmingStore.getState().disarmCrossHostTarget(REMOTE);
+    });
+    expect(setDraft).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["not in the fleet", {}],
     ["a follower", { isFleetFollower: true, value: "" }],
@@ -168,6 +223,7 @@ describe("useFleetMirror", () => {
     act(() => {
       useFleetArmingStore.getState().armIds(["term-1", "term-2", "term-3"]);
     });
+    act(() => armRemote());
     act(() => {
       useFleetArmingStore.getState().clear();
     });

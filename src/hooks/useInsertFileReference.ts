@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { usePanelStore } from "@/store";
 import type { BackendStatus, PanelGridState } from "@/store/panelStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectIsLocalFleetComposing, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalInputStore, type LastTypedAgentTarget } from "@/store/terminalInputStore";
 import {
@@ -24,7 +24,7 @@ interface TargetInputs {
   hybridInputEnabled: boolean;
   voiceSubmittingIds: ReadonlySet<string>;
   lastTypedAgentTarget: LastTypedAgentTarget | null;
-  armedCount: number;
+  fleetComposing: boolean;
 }
 
 /**
@@ -76,9 +76,10 @@ export function resolveInsertTarget(inputs: TargetInputs): InsertTargetResolutio
   const workspaceId = getViewWorkspaceId();
   if (workspaceId === null) return refuse("workspace-unavailable");
 
-  // Two armed ids means a real broadcast rather than a preview — the same
-  // threshold `tryFleetBroadcastFromEditor` uses.
-  if (inputs.armedCount >= 2) return refuse("fleet-broadcast-armed");
+  // A pane here armed into two or more members, another host's agents included,
+  // means a real broadcast rather than a preview — the same threshold
+  // `tryFleetBroadcastFromEditor` uses.
+  if (inputs.fleetComposing) return refuse("fleet-broadcast-armed");
 
   // Both of these disable every agent's editor at once, so there is no target
   // worth resolving — the same pair, in the same order, `resolveRescueTarget`
@@ -175,7 +176,7 @@ export function useInsertFileReference(): InsertFileReference {
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const voiceSubmittingPanels = useTerminalInputStore((s) => s.voiceSubmittingPanels);
   const lastTypedAgentTarget = useTerminalInputStore((s) => s.lastTypedAgentTarget);
-  const armedCount = useFleetArmingStore((s) => s.armedIds.size);
+  const fleetComposing = useFleetArmingStore(selectIsLocalFleetComposing);
 
   // Derived inside the selector so the pane subscribes to the verdict, not the
   // whole panel map: a live `panelsById` selector here would re-render the file
@@ -191,9 +192,9 @@ export function useInsertFileReference(): InsertFileReference {
         hybridInputEnabled,
         voiceSubmittingIds: voiceSubmittingPanels,
         lastTypedAgentTarget,
-        armedCount,
+        fleetComposing,
       }),
-    [hybridInputEnabled, voiceSubmittingPanels, lastTypedAgentTarget, armedCount]
+    [hybridInputEnabled, voiceSubmittingPanels, lastTypedAgentTarget, fleetComposing]
   );
   const resolution = usePanelStore(useShallow(selectResolution));
 
@@ -211,7 +212,7 @@ export function useInsertFileReference(): InsertFileReference {
       hybridInputEnabled: inputStore.hybridInputEnabled,
       voiceSubmittingIds: inputStore.voiceSubmittingPanels,
       lastTypedAgentTarget: inputStore.lastTypedAgentTarget,
-      armedCount: useFleetArmingStore.getState().armedIds.size,
+      fleetComposing: selectIsLocalFleetComposing(useFleetArmingStore.getState()),
     });
     const target = resolvedId === null ? undefined : panelState.panelsById[resolvedId];
     if (resolvedId === null || target === undefined) {

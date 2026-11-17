@@ -21,11 +21,13 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 }));
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: Object.assign(
-    (selector: (s: { armedIds: Set<string> }) => unknown) =>
-      selector({ armedIds: new Set<string>() }),
-    { getState: () => ({ armedIds: new Set<string>() }) }
+    (selector: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) => unknown) =>
+      selector({ armedIds: new Set<string>(), crossHostTargets: [] }),
+    { getState: () => ({ armedIds: new Set<string>(), crossHostTargets: [] }) }
   ),
   isFleetArmEligible: () => false,
+  selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size + s.crossHostTargets.length,
 }));
 
 const panelsById = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
