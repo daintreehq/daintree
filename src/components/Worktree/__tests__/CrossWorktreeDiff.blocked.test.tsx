@@ -12,6 +12,7 @@ type Snapshot = {
   name: string;
   path: string;
   branch: string | undefined;
+  isDetached?: boolean;
   isMainWorktree: boolean;
   worktreeChanges: { headOid: string };
 };
@@ -155,6 +156,26 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
 
     expect(await screen.findByText("Choose a compare worktree on a branch")).toBeTruthy();
     expect(screen.getByText(/wt-right has a detached HEAD/)).toBeTruthy();
+    expectNothingStale();
+  });
+
+  it("clears the comparison when a side detaches but still carries its last branch name", async () => {
+    const view = await openComparison();
+
+    setWorktrees(LEFT(), { ...snapshot("wt-right", "feature"), isDetached: true });
+    view.rerender(tree());
+
+    expect(await screen.findByText("Choose a compare worktree on a branch")).toBeTruthy();
+    expect(screen.getByText(/wt-right has a detached HEAD/)).toBeTruthy();
+    expectNothingStale();
+    const calls = mockCompareWorktrees.mock.calls.length;
+    view.rerender(tree());
+    expect(mockCompareWorktrees.mock.calls.length).toBe(calls);
+
+    setWorktrees({ ...snapshot("wt-left", "main", true), isDetached: true }, RIGHT());
+    view.rerender(tree());
+    expect(await screen.findByText("Choose a base worktree on a branch")).toBeTruthy();
+    expect(screen.getByText(/wt-left has a detached HEAD/)).toBeTruthy();
     expectNothingStale();
   });
 

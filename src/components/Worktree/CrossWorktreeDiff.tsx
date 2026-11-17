@@ -37,6 +37,7 @@ import { DiffFilePath, DiffViewer, type DiffViewerSideLabels } from "./DiffViewe
 import { WorktreeSelector } from "./WorktreeSelector";
 import {
   WHOLE_FILE_CONTEXT_LINES,
+  comparableBranch,
   comparisonBlocker,
   committedSourceFromFullDiff,
   sortWorktreesForComparison,
@@ -423,7 +424,9 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       const initial = worktrees.find((wt) => wt.id === initialWorktreeId);
       // A detached worktree can't be a side (its option is disabled), so the
       // base starts from the first one that has a branch instead.
-      const base = initial?.branch ? initial : initial && worktrees.find((wt) => wt.branch);
+      const base = comparableBranch(initial)
+        ? initial
+        : initial && worktrees.find((wt) => comparableBranch(wt));
       if (base) setLeftId(base.id);
     }
   }, [isOpen, initialWorktreeId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -437,8 +440,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // not on the snapshot objects, which the store replaces for every status or
   // activity update in either worktree (#15009).
   const leftPath = leftWorktree?.path;
-  const leftBranch = leftWorktree?.branch;
-  const rightBranch = rightWorktree?.branch;
+  const leftBranch = comparableBranch(leftWorktree);
+  const rightBranch = comparableBranch(rightWorktree);
   const leftHead = leftWorktree?.worktreeChanges?.headOid;
   const rightHead = rightWorktree?.worktreeChanges?.headOid;
   const comparisonKey = JSON.stringify([leftId, rightId, leftPath, leftBranch, rightBranch]);
@@ -765,7 +768,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     setLeftId(rightId);
     setRightId(leftId);
     const sideName = (wt: typeof leftWorktree) =>
-      wt ? (wt.branch ?? `${wt.name} (detached)`) : "not chosen";
+      wt ? (comparableBranch(wt) ?? `${wt.name} (detached)`) : "not chosen";
     useAnnouncerStore
       .getState()
       .announce(`Base is now ${sideName(rightWorktree)}, Compare is now ${sideName(leftWorktree)}`);
@@ -888,7 +891,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     const copy = blockedCopy(
       blocker,
       baseLabel,
-      worktrees.length > 0 && !worktrees.some((wt) => wt.branch),
+      worktrees.length > 0 && !worktrees.some((wt) => comparableBranch(wt)),
       Boolean(leftId)
     );
     canvas = (
