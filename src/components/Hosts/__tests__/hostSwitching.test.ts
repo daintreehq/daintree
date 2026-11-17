@@ -259,6 +259,7 @@ describe("switchToHost", () => {
     toast.actions[0]!.onClick();
     expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "h1" });
     const opened = m.dispatchEvent.mock.calls.at(-1)![0];
+    expect(opened?.type).toBe("daintree:open-settings-tab");
     expect(opened instanceof CustomEvent && opened.detail).toEqual({ tab: "hosts" });
   });
 
