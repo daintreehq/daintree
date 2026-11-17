@@ -500,6 +500,38 @@ describe("handleMemoryLeakRestartRequest", () => {
     expect(backendReadyListeners.size).toBe(0);
   });
 
+  it("says nothing when a restart took over right after the host confirmed this one", async () => {
+    panelsById.t1 = pane({ restartKey: 0 });
+
+    const handled = handleMemoryLeakRestartRequest(requestFor());
+    await settle();
+    answerSpawn("t1", { success: true });
+    panelsById.t1 = { ...panelsById.t1, restartKey: 2 };
+    await handled;
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("forgets a closed pane's failure even when another pane's report ends early", async () => {
+    const message = "Working directory does not exist: /gone";
+    panelsById.t1 = pane({ restartKey: 4 });
+    restartTerminal.mockImplementationOnce(failsValidation(message));
+    await handleMemoryLeakRestartRequest(requestFor("t1"));
+    delete panelsById.t1;
+
+    panelsById.t2 = pane({ id: "t2" });
+    restartTerminal.mockImplementationOnce(async (id) => {
+      delete panelsById[id];
+    });
+    await handleMemoryLeakRestartRequest(requestFor("t2"));
+
+    panelsById.t1 = pane({ restartKey: 4 });
+    restartTerminal.mockImplementationOnce(failsValidation(message));
+    await handleMemoryLeakRestartRequest(requestFor("t1"));
+
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
   it("releases its listener when reporting throws", async () => {
     panelsById.t1 = pane();
     restartTerminal.mockImplementationOnce(

@@ -376,14 +376,15 @@ function listenForSpawnAnswer(
 
 function reportRestart(before: PtyPanelData, thresholdMb: number, outcome: RestartOutcome): void {
   const terminalId = before.id;
-  const panel = usePanelStore.getState().panelsById[terminalId];
+  const panelsById = usePanelStore.getState().panelsById;
+  for (const id of reportedFailures.keys()) {
+    if (!panelsById[id]) reportedFailures.delete(id);
+  }
+  const panel = panelsById[terminalId];
   // Closed, or taken over by another restart: there is nothing left to report on.
   if (outcome.kind === "gone" || !panel || !isPtyPanel(panel) || panel.location === "trash") {
     reportedFailures.delete(terminalId);
     return;
-  }
-  for (const id of reportedFailures.keys()) {
-    if (!usePanelStore.getState().panelsById[id]) reportedFailures.delete(id);
   }
 
   if (outcome.kind === "failed") {
