@@ -153,14 +153,15 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     const run = (pathDirs: string[], invoke = link) => {
       // An empty APPDIR still makes the script try /daintree; BASH_ENV can seed
       // bash's command hash and change what the lookup returns.
-      const env = { ...process.env, APPDIR: path.join(root, "no-appdir") };
+      const env: NodeJS.ProcessEnv = { ...process.env, APPDIR: path.join(root, "no-appdir") };
       delete env.BASH_ENV;
       env.PATH = [...pathDirs, process.env.PATH ?? ""].join(path.delimiter);
-      const { status, stderr } = spawnSync("bash", [invoke, projectDir], {
+      const { status, stderr, error } = spawnSync("bash", [invoke, projectDir], {
         encoding: "utf-8",
         env,
         timeout: 10_000,
       });
+      if (error) throw error;
       return { code: status, stderr };
     };
     // The recorder appends its own path, so a second launch would show as a second line.
@@ -191,20 +192,22 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
 
   // The fallback would reach a real install through the fixed package paths or
   // PATH and launch it, so these only run where none exists (CI).
-  const appInstalled = [
-    "/opt/Daintree/daintree",
-    "/opt/Daintree/daintree-app",
-    ...(process.env.PATH ?? "")
-      .split(path.delimiter)
-      .flatMap((dir) => ["daintree", "daintree-app"].map((name) => path.join(dir, name))),
-  ].some((candidate) => {
+  const executable = (candidate: string, mustBeFile: boolean) => {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      return fs.statSync(candidate).isFile();
+      // A directory on PATH is not a match, but the script takes a fixed path
+      // on -x alone.
+      return !mustBeFile || fs.statSync(candidate).isFile();
     } catch {
       return false;
     }
-  });
+  };
+  const appInstalled =
+    ["/opt/Daintree/daintree", "/opt/Daintree/daintree-app"].some((c) => executable(c, false)) ||
+    (process.env.PATH ?? "")
+      .split(path.delimiter)
+      .flatMap((dir) => ["daintree", "daintree-app"].map((name) => path.join(dir, name)))
+      .some((c) => executable(c, true));
 
   describe.skipIf(process.platform !== "linux" || appInstalled)(
     "PATH fallback with the wrapper installed on PATH",
@@ -245,8 +248,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
         const layout = pathFallbackLayout();
         const result = layout.run([], layout.script);
         expect(result.code).toBe(1);
-        expect(result.stderr).toContain("Daintree executable not found.");
-        expect(result.stderr).not.toContain("only match on PATH");
+        expect(result.stderr).toBe("daintree: Daintree executable not found.\n");
       });
     }
   );
