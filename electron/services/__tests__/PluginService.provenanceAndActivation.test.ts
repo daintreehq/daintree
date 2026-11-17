@@ -1245,9 +1245,15 @@ describe("Deferred activation — activatePlugin", () => {
       openedServices.push(service);
       await service.initialize();
       const first = service.activatePlugin("acme.loop-on-boot");
-      await vi.waitFor(() => {
-        expect(devWorkerMock.bridges[base.bridges]?.waitForActivation).toHaveBeenCalled();
-      });
+      // activate() taking the gate is what attaches a handler to it; rejecting
+      // any earlier would be an unhandled rejection.
+      await vi.waitFor(
+        () => {
+          expect(devWorkerMock.bridges[base.bridges]?.waitForActivation).toHaveBeenCalled();
+          expect(globals.__loopOnBootGate).toBeUndefined();
+        },
+        { timeout: 5_000 }
+      );
       const host = devWorkerMock.instances[base.hosts];
       const calls = host.on.mock.calls as unknown[][];
       const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
