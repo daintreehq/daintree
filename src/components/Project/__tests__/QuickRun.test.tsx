@@ -1057,6 +1057,86 @@ describe("QuickRun", () => {
     expect(screen.getByRole("alert").textContent).toContain("cargo run");
   });
 
+  describe("when the panel registry refuses the launch", () => {
+    const historyKey = "daintree_cmd_history_test-project";
+
+    function recentCommands(input: HTMLElement) {
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      return commandOptions().map((o) => o.getAttribute("data-command"));
+    }
+
+    it("gives the draft back and leaves Recent as it was", async () => {
+      seedHistory("ls -la");
+      const stored = localStorage.getItem(historyKey);
+      mockAddTerminal.mockResolvedValue(null);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel() as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "cargo run" } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+
+      expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+      expect(input.value).toBe("cargo run");
+      // The registry has already said why, and a Retry would meet the same limit.
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(localStorage.getItem(historyKey)).toBe(stored);
+      expect(recentCommands(input)).toEqual(["ls -la"]);
+    });
+
+    it("records the command once when the next try starts", async () => {
+      seedHistory("ls -la");
+      mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel() as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "cargo run" } });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+      expect(input.value).toBe("");
+      expect(recentCommands(input)).toEqual(["cargo run", "ls -la"]);
+    });
+
+    it("keeps a one-off override on a pinned command for the next try", async () => {
+      settingsMock.runCommands = [
+        { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
+      ];
+      mockAddTerminal.mockResolvedValueOnce(null).mockResolvedValueOnce("terminal-1");
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel() as HTMLInputElement;
+        const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.click(dockToggle);
+        expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(input.value).toBe("npx serve docs");
+        expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+        for (const [options] of mockAddTerminal.mock.calls) {
+          expect(options).toEqual(
+            expect.objectContaining({ command: "npx serve docs", location: "grid" })
+          );
+        }
+      } finally {
+        settingsMock.runCommands = [];
+      }
+    });
+  });
+
   it("pins the highlighted row from the keyboard without leaving the field", () => {
     seedHistory("docker compose up");
     render(<Footer projectId="test-project" />);

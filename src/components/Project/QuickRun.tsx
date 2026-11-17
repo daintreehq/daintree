@@ -453,8 +453,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     setLaunchError(null);
     setLaunchOverride(null);
 
+    // Give the command back rather than leaving an empty field and no task —
+    // unless something new has been typed since — and the options it was
+    // launched with, so the next try runs the same thing.
+    const giveBack = () => {
+      setInput((current) => (current === "" ? cmd : current));
+      if (intent === intentRef.current) setLaunchOverride((current) => current ?? override);
+    };
+
     try {
-      await addPanel({
+      const id = await addPanel({
         kind: "terminal",
         title: cmd,
         cwd: cwd,
@@ -464,15 +472,18 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         exitBehavior: restart ? "restart" : undefined,
         spawnedBy: "quickrun",
       });
+      // Refused before anything started (the panel limit, a project still
+      // cloning). The registry has already said why, and Retry would meet the
+      // same refusal, so only the draft comes back.
+      if (id === null) {
+        giveBack();
+        return;
+      }
       setHistory(recordHistory(historyStorageKey(projectId), cmd, history));
     } catch (error) {
       logError("Failed to spawn terminal", error);
-      // Give the command back rather than leaving an empty field and no task —
-      // unless something new has been typed since.
-      setInput((current) => (current === "" ? cmd : current));
-      // And the options it was launched with, so the retry runs the same thing.
+      giveBack();
       if (intent === intentRef.current) {
-        setLaunchOverride((current) => current ?? override);
         setLaunchError({ item, options: { dock, restart }, worktreeId: activeWorktreeId });
       }
     } finally {
