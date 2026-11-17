@@ -77,7 +77,11 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
     // prop the viewer actually receives, not just from the toolbar's pressed state.
     // `diff` rides along so a test can prove the viewer received the patch it
     // names, not merely that something mounted.
-    DiffViewer: (props: { wrapLines?: boolean; diff?: string }) => {
+    DiffViewer: (props: {
+      wrapLines?: boolean;
+      diff?: string;
+      onShowWhitespaceChanges?: () => void;
+    }) => {
       viewerDraftSessions.add(use(DiffNoteDraftContext));
       return (
         <div
@@ -85,6 +89,11 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
           data-wrap-lines={String(props.wrapLines)}
           data-diff={props.diff}
         >
+          {props.onShowWhitespaceChanges && (
+            <button type="button" onClick={props.onShowWhitespaceChanges}>
+              Show whitespace changes
+            </button>
+          )}
           {viewerOverlay.open &&
             createPortal(
               <div role="menu" aria-label="Viewer overlay">
@@ -232,6 +241,10 @@ const preferences = {
   setDiffWrapLines: vi.fn((value: boolean) => {
     preferences.diffWrapLines = value;
   }),
+  diffIgnoreWhitespace: false,
+  setDiffIgnoreWhitespace: vi.fn((value: boolean) => {
+    preferences.diffIgnoreWhitespace = value;
+  }),
   diffShowFileList: true,
   setDiffShowFileList: vi.fn(),
   diffFullFile: false,
@@ -338,6 +351,8 @@ beforeEach(() => {
   preferences.diffShowFileList = true;
   preferences.diffWrapLines = null;
   preferences.setDiffWrapLines.mockClear();
+  preferences.diffIgnoreWhitespace = false;
+  preferences.setDiffIgnoreWhitespace.mockClear();
   preferences.diffMarkdownRendered = false;
   preferences.diffFullFile = false;
   (preferences.setDiffFullFile as ReturnType<typeof vi.fn>).mockReset();
@@ -2021,6 +2036,206 @@ describe("DiffPane wrap toggle (#12170)", () => {
     seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
     renderPane();
     expect(viewerWrap()).toBe("true");
+  });
+});
+
+describe("DiffPane ignore whitespace toggle (#17325)", () => {
+  const LABEL = "Ignore whitespace changes";
+
+  function toolbarToggle(): HTMLElement | null {
+    return screen.queryByRole("button", { name: LABEL });
+  }
+
+  /** Below the toolbar's 720px fold, where secondary controls go into More actions. */
+  function renderNarrow() {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 500, 30)
+    );
+    return renderPane();
+  }
+
+  async function openMoreActions(): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
+    });
+    return screen.findByRole("menu");
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sits beside Wrap long lines and flips the stored preference both ways", () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    const { rerender } = renderPane();
+    expect(screen.getByRole("button", { name: "Wrap long lines" })).toBeTruthy();
+    expect(toolbarToggle()?.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(toolbarToggle()!);
+    rerender(paneElement());
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenLastCalledWith(true);
+    expect(toolbarToggle()?.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(toolbarToggle()!);
+    rerender(paneElement());
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenLastCalledWith(false);
+    expect(toolbarToggle()?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is absent from a since-review diff, whose read takes no whitespace flag", () => {
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/a.ts b/a.ts",
+      sinceReview: { status: "none" },
+      stale: false,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", diffSource: "since-review" });
+    renderPane();
+
+    expect(screen.getByRole("button", { name: "Wrap long lines" })).toBeTruthy();
+    expect(toolbarToggle()).toBeNull();
+  });
+
+  it("is absent while rendered Markdown is requested, even on the source fallback", () => {
+    // The rendered request forces a whitespace-sensitive patch before it knows
+    // whether the layout can render, so the fallback diff ignores the
+    // preference too. Wrap stays, since it still applies to the fallback.
+    preferences.diffMarkdownRendered = true;
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/docs/guide.md b/docs/guide.md",
+      stale: true,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Wrap long lines" })).toBeTruthy();
+    expect(toolbarToggle()).toBeNull();
+  });
+
+  it("is absent from an image diff, which has no text to filter", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "img/a.png", fileStatus: "modified", changeSet: [entry("img/a.png")] });
+    renderPane();
+
+    expect(toolbarToggle()).toBeNull();
+  });
+
+  it("folds into More actions beside Wrap long lines on a narrow panel while off", async () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    renderNarrow();
+    expect(toolbarToggle()).toBeNull();
+
+    const menu = await openMoreActions();
+    const rows = within(menu)
+      .getAllByRole("menuitemcheckbox")
+      .map((row) => row.textContent);
+    expect(rows).toEqual(["Wrap long lines", LABEL]);
+    const row = within(menu).getByRole("menuitemcheckbox", { name: LABEL });
+    expect(row.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(true);
+  });
+
+  it("stays out of the fold on a narrow panel while on, and folds back once off", async () => {
+    preferences.diffIgnoreWhitespace = true;
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    const { rerender } = renderNarrow();
+
+    const button = toolbarToggle();
+    expect(button?.getAttribute("aria-pressed")).toBe("true");
+    let menu = await openMoreActions();
+    expect(within(menu).queryByRole("menuitemcheckbox", { name: LABEL })).toBeNull();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Wrap long lines" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(menu, { key: "Escape" });
+    });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    fireEvent.click(button!);
+    rerender(paneElement());
+
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(false);
+    expect(toolbarToggle()).toBeNull();
+    menu = await openMoreActions();
+    const row = within(menu).getByRole("menuitemcheckbox", { name: LABEL });
+    expect(row.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it.each(["media/clip.mp4", "media/track.mp3", "docs/spec.pdf"])(
+    "is absent from %s, which previews the file rather than diffing it",
+    (path) => {
+      // The previews fetch the working-tree bytes; held pending, they never land.
+      const realFetch = globalThis.fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise(() => {}))
+      );
+      try {
+        preferences.diffIgnoreWhitespace = true;
+        seedPanel({ filePath: path, fileStatus: "modified", changeSet: [entry(path)] });
+        renderNarrow();
+
+        expect(toolbarToggle()).toBeNull();
+      } finally {
+        vi.stubGlobal("fetch", realFetch);
+      }
+    }
+  );
+
+  it("hands focus to More actions when switching off folds the narrow button away", () => {
+    preferences.diffIgnoreWhitespace = true;
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    const { rerender } = renderNarrow();
+    const button = toolbarToggle()!;
+    button.focus();
+
+    fireEvent.click(button);
+    rerender(paneElement());
+
+    expect(toolbarToggle()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions" }));
+  });
+
+  it("leaves focus on the wide button, which stays put when switched off", () => {
+    preferences.diffIgnoreWhitespace = true;
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    const { rerender } = renderPane();
+    const button = toolbarToggle()!;
+    button.focus();
+
+    fireEvent.click(button);
+    rerender(paneElement());
+
+    expect(document.activeElement).toBe(toolbarToggle());
+    expect(toolbarToggle()?.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("offers the way back from an empty diff only while the filter applies", () => {
+    useDiffContentMock.mockReturnValue({ content: "NO_CHANGES", stale: false, retry: vi.fn() });
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    const { rerender } = renderPane();
+    expect(screen.queryByRole("button", { name: "Show whitespace changes" })).toBeNull();
+
+    preferences.diffIgnoreWhitespace = true;
+    rerender(paneElement());
+    fireEvent.click(screen.getByRole("button", { name: "Show whitespace changes" }));
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(false);
+  });
+
+  it("offers no way back on the rendered fallback, which never filtered", () => {
+    preferences.diffIgnoreWhitespace = true;
+    preferences.diffMarkdownRendered = true;
+    useDiffContentMock.mockReturnValue({ content: "NO_CHANGES", stale: true, retry: vi.fn() });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show whitespace changes" })).toBeNull();
   });
 });
 

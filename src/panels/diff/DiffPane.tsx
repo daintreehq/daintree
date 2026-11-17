@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,6 +21,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { FileDiff as FileDiffIcon } from "lucide-react";
+import { Pilcrow } from "@/components/icons";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
@@ -292,6 +295,8 @@ export function DiffPane({
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
   const diffMarkdownRendered = usePreferencesStore((s) => s.diffMarkdownRendered);
   const setDiffMarkdownRendered = usePreferencesStore((s) => s.setDiffMarkdownRendered);
   const markdownFontSize = usePreferencesStore((s) => s.markdownFontSize);
@@ -752,6 +757,43 @@ export function DiffPane({
   // applies to every diff source.
   const isPdfMode = Boolean(filePath && !isGitlink && !isSinceReview && isPdfFilePath(filePath));
 
+  // Shown only where the request honours the preference: a since-review read
+  // takes no whitespace flag, and a rendered request forces whitespace on even
+  // when it falls back to the source diff, so a toggle there would do nothing.
+  const showWhitespaceToggle =
+    !isImageMode && !isMediaMode && !isPdfMode && !isSinceReview && !renderedRequested;
+  // On a narrow toolbar, switching the filter off folds its button into More
+  // actions, so focus follows it there rather than dropping to the page: ringless
+  // after a pointer click, ringed after a key press.
+  const moreActionsRef = useRef<HTMLButtonElement>(null);
+  const whitespaceRefocusRef = useRef<{ ringless: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const refocus = whitespaceRefocusRef.current;
+    whitespaceRefocusRef.current = null;
+    const trigger = moreActionsRef.current;
+    if (!refocus || !trigger) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    // A hand-off, not a move the user made: the menu button's tooltip must not
+    // open with the pointer nowhere near it.
+    armTooltipFocusSuppression();
+    trigger.focus(
+      refocus.ringless ? { preventScroll: true, focusVisible: false } : { preventScroll: true }
+    );
+  }, [diffIgnoreWhitespace]);
+  const whitespaceToggle = showWhitespaceToggle && (
+    <FileViewerToolbar.IconButton
+      label="Ignore whitespace changes"
+      pressed={diffIgnoreWhitespace}
+      onClick={(event) => {
+        if (diffIgnoreWhitespace) whitespaceRefocusRef.current = { ringless: event.detail > 0 };
+        setDiffIgnoreWhitespace(!diffIgnoreWhitespace);
+      }}
+    >
+      <Pilcrow className={TOOLBAR_ICON_CLASS} />
+    </FileViewerToolbar.IconButton>
+  );
+
   // Whether this file *can* show its whole contents, independent of whether the
   // user currently wants to — the toggle stays visible either way so the option
   // is discoverable, and explains itself when it can't be used.
@@ -1184,49 +1226,69 @@ export function DiffPane({
         <FileViewerToolbar.Actions>
           <FileViewerToolbar.Responsive
             narrow={
-              <FileViewerToolbar.MoreActions data-testid="diff-pane-more-actions">
-                {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
-                  <>
-                    <DropdownMenuCheckboxItem
-                      checked={effectiveWrapLines}
-                      onCheckedChange={(checked) => setDiffWrapLines(checked)}
-                    >
-                      Wrap long lines
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onSelect={refreshAll}>
-                  <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                  Refresh
-                </DropdownMenuItem>
-                {absolutePath && browserScope && fileStatus !== "deleted" && !isGitlink && (
-                  <DropdownMenuItem onSelect={() => void handleExternalAction("file-browser")}>
-                    <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    Open in file browser
+              <>
+                {/* A filtered diff looks just like a plain one, so while the
+                    filter is on its control stays out of the fold. */}
+                {diffIgnoreWhitespace && whitespaceToggle}
+                <FileViewerToolbar.MoreActions
+                  ref={moreActionsRef}
+                  data-testid="diff-pane-more-actions"
+                >
+                  {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
+                    <>
+                      <DropdownMenuCheckboxItem
+                        checked={effectiveWrapLines}
+                        onCheckedChange={(checked) => setDiffWrapLines(checked)}
+                      >
+                        Wrap long lines
+                      </DropdownMenuCheckboxItem>
+                      {showWhitespaceToggle && !diffIgnoreWhitespace && (
+                        <DropdownMenuCheckboxItem
+                          checked={false}
+                          onCheckedChange={(checked) => setDiffIgnoreWhitespace(checked)}
+                        >
+                          Ignore whitespace changes
+                        </DropdownMenuCheckboxItem>
+                      )}
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem onSelect={refreshAll}>
+                    <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    Refresh
                   </DropdownMenuItem>
-                )}
-                {absolutePath && (
-                  <>
-                    <DropdownMenuItem
-                      onSelect={() =>
-                        runTransientReveal(reveal, () => handleExternalAction("reveal"))
-                      }
-                    >
-                      <reveal.icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                      {reveal.label}
+                  {absolutePath && browserScope && fileStatus !== "deleted" && !isGitlink && (
+                    <DropdownMenuItem onSelect={() => void handleExternalAction("file-browser")}>
+                      <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                      Open in file browser
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => void handleExternalAction("editor")}>
-                      <ExternalLink
-                        className="mr-2 h-3.5 w-3.5"
-                        aria-hidden="true"
-                        data-menu-icon
-                      />
-                      Open in editor
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </FileViewerToolbar.MoreActions>
+                  )}
+                  {absolutePath && (
+                    <>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                        }
+                      >
+                        <reveal.icon
+                          className="mr-2 h-3.5 w-3.5"
+                          aria-hidden="true"
+                          data-menu-icon
+                        />
+                        {reveal.label}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => void handleExternalAction("editor")}>
+                        <ExternalLink
+                          className="mr-2 h-3.5 w-3.5"
+                          aria-hidden="true"
+                          data-menu-icon
+                        />
+                        Open in editor
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </FileViewerToolbar.MoreActions>
+              </>
             }
             wide={
               <>
@@ -1240,6 +1302,7 @@ export function DiffPane({
                     <WrapText className={TOOLBAR_ICON_CLASS} />
                   </FileViewerToolbar.IconButton>
                 )}
+                {whitespaceToggle}
                 <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
                   <RefreshCw className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
@@ -1574,6 +1637,11 @@ export function DiffPane({
                   onFullFileVerdict={handleFullFileVerdict}
                   wrapLines={effectiveWrapLines}
                   onRetry={retry}
+                  onShowWhitespaceChanges={
+                    showWhitespaceToggle && diffIgnoreWhitespace
+                      ? () => setDiffIgnoreWhitespace(false)
+                      : undefined
+                  }
                 />
               ))}
 

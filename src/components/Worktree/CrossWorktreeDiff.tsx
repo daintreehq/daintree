@@ -19,7 +19,7 @@ import {
   RefreshCw,
   WrapText,
 } from "lucide-react";
-import { ArrowLeftRight } from "@/components/icons";
+import { ArrowLeftRight, Pilcrow } from "@/components/icons";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -118,6 +118,18 @@ export function groupComparisonFiles(files: CrossWorktreeFile[]): FileGroup[] {
 
 function isSameFile(a: CrossWorktreeFile, b: CrossWorktreeFile): boolean {
   return a.path === b.path && a.status === b.status;
+}
+
+/**
+ * The name of the comparison control holding focus, if one does. A reload
+ * started from a header control unmounts it with the diff it sat on, and the
+ * name is how focus follows it into the next header.
+ */
+function focusedComparisonControl(): string | null {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active.closest("[data-comparison-controls]")
+    ? active.getAttribute("aria-label")
+    : null;
 }
 
 interface CrossWorktreeFileRowProps {
@@ -432,6 +444,12 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const comparisonKey = JSON.stringify([leftId, rightId, leftPath, leftBranch, rightBranch]);
 
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
+  // The mode the next file request asks for, read when it is made rather than
+  // captured by `fetchFileDiff`: keyed on it, the callback would change
+  // `fetchComparison` too, and the auto-fetch effect would answer a toggle by
+  // refreshing in place, where a failure keeps the other mode's patch on screen.
+  const ignoreWhitespaceRef = useRef(ignoreWhitespace);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
   const diffViewType = usePreferencesStore((s) => s.diffViewType);
@@ -487,7 +505,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             rightBranch,
             file.path,
             undefined,
-            ignoreWhitespace
+            ignoreWhitespaceRef.current
           ),
           sourceRequest,
         ]);
@@ -514,8 +532,26 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
       }
     },
-    [leftPath, leftBranch, rightBranch, ignoreWhitespace]
+    [leftPath, leftBranch, rightBranch]
   );
+
+  // A new mode reloads the open file in the foreground, the way stepping to it
+  // would: the list and its counts don't read the preference, and the old
+  // mode's patch must not stay on screen while the new one loads or fails.
+  const applyIgnoreWhitespace = useCallback(
+    (next: boolean) => {
+      ignoreWhitespaceRef.current = next;
+      const open = selectedFileRef.current;
+      if (open) void fetchFileDiff(open);
+    },
+    [fetchFileDiff]
+  );
+
+  // The dialog stays mounted between openings, so the preference can also
+  // change under it from a diff panel.
+  useEffect(() => {
+    if (ignoreWhitespaceRef.current !== ignoreWhitespace) applyIgnoreWhitespace(ignoreWhitespace);
+  }, [ignoreWhitespace, applyIgnoreWhitespace]);
 
   // Layout, not passive: a response can land between commit and passive effects.
   useLayoutEffect(() => {
@@ -635,13 +671,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             : undefined
           : files[selectedFileIndex + delta];
       if (!target) return;
-      // Stepping from a header control unmounts it with the diff it sat on;
-      // remember which one so focus can follow it into the next header.
-      const active = document.activeElement;
-      refocusLabelRef.current =
-        active instanceof HTMLElement && active.closest("[data-comparison-controls]")
-          ? active.getAttribute("aria-label")
-          : null;
+      refocusLabelRef.current = focusedComparisonControl();
       void fetchFileDiff(target);
       // The full path: two files can share a basename, and the list tells
       // them apart by directory band, which a screen reader never hears.
@@ -806,6 +836,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         onClick={() => setDiffWrapLines(!effectiveWrapLines)}
       >
         <WrapText className={TOOLBAR_ICON_CLASS} />
+      </FileViewerToolbar.IconButton>
+      <FileViewerToolbar.IconButton
+        label="Ignore whitespace changes"
+        pressed={ignoreWhitespace}
+        onClick={() => {
+          const next = !ignoreWhitespace;
+          refocusLabelRef.current = focusedComparisonControl();
+          setDiffIgnoreWhitespace(next);
+          applyIgnoreWhitespace(next);
+        }}
+      >
+        <Pilcrow className={TOOLBAR_ICON_CLASS} />
       </FileViewerToolbar.IconButton>
     </ComparisonControls>
   ) : null;
@@ -1030,6 +1072,9 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 source={fileSource}
                 wrapLines={effectiveWrapLines}
                 onRetry={() => void fetchFileDiff(selectedFile)}
+                onShowWhitespaceChanges={
+                  ignoreWhitespace ? () => setDiffIgnoreWhitespace(false) : undefined
+                }
                 sideLabels={sideLabels}
                 headerLeading={fileListToggle}
                 headerActions={comparisonControls}

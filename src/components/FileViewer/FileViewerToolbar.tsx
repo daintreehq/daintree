@@ -364,7 +364,7 @@ function IconButton({
   "data-testid": testId,
 }: {
   label: string;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   /** Renders the button as a toggle with an `aria-pressed` state. */
   pressed?: boolean;
   /**
@@ -400,8 +400,8 @@ function IconButton({
       <TooltipTrigger asChild>
         <button
           type="button"
-          onClick={() => {
-            if (!disabled) onClick();
+          onClick={(event) => {
+            if (!disabled) onClick(event);
           }}
           aria-label={label}
           aria-pressed={pressed}
@@ -495,9 +495,12 @@ function RevealButton({
  */
 function MoreActions({
   children,
+  ref,
   "data-testid": testId,
 }: {
   children: React.ReactNode;
+  /** The menu button, for a caller that hands focus to it. */
+  ref?: React.Ref<HTMLButtonElement>;
   "data-testid"?: string;
 }) {
   const label = "More actions";
@@ -507,6 +510,7 @@ function MoreActions({
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <button
+              ref={ref}
               type="button"
               aria-label={label}
               data-testid={testId}
