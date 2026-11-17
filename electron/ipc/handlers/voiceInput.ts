@@ -300,8 +300,9 @@ interface VoiceSession {
   warmTimer: ReturnType<typeof setInterval> | null;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
-  // Settles once its project vocabulary is read and in use, or can't be.
-  vocabularyRead: Promise<void> | null;
+  // Settles once its project vocabulary is read and in use, or can't be; a
+  // stop waits on it until `by` (performance.now()).
+  vocabularyRead: { settled: Promise<void>; by: number } | null;
   // Main's share of the session summary, sent with its ended notice. Kept
   // apart from the buffers above, which are released as the session goes.
   readonly stats: Pick<
@@ -608,9 +609,10 @@ const CODE_NAME_READ_BUDGET_MS = 300;
 // cleanup, so it has longer than the start's other reads.
 const DIFF_NAMES_READ_BUDGET_MS = 800;
 // A dictation can stop before its project vocabulary is read: the keyterms
-// stop waiting for it well before the read's own limit. A stop gives it this
-// much longer, beside the provider's drain, so the owner's rerun has it.
-const VOCABULARY_STOP_BUDGET_MS = 1_000;
+// stop waiting for it well before the read's own limit, the project I/O gate's
+// 2s. A stop waits for it, beside the provider's drain, until this long after
+// the read began, so the owner's rerun has it.
+const VOCABULARY_READ_DEADLINE_MS = 2_500;
 
 // A pause's prefetch covers the passage so far, so a session's dictation pays
 // for its opening again at each one. Past these a stop just sends its own.
@@ -1431,10 +1433,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           service?.stopGracefully(),
           reason === "stopped" && session.vocabularyRead
             ? withinBudget(
-                session.vocabularyRead,
+                session.vocabularyRead.settled,
                 undefined,
                 "Vocabulary read",
-                VOCABULARY_STOP_BUDGET_MS
+                Math.max(0, session.vocabularyRead.by - performance.now())
               )
             : undefined,
         ]);
@@ -1735,16 +1737,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // those transcribes nothing before the project's rules are in place. The
     // owner gets the vocabulary too: its reruns over the whole dictation, which
     // put right a completion that landed first, take the same rules.
-    session.vocabularyRead = vocabulary.then(
-      (entries) => {
-        if (entries.length === 0) return;
-        rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
-        if (session.sender.isDestroyed()) return;
-        const update: VoiceSessionVocabulary = { sessionId: session.id, vocabulary: entries };
-        session.sender.send(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, update);
-      },
-      () => {}
-    );
+    const vocabularyReadBy = performance.now() + VOCABULARY_READ_DEADLINE_MS;
+    session.vocabularyRead = {
+      settled: vocabulary.then(
+        (entries) => {
+          if (entries.length === 0) return;
+          rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
+          if (session.sender.isDestroyed()) return;
+          const update: VoiceSessionVocabulary = { sessionId: session.id, vocabulary: entries };
+          session.sender.send(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, update);
+        },
+        () => {}
+      ),
+      by: vocabularyReadBy,
+    };
     const projectDictionary = vocabulary.then(dictionaryTerms);
     // The names and the worktree come from one read, bounded here by the
     // keyterms' own budget so the keyterms and cleanup get the same answer. A

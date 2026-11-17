@@ -1035,6 +1035,54 @@ describe("voiceInput — keyterm target", () => {
       );
     });
 
+    // The read began at 1000 and has until 3500 (performance.now()).
+    const stopWhileReading = async (stopAt: number, wait: () => Promise<void>) => {
+      let release!: () => void;
+      shared.vocabularyGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let now = 1_000;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      try {
+        await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+        now = stopAt;
+        const stopping = stop();
+        await wait();
+        release();
+        await stopping;
+        await vi.waitFor(() => expect(vocabularyPushes()).toHaveLength(1));
+      } finally {
+        clock.mockRestore();
+      }
+      const channels = received.map((m) => m.channel);
+      return channels.indexOf("voice-input:session-ended") <
+        channels.indexOf("voice-input:session-vocabulary")
+        ? "after the end"
+        : "before the end";
+    };
+
+    it("waits for a read still in its window at the stop, more than a second of it", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const landed = await stopWhileReading(1_600, async () => {
+          await vi.advanceTimersByTimeAsync(1_500);
+          expect(received.map((m) => m.channel)).not.toContain("voice-input:session-ended");
+        });
+        expect(landed).toBe("before the end");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ends a stop once the read's window has passed, without it", async () => {
+      const landed = await stopWhileReading(3_600, () =>
+        vi.waitFor(() =>
+          expect(received.map((m) => m.channel)).toContain("voice-input:session-ended")
+        )
+      );
+      expect(landed).toBe("after the end");
+    });
+
     it("keeps to the user's rules, and sends no vocabulary, for a dictation with none", async () => {
       shared.viewProjectId = "proj-b";
       await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
