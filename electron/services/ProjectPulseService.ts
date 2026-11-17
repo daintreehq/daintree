@@ -380,11 +380,18 @@ export class ProjectPulseService {
       return [];
     }
 
+    // A bare `YYYY-MM-DD` makes git borrow the current time of day, so an afternoon refresh would
+    // drop the morning commits of the oldest cell. An epoch pins the cutoff to local midnight.
+    const [sinceYear, sinceMonth, sinceDay] = since.split("-").map(Number);
+    const sinceEpochSeconds = Math.floor(
+      new Date(sinceYear, sinceMonth - 1, sinceDay).getTime() / 1000
+    );
+
     let output: string;
     try {
       output = await git.raw([
         "log",
-        `--since=${since}`,
+        `--since=${sinceEpochSeconds}`,
         `--max-count=${MAX_COMMITS_FOR_HEATMAP}`,
         "--pretty=format:%ct",
       ]);
