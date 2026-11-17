@@ -1,4 +1,4 @@
-import type { Literal, Paragraph, Root, RootContent } from "mdast";
+import type { Paragraph, Root, RootContent } from "mdast";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";

@@ -1286,7 +1286,7 @@ function plainHeading(text: string): string {
  * document shows that block as metadata, so its keys are never headings.
  */
 function frontmatterLineCount(lines: readonly string[]): number {
-  const open = /^(---|\+\+\+)[ \t]*$/.exec((lines[0] ?? "").replace(/^﻿/, ""));
+  const open = /^(---|\+\+\+)[ \t]*$/.exec((lines[0] ?? "").replace(/^\uFEFF/, ""));
   if (!open) return 0;
   for (let index = 1; index < lines.length; index++) {
     if (lines[index]!.replace(/[ \t]+$/, "") === open[1]) return index + 1;

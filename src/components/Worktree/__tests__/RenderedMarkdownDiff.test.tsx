@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Component, type ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
@@ -628,7 +631,22 @@ describe("RenderedMarkdownDiff", () => {
 
     const removed = container.querySelector(".rendered-markdown-diff__block--removed");
     expect(removed?.getAttribute("data-whole")).toBe("true");
-    expect(removed?.querySelector("[data-frontmatter]")?.textContent).toBe("name: release-check");
+    const metadata = removed?.querySelector("[data-frontmatter]");
+    expect(metadata?.textContent).toBe("name: release-check");
+
+    // jsdom applies no imported stylesheet, so the rule that strikes a deleted
+    // block's text goes in by hand to see that it reaches the metadata too.
+    const style = document.createElement("style");
+    style.textContent = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../RenderedMarkdownDiff.css"),
+      "utf8"
+    );
+    document.head.append(style);
+    try {
+      expect(metadata && getComputedStyle(metadata).textDecoration).toContain("line-through");
+    } finally {
+      style.remove();
+    }
   });
 
   it("keeps a footnote's text in the rendered output", () => {

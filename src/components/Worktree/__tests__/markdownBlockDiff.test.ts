@@ -349,10 +349,18 @@ describe("parseMarkdownBlocks", () => {
     expect(blocks.map((block) => block.source)).toEqual(["---\nname: x\n---", "# Title"]);
   });
 
-  it("drops blank front matter, which renders nothing", () => {
-    const { blocks } = parseMarkdownBlocks("---\n\n---\n\n# Title\n");
+  it("skips only the first byte order mark, as the rendered document does", () => {
+    // A second mark is content, so the fence below it is not front matter.
+    const { blocks } = parseMarkdownBlocks("\uFEFF\uFEFF---\nname: x\n---\n\n# Title\n");
 
-    expect(blocks.map((block) => block.type)).toEqual(["heading"]);
+    expect(blocks.map((block) => block.type)).toEqual(["heading", "heading"]);
+    expect(blocks.map((block) => block.source)).toEqual(["\uFEFF---\nname: x\n---", "# Title"]);
+  });
+
+  it("drops blank front matter, which renders nothing", () => {
+    for (const source of ["---\n\n---\n\n# Title\n", "---\n \t\n  \n---\n\n# Title\n"]) {
+      expect(parseMarkdownBlocks(source).blocks.map((block) => block.type)).toEqual(["heading"]);
+    }
   });
 });
 
@@ -398,6 +406,21 @@ describe("diffMarkdownBlocks", () => {
     expect(change.inline.new.map(({ start, end }) => change.new.text.slice(start, end))).toEqual([
       "before tagging",
     ]);
+  });
+
+  it("never anchors identical source that parses as a different kind of block", () => {
+    // A blank line above a `+++` fence turns TOML front matter into a paragraph
+    // showing its fences, with not a byte of the block itself changed.
+    const frontmatter = '+++\ntitle = "Plan"\n+++\n';
+    for (const [before, after] of [
+      [frontmatter, `\n${frontmatter}`],
+      [`\n${frontmatter}`, frontmatter],
+    ] as const) {
+      const result = diffMarkdownBlocks(parse(before), parse(after));
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(kinds(result.changes)).toEqual(["removed", "added"]);
+    }
   });
 
   it("degrades a block that changed type into a removal plus an addition", () => {

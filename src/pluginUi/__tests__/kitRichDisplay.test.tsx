@@ -966,10 +966,10 @@ describe("TableOfContents", () => {
     expect(markdownHeadings(`---\nname: release-check\ndescription: Checks\n---${body}`)).toEqual([
       { text: "Release check", level: 1 },
     ]);
-    expect(markdownHeadings(`+++ \r\ntitle = "x"\r\n+++\t${body}`)).toEqual([
+    expect(markdownHeadings(`+++ \r\n# Hidden\r\ntitle = "x"\r\n+++\t${body}`)).toEqual([
       { text: "Release check", level: 1 },
     ]);
-    expect(markdownHeadings(`﻿---\nname: x\n---${body}`).map((h) => h.text)).toEqual([
+    expect(markdownHeadings(`\uFEFF---\nname: x\n---${body}`).map((h) => h.text)).toEqual([
       "Release check",
     ]);
     expect(markdownHeadings("---\rname: x\r---\r# Title").map((h) => h.text)).toEqual(["Title"]);
@@ -977,7 +977,8 @@ describe("TableOfContents", () => {
     expect(markdownHeadings("---\nname: x\n\n# Title").map((h) => h.text)).toEqual(["Title"]);
     expect(markdownHeadings("\n---\nname: x\n---\n").map((h) => h.text)).toEqual(["name: x"]);
     expect(markdownHeadings("----\nname: x\n----\n").map((h) => h.text)).toEqual(["name: x"]);
-    expect(markdownHeadings("---\nname: x\n--- x\n\n# Title").map((h) => h.text)).toEqual([
+    expect(markdownHeadings("---\n# Visible\n--- x\n\n# Title").map((h) => h.text)).toEqual([
+      "Visible",
       "Title",
     ]);
   });

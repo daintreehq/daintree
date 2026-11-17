@@ -79,7 +79,8 @@ export interface MarkdownBlock {
   /** mdast node type — `paragraph`, `list`, `table`, `code`, … */
   type: string;
   /**
-   * The block's verbatim source slice, which is also its exact-match identity.
+   * The block's verbatim source slice, which with its type is its exact-match
+   * identity.
    * Deliberately unnormalized: rendered mode always requests a
    * whitespace-sensitive patch, so a whitespace-only edit is a real edit here.
    */
@@ -467,13 +468,14 @@ export interface ParsedMarkdown {
  * html block would be an empty tinted box standing for something invisible.
  */
 export function parseMarkdownBlocks(input: string): ParsedMarkdown {
-  // The parser skips a leading byte order mark and its offsets don't count it,
-  // so slicing the input by them would cut every block one character short,
-  // front matter's closing fence included.
+  // The parser skips one leading byte order mark and its offsets don't count
+  // it, so the slices come from the input without it. Slicing the input itself
+  // would cut every block one character short, front matter's closing fence
+  // included; parsing the stripped copy would skip a second mark as well.
   const source = input.startsWith("\uFEFF") ? input.slice(1) : input;
   let tree: Root;
   try {
-    tree = markdownProcessor.parse(source);
+    tree = markdownProcessor.parse(input);
   } catch (error) {
     console.warn("[markdownBlockDiff] failed to parse markdown", error);
     return { blocks: [], definitions: "", definitionsById: new Map() };
@@ -766,10 +768,11 @@ export function diffMarkdownBlocks(
   if (oldBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS || newBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS) {
     return { ok: false, reason: "too-large" };
   }
-  const anchors = longestCommonSubsequence(
-    oldBlocks.map((block) => block.source),
-    newBlocks.map((block) => block.source)
-  );
+  // Keyed on the type as well as the source: the same bytes can parse as two
+  // kinds of block, as a `+++` fenced block is TOML front matter at the top of
+  // a document and a paragraph anywhere else, and those render differently.
+  const identity = (block: MarkdownBlock) => `${block.type}\n${block.source}`;
+  const anchors = longestCommonSubsequence(oldBlocks.map(identity), newBlocks.map(identity));
   const budget: InlineCellBudget = { remaining: MARKDOWN_DIFF_MAX_INLINE_CELLS };
   const changes: MarkdownBlockChange[] = [];
   let oldCursor = 0;

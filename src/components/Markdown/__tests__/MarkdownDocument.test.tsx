@@ -722,13 +722,15 @@ describe("MarkdownDocument front matter (#17334)", () => {
   });
 
   it("draws nothing for blank front matter", () => {
-    const { container } = render(
-      <MarkdownDocument {...FIXTURE_PROPS} content={"---\n\n---\n\n# Title"} />
-    );
-
-    expect(frontmatterBlocks(container)).toEqual([]);
-    expect(container.querySelector("hr")).toBeNull();
-    expect(container.querySelector(".markdown-document")?.firstElementChild?.tagName).toBe("H1");
+    for (const content of ["---\n\n---\n\n# Title", "---\n \t\n  \n---\n\n# Title"]) {
+      const { container, unmount } = render(
+        <MarkdownDocument {...FIXTURE_PROPS} content={content} />
+      );
+      expect(frontmatterBlocks(container)).toEqual([]);
+      expect(container.querySelector("hr")).toBeNull();
+      expect(container.querySelector(".markdown-document")?.firstElementChild?.tagName).toBe("H1");
+      unmount();
+    }
   });
 
   it("keeps heading ids and their lines past the front matter, whose `#` lines are comments", () => {
