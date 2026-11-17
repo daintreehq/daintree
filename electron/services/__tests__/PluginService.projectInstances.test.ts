@@ -533,8 +533,8 @@ describe("installed package instance mode (#14103)", () => {
     const { service } = await startService();
     await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
 
-    await service.setEnabled(PKG, false);
     await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, false);
+    await service.setEnabled(PKG, false);
 
     expect(mockPluginMcpSupervisor.removeStatesWhere).not.toHaveBeenCalled();
     expect(mockPluginMcpSupervisor.removeState).not.toHaveBeenCalled();
