@@ -237,6 +237,7 @@ export function GlobalAssistantPane({
                   <>
                     <DropdownMenuItem
                       destructive
+                      focusHandoff
                       onSelect={() => setPendingConfirm({ kind: "restart", generation })}
                     >
                       <Eraser className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
@@ -254,6 +255,7 @@ export function GlobalAssistantPane({
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       destructive
+                      focusHandoff
                       onSelect={() => setPendingConfirm({ kind: "discard", generation })}
                     >
                       <CircleStop className="mr-2 h-3.5 w-3.5" aria-hidden="true" />

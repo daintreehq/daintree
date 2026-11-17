@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
+import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import type { HelpAssistantTier, McpAuditRecord, McpAuditResult } from "@shared/types";
 
 // Local mirror of the Settings audit viewer's outcome→severity mapping. The
@@ -123,6 +124,7 @@ export function RecentCallsPopover({
     return Date.now();
   }, [tick]);
   const baseId = useId();
+  const focusRestore = useOverlayFocusRestore();
 
   // Recovery unmounts Retry. If it still held focus at that moment — the user
   // didn't move on while the read was in flight — hand focus to the first call
@@ -235,7 +237,11 @@ export function RecentCallsPopover({
       <div className="shrink-0 border-t border-divider px-1 py-1">
         <button
           type="button"
-          onClick={onOpenAuditLog}
+          onClick={() => {
+            // Settings takes focus; the popover mustn't take it back.
+            focusRestore?.expectHandoff();
+            onOpenAuditLog();
+          }}
           className={cn(
             "w-full rounded-[var(--radius-md)] px-2 py-1 text-left text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
             POPOVER_ROW_HOVER_CLASS

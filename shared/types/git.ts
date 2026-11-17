@@ -366,6 +366,33 @@ export interface GitPullRebaseReview {
 export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
 
 /**
+ * Why a rebase-onto-base or merge-base would be refused as the worktree stands
+ * (#17189).
+ *
+ * Read by the preview from the same predicates the write refuses on, so the
+ * confirm can say so before approval rather than closing into a failure. The
+ * write still re-checks: the worktree can change after the preview.
+ *
+ * - `operation-in-progress`: a merge, rebase, cherry-pick or revert is halted.
+ * - `base-checked-out`: the worktree is on the base branch itself, so
+ *   integrating it would rewrite it.
+ * - `conflicts`: unmerged paths stand with no operation halted (what a failed
+ *   stash pop leaves).
+ * - `uncommitted-changes`: staged, unstaged or untracked files, each counted
+ *   once.
+ */
+export type GitBaseIntegrationBlocker =
+  | {
+      reason: "operation-in-progress";
+      operation: Exclude<RepoState, "CLEAN" | "DIRTY">;
+      rebaseStep: number | null;
+      rebaseTotalSteps: number | null;
+    }
+  | { reason: "base-checked-out" }
+  | { reason: "conflicts"; count: number }
+  | { reason: "uncommitted-changes"; count: number };
+
+/**
  * What a rebase-onto-base or merge-base would actually act on.
  *
  * Separate from {@link GitRebaseCommitPreview}, which is measured against the
@@ -373,15 +400,30 @@ export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
  * A base target may be a purely local branch in a repo with no remote at all,
  * which that shape cannot describe truthfully — so this one carries the short
  * ref as a string and names the remote only when there is one.
+ *
+ * A halted operation or a checked-out base branch stops the read before it
+ * measures anything, so the target, the range and the counts are `null` there:
+ * unmeasured, which must never read as "nothing to integrate". A dirty or
+ * conflicted tree is still measured, because what the operation WOULD do is
+ * worth seeing while deciding whether to commit first.
  */
 export interface GitBaseIntegrationCommitPreview {
   kind: GitBaseIntegrationKind;
-  /** The branch the operation would act on, as git resolved it. */
-  branch: string;
+  /**
+   * The branch the operation would act on, as git resolved it. `null` only
+   * when a halted operation stopped the read: a paused rebase detaches HEAD,
+   * and its branch is not the one a fresh read would name.
+   */
+  branch: string | null;
   /** The base branch the worktree measures itself against. */
   baseBranch: string;
-  /** Short ref the operation targets — `upstream/develop`, or a bare `develop`. */
-  compareRef: string;
+  /** What the write would refuse on right now, or `null` when nothing would. */
+  blocker: GitBaseIntegrationBlocker | null;
+  /**
+   * Short ref the operation targets — `upstream/develop`, or a bare `develop`.
+   * `null` when a blocker stopped the read before the target was resolved.
+   */
+  compareRef: string | null;
   /** Remote `compareRef` lives on, or `null` on the local-branch fallback. */
   remote: string | null;
   /**
@@ -403,16 +445,19 @@ export interface GitBaseIntegrationCommitPreview {
    * that would be BROUGHT IN from the base.
    */
   commits: GitRemoteCommit[];
-  /** Commits in the whole set, which may exceed the returned `commits`. */
-  total: number;
   /**
-   * Commits the base has that the branch does not.
+   * Commits in the whole set, which may exceed the returned `commits`. `null`
+   * when unmeasured.
+   */
+  total: number | null;
+  /**
+   * Commits the base has that the branch does not. `null` when unmeasured.
    *
    * Carried for the same reason {@link GitRebaseCommitPreview.behind} is: an
    * empty replay set alone cannot tell "level with the base" from "purely
    * behind it". Both replay nothing; only the second one moves the branch.
    */
-  behind: number;
+  behind: number | null;
 }
 
 export interface StagingStatus {

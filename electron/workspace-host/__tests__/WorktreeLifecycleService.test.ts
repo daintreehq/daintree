@@ -1883,7 +1883,7 @@ describe("WorktreeLifecycleService", () => {
       mockSpawn.mockImplementation(makeSpawnChild(0));
 
       const monitor = makeTeardownMonitor();
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       const finalStatus = monitor.recordedStatuses.at(-1) as {
         phase: string;
@@ -1925,7 +1925,7 @@ describe("WorktreeLifecycleService", () => {
       // Approval as the run sees it: a phase the preview calls approved is one
       // the run executes rather than skipping for approval.
       mockSpawn.mockImplementation(makeSpawnChild(0));
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
       for (const phase of preview.phases) {
         const result = monitor.lifecyclePhaseResults.find((r) => r.phase === phase.phase);
         expect(result?.state === "needs-approval").toBe(!phase.approved);
@@ -1958,7 +1958,7 @@ describe("WorktreeLifecycleService", () => {
       mockSpawn.mockImplementation(makeSpawnChild(0));
 
       const monitor = makeTeardownMonitor({ hasResourceConfig: true });
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       const resourceFinal = monitor.recordedStatuses
         .filter(
@@ -1993,7 +1993,7 @@ describe("WorktreeLifecycleService", () => {
         emitUpdate: vi.fn(),
       } as unknown as import("../WorktreeLifecycleService.js").WorkspaceHostContext;
 
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, ctx);
+      await service.runLifecycleTeardown("wt-1", monitor as never, ctx);
 
       const finalStatus = monitor.recordedStatuses.at(-1) as { logPath?: string };
       expect(finalStatus.logPath).toBeDefined();
@@ -2186,7 +2186,7 @@ describe("WorktreeLifecycleService", () => {
       });
 
       const monitor = makeTeardownMonitor();
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       const results = monitor.lifecyclePhaseResults;
       expect(results).toHaveLength(2);
@@ -2227,7 +2227,7 @@ describe("WorktreeLifecycleService", () => {
       });
 
       const monitor = makeTeardownMonitor();
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       const results = monitor.lifecyclePhaseResults;
       expect(results).toHaveLength(1);
@@ -2252,7 +2252,7 @@ describe("WorktreeLifecycleService", () => {
       // No config file exists this time → early-return path.
       mockAccess.mockRejectedValue(new Error("ENOENT"));
 
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       expect(monitor.lifecyclePhaseResults).toHaveLength(0);
     });
@@ -2786,7 +2786,7 @@ describe("WorktreeLifecycleService", () => {
       const monitor = makeMonitor({ hasResourceConfig: true });
 
       await expect(
-        service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor))
+        service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor))
       ).resolves.toBeUndefined();
 
       expect(mockSpawn).not.toHaveBeenCalled();
@@ -2802,7 +2802,7 @@ describe("WorktreeLifecycleService", () => {
       await approveCurrentReview();
       const monitor = makeMonitor();
 
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       expect(monitor.lifecyclePhaseResults[0]).toMatchObject({
@@ -2822,7 +2822,7 @@ describe("WorktreeLifecycleService", () => {
       serveFiles({ "/wt/.daintree/config.json": { teardown: ["docker compose down"] } });
       const monitor = makeMonitor();
 
-      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      await service.runLifecycleTeardown("wt-1", monitor as never, makeCtx(monitor));
 
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(monitor.lifecyclePhaseResults[0]?.state).toBe("needs-approval");

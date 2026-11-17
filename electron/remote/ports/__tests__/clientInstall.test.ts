@@ -7,6 +7,7 @@ const hooks = vi.hoisted(() => ({
   isRemoteView: null as ((webContentsId: number) => boolean) | null,
   resolver: null as ((subdomain: string) => unknown) | null,
   localSubdomains: new Set<string>(),
+  localPorts: new Map<string, number>(),
   forwarded: null as ((call: unknown) => void) | null,
   sent: [] as unknown[],
 }));
@@ -33,7 +34,7 @@ vi.mock("../../../ipc/handlers/devPreview.js", () => ({
   getDevPreviewProxyPort: () => 43000,
   resolveLocalDevPreviewUpstream: (subdomain: string) =>
     hooks.localSubdomains.has(subdomain)
-      ? { kind: "ok", port: 5173, isHttps: false }
+      ? { kind: "ok", port: hooks.localPorts.get(subdomain) ?? 5173, isHttps: false }
       : { kind: "unknown-subdomain" },
   setRemoteDevPreviewResolver: (resolver: typeof hooks.resolver) => {
     hooks.resolver = resolver;
@@ -85,6 +86,7 @@ afterEach(async () => {
   client.close("done");
   hooks.sent.length = 0;
   hooks.localSubdomains.clear();
+  hooks.localPorts.clear();
   _resetRemoteServicesForTest();
   await removeTempDir(dir);
 });
@@ -325,6 +327,110 @@ describe("installPortForwardClient", () => {
       args: [{ panelId: "panel" }],
     });
     await waitFor(() => service.list().length === 0, 3_000);
+  });
+
+  it("lets the stopped project's preview go when one view stops another project's server", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "alpha" },
+      11: { hostId: HOST, projectId: "beta" },
+    };
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    // Both projects hold a panel with the same id, each with its own server.
+    hooks.localSubdomains.add("dp-alpha-panel");
+    hooks.localSubdomains.add("dp-beta-panel");
+    hooks.localPorts.set("dp-alpha-panel", 5173);
+    hooks.localPorts.set("dp-beta-panel", 6006);
+    for (const [webContentsId, projectId] of [
+      [9, "alpha"],
+      [11, "beta"],
+    ] as const) {
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId,
+        hostProjectId: projectId,
+        channel: "dev-preview:ensure",
+        args: [{ panelId: "panel", projectId, cwd: "/x", devCommand: "npm run dev" }],
+      });
+    }
+    await (hooks.resolver!("dp-alpha-panel") as Promise<unknown>);
+    await (hooks.resolver!("dp-beta-panel") as Promise<unknown>);
+    expect(
+      service
+        .list()
+        .map((f) => f.remotePort)
+        .sort()
+    ).toEqual([5173, 6006]);
+
+    // Alpha's dev server dashboard stops beta's server.
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "alpha",
+      channel: "dev-preview:stop",
+      args: [{ panelId: "panel", projectId: "beta" }],
+    });
+    await waitFor(() => service.list().length === 1, 3_000);
+    expect(service.list()[0]?.remotePort).toBe(5173);
+  });
+
+  it("keeps another project's preview whose record has lapsed when a view stops it", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "alpha" },
+      11: { hostId: HOST, projectId: "beta" },
+    };
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-beta-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 11,
+      hostProjectId: "beta",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel", projectId: "beta", cwd: "/x", devCommand: "npm run dev" }],
+    });
+    await (hooks.resolver!("dp-beta-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    // Enough newer registrations push beta's record out of the bounded registry.
+    for (let i = 0; i < 512; i++) {
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId: 9,
+        hostProjectId: "alpha",
+        channel: "dev-preview:ensure",
+        args: [{ panelId: `p${i}`, projectId: "alpha", cwd: "/x", devCommand: "npm run dev" }],
+      });
+    }
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "alpha",
+      channel: "dev-preview:stop",
+      args: [{ panelId: "panel", projectId: "beta" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.list()).toHaveLength(1);
   });
 
   it("lets a worktree's previews go when its servers are stopped, and ignores another host's stop", async () => {
