@@ -25,8 +25,7 @@ vi.mock("../../dispatcher.js", () => ({
 import { cloudHostsNamespace } from "../cloudHosts.js";
 
 type ForWorktree = (context: IpcContext, payload: unknown) => Promise<unknown>;
-const forWorktree = cloudHostsNamespace.ops.createHostForWorktree
-  .handler as unknown as ForWorktree;
+const forWorktree = cloudHostsNamespace.ops.createHostForWorktree.handler as unknown as ForWorktree;
 
 function ctx(overrides: Partial<Record<keyof IpcContext, unknown>> = {}): IpcContext {
   return {

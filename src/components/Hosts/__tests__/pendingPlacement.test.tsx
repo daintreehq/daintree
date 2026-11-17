@@ -42,6 +42,7 @@ vi.mock("@/lib/viewCacheState", () => ({
 
 import {
   _resetHostSwitchRequestsForTesting,
+  completeHostSwitchRequest,
   currentHostSwitchRequest,
   dismissHostSwitchRequest,
   registerHostSwitchDialogHost,
@@ -55,6 +56,8 @@ import {
   cancelPlacement,
   holdHostSetup,
   holdPlacement,
+  NOT_OPENED,
+  noteAskedHere,
   notePlacementFailure,
   placementForWorktree,
   resumePlacement,
@@ -304,6 +307,50 @@ describe("usePendingPlacementResume", () => {
       for (const listener of env.observers) listener(true);
     });
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box" });
+  });
+
+  describe("a placement whose machine was made for it (#17359)", () => {
+    const made = { ...request, createdMachine: true as const };
+
+    it("stays held through the switch dialog, and goes once the worktree opens there", async () => {
+      const placement = await holdPlacement("box", made, 1_000);
+      update.mockClear();
+      await show([hostEntry("box", connected, placement)]);
+      const switchRequest = currentHostSwitchRequest();
+      expect(switchRequest).toMatchObject({ toHostId: "box", worktreePath: request.worktreePath });
+      expect(update).not.toHaveBeenCalled();
+
+      await act(async () => completeHostSwitchRequest(switchRequest!.id));
+      expect(update).toHaveBeenCalledWith({ hostId: "box", pendingPlacement: null });
+    });
+
+    it("is left failed, not dropped, when the switch dialog closes without opening it", async () => {
+      const placement = await holdPlacement("box", made, 1_000);
+      update.mockClear();
+      const view = await show([hostEntry("box", connected, placement)]);
+      await act(async () => dismissHostSwitchRequest(currentHostSwitchRequest()!.id));
+
+      expect(update).toHaveBeenCalledTimes(1);
+      const written = update.mock.calls[0]![0] as {
+        hostId: string;
+        pendingPlacement: PendingHostPlacement;
+      };
+      expect(written.hostId).toBe("box");
+      expect(written.pendingPlacement).toMatchObject({
+        ...made,
+        requestedAt: 1_000,
+        failure: { message: NOT_OPENED },
+      });
+      // The same placement isn't handed to a dialog again by itself: its card offers Retry.
+      await show([hostEntry("box", connected, written.pendingPlacement)], view);
+      expect(currentHostSwitchRequest()).toBeNull();
+    });
+
+    it("opens without asking first when main wrote it at this view's asking", async () => {
+      noteAskedHere("box", 2_000);
+      await show([hostEntry("box", connected, { ...made, requestedAt: 2_000 })]);
+      expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "box", askFirst: false });
+    });
   });
 
   it("does nothing in a window on another host", async () => {

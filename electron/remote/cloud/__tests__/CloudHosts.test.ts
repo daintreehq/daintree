@@ -17,7 +17,12 @@ function setup() {
 }
 
 describe("CloudHosts.createHostForWorktree", () => {
-  const machine = { accountId: "ca_1", name: "feature-login", machineType: "s", lifetimeHours: null };
+  const machine = {
+    accountId: "ca_1",
+    name: "feature-login",
+    machineType: "s",
+    lifetimeHours: null,
+  };
 
   it("marks the machine for the worktree on this device and holds the worktree on its host", async () => {
     const { cloud, create } = setup();
