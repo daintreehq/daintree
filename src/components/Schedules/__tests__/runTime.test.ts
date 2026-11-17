@@ -118,8 +118,6 @@ describe("localDayNumber", () => {
     expect(
       localDayNumber(LATER, "America/New_York") - localDayNumber(NOW, "America/New_York")
     ).toBe(0);
-    expect(localDayNumber(LATER, "Asia/Tokyo")).toBe(
-      localDayNumber(LATER, "America/New_York") + 1
-    );
+    expect(localDayNumber(LATER, "Asia/Tokyo")).toBe(localDayNumber(LATER, "America/New_York") + 1);
   });
 });

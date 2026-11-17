@@ -525,8 +525,7 @@ export function validateTimeZone(timeZone: string): TimeZoneValidation {
 
 // The zone is read on every call, since the machine can change zone while the app
 // runs; only the check of a zone already seen is skipped.
-let lastMachineZone: { readonly reported: string | undefined; readonly zone: string } | null =
-  null;
+let lastMachineZone: { readonly reported: string | undefined; readonly zone: string } | null = null;
 
 /** The machine's IANA time zone, or UTC when the runtime can't name one. */
 export function machineTimeZone(): string {
