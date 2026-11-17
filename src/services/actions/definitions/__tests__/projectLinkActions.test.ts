@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
-import type { ProjectPortalLink } from "@shared/types";
+import type { ProjectLink } from "@shared/types";
 import type { NotifyPayload } from "@/lib/notify";
 import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -10,25 +10,25 @@ const { changeMock, getSettingsMock, notifyMock } = vi.hoisted(() => ({
   notifyMock: vi.fn<(payload: NotifyPayload) => string>(),
 }));
 
-vi.mock("@/store/projectSettingsStore", () => ({ changeProjectPortalLinks: changeMock }));
+vi.mock("@/store/projectSettingsStore", () => ({ changeProjectLinks: changeMock }));
 vi.mock("@/clients", () => ({ projectClient: { getSettings: getSettingsMock } }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
-import { registerProjectPortalLinkActions } from "../projectPortalLinkActions";
+import { registerProjectLinkActions } from "../projectLinkActions";
 import { UnactionableTargetError } from "../../unactionableTarget";
 
-const staging: ProjectPortalLink = {
+const staging: ProjectLink = {
   id: "link-1",
   title: "Staging",
   url: "https://staging.example.com/",
   addedByAssistant: true,
 };
-const prod: ProjectPortalLink = { id: "link-2", title: "Prod", url: "https://prod.example.com/" };
+const prod: ProjectLink = { id: "link-2", title: "Prod", url: "https://prod.example.com/" };
 
 function define(id: string): AnyActionDefinition {
   const actions: ActionRegistry = new Map();
-  registerProjectPortalLinkActions(actions);
+  registerProjectLinkActions(actions);
   const factory = actions.get(id);
   if (!factory) throw new Error(`missing ${id}`);
   return factory() as AnyActionDefinition;
@@ -56,9 +56,9 @@ const assistant: Partial<ActionContext> = {
 };
 
 const writes: Array<[string, unknown]> = [
-  ["portal.projectLinks.add", { title: "X", url: "https://x.example.com" }],
-  ["portal.projectLinks.update", { id: "link-1", title: "X" }],
-  ["portal.projectLinks.remove", { id: "link-1" }],
+  ["project.links.add", { title: "X", url: "https://x.example.com" }],
+  ["project.links.update", { id: "link-1", title: "X" }],
+  ["project.links.remove", { id: "link-1" }],
 ];
 
 beforeEach(() => {
@@ -66,10 +66,10 @@ beforeEach(() => {
   changeMock.mockResolvedValue({ saved: true, links: [staging], link: staging });
 });
 
-describe("portal.projectLinks (#17091)", () => {
+describe("project.links (#17091)", () => {
   it("adds as the Assistant in the session's own project and offers an Undo", async () => {
     const result = await run(
-      "portal.projectLinks.add",
+      "project.links.add",
       { title: "Staging", url: "https://staging.example.com" },
       assistant
     );
@@ -90,7 +90,7 @@ describe("portal.projectLinks (#17091)", () => {
 
   it("undoes the Assistant's add only while the link is still the Assistant's", async () => {
     await run(
-      "portal.projectLinks.add",
+      "project.links.add",
       { title: "Staging", url: "https://staging.example.com" },
       assistant
     );
@@ -139,7 +139,7 @@ describe("portal.projectLinks (#17091)", () => {
     changeMock.mockResolvedValueOnce({ saved: true, links: [prod], link: prod });
 
     const result = await run(
-      "portal.projectLinks.update",
+      "project.links.update",
       { id: "link-2", title: "Prod" },
       { projectId: "proj-1", dispatchSource: "user" }
     );
@@ -156,7 +156,7 @@ describe("portal.projectLinks (#17091)", () => {
   it("refuses without a project, and passes main's refusal on as unactionable", async () => {
     await expect(
       run(
-        "portal.projectLinks.remove",
+        "project.links.remove",
         { id: "link-1" },
         { dispatchSource: "agent", hostCallerOrigin: "assistant" }
       )
@@ -168,22 +168,22 @@ describe("portal.projectLinks (#17091)", () => {
       code: "not-added-by-assistant",
       message: "That link was added or edited by hand, so only the user can change it",
     });
-    await expect(run("portal.projectLinks.remove", { id: "link-2" }, assistant)).rejects.toThrow(
+    await expect(run("project.links.remove", { id: "link-2" }, assistant)).rejects.toThrow(
       "only the user can change it"
     );
   });
 
   it("lists the project's links with each marker as a boolean", async () => {
-    getSettingsMock.mockResolvedValueOnce({ runCommands: [], portalLinks: [staging, prod] });
+    getSettingsMock.mockResolvedValueOnce({ runCommands: [], links: [staging, prod] });
 
-    const result = await run("portal.projectLinks.list", undefined, assistant);
+    const result = await run("project.links.list", undefined, assistant);
 
     expect(getSettingsMock).toHaveBeenCalledWith("proj-1");
     expect(result).toEqual({ links: [staging, { ...prod, addedByAssistant: false }] });
   });
 
   it("keeps every tool off the palette and away from plugins", () => {
-    for (const id of ["portal.projectLinks.list", ...writes.map(([write]) => write)]) {
+    for (const id of ["project.links.list", ...writes.map(([write]) => write)]) {
       const definition = define(id);
       expect(definition.denyPluginDispatch).toBe(true);
       expect(definition.palette?.mode).toBe("hidden");

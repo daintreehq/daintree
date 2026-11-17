@@ -123,17 +123,24 @@ describe("toNonRendererOwnedTools", () => {
   });
 
   it("offers the project link tools to the Assistant at core, and to no worker pane (#17091)", () => {
-    const linkTools = BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("portal.projectLinks."));
+    const isLinkTool = (id: string) => id.startsWith("project.links.");
+    const linkTools = BUILT_IN_ACTION_IDS.filter(isLinkTool);
     expect(linkTools.length).toBeGreaterThan(0);
     expect(linkTools.filter((id) => !CORE_TIER_TOOLS.includes(id as never))).toEqual([]);
     for (const tier of HELP_ASSISTANT_TIERS) {
       const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);
-      expect(
-        projected.filter((id) => id.startsWith("portal.")),
-        tier
-      ).toEqual([]);
+      expect(projected.filter(isLinkTool), tier).toEqual([]);
     }
-    expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => id.startsWith("portal."))).toEqual([]);
+    expect(MCP_EXTERNAL_TIER_TOOLS.filter(isLinkTool)).toEqual([]);
+  });
+
+  it("keeps no project link tool under the Portal namespace (#17243)", () => {
+    expect(BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("portal.projectLinks"))).toEqual([]);
+    expect(
+      [...CORE_TIER_TOOLS, ...RENDERER_OWNED_ORIGIN_ONLY_TOOLS].filter((id) =>
+        id.startsWith("portal.")
+      )
+    ).toEqual([]);
   });
 
   it("gives other origins only the owned worktree delete at core", () => {

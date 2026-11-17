@@ -42,6 +42,7 @@ import { registerWorktreeSessionActions } from "./definitions/worktreeSessionAct
 import { registerWorktreeBulkActions } from "./definitions/worktreeBulkActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
 import { registerProjectCheckActions } from "./definitions/projectCheckActions";
+import { registerProjectLinkActions } from "./definitions/projectLinkActions";
 import { registerPluginActions } from "./definitions/pluginActions";
 import { registerSkillActions } from "./definitions/skillActions";
 import { registerHostActions } from "./definitions/hostActions";
@@ -85,6 +86,7 @@ export function createActionDefinitions(
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);
   registerProjectCheckActions(actions, callbacks);
+  registerProjectLinkActions(actions);
   registerPluginActions(actions, callbacks);
   registerSkillActions(actions, callbacks);
   registerWatchdogActions(actions);

@@ -2616,7 +2616,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
   "project:general": {
     tabLabel: "General",
     searchNavDescription:
-      "Project name, emoji, color, group, icon, dev server and Portal links configuration",
+      "Project name, emoji, color, group, icon, dev server and project links configuration",
     searchNavKeywords: [
       "project",
       "name",
@@ -2666,9 +2666,9 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         keywords: ["dev", "server", "preview", "start", "command"],
       },
       {
-        id: "project-portal-links",
-        section: "Portal links",
-        title: "Portal links",
+        id: "project-links",
+        section: "Project links",
+        title: "Project links",
         description: "Addresses offered in this project's Portal launchpad, such as staging",
         keywords: ["portal", "links", "launchpad", "staging", "production", "dashboard", "url"],
       },

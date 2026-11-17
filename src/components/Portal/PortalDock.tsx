@@ -19,7 +19,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useGlobalLinksStore } from "@/store/globalLinksStore";
 import { withGlobalLinks } from "@/lib/portalLinks";
 import {
-  refreshCachedProjectPortalLinks,
+  refreshCachedProjectLinks,
   useProjectSettingsStore,
 } from "@/store/projectSettingsStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -147,7 +147,7 @@ export function PortalDock() {
     (s) => selectViewProject(getViewWorkspaceId(), s)?.id ?? null
   );
   const projectLinks = useProjectSettingsStore((s) =>
-    viewProjectId !== null && s.projectId === viewProjectId ? s.settings?.portalLinks : undefined
+    viewProjectId !== null && s.projectId === viewProjectId ? s.settings?.links : undefined
   );
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -161,7 +161,7 @@ export function PortalDock() {
   // when this view comes back with it showing.
   const refreshProjectLinks = useCallback(() => {
     if (viewProjectId === null) return;
-    refreshCachedProjectPortalLinks(viewProjectId).catch((error: unknown) =>
+    refreshCachedProjectLinks(viewProjectId).catch((error: unknown) =>
       logError("Failed to refresh the project's Portal links", error)
     );
   }, [viewProjectId]);

@@ -303,11 +303,11 @@ describe("projectActions adversarial", () => {
   });
 
   describe("project.saveSettings", () => {
-    it("never writes Portal links an agent sends, which only the link actions change (#17091)", async () => {
+    it("never writes project links an agent sends, which only the link actions change (#17091)", async () => {
       const staging = { id: "a", title: "Staging", url: "https://staging.example.com/" };
       projectClientMock.getSettings.mockResolvedValueOnce({
         runCommands: [],
-        portalLinks: [staging],
+        links: [staging],
       });
       const { run } = setupActions();
 
@@ -315,13 +315,33 @@ describe("projectActions adversarial", () => {
         projectId: "proj-1",
         settings: {
           devServerCommand: "npm run dev",
-          portalLinks: [{ id: "b", title: "Prod", url: "https://evil.example.com/" }],
+          links: [{ id: "b", title: "Prod", url: "https://evil.example.com/" }],
         },
       });
 
       expect(projectClientMock.saveSettings).toHaveBeenCalledWith("proj-1", {
         runCommands: [],
-        portalLinks: [staging],
+        links: [staging],
+        devServerCommand: "npm run dev",
+      });
+    });
+
+    it("never forwards links under the pre-#17243 portalLinks key either", async () => {
+      projectClientMock.getSettings.mockResolvedValueOnce({ runCommands: [] });
+      const { run } = setupActions();
+
+      await run("project.saveSettings", {
+        projectId: "proj-1",
+        settings: {
+          devServerCommand: "npm run dev",
+          portalLinks: [
+            { id: "b", title: "Prod", url: "https://evil.example.com/", addedByAssistant: true },
+          ],
+        },
+      });
+
+      expect(projectClientMock.saveSettings).toHaveBeenCalledWith("proj-1", {
+        runCommands: [],
         devServerCommand: "npm run dev",
       });
     });

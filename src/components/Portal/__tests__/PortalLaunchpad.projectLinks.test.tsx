@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
-import type { PortalLink, ProjectPortalLink } from "@shared/types";
+import type { PortalLink, ProjectLink } from "@shared/types";
 
 const { dispatchMock } = vi.hoisted(() => ({ dispatchMock: vi.fn() }));
 
@@ -21,13 +21,13 @@ const chat: PortalLink = {
   order: 0,
 };
 
-const staging: ProjectPortalLink = {
+const staging: ProjectLink = {
   id: "a",
   title: "Staging",
   url: "https://www.staging.example.com/app",
   addedByAssistant: true,
 };
-const prod: ProjectPortalLink = { id: "b", title: "Production", url: "https://example.com/" };
+const prod: ProjectLink = { id: "b", title: "Production", url: "https://example.com/" };
 
 afterEach(() => {
   cleanup();
@@ -95,7 +95,7 @@ describe("PortalLaunchpad project links (#17091)", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "project:general", sectionId: "project-portal-links" },
+      { tab: "project:general", sectionId: "project-links" },
       { source: "user" }
     );
   });

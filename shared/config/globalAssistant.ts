@@ -195,11 +195,11 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   // Brings the user's backgrounded pane forward or relaunches their conversation,
   // and the pane it opens is never recorded as the assistant's.
   "agentSessionHistory.resume",
-  // A project's launchpad links are its own assistant's to keep (#17091).
-  "portal.projectLinks.list",
-  "portal.projectLinks.add",
-  "portal.projectLinks.update",
-  "portal.projectLinks.remove",
+  // A project's own links are its own assistant's to keep (#17091).
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
 ]);
 
 /**

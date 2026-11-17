@@ -11,48 +11,6 @@ export interface PortalLink {
   alwaysEnabled?: boolean;
 }
 
-/**
- * A link saved with one project and shown only in that project's Portal
- * launchpad (#17091). Kept in the project's local settings, never in the
- * committed settings file, so a cloned repository can't seed it.
- */
-export interface ProjectPortalLink {
-  id: string;
-  title: string;
-  url: string;
-  /** Set while the link is as the Assistant left it. A change made by hand clears it. */
-  addedByAssistant?: true;
-}
-
-/** Who is changing a project's links: the Assistant is held to its own links and a narrower URL rule. */
-export type ProjectPortalLinkActor = "user" | "assistant";
-
-export type ProjectPortalLinkChange =
-  | { op: "add"; title: string; url: string }
-  | { op: "update"; id: string; title?: string; url?: string }
-  /** `onlyIfAddedByAssistant` is an Undo of the Assistant's add: a link someone has since taken over stays. */
-  | { op: "remove"; id: string; onlyIfAddedByAssistant?: boolean };
-
-export interface ProjectPortalLinksChangePayload {
-  projectId: string;
-  actor: ProjectPortalLinkActor;
-  change: ProjectPortalLinkChange;
-}
-
-export type ProjectPortalLinkRefusal =
-  "invalid-title" | "invalid-url" | "limit" | "not-found" | "not-added-by-assistant";
-
-/** `saved` rather than `ok`: an IPC handler's result can't carry the envelope's own keys. */
-export type ProjectPortalLinksChangeResult =
-  | {
-      saved: true;
-      /** The project's links as saved. */
-      links: ProjectPortalLink[];
-      /** The link added or updated, or the one removed. */
-      link: ProjectPortalLink;
-    }
-  | { saved: false; code: ProjectPortalLinkRefusal; message: string };
-
 export interface LinkTemplate {
   title: string;
   url: string;

@@ -1,15 +1,15 @@
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import type { ProjectPortalLink, ProjectPortalLinkActor } from "@shared/types";
+import type { ProjectLink, ProjectLinkActor } from "@shared/types";
 import {
-  MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH,
-  MAX_PROJECT_PORTAL_LINK_URL_LENGTH,
-  portalLinkHost,
-} from "@shared/utils/projectPortalLinks";
+  MAX_PROJECT_LINK_TITLE_LENGTH,
+  MAX_PROJECT_LINK_URL_LENGTH,
+  linkHost,
+} from "@shared/utils/projectLinks";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
-import { changeProjectPortalLinks } from "@/store/projectSettingsStore";
+import { changeProjectLinks } from "@/store/projectSettingsStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionRegistry } from "../actionTypes";
@@ -31,17 +31,17 @@ const linkId = z.string().min(1).max(200).describe("Id from the project link lis
 const linkTitle = z
   .string()
   .min(1)
-  .max(MAX_PROJECT_PORTAL_LINK_TITLE_LENGTH)
-  .describe("Name shown in the launchpad, e.g. Staging.");
+  .max(MAX_PROJECT_LINK_TITLE_LENGTH)
+  .describe("Name shown for the link, e.g. Staging.");
 const linkUrl = z
   .string()
   .min(1)
-  .max(MAX_PROJECT_PORTAL_LINK_URL_LENGTH)
+  .max(MAX_PROJECT_LINK_URL_LENGTH)
   .describe("https://, or http:// only for localhost or 127.0.0.1.");
 
-const KEYWORDS = ["portal", "link", "launchpad", "staging", "production", "dashboard", "url"];
+const KEYWORDS = ["link", "launchpad", "launcher", "staging", "production", "dashboard", "url"];
 
-function toResult(link: ProjectPortalLink) {
+function toResult(link: ProjectLink) {
   return {
     id: link.id,
     title: link.title,
@@ -55,15 +55,15 @@ function toResult(link: ProjectPortalLink) {
  * session is one; any other agent is refused outright, though the tool sets
  * already keep these tools from worker panes and outside clients.
  */
-function actorFor(ctx: ActionContext): ProjectPortalLinkActor {
+function actorFor(ctx: ActionContext): ProjectLinkActor {
   if (ctx.dispatchSource === "agent") {
     if (ctx.hostCallerOrigin === "assistant") return "assistant";
     throw new UnactionableTargetError(
-      "Only the Daintree Assistant can change a project's Portal links."
+      "Only the Daintree Assistant can change a project's links."
     );
   }
   if (ctx.dispatchSource === "plugin") {
-    throw new UnactionableTargetError("A plugin can't change a project's Portal links.");
+    throw new UnactionableTargetError("A plugin can't change a project's links.");
   }
   return "user";
 }
@@ -75,9 +75,9 @@ function projectFor(ctx: ActionContext): string {
   return ctx.projectId;
 }
 
-async function undoAssistantAdd(projectId: string, link: ProjectPortalLink): Promise<void> {
+async function undoAssistantAdd(projectId: string, link: ProjectLink): Promise<void> {
   try {
-    const result = await changeProjectPortalLinks({
+    const result = await changeProjectLinks({
       projectId,
       actor: "user",
       change: { op: "remove", id: link.id, onlyIfAddedByAssistant: true },
@@ -93,11 +93,11 @@ async function undoAssistantAdd(projectId: string, link: ProjectPortalLink): Pro
       });
     }
   } catch (error) {
-    logError("Failed to undo a project Portal link", error);
+    logError("Failed to undo a project link", error);
     notify({
       type: "error",
       title: "Couldn't remove the link",
-      message: formatErrorMessage(error, "The link is still in the launchpad."),
+      message: formatErrorMessage(error, "The link is still saved with the project."),
       priority: "high",
       context: { eventKind: "settings", projectId },
       action: { label: "Retry", onClick: () => void undoAssistantAdd(projectId, link) },
@@ -110,11 +110,11 @@ async function undoAssistantAdd(projectId: string, link: ProjectPortalLink): Pro
  * back. Kept in the inbox too, named for its project: an add made while the
  * window is blurred raises no toast, and the row says what was added where.
  */
-function offerUndo(projectId: string, link: ProjectPortalLink): void {
+function offerUndo(projectId: string, link: ProjectLink): void {
   notify({
     type: "info",
-    title: "Assistant added a Portal link",
-    message: `${link.title} · ${portalLinkHost(link.url)}`,
+    title: "Assistant added a project link",
+    message: `${link.title} · ${linkHost(link.url)}`,
     priority: "high",
     context: { eventKind: "agent", projectId },
     duration: UNDO_TOAST_DURATION_MS,
@@ -126,20 +126,20 @@ function offerUndo(projectId: string, link: ProjectPortalLink): void {
 }
 
 /**
- * A project's own Portal launchpad links (#17091), for the Daintree Assistant
- * to fill in from what it knows of the project's environments. None of these
- * opens a tab, shows the Portal or moves focus: a link is only offered in the
- * launchpad. The tool sets keep them to the Assistant, and the Assistant to
- * the links it added.
+ * A project's own links (#17091), for the Daintree Assistant to fill in from
+ * what it knows of the project's environments. None of these opens a page or
+ * moves focus: a link is only offered wherever the project's links are shown.
+ * The tool sets keep them to the Assistant, and the Assistant to the links it
+ * added.
  */
-export function registerProjectPortalLinkActions(actions: ActionRegistry): void {
-  actions.set("portal.projectLinks.list", () =>
+export function registerProjectLinkActions(actions: ActionRegistry): void {
+  actions.set("project.links.list", () =>
     defineAction({
-      id: "portal.projectLinks.list",
-      title: "List project Portal links",
+      id: "project.links.list",
+      title: "List project links",
       description:
-        "List this project's Portal launchpad links in order, with each id and whether you added it. You can change or remove only the links you added.",
-      category: "portal",
+        "List this project's links in order, with each id and whether you added it. You can change or remove only the links you added.",
+      category: "project",
       kind: "query",
       danger: "safe",
       denyPluginDispatch: true,
@@ -156,18 +156,18 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       },
       run: async (_args, ctx) => {
         const settings = await projectClient.getSettings(projectFor(ctx));
-        return { links: (settings.portalLinks ?? []).map(toResult) };
+        return { links: (settings.links ?? []).map(toResult) };
       },
     })
   );
 
-  actions.set("portal.projectLinks.add", () =>
+  actions.set("project.links.add", () =>
     defineAction({
-      id: "portal.projectLinks.add",
-      title: "Add project Portal link",
+      id: "project.links.add",
+      title: "Add project link",
       description:
-        "Add a named link, such as a staging site or CI dashboard, to this project's Portal launchpad. Opens nothing; the user sees it marked as yours, with an Undo. List first: adding twice makes two.",
-      category: "portal",
+        "Add a named link, such as a staging site or CI dashboard, to this project. Opens nothing; the user sees it marked as yours, with an Undo. List first: adding twice makes two.",
+      category: "project",
       kind: "command",
       danger: "safe",
       denyPluginDispatch: true,
@@ -185,7 +185,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       run: async ({ title, url }, ctx) => {
         const actor = actorFor(ctx);
         const projectId = projectFor(ctx);
-        const result = await changeProjectPortalLinks({
+        const result = await changeProjectLinks({
           projectId,
           actor,
           change: { op: "add", title, url },
@@ -197,13 +197,13 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
     })
   );
 
-  actions.set("portal.projectLinks.update", () =>
+  actions.set("project.links.update", () =>
     defineAction({
-      id: "portal.projectLinks.update",
-      title: "Update project Portal link",
+      id: "project.links.update",
+      title: "Update project link",
       description:
-        "Rename or readdress a link you added to this project's Portal launchpad, under the same address rule as adding. A link the user added or has since edited is refused as theirs.",
-      category: "portal",
+        "Rename or readdress a link you added to this project, under the same address rule as adding. A link the user added or has since edited is refused as theirs.",
+      category: "project",
       kind: "command",
       danger: "safe",
       denyPluginDispatch: true,
@@ -224,7 +224,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       },
       run: async ({ id, title, url }, ctx) => {
         const actor = actorFor(ctx);
-        const result = await changeProjectPortalLinks({
+        const result = await changeProjectLinks({
           projectId: projectFor(ctx),
           actor,
           change: {
@@ -240,13 +240,13 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
     })
   );
 
-  actions.set("portal.projectLinks.remove", () =>
+  actions.set("project.links.remove", () =>
     defineAction({
-      id: "portal.projectLinks.remove",
-      title: "Remove project Portal link",
+      id: "project.links.remove",
+      title: "Remove project link",
       description:
-        "Remove a link you added from this project's Portal launchpad. A link the user added or has since edited is refused as theirs; ask them to remove it in project settings.",
-      category: "portal",
+        "Remove a link you added from this project. A link the user added or has since edited is refused as theirs; ask them to remove it in project settings.",
+      category: "project",
       kind: "command",
       danger: "safe",
       denyPluginDispatch: true,
@@ -263,7 +263,7 @@ export function registerProjectPortalLinkActions(actions: ActionRegistry): void 
       },
       run: async ({ id }, ctx) => {
         const actor = actorFor(ctx);
-        const result = await changeProjectPortalLinks({
+        const result = await changeProjectLinks({
           projectId: projectFor(ctx),
           actor,
           change: { op: "remove", id },

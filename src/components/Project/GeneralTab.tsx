@@ -36,7 +36,7 @@ import { findDevServerCandidate } from "@/utils/devServerDetection";
 import { PresentationFeaturesSection } from "./PresentationFeaturesSection";
 import { LauncherPresentationSection } from "./LauncherPresentationSection";
 import { FactSeparator } from "@/components/ui/FactSeparator";
-import { ProjectPortalLinksSection } from "./ProjectPortalLinksSection";
+import { ProjectLinksSection } from "./ProjectLinksSection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -730,7 +730,7 @@ export function GeneralTab({
         </SettingsGroup>
       </SettingsSection>
 
-      {projectId && <ProjectPortalLinksSection projectId={projectId} />}
+      {projectId && <ProjectLinksSection projectId={projectId} />}
 
       <SettingsSection
         id="project-agent-integrations"

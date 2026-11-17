@@ -1,8 +1,8 @@
 import { create, type StateCreator } from "zustand";
 import type {
-  ProjectPortalLink,
-  ProjectPortalLinksChangePayload,
-  ProjectPortalLinksChangeResult,
+  ProjectLink,
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
   ProjectSettings,
   RunCommand,
 } from "@shared/types";
@@ -72,9 +72,9 @@ const settingsSnapshotCache = new Map<string, SettingsSnapshot>();
 // save made while one was in flight must survive its older settings read.
 let latestLoadRequest = 0;
 let settingsRevision = 0;
-// Bumped only when the cached Portal links change, so a links read can tell
+// Bumped only when the cached project links change, so a links read can tell
 // a links change apart from any other settings write landing meanwhile.
-let portalLinksRevision = 0;
+let linksRevision = 0;
 // The links revision the cached settings hold. Set only when a patch lands on
 // cached settings: one queued during a first load reaches it through the queue,
 // and a whole-settings copy installed meanwhile holds no newer links.
@@ -135,7 +135,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
 
     const request = ++latestLoadRequest;
     const revisionAtStart = settingsRevision;
-    const linksRevisionAtStart = portalLinksRevision;
+    const linksRevisionAtStart = linksRevision;
 
     try {
       const [data, detected] = await Promise.all([
@@ -156,7 +156,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       );
       // Links main returned while this read was out are at least as new as it.
       if (cachedLinksRevision > linksRevisionAtStart && current) {
-        settings = withPortalLinks(settings, current.portalLinks);
+        settings = withLinks(settings, current.links);
       }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
@@ -215,9 +215,9 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
         settings.browserAllowedHosts
       );
       let next = browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings;
-      // Main keeps the stored Portal links through a whole save, so the cache
-      // keeps its own; only `patchCachedProjectPortalLinks` changes them.
-      if (state.settings) next = withPortalLinks(next, state.settings.portalLinks);
+      // Main keeps the stored project links through a whole save, so the cache
+      // keeps its own; only `patchCachedProjectLinks` changes them.
+      if (state.settings) next = withLinks(next, state.settings.links);
       return {
         settings: next,
         detectedRunners: state.allDetectedRunners.filter(
@@ -299,78 +299,78 @@ export function patchCachedProjectSettings(
   state.setSettings({ ...state.settings, ...patch });
 }
 
-function withPortalLinks(
+function withLinks(
   settings: ProjectSettings,
-  portalLinks: ProjectPortalLink[] | undefined
+  links: ProjectLink[] | undefined
 ): ProjectSettings {
-  if (settings.portalLinks === portalLinks) return settings;
+  if (settings.links === links) return settings;
   const next = { ...settings };
-  if (portalLinks === undefined) delete next.portalLinks;
-  else next.portalLinks = portalLinks;
+  if (links === undefined) delete next.links;
+  else next.links = links;
   return next;
 }
 
 /**
- * Put the Portal links main returned from a change into the cached settings,
+ * Put the project links main returned from a change into the cached settings,
  * the one way they change there: a whole-settings update keeps the cached
  * list, since its copy may predate the change. No-op unless the store holds
  * the project the change was for; while that project's settings are still
  * loading, the list waits for the load to land.
  */
-export function patchCachedProjectPortalLinks(
+export function patchCachedProjectLinks(
   projectId: string,
-  portalLinks: ProjectPortalLink[]
+  links: ProjectLink[]
 ): void {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId) return;
-  portalLinksRevision++;
+  linksRevision++;
   if (!state.settings) {
     settingsRevision++;
     const queued = patchesAwaitingLoad.get(projectId) ?? [];
-    queued.push({ patch: { portalLinks }, revision: settingsRevision });
+    queued.push({ patch: { links }, revision: settingsRevision });
     patchesAwaitingLoad.set(projectId, queued);
     return;
   }
   // Not a whole-settings write: a revalidation in flight keeps the rest of
   // what it read, and takes these links in place of its own.
-  cachedLinksRevision = portalLinksRevision;
+  cachedLinksRevision = linksRevision;
   useProjectSettingsStore.setState({
-    settings: withPortalLinks(state.settings, portalLinks),
+    settings: withLinks(state.settings, links),
   });
 }
 
 /**
- * One change to a project's Portal links through main, the list's only
+ * One change to a project's links through main, the list's only
  * writer, with the list it saved put into the cached settings.
  */
-export async function changeProjectPortalLinks(
-  payload: ProjectPortalLinksChangePayload
-): Promise<ProjectPortalLinksChangeResult> {
-  const result = await projectClient.changePortalLinks(payload);
-  if (result.saved) patchCachedProjectPortalLinks(payload.projectId, result.links);
+export async function changeProjectLinks(
+  payload: ProjectLinksChangePayload
+): Promise<ProjectLinksChangeResult> {
+  const result = await projectClient.changeLinks(payload);
+  if (result.saved) patchCachedProjectLinks(payload.projectId, result.links);
   return result;
 }
 
 /**
- * Re-read the project's Portal links from main into the cached settings. A
+ * Re-read the project's links from main into the cached settings. A
  * change made from another view of the same project, or from that project's
  * other window, reaches only its own renderer, so a launchpad shown here reads
  * main's list first. Dropped when the cached links changed while the read was
  * out: whatever changed them is at least as new.
  */
-export async function refreshCachedProjectPortalLinks(projectId: string): Promise<void> {
+export async function refreshCachedProjectLinks(projectId: string): Promise<void> {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId || !state.settings) return;
-  const revision = portalLinksRevision;
+  const revision = linksRevision;
   invalidateProjectSettingsCache(projectId);
   const settings = await projectClient.getSettings(projectId);
-  if (portalLinksRevision !== revision) return;
+  if (linksRevision !== revision) return;
   const current = useProjectSettingsStore.getState();
   if (current.projectId !== projectId || !current.settings) return;
-  const links = settings.portalLinks ?? [];
-  const cached = current.settings.portalLinks ?? [];
+  const links = settings.links ?? [];
+  const cached = current.settings.links ?? [];
   if (JSON.stringify(links) === JSON.stringify(cached)) return;
-  patchCachedProjectPortalLinks(projectId, links);
+  patchCachedProjectLinks(projectId, links);
 }
 
 /** Cleanup function for project switch */

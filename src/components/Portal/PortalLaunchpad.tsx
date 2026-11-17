@@ -1,7 +1,7 @@
 import { Globe, Settings2 } from "lucide-react";
 import { useCallback } from "react";
-import type { PortalLink, ProjectPortalLink } from "@shared/types";
-import { portalLinkHost } from "@shared/utils/projectPortalLinks";
+import type { PortalLink, ProjectLink } from "@shared/types";
+import { linkHost } from "@shared/utils/projectLinks";
 import { PortalIcon } from "./PortalIcon";
 import { isMac } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
@@ -14,11 +14,11 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 interface PortalLaunchpadProps {
   links: PortalLink[];
   /** This project's own links, shown above the chat services. */
-  projectLinks?: ProjectPortalLink[];
+  projectLinks?: ProjectLink[];
   onOpenUrl: (url: string, title: string, background?: boolean) => void;
 }
 
-const NO_PROJECT_LINKS: ProjectPortalLink[] = [];
+const NO_PROJECT_LINKS: ProjectLink[] = [];
 
 interface LaunchpadRowProps {
   id: string;
@@ -75,7 +75,7 @@ function LaunchpadRow({
             id={`portal-link-${id}-host`}
             className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
           >
-            {portalLinkHost(url)}
+            {linkHost(url)}
             {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
           </span>
         </span>
@@ -103,7 +103,7 @@ export function PortalLaunchpad({
   const openProjectLinkSettings = useCallback(() => {
     void actionService.dispatch(
       "app.settings.openTab",
-      { tab: "project:general", sectionId: "project-portal-links" },
+      { tab: "project:general", sectionId: "project-links" },
       { source: "user" }
     );
   }, []);

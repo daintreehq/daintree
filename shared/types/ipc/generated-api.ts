@@ -1837,6 +1837,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-history:peek"]["args"]
     ): Promise<IpcInvokeMap["project-history:peek"]["result"]>;
   };
+  projectLinks: {
+    change(
+      ...args: IpcInvokeMap["project-links:change"]["args"]
+    ): Promise<IpcInvokeMap["project-links:change"]["result"]>;
+  };
   projectMatch: {
     find(
       ...args: IpcInvokeMap["project-match:find"]["args"]
@@ -1850,11 +1855,6 @@ export interface GeneratedElectronAPI {
     takePendingSetup(
       ...args: IpcInvokeMap["project-match:take-pending-setup"]["args"]
     ): Promise<IpcInvokeMap["project-match:take-pending-setup"]["result"]>;
-  };
-  projectPortalLinks: {
-    change(
-      ...args: IpcInvokeMap["project-portal-links:change"]["args"]
-    ): Promise<IpcInvokeMap["project-portal-links:change"]["result"]>;
   };
   projectPresence: {
     getSnapshot(

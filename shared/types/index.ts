@@ -566,13 +566,17 @@ export type {
   PortalShowPayload,
   PortalCloseTabPayload,
   PortalNavigatePayload,
-  ProjectPortalLink,
-  ProjectPortalLinkActor,
-  ProjectPortalLinkChange,
-  ProjectPortalLinkRefusal,
-  ProjectPortalLinksChangePayload,
-  ProjectPortalLinksChangeResult,
 } from "./portal.js";
+
+// A project's own links (#17091)
+export type {
+  ProjectLink,
+  ProjectLinkActor,
+  ProjectLinkChange,
+  ProjectLinkRefusal,
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
+} from "./projectLinks.js";
 
 export {
   LINK_TEMPLATES,
