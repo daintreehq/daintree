@@ -310,4 +310,43 @@ describe("CloudMachineSection host key review", () => {
     );
     expect(connect).not.toHaveBeenCalled();
   });
+
+  it("never shows one key's refusal under a different key", async () => {
+    let reject!: (error: unknown) => void;
+    trustHostKey.mockImplementation(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    const offered = (fingerprint: string) =>
+      status({
+        ...running,
+        hostKeyReview: {
+          reason: "first-connect",
+          fingerprint,
+          keyType: "ED25519",
+          seenAt: 1,
+          previousFingerprint: null,
+          previousTrustedAt: null,
+        },
+      });
+    const view = show(offered("SHA256:first"));
+    fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+    cloud.snapshot = { providers: [], accounts: [], hosts: [offered("SHA256:second")] };
+    view.rerender(
+      <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+    );
+    await act(async () => {
+      reject(
+        Object.assign(new Error("changed"), {
+          name: "AppError",
+          code: "VALIDATION",
+          userMessage: "The machine's host key changed again since it was shown.",
+        })
+      );
+    });
+    expect(review()).toContain("SHA256:second");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

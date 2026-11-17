@@ -28,6 +28,7 @@ import {
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import {
@@ -41,6 +42,7 @@ import {
   formatSshEndpoint,
   hostKeyFingerprint,
   hostKeyTypeLabel,
+  keyscanTypeOf,
   type SshEndpoint,
 } from "./sshEndpoint.js";
 import type {
@@ -1191,12 +1193,21 @@ export class CloudHostLifecycle {
    * is refused; nothing here ever trusts a key by itself.
    */
   private async confirmedHostKey(bindingId: string, endpoint: SshEndpoint): Promise<string> {
-    let scanned: string[];
-    try {
-      scanned = await this.deps.files.scanHostKeys(endpoint);
-    } catch (error) {
-      const said = `Daintree couldn't read the machine's host key: ${error instanceof Error ? error.message : String(error)}`;
-      throw new UnusableConnectionError(said, said);
+    const scan = async (types?: string): Promise<string[]> => {
+      try {
+        return await this.deps.files.scanHostKeys(endpoint, { types });
+      } catch (error) {
+        const said = `Daintree couldn't read the machine's host key: ${formatErrorMessage(error, "ssh-keyscan failed")}`;
+        throw new UnusableConnectionError(said, said);
+      }
+    };
+    let scanned = await scan();
+    const trustedBefore = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
+    if (trustedBefore && !scanned.includes(trustedBefore)) {
+      // Each algorithm is its own connection, and one can drop while the others
+      // answer: the trusted key's absence is checked on its own before it counts.
+      const again = await scan(keyscanTypeOf(trustedBefore));
+      if (again.includes(trustedBefore)) scanned = [...scanned, trustedBefore];
     }
     // Read after the scan: the person may have trusted a key while it ran.
     const binding = this.deps.store.binding(bindingId);
@@ -1252,6 +1263,14 @@ export class CloudHostLifecycle {
     if (!binding) return;
     if (this.deps.accounts.providerUnavailable(binding.providerId) !== null) return;
     if (!confirmsHostKeys(this.deps.accounts.provider(binding.providerId))) return;
+    // A resolution already under way may have chosen the old access before the
+    // refusal; joining it would skip the look. It settles first.
+    for (let waits = 0; waits < 3; waits++) {
+      const pending = this.accessInFlight.get(bindingId);
+      if (!pending) break;
+      await pending.catch(() => {});
+    }
+    // No await from here into ensureAccess: the resolution it starts reads the cleared access.
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));
     await this.ensureAccess(bindingId, signal);
   }

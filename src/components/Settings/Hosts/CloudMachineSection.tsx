@@ -124,7 +124,10 @@ export function CloudMachineSection({
   const [busy, setBusy] = useState<"retry" | "lifetime" | "trust" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lifetimeError, setLifetimeError] = useState<string | null>(null);
-  const [trustError, setTrustError] = useState<string | null>(null);
+  // Kept with the fingerprint it was about: a different key on show is a different decision.
+  const [trustError, setTrustError] = useState<{ fingerprint: string; message: string } | null>(
+    null
+  );
   const now = useNow(status !== null);
   if (!status) return null;
   // An old reading is the last one, not the machine now: its facts say so.
@@ -199,7 +202,7 @@ export function CloudMachineSection({
       },
       (err: unknown) => {
         setBusy(null);
-        setTrustError(errorText(err, "Couldn't trust the host key"));
+        setTrustError({ fingerprint, message: errorText(err, "Couldn't trust the host key") });
       }
     );
   };
@@ -309,7 +312,11 @@ export function CloudMachineSection({
             label={review.reason === "changed" ? "Host key changed" : "Confirm host key"}
             layout="stacked"
             description={<HostKeyReviewDetails review={review} providerName={providerName} />}
-            error={trustError ? <span role="alert">{trustError}</span> : undefined}
+            error={
+              trustError?.fingerprint === review.fingerprint ? (
+                <span role="alert">{trustError.message}</span>
+              ) : undefined
+            }
             control={
               <SettingsRowActions>
                 <Button

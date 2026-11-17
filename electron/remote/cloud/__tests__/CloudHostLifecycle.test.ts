@@ -155,8 +155,11 @@ async function setup(
   const state = { machine: resource(initial) };
   const provider = fakeProvider(state, options.sshTrust, options.transport);
   options.adapt?.(provider);
-  /** What ssh-keyscan prints for the machine. */
-  const scan = { output: `[203.0.113.10]:22001 ${HOST_KEY}\n` };
+  /** What ssh-keyscan prints for the machine; `byTypes` answers a scan of named algorithms. */
+  const scan: { output: string; byTypes: Record<string, string> } = {
+    output: `[203.0.113.10]:22001 ${HOST_KEY}\n`,
+    byTypes: {},
+  };
   let backendValue: unknown;
   const backend = {
     get: () => backendValue,
@@ -171,7 +174,9 @@ async function setup(
   const disconnect = vi.fn(async () => {});
   const run = vi.fn(async (cmd: string, args: string[]) => {
     if (cmd.endsWith("ssh-keyscan")) {
-      return { code: 0, stdout: scan.output, stderr: "", spawnError: null, timedOut: false };
+      const types = args[args.indexOf("-t") + 1]!;
+      const stdout = scan.byTypes[types] ?? scan.output;
+      return { code: 0, stdout, stderr: "", spawnError: null, timedOut: false };
     }
     const keyPath = args[args.length - 1]!;
     await fs.writeFile(keyPath, "PRIVATE");
@@ -433,19 +438,80 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     expect(status.hostKeyFingerprint).toBe(hostKeyFingerprint(HOST_KEY));
   });
 
-  it("connects again on the trusted key after a restart and a stop and start", async () => {
+  it("keeps a trusted key the machine still presents, through a restart and a stop and start", async () => {
     const env = await confirming();
-    await trusted(env);
+    env.scan.output = `203.0.113.10 ${RSA_KEY}\n`;
+    await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+    await env.lifecycle.trustHostKey("build", hostKeyFingerprint(RSA_KEY));
+    await env.lifecycle.ensureAccess(env.bindingId);
     const { lifecycle: next } = env.restart(env.lifecycle);
     env.state.machine = resource({ machine: "stopped", rawState: "archived" });
     await next.startMachine("build");
-    // The machine also offers a key it would prefer; the one trusted is kept.
-    env.scan.output = `# 203.0.113.10:22001 SSH-2.0-OpenSSH_9.6\n203.0.113.10 ${RSA_KEY}\n[203.0.113.10]:22001 ${HOST_KEY}\n`;
+    // It now also offers a key a first connect would prefer; the one trusted is kept.
+    env.scan.output = `# 203.0.113.10:22001 SSH-2.0-OpenSSH_9.6\n[203.0.113.10]:22001 ${HOST_KEY}\n203.0.113.10 ${RSA_KEY}\n`;
     const scansBefore = keyscans(env.run);
     const route = await next.ensureAccess(env.bindingId);
     expect(keyscans(env.run)).toBe(scansBefore + 1);
-    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${RSA_KEY}\n`);
     expect(next.statuses()[0]!.hostKeyReview).toBeNull();
+  });
+
+  it("reuses fresh access only while it pins the key that is still trusted", async () => {
+    const env = await confirming();
+    await trusted(env);
+    const scansBefore = keyscans(env.run);
+    await env.lifecycle.ensureAccess(env.bindingId);
+    expect(keyscans(env.run)).toBe(scansBefore);
+    // Access left from a key that is no longer the trusted one never skips the look.
+    env.store.updateBinding(env.bindingId, (current) => ({ ...current, trustedHostKey: null }));
+    const refused = await env.lifecycle.ensureAccess(env.bindingId).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnusableConnectionError);
+    expect(keyscans(env.run)).toBe(scansBefore + 1);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("first-connect");
+  });
+
+  it("asks for confirmation even when the provider's API names a key", async () => {
+    const env = await confirming();
+    vi.mocked(env.provider.authorizeSsh).mockResolvedValue({
+      user: "user",
+      endpoint: { host: "203.0.113.10", port: 22001 },
+      hostKey: HOST_KEY,
+    });
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toBeInstanceOf(
+      UnusableConnectionError
+    );
+    expect(await env.files.exists(env.bindingId)).toBe(false);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("first-connect");
+  });
+
+  it("checks a trusted key a partial scan missed before calling it a change", async () => {
+    const env = await confirming();
+    const route = await trusted(env);
+    // The ED25519 connection dropped while RSA answered; asked on its own, it answers.
+    env.scan.output = `203.0.113.10 ${RSA_KEY}\n`;
+    env.scan.byTypes = { ed25519: `[203.0.113.10]:22001 ${HOST_KEY}\n` };
+    await env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true });
+    expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+
+    // Asked on its own and still missing: the machine no longer has it.
+    env.scan.byTypes = { ed25519: "" };
+    await expect(
+      env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true })
+    ).rejects.toThrow(/identity changed/i);
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview?.fingerprint).toBe(
+      hostKeyFingerprint(RSA_KEY)
+    );
+  });
+
+  it("refuses two different keys of one kind without offering either", async () => {
+    const env = await confirming();
+    env.scan.output = `203.0.113.10 ${HOST_KEY}\n203.0.113.10 ${NEW_KEY}\n`;
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+      /two different host keys/
+    );
+    expect(env.store.bindings()[0]!.offeredHostKey).toBeNull();
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
   });
 
   it("refuses a changed key, says the identity changed, and keeps the old pin", async () => {
@@ -490,6 +556,21 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
   });
 
+  it("drops an offered key once the machine presents the trusted one again", async () => {
+    const env = await confirming();
+    await trusted(env);
+    env.scan.output = `[203.0.113.10]:22001 ${NEW_KEY}\n`;
+    await env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true }).catch(() => {});
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("changed");
+    env.scan.output = `[203.0.113.10]:22001 ${HOST_KEY}\n`;
+    await env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true });
+    expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+    await expect(
+      env.lifecycle.trustHostKey("build", hostKeyFingerprint(NEW_KEY))
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.store.bindings()[0]!.trustedHostKey?.key).toBe(HOST_KEY);
+  });
+
   it("names the change when ssh itself refuses the key between looks", async () => {
     const env = await confirming();
     await trusted(env);
@@ -498,6 +579,28 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     expect(refused).toBeInstanceOf(UnusableConnectionError);
     expect((refused as Error).message).toMatch(/identity changed/i);
     expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("changed");
+  });
+
+  it("looks again after a refusal even while a dial on the old access is under way", async () => {
+    const env = await confirming();
+    await trusted(env);
+    env.scan.output = `[203.0.113.10]:22001 ${NEW_KEY}\n`;
+    let release!: (value: boolean) => void;
+    const exists = vi.spyOn(env.files, "exists");
+    exists.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        })
+    );
+    const dial = env.lifecycle.ensureAccess(env.bindingId);
+    await vi.waitFor(() => expect(exists).toHaveBeenCalled());
+    const recheck = env.lifecycle.recheckHostKey(env.bindingId).catch((e: unknown) => e);
+    release(true);
+    await dial;
+    const refused = await recheck;
+    expect(refused).toBeInstanceOf(UnusableConnectionError);
+    expect((refused as Error).message).toMatch(/identity changed/i);
   });
 
   it("retries a machine that presents no key yet instead of refusing it", async () => {
@@ -529,9 +632,16 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     await env.lifecycle.ensureAccess(bindingId);
     await env.lifecycle.recheckHostKey(bindingId);
     expect(keyscans(env.run)).toBe(0);
-    await expect(env.lifecycle.trustHostKey("build", "SHA256:x")).rejects.toMatchObject({
-      code: "VALIDATION",
-    });
+    // Even with a key on offer, there is nothing for the person to vouch for.
+    env.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      offeredHostKey: { key: HOST_KEY, at: 1 },
+    }));
+    await expect(
+      env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY))
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.store.bindings()[0]!.trustedHostKey).toBeNull();
+    env.store.updateBinding(bindingId, (current) => ({ ...current, offeredHostKey: null }));
 
     // Its API naming no key is a failed setup, never a first-connect prompt.
     vi.mocked(env.provider.authorizeSsh).mockResolvedValueOnce({

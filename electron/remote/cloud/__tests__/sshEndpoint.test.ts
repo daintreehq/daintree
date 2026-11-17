@@ -5,6 +5,7 @@ import {
   hostKeyFingerprint,
   hostKeyTypeLabel,
   isSafeSshUser,
+  keyscanTypeOf,
   normalizeHostKey,
   parseKeyscanOutput,
   parseSshEndpoint,
@@ -116,5 +117,9 @@ describe("parseKeyscanOutput", () => {
 
   it("names each algorithm as ssh-keygen -l does", () => {
     expect([ed25519, ecdsa, rsa].map(hostKeyTypeLabel)).toEqual(["ED25519", "ECDSA", "RSA"]);
+  });
+
+  it("asks ssh-keyscan for each key's own algorithm", () => {
+    expect([ed25519, ecdsa, rsa].map(keyscanTypeOf)).toEqual(["ed25519", "ecdsa", "rsa"]);
   });
 });

@@ -102,6 +102,14 @@ export function hostKeyTypeLabel(normalizedKey: string): string {
   return type;
 }
 
+/** The ssh-keyscan `-t` name that fetches this key's algorithm. */
+export function keyscanTypeOf(normalizedKey: string): string {
+  const type = normalizedKey.split(" ")[0] ?? "";
+  if (type === "ssh-ed25519") return "ed25519";
+  if (type.startsWith("ecdsa-")) return "ecdsa";
+  return "rsa";
+}
+
 /** `SHA256:…` as ssh-keygen -l prints it. */
 export function hostKeyFingerprint(normalizedKey: string): string {
   const blob = Buffer.from(normalizedKey.split(" ")[1] ?? "", "base64");

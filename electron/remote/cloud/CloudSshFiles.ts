@@ -176,11 +176,22 @@ export class CloudSshFiles {
    * person confirms one, and ssh then pins it. Empty when the machine didn't
    * answer with any.
    */
-  async scanHostKeys(endpoint: SshEndpoint, signal?: AbortSignal): Promise<string[]> {
+  async scanHostKeys(
+    endpoint: SshEndpoint,
+    options: { types?: string; signal?: AbortSignal } = {}
+  ): Promise<string[]> {
     const scanned = await this.run(
       sshKeyscanExecutable(),
-      ["-T", "10", "-p", String(endpoint.port), "-t", "ed25519,ecdsa,rsa", endpoint.host],
-      { timeoutMs: 20_000, signal }
+      [
+        "-T",
+        "10",
+        "-p",
+        String(endpoint.port),
+        "-t",
+        options.types ?? "ed25519,ecdsa,rsa",
+        endpoint.host,
+      ],
+      { timeoutMs: 20_000, signal: options.signal }
     );
     if (scanned.spawnError) throw new Error(`ssh-keyscan couldn't run: ${scanned.spawnError}`);
     return parseKeyscanOutput(scanned.stdout);

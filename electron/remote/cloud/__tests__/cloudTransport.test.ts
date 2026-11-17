@@ -23,10 +23,12 @@ function harness(open: LinkTransport["open"]) {
   };
   const ssh = vi.fn((): LinkTransport => ({ open }));
   const transports = createCloudTransports({ access: () => access, ssh });
+  const ensureRunning = vi.fn(async () => true);
   return {
     access,
     ssh,
-    transport: transports.transportFor("cb_abcdefgh12"),
+    ensureRunning,
+    transport: transports.transportFor("cb_abcdefgh12", ensureRunning),
     forget: () => transports.forget("cb_abcdefgh12"),
     setGeneration: (next: string) => {
       generation = next;
@@ -52,6 +54,16 @@ describe("createCloudTransports", () => {
     env.forget();
     await env.transport.open(signal());
     expect(env.ssh).toHaveBeenCalledTimes(3);
+  });
+
+  it("hands the dial's signal and options through to ssh on the resolved route", async () => {
+    const open = vi.fn(async () => ({}) as LinkTransportConnection);
+    const env = harness(open);
+    const dialSignal = signal();
+    const options = { fresh: true, mayStart: false };
+    await env.transport.open(dialSignal, options);
+    expect(env.ssh).toHaveBeenCalledWith(ROUTE, env.ensureRunning);
+    expect(open).toHaveBeenCalledWith(dialSignal, options);
   });
 
   it("looks at the key again when ssh refuses it, and reports the change it finds", async () => {
