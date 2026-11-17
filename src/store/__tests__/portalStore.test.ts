@@ -450,6 +450,18 @@ describe("portalStore persistence migration", () => {
     });
     const recovered = (await import("../portalStore")).usePortalStore;
     expect(recovered.getState().links.some((l) => l.id === "system-grok")).toBe(true);
+
+    // And a backup that still holds the person's Grok link keeps the default out.
+    vi.resetModules();
+    installLocalStorageWith({
+      [STORAGE_KEY]: JSON.stringify({
+        state: { links: [systemLink("claude", "https://claude.ai/new")] },
+      }),
+      "daintree-global-links": "{not json",
+      "daintree-global-links.__bak": globalPayload(["https://grok.com/"]),
+    });
+    const fromBackup = (await import("../portalStore")).usePortalStore;
+    expect(fromBackup.getState().links.some((l) => l.id === "system-grok")).toBe(false);
   });
 
   it("still runs the discovered→system merge migration after version check", async () => {
