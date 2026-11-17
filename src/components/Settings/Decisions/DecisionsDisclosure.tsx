@@ -53,9 +53,9 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         <span className="font-medium text-text-primary">Whether you&apos;re at this computer.</span>{" "}
         While desktop notifications are on, this computer tells your relay whether you&apos;re here,
         so it can wait up to two minutes before notifying your phone of a new question, and not
-        notify it at all if the question is answered first. It&apos;s only a yes or no, which the
-        relay can read. Remote Hosts never send it. It&apos;s on unless you turn it off under
-        Questions.
+        notify it at all if it hears the question was answered first. It&apos;s only a yes or no,
+        which the relay can read. Remote Hosts never send it. It&apos;s on unless you turn it off
+        under Questions.
       </li>
       <li>
         <span className="font-medium text-text-primary">

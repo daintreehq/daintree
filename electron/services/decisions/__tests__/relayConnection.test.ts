@@ -2215,6 +2215,26 @@ describe("presence over a connection (#17240)", () => {
     expect(relay.requests).not.toContain("PUT /api/v1/presence");
   });
 
+  it("tells the relay the person left once the store stops writing, since no question can show", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { presence } = presenceState();
+    let faulted = false;
+    const store = Object.assign(new MemoryLocalStore(), { isFaulted: () => faulted });
+    const h = await harness({ store, wrapFetch: relay.wrapFetch, overrides: { presence } });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    faulted = true;
+    // The library may renew once before the next read sees the fault; that read ends the lease.
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS);
+    await vi.waitFor(() => expect(relay.reports.at(-1)).toBe(false));
+    const sent = relay.reports.length;
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 3);
+    expect(relay.reports).toHaveLength(sent);
+  });
+
   it("stops following presence when the connection stops", async () => {
     const relay = presenceRelay(["presence-v1"]);
     const read = vi.fn<() => UserPresence>(() => "present");

@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ powerMonitor: { on: vi.fn(), off: vi.fn() } }));
 
+import { powerMonitor } from "electron";
+import { PRESENCE_REPORT_MS } from "@daintreehq/decisions-client";
 import type { UserPresence } from "../../userPresence.js";
 import { DesktopPresence, PRESENCE_TICK_MS, type PresenceWatchers } from "../desktopPresence.js";
+import {
+  resetPowerPolicyForTesting,
+  updatePowerObservations,
+} from "../../../window/powerPolicy.js";
 
 function harness(initial: UserPresence = "present") {
   let presence: UserPresence = initial;
@@ -186,5 +192,64 @@ describe("DesktopPresence", () => {
     expect(report).toHaveBeenCalledTimes(2);
     presence.stop();
     warn.mockRestore();
+  });
+});
+
+describe("DesktopPresence on Electron's own signals", () => {
+  afterEach(() => {
+    resetPowerPolicyForTesting();
+    vi.mocked(powerMonitor.on).mockClear();
+    vi.mocked(powerMonitor.off).mockClear();
+  });
+
+  /** The listener the reporter gave `powerMonitor` for `event`. */
+  function listener(event: string): () => void {
+    const call = vi.mocked(powerMonitor.on).mock.calls.find(([name]) => name === event);
+    if (!call) throw new Error(`No ${event} listener`);
+    return call[1] as () => void;
+  }
+
+  it("reads again on suspend, resume, a lock or unlock and a focus change, and lets them all go on stop", () => {
+    let presence: UserPresence = "present";
+    const reports: boolean[] = [];
+    const reporter = new DesktopPresence({
+      read: () => presence,
+      allowed: () => true,
+      report: (present) => reports.push(present),
+    });
+    reporter.update();
+    expect(reports).toEqual([true]);
+    const suspend = listener("suspend");
+    const resume = listener("resume");
+
+    suspend();
+    expect(reports).toEqual([true, false]);
+    resume();
+    expect(reports).toEqual([true, false, true]);
+
+    presence = "away";
+    updatePowerObservations({ screenLocked: true });
+    expect(reports).toEqual([true, false, true, false]);
+    presence = "present";
+    updatePowerObservations({ screenLocked: false });
+    expect(reports).toEqual([true, false, true, false, true]);
+
+    presence = "away";
+    updatePowerObservations({ anyWindowFocused: false });
+    expect(reports).toEqual([true, false, true, false, true, false]);
+    // A power source change says nothing about the person.
+    presence = "present";
+    updatePowerObservations({ onBattery: true });
+    expect(reports).toHaveLength(6);
+
+    reporter.stop();
+    expect(powerMonitor.off).toHaveBeenCalledWith("suspend", suspend);
+    expect(powerMonitor.off).toHaveBeenCalledWith("resume", resume);
+    updatePowerObservations({ anyWindowFocused: true });
+    expect(reports).toHaveLength(6);
+  });
+
+  it("reports present at least twice inside the client's freshness window, so a lost report can't lapse it", () => {
+    expect(PRESENCE_TICK_MS * 2).toBeLessThanOrEqual(PRESENCE_REPORT_MS);
   });
 });

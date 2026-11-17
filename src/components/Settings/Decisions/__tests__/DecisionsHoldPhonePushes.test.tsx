@@ -122,6 +122,18 @@ describe("Decisions hold phone pushes switch (#17240)", () => {
     expect(resetButton()).toBeNull();
   });
 
+  it("turns on again from the switch itself", async () => {
+    setHoldPhonePushes.mockResolvedValueOnce({ state: "connected", revision: 2 });
+    await renderSection({ state: "connected", holdPhonePushes: false });
+    expect(on()).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(holdSwitch());
+    });
+    expect(setHoldPhonePushes).toHaveBeenCalledExactlyOnceWith(true);
+    expect(on()).toBe("true");
+  });
+
   it("shows the change being saved and takes no other until main answers", async () => {
     const saving = deferred<DecisionsStatus>();
     setHoldPhonePushes.mockReturnValueOnce(saving.promise);

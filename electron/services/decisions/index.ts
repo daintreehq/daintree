@@ -1,3 +1,4 @@
+import { Notification } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -490,6 +491,9 @@ export function onDecisionsHostQuestionsChanged(listener: () => void): () => voi
   };
 }
 
+/** The owner lifetime's question notifications, the latest made; following only while they can show one. */
+let questionNotifier: QuestionNotifier | null = null;
+
 /**
  * Desktop notifications for the questions agents ask (#17232), and for the
  * follow-ups that want a reply and the answers delivery stops on (#17235),
@@ -514,6 +518,8 @@ function notifyQuestions(store: MetaStore): QuestionNotifications {
     presenter?.decisionQuestionNotificationsOn(projectId) ?? false;
   const close = (key: string) => presenter?.closeDecisionQuestion(key);
   const asked = new QuestionNotifier({
+    // Presence holds the phone only while a question can show here (#17240).
+    onFollowing: () => service?.presenceChanged(),
     store,
     questions,
     readOpeningLine,
@@ -534,6 +540,7 @@ function notifyQuestions(store: MetaStore): QuestionNotifications {
     showStall: (question, key) => presenter?.notifyDecisionStall(question, key),
     close,
   });
+  questionNotifier = asked;
   void asked.start();
   void thread.start();
   return {
@@ -813,18 +820,25 @@ const snapshotDeps: DecisionsSnapshotDeps = {
 
 /**
  * Whether the person's presence may be reported now (#17240): Decisions on in
- * this run, holding phone pushes on, and desktop notifications on, so a
- * question held from the phone is shown here. Read from the store each time,
- * so it answers false as soon as any of them is turned off.
+ * this run, holding phone pushes on, and #17232's question notifications able
+ * to show a question here: turned on, supported by the system, and following
+ * this lifetime's questions. Read each time, so it answers false as soon as
+ * any of them stops holding; a setting that can't be read holds nothing.
  */
 function presenceAllowed(): boolean {
-  const settings = readDecisionsSettings(store);
-  return (
-    !shutDown &&
-    settings.enabled &&
-    settings.holdPhonePushes &&
-    store.get("notificationSettings")?.enabled !== false
-  );
+  try {
+    const settings = readDecisionsSettings(store);
+    return (
+      !shutDown &&
+      settings.enabled &&
+      settings.holdPhonePushes &&
+      store.get("notificationSettings")?.enabled !== false &&
+      questionNotifier?.following === true &&
+      Notification.isSupported()
+    );
+  } catch {
+    return false;
+  }
 }
 
 const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
@@ -2031,6 +2045,8 @@ export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<Decisions
     if (current.holdPhonePushes) {
       writeDecisionsSettings(store, { ...current, holdPhonePushes: false });
       service?.presenceChanged();
+      // Every window shows it off now, not once the queue reaches it.
+      publishStatus();
     }
   }
   return serialize(async () => {
@@ -3100,6 +3116,8 @@ export function _resetDecisionsForTesting(): void {
   setupCheckEpoch = 0;
   service = null;
   creating = null;
+  questionNotifier = null;
+  holdPhonePushesOffs = 0;
   shutDown = false;
   transitions = Promise.resolve();
   statusRevision = 0;

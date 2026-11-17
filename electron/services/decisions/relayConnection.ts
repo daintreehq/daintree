@@ -307,10 +307,13 @@ export class RelayConnection {
     this.snapshots = options.snapshots
       ? new PaneSnapshots({ ...options.snapshots, store: this.store, now: this.now })
       : null;
+    const presence = options.presence;
     this.presence =
-      options.presence && (options.role ?? "owner-desktop") === "owner-desktop"
+      presence && (options.role ?? "owner-desktop") === "owner-desktop"
         ? new DesktopPresence({
-            ...options.presence,
+            ...presence,
+            // A store that stopped writing can't record a question's notification, so none shows.
+            allowed: () => !this.o.store.isFaulted?.() && presence.allowed(),
             report: (present) => this.reportPresence(present),
           })
         : null;

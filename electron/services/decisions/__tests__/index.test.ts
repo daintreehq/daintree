@@ -36,7 +36,17 @@ const toastAudience = vi.hoisted(() => ({ present: true }));
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
-vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
+// Whether the system can show a native notification (#17240).
+const nativeNotifications = vi.hoisted(() => ({ supported: true }));
+// Whether the fake store holds a question notification record the notifier can read (#17240).
+const notificationRecord = vi.hoisted(() => ({ readable: false }));
+
+vi.mock("electron", () => ({
+  net: { fetch: netFetch },
+  app: {},
+  safeStorage: {},
+  Notification: { isSupported: () => nativeNotifications.supported },
+}));
 
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
@@ -431,6 +441,9 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
             listQuestions: async () => [],
+            ...(notificationRecord.readable
+              ? { getMeta: async () => "[]", setMeta: async () => {} }
+              : {}),
           } as never;
         },
       });
@@ -579,6 +592,8 @@ describe("Decisions entry", () => {
     saved.value = undefined;
     savedHost.value = undefined;
     savedNotifications.value = { enabled: true };
+    nativeNotifications.supported = true;
+    notificationRecord.readable = false;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
@@ -1822,28 +1837,36 @@ describe("Decisions entry", () => {
     });
 
     it("reports presence only while Decisions, the switch and desktop notifications are on, telling the connection of each turn", async () => {
+      notificationRecord.readable = true;
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const connection = connections.at(-1)!;
       const presence = connection.options.presence!;
-      // On by default, and with nothing new to agree to.
-      expect(presence.allowed()).toBe(true);
+      // On by default, with nothing new to agree to, once question notifications follow the lifetime.
+      await vi.waitFor(() => expect(presence.allowed()).toBe(true));
+      // Whether the connection was there yet to hear it start following, it reads the gate on loading.
+      const told = connection.presenceChanged;
       expect((await getDecisionsStatus()).holdPhonePushes).toBeUndefined();
 
       savedNotifications.value = { enabled: false };
       notificationSettingsWritten();
-      expect(connection.presenceChanged).toBe(1);
+      expect(connection.presenceChanged).toBe(told + 1);
       expect(presence.allowed()).toBe(false);
 
       savedNotifications.value = { enabled: true };
       notificationSettingsWritten();
-      expect(connection.presenceChanged).toBe(2);
+      expect(connection.presenceChanged).toBe(told + 2);
       expect(presence.allowed()).toBe(true);
+
+      // A system that can't show a notification can't tell the person first.
+      nativeNotifications.supported = false;
+      expect(presence.allowed()).toBe(false);
+      nativeNotifications.supported = true;
 
       // Off reaches the connection before the queue gets to it.
       const off = setDecisionsHoldPhonePushes(false);
       expect(presence.allowed()).toBe(false);
-      expect(connection.presenceChanged).toBe(3);
+      expect(connection.presenceChanged).toBe(told + 3);
       expect((await off).holdPhonePushes).toBe(false);
       expect(saved.value).toEqual({
         ...defaultDecisionsSettings(),
@@ -1860,13 +1883,53 @@ describe("Decisions entry", () => {
       notificationSettingsWritten();
       expect(presence.allowed()).toBe(false);
 
+      const beforeOn = connection.presenceChanged;
       const on = await setDecisionsHoldPhonePushes(true);
       expect(on.holdPhonePushes).toBeUndefined();
       expect(presence.allowed()).toBe(true);
+      expect(connection.presenceChanged).toBeGreaterThan(beforeOn);
       expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(true);
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("holdPhonePushes"));
 
-      await stopDecisions();
+      // Decisions turned off, with the app still running.
+      await setDecisionsEnabled(false);
       expect(presence.allowed()).toBe(false);
+    });
+
+    it("holds nothing for a lifetime whose question notifications can't follow its questions", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const presence = connections.at(-1)!.options.presence!;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      warn.mockRestore();
+    });
+
+    it("shows every window the switch off before the queue reaches it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      let answered = false;
+      const off = setDecisionsHoldPhonePushes(false).then((status) => {
+        answered = true;
+        return status;
+      });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+      );
+      expect(answered).toBe(false);
+
+      closed();
+      const [, , status] = await Promise.all([stopping, enabling, off]);
+      expect(status.holdPhonePushes).toBe(false);
     });
 
     it("lets a turn off stand over a turn on queued before it", async () => {
