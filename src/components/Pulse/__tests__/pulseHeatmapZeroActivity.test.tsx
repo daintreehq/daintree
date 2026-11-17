@@ -462,13 +462,25 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
 
   // jsdom has no layout, so say what the finger landed on, top to bottom.
   async function tapCard(card: Element, hit: Element[]) {
+    const elementsFromPoint = vi.fn((_x: number, _y: number) => hit);
     Object.defineProperty(document, "elementsFromPoint", {
       configurable: true,
-      value: () => hit,
+      value: elementsFromPoint,
     });
     try {
       fireEvent.pointerDown(card, { pointerType: "touch" });
-      click(card, "touch");
+      fireEvent(
+        card,
+        new PointerEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          pointerType: "touch",
+          clientX: 12,
+          clientY: 34,
+        })
+      );
+      // The day is read where the finger came down.
+      expect(elementsFromPoint).toHaveBeenCalledWith(12, 34);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
@@ -713,12 +725,15 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
 
     const outside = document.createElement("button");
     document.body.appendChild(outside);
-    fireEvent.blur(cell, { relatedTarget: outside });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    outside.remove();
-    expect(shown()).not.toContain("5 commits");
+    try {
+      fireEvent.blur(cell, { relatedTarget: outside });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(shown()).not.toContain("5 commits");
+    } finally {
+      outside.remove();
+    }
   });
 
   it("closes on one tap after the window hands focus back to the tapped day", async () => {

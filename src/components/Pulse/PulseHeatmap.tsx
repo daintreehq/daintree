@@ -228,13 +228,6 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (activeCellKey && !positions.has(activeCellKey)) {
       setActiveCellKey(null);
     }
-    // A tap's readout has no pointer or focus to end it, so one whose day left
-    // the range would otherwise sit there empty.
-    setTip((prev) =>
-      prev.open && prev.date !== null && !positions.has(prev.date)
-        ? { ...prev, open: false, source: null }
-        : prev
-    );
   }, [positions, activeCellKey]);
 
   const focusCell = useCallback((date: string) => {
@@ -268,6 +261,16 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
   const tipPosition = tip.date ? positions.get(tip.date) : undefined;
   const tipCell = tipPosition ? weeks[tipPosition.col]?.[tipPosition.row] : undefined;
 
+  // A tap's readout has no pointer or focus to end it, so one whose day left
+  // the range would otherwise sit there empty.
+  useEffect(() => {
+    setTip((prev) =>
+      prev.open && prev.date !== null && !positions.has(prev.date)
+        ? { ...prev, open: false, source: null }
+        : prev
+    );
+  }, [positions]);
+
   const cellDateOf = (grid: HTMLElement, target: EventTarget): string | null => {
     // The card is portaled but still a React child of the grid, so its pointer
     // events bubble here; only a node actually inside the grid is a cell.
@@ -277,10 +280,10 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
 
   // `source` is who owns the readout: the pointer leaving only closes what the
   // pointer opened, and a blur only what focus opened, so one input ending
-  // never wipes out the other's. A tap's readout answers to neither: the
-  // pointerleave a lifted finger fires leaves it up, and it closes on a second
-  // tap, a tap elsewhere, focus moving to a control outside the grid, a scroll
-  // or Escape.
+  // never wipes out the other's. A tap's readout answers to neither of those:
+  // the pointerleave a lifted finger fires leaves it up, and it closes on a
+  // second tap, a tap elsewhere, a scroll, Escape, or focus moving to a control
+  // outside the grid.
   const showTip = (date: string, source: TipSource) => {
     setTip((prev) =>
       prev.date === date &&
