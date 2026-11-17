@@ -504,7 +504,7 @@ export function PortalSettingsTab() {
 
       <SettingsSection
         title="Your links"
-        description="Links you add for every project have their own page"
+        description="Add, edit and reorder the links you keep for every project on the Links page"
         action={
           <Button
             type="button"
