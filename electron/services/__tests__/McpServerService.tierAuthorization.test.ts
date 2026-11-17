@@ -1547,11 +1547,6 @@ describe("McpServerService", () => {
         description: "Restart the dev server for the dev preview panel",
       }),
       createManifestEntry({
-        id: "devPreview.promoteToPortal" as ActionId,
-        title: "Promote Dev Preview to Portal",
-        description: "Promote a dev preview panel to a portal tab",
-      }),
-      createManifestEntry({
         id: "portal.openUrl" as ActionId,
         title: "Open URL in Portal",
         description: "Open a URL in a new portal tab",
@@ -1915,7 +1910,6 @@ describe("McpServerService", () => {
       "browser.openUrl",
       "browser.captureScreenshot",
       "panel.focus",
-      "devPreview.promoteToPortal",
       "portal.openUrl",
       "app.theme.pick",
     ] as const;

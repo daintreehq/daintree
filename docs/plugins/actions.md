@@ -120,7 +120,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `devPreview.promoteToPortal` | Open in portal | safe | `panelId?`, `projectId?` |
 | `devPreview.reinstallAndRestart` | Reinstall and restart | confirm | `panelId?`, `projectId?` |
 | `devPreview.reloadPreview` | Reload preview | safe | `panelId?`, `projectId?` |
 | `devPreview.restart` | Restart dev server | safe | `panelId?`, `projectId?` |

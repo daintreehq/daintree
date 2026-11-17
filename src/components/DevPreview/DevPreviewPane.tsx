@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, useReducer } from "react";
-import { RefreshCw, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { DevPreviewDestructiveConfirmDialog } from "./DevPreviewDestructiveConfirmDialog";
 import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -630,10 +630,6 @@ export function DevPreviewPane({
     handleToggleConsole,
     handleZoomChange,
     handleOpenExternal,
-    handlePromoteToPortal,
-    promoteToPortalError,
-    isPromotingToPortal,
-    clearPromoteToPortalError,
   } = useDevPreviewNavigation({
     id,
     currentProjectId,
@@ -1022,7 +1018,6 @@ export function DevPreviewPane({
           onStop={handleCancelLoad}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
-          onPromoteToPortal={currentUrl ? () => void handlePromoteToPortal() : undefined}
           onZoomChange={handleZoomChange}
           onCaptureScreenshot={handleCaptureScreenshot}
           onToggleDevTools={handleToggleDevTools}
@@ -1049,25 +1044,6 @@ export function DevPreviewPane({
           url={currentUrl}
           isWebviewReady={isWebviewReady}
         />
-
-        {promoteToPortalError && (
-          <InlineStatusBanner
-            title="Couldn't open in Portal"
-            description={promoteToPortalError}
-            severity="error"
-            action={{
-              id: "retry-promote-to-portal",
-              label: "Retry",
-              icon: RefreshCw,
-              variant: "dangerFilled",
-              loading: isPromotingToPortal,
-              onClick: () => void handlePromoteToPortal(),
-              ariaLabel: "Retry opening in Portal",
-            }}
-            onClose={clearPromoteToPortalError}
-            closeAriaLabel="Dismiss Portal error"
-          />
-        )}
 
         {stuckTier >= 2 && (
           <DevPreviewStuckBanner

@@ -177,7 +177,6 @@ export const SEL = {
     zoomReset: '[aria-label="Reset zoom"]',
     zoomIndicator: '[data-testid="browser-zoom-indicator"]',
     moreActions: '[data-testid="browser-more-actions"]',
-    promoteToPortal: '[data-testid="browser-promote-portal"]',
     findInput: 'input[placeholder="Find in page…"]',
     findPrev: '[aria-label="Previous match"]',
     findNext: '[aria-label="Next match"]',
