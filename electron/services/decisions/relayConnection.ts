@@ -35,9 +35,11 @@ import {
   chromiumWebSocket,
   holdingTerminalSink,
   isRelaySocketUrl,
+  newBridgeLock,
   retireable,
   socketBridgeStore,
   watchResume,
+  type BridgeLock,
 } from "./relayTransport.js";
 import type { QuestionAttachments } from "./attachmentSpool.js";
 import { watchNetwork } from "../../utils/networkWatch.js";
@@ -83,11 +85,11 @@ export interface QuestionSource {
   /** The lifetime's trusted policy, the one every attempt's bridge asks under. */
   readonly policy: PolicyRegistry;
   /**
-   * The lock every bridge over the store takes its turn under once the
-   * lifetime's delivery runs (each attempt's bridge does); null before then.
-   * Read at each turn: the source is handed out before delivery starts.
+   * The lifetime's lock, from its start: delivery and every attempt's bridge
+   * take their turns under it, so a bridge between attempts takes its turns
+   * under it too, and never beside them.
    */
-  lock?(): DecisionsBridge["ctx"]["lock"] | null;
+  readonly lock?: BridgeLock;
   /** The lifetime's attachments, the ones every attempt's bridge asks with; none refuses them. */
   readonly attachments?: QuestionAttachments;
 }
@@ -273,6 +275,13 @@ export class RelayConnection {
   private readonly keys: KeyStore;
   private readonly store: RelayConnectionStore;
   private delivery: AnswerDelivery | null = null;
+  /**
+   * The lifetime's one lock over the store: delivery's, each attempt's and
+   * the question bridge's, from before any of them runs. The library reserves
+   * and settles a person's answer under it, so two bridges must never hold
+   * locks of their own over the same store.
+   */
+  private readonly lock = newBridgeLock();
   private readonly snapshots: PaneSnapshots | null;
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
@@ -417,7 +426,7 @@ export class RelayConnection {
       },
       store: this.store,
       policy: this.o.policy,
-      lock: () => this.delivery?.lock ?? null,
+      lock: this.lock,
       ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
     });
     if (this.ended) return;
@@ -482,6 +491,7 @@ export class RelayConnection {
       store: this.o.store,
       keys: this.o.keys,
       ...(this.o.phoneImages ? { phoneImages: this.o.phoneImages } : {}),
+      lock: this.lock,
       // Reports are retried on every pass while they fail, so each is tried once.
       client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
@@ -568,7 +578,7 @@ export class RelayConnection {
       // crashed ones each time an attempt starts.
       bridge.delivery.stopped = true;
       // Its inbox appends answers to the rows delivery marks delivered.
-      if (this.delivery) bridge.ctx.lock = this.delivery.lock;
+      bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;
       const started = bridge;
       attempt.offs.push(

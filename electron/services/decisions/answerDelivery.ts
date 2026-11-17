@@ -77,7 +77,7 @@ import {
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
-import { RetiredAttemptError, retireable } from "./relayTransport.js";
+import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
 
 /** A hold on the wake engine's queue (#15999), which takes wakes with the MCP server off. */
 export interface DecisionWakeHold {
@@ -163,6 +163,11 @@ export interface AnswerDeliveryOptions {
   client: RelayClient;
   /** Where a person's phone images go before an answer listing them is typed (#16233). */
   phoneImages?: PhoneImageStore;
+  /**
+   * The connection lifetime's lock, which every other bridge over the store
+   * takes its turns under too; delivery's own when there is none.
+   */
+  lock?: BridgeLock;
   /** The keys couldn't be reloaded: the connection stops, and nothing more is written. */
   onKeysUnusable(): void;
 }
@@ -330,6 +335,7 @@ export class AnswerDelivery {
       ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     });
+    if (options.lock) this.owner.ctx.lock = options.lock;
     this.engine = this.owner.delivery;
   }
 

@@ -52,19 +52,6 @@ function cancelRefusal(status: QuestionRow["local_status"]): DecisionQuestionCan
   }
 }
 
-type BridgeLock = DecisionsBridge["ctx"]["lock"];
-
-/**
- * Runs each turn under the lifetime's lock once it has one, and under `own`
- * until then. The library reserves, settles and reads a person's answer under
- * its bridge's lock, so the answer this bridge commits between attempts must
- * take its turn with a live attempt's flush, never beside it.
- */
-function lifetimeLock(current: () => BridgeLock | null, own: BridgeLock): BridgeLock {
-  const lock = { run: <T>(fn: () => Promise<T>): Promise<T> => (current() ?? own).run(fn) };
-  return lock as unknown as BridgeLock;
-}
-
 /** The library's outcome, without the ids the result carries alongside it. */
 function answerOutcome(result: OwnerAnswerResult): DecisionAnswerOutcome {
   switch (result.status) {
@@ -120,8 +107,10 @@ export class QuestionBridge extends DecisionsBridge {
       ...(attachments ? { resolver: attachments.resolver, spool: attachments.spool } : {}),
     });
     this.question = options;
-    const lifetime = options.source.lock?.bind(options.source);
-    if (lifetime) this.ctx.lock = lifetimeLock(lifetime, this.ctx.lock);
+    // The library reserves, settles and reads a person's answer under its
+    // bridge's lock: what this bridge commits between attempts takes its turn
+    // with a live attempt's flush, never beside it.
+    if (options.source.lock) this.ctx.lock = options.source.lock;
     // Synchronous for a bridge that never started; from here `pump` does nothing.
     void super.stop();
   }

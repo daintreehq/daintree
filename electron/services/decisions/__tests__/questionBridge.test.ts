@@ -1186,36 +1186,43 @@ describe("QuestionBridge", () => {
     );
 
     it("commits between attempts only in its turn under the lifetime's lock, after a live attempt's settling", async () => {
-      // The lock the lifetime's delivery and every attempt's bridge share.
+      // The lifetime's lock, which delivery and every attempt's bridge share; each turn asked for is counted.
       let tail: Promise<unknown> = Promise.resolve();
+      let turns = 0;
       const shared = {
         run<T>(fn: () => Promise<T>): Promise<T> {
+          turns += 1;
           const turn = tail.then(fn);
           tail = turn.catch(() => {});
           return turn;
         },
       };
-      source = { ...source, lock: () => shared as never };
+      source = { ...source, lock: shared as never };
       const b = bridge();
       const questionId = "q_remote_host_0001";
       let settle!: () => void;
       const settling = shared.run(() => new Promise<void>((resolve) => (settle = resolve)));
+      try {
+        const answering = b.answerForPerson(
+          payload(questionId, {
+            reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
+          }),
+          HOST
+        );
+        // The answer asked for its turn behind the settling, and wrote nothing while it waited.
+        await vi.waitFor(() => expect(turns).toBe(2));
+        expect(await store.outboxFor(questionId)).toEqual([]);
+        expect(await store.getMeta(`owner-answer:${ANSWER_ID}`)).toBeNull();
 
-      const answering = b.answerForPerson(
-        payload(questionId, {
-          reference: { hostId: "host_studio", projectId: "p9", terminalId: "pane-9", questionId },
-        }),
-        HOST
-      );
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(await store.outboxFor(questionId)).toEqual([]);
-
-      settle();
-      await settling;
-      await expect(answering).resolves.toMatchObject({ outcome: { status: "queued" } });
-      expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
-        "owner-answer",
-      ]);
+        settle();
+        await expect(answering).resolves.toMatchObject({ outcome: { status: "queued" } });
+        expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual([
+          "owner-answer",
+        ]);
+      } finally {
+        settle();
+        await settling;
+      }
     });
 
     it("checks this computer's own question against its rules before signing", async () => {
@@ -1279,6 +1286,12 @@ describe("QuestionBridge", () => {
           terminalId: "pane-9",
           questionId: "q_remote_host_0001",
         },
+        expectedRevision: 5,
+        selectedOptionIds: ["approve"],
+        text: "Ship it.",
+        explicitApproval: true,
+        reason: "Both match.",
+        reviewedAttachmentDigests: ["d".repeat(64)],
       });
 
       await expect(b.answerForPerson(request, HOST)).resolves.toMatchObject({
