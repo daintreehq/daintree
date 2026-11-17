@@ -55,7 +55,7 @@ function failToast(
 interface UndoReservation {
   land: (
     restoreOnce: () => void,
-    shown?: { title: string; message: string } | { line: string }
+    shown?: { title: string; message: string; partial?: boolean } | { line: string }
   ) => void;
   forget: () => void;
 }
@@ -393,7 +393,7 @@ export function useCanopyInboxActions({
             });
             return;
           }
-          const notDone = `Couldn't reach ${left}. Its agents are still unread.`;
+          const notDone = `Didn't finish on ${left}. Its agents are still unread.`;
           if (after.length === 0) {
             undo.forget();
             notify({

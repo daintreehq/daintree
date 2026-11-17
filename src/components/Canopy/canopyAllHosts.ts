@@ -296,11 +296,13 @@ export interface MarkAllReadReport {
   marks: CanopyReadMark[];
   /** Hosts whose call failed: their runs are still as they were. */
   refused: HostId[];
+  /** The first failure, when no host answered at all. */
+  failure?: unknown;
 }
 
 export interface AllHostsRoute {
   api: CanopyApi;
-  /** `api.markAllRead`, and which hosts didn't answer; throws when none did. */
+  /** `api.markAllRead`, and which hosts didn't answer. */
   markAllReadReport: (
     targets: Parameters<CanopyApi["markAllRead"]>[0]
   ) => Promise<MarkAllReadReport>;
@@ -377,11 +379,17 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         .markAllRead(group.map(({ item, id }) => ({ ...item, runId: id })))
         .then((marks) => marks.map((mark): CanopyReadMark => keyed(hostId, mark)))
     );
-    const marks = answered(settled).flat();
     const refused = groups.flatMap(([hostId], index) =>
       settled[index]!.status === "rejected" ? [hostId] : []
     );
-    return { marks, refused };
+    const marks = settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+    const noneAnswered = refused.length > 0 && refused.length === settled.length;
+    const first = settled.find((result) => result.status === "rejected");
+    return {
+      marks,
+      refused,
+      ...(noneAnswered && first?.status === "rejected" ? { failure: first.reason } : {}),
+    };
   };
 
   const api: CanopyApi = {
@@ -401,7 +409,11 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     reread: (key, ...rest) => routed(key, (host, id) => host.reread(id, ...rest)),
     runBranch: (key, ...rest) => routed(key, (host, id) => host.runBranch(id, ...rest)),
     rename: (key, ...rest) => routed(key, (host, id) => host.rename(id, ...rest)),
-    markAllRead: async (targets) => (await markAllReadReport(targets)).marks,
+    markAllRead: async (targets) => {
+      const report = await markAllReadReport(targets);
+      if ("failure" in report) throw report.failure;
+      return report.marks;
+    },
     restoreReads: async (restores) => {
       const groups = groupByHost(restores, (restore) => restore.mark.runId);
       answered(
