@@ -5524,6 +5524,46 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     expect(addTerminalMock).not.toHaveBeenCalled();
   });
 
+  it("runs the recipe a dialog showed while it still matches", async () => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+    const results = await useRecipeStore.getState().runRecipeWithResults(
+      "acme.tools.review",
+      "/repo/wt",
+      "wt-1",
+      { branchName: "feature/x" },
+      {
+        expectedRecipe: {
+          id: "acme.tools.review",
+          terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+        },
+      }
+    );
+    expect(results.spawned.map((s) => s.index)).toEqual([0, 1]);
+    expect(addTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses as a change when the recipe a dialog showed is gone (#17447)", async () => {
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "acme.tools.review",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: {
+            id: "acme.tools.review",
+            terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+          },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    // Without an approval to honour, a missing recipe is still just missing.
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults("acme.tools.review", "/repo/wt", "wt-1", {})
+    ).rejects.toThrow("Recipe acme.tools.review not found");
+    expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
   it("refuses when the row the dialog showed now resolves to another recipe (#17447)", async () => {
     const terminals = [{ type: "terminal" as const, command: "npm run dev", env: {} }];
     const local = { id: "local-dev", name: "Dev", projectId: "p", terminals, createdAt: 0 };

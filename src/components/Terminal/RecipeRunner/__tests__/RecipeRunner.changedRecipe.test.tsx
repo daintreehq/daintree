@@ -74,27 +74,24 @@ const other: TerminalRecipe = {
   createdAt: 0,
 };
 
-const settle = () =>
-  act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
-
-// Run the card, change the recipe while the confirm waits, then confirm.
-async function confirmAfterChange(before: TerminalRecipe, after: TerminalRecipe) {
+// Run the card, change the store while the confirm waits, then confirm.
+async function confirmAfterChange(before: TerminalRecipe, after: TerminalRecipe[]) {
   useRecipeStore.setState({ recipes: [before, other] });
   render(<RecipeRunner activeWorktreeId={null} defaultCwd="/repo" />);
   fireEvent.click(screen.getByRole("option", { name: `Run ${before.name}` }));
   const pending = useRecipeRunConfirmStore.getState().current;
   expect(pending?.missing).toEqual(["pr_number"]);
   act(() => {
-    useRecipeStore.setState({ recipes: [after, other] });
+    useRecipeStore.setState({ recipes: after });
   });
   await act(async () => {
     resolveRecipeRunConfirmation(pending!.requestId, true);
   });
-  await settle();
-  return screen.getByTestId("recipe-changed-banner");
+  return screen.findByTestId("recipe-changed-banner");
 }
+
+const reviewButton = (banner: HTMLElement) =>
+  within(banner).queryByRole("button", { name: /Review recipe/ });
 
 describe("RecipeRunner — a confirmed recipe that changed before it started (#17447)", () => {
   beforeEach(() => {
@@ -107,24 +104,26 @@ describe("RecipeRunner — a confirmed recipe that changed before it started (#1
     useRecipeStore.setState({ recipes: [] });
   });
 
-  it("shows the store's refusal and opens the current recipe for review", async () => {
+  it("shows the store's refusal under the name confirmed, and opens the current recipe", async () => {
     const opened: unknown[] = [];
     const listener = (e: Event) => {
       if (e instanceof CustomEvent) opened.push(e.detail.recipeId);
     };
     window.addEventListener("daintree:open-recipe-editor", listener);
     try {
-      const banner = await confirmAfterChange(
-        needsPr(),
+      const banner = await confirmAfterChange(needsPr(), [
         needsPr({
+          name: "Review v2",
           terminals: [{ type: "claude", env: {}, initialPrompt: "ship pr {{pr_number}}" }],
-        })
-      );
+        }),
+        other,
+      ]);
 
-      expect(within(banner).getByText("Couldn't start 'Review'")).toBeTruthy();
-      expect(banner.textContent).toContain("Review it before running it again.");
-      fireEvent.click(within(banner).getByRole("button", { name: /Review recipe/ }));
+      expect(within(banner).getByRole("alert").textContent).toMatch(/'Review'/);
+      expect(banner.textContent).toMatch(/changed.*confirmation/i);
+      fireEvent.click(reviewButton(banner)!);
       expect(opened).toEqual(["r1"]);
+      expect(useRecipeStore.getState().recipes.every((r) => r.lastUsedAt === undefined)).toBe(true);
     } finally {
       window.removeEventListener("daintree:open-recipe-editor", listener);
     }
@@ -134,38 +133,64 @@ describe("RecipeRunner — a confirmed recipe that changed before it started (#1
     const origin = { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "rel" };
     const banner = await confirmAfterChange(
       needsPr({ id: "acme.tools.rel", name: "Release", origin }),
-      needsPr({
-        id: "acme.tools.rel",
-        name: "Release",
-        origin,
-        terminals: [{ type: "claude", env: {}, initialPrompt: "release pr {{pr_number}}" }],
-      })
+      [
+        needsPr({
+          id: "acme.tools.rel",
+          name: "Release",
+          origin,
+          terminals: [{ type: "claude", env: {}, initialPrompt: "release pr {{pr_number}}" }],
+        }),
+        other,
+      ]
     );
 
-    expect(banner.textContent).toContain("Its plugin changed the recipe");
-    expect(within(banner).queryByRole("button", { name: /Review recipe/ })).toBeNull();
+    expect(banner.textContent).toMatch(/plugin/i);
+    expect(reviewButton(banner)).toBeNull();
   });
 
-  it("keeps the explanation without a Review action once the recipe is deleted", async () => {
-    await confirmAfterChange(needsPr(), needsPr({ terminals: [{ type: "terminal", env: {} }] }));
+  it("explains a recipe deleted while the confirmation was open", async () => {
+    const banner = await confirmAfterChange(needsPr(), [other]);
+
+    expect(banner.textContent).toMatch(/'Review'/);
+    expect(banner.textContent).toMatch(/no longer available/i);
+    expect(reviewButton(banner)).toBeNull();
+  });
+
+  it("drops Review once the recipe is deleted after the refusal", async () => {
+    const banner = await confirmAfterChange(needsPr(), [
+      needsPr({ terminals: [{ type: "terminal", env: {} }] }),
+      other,
+    ]);
+    expect(reviewButton(banner)).not.toBeNull();
 
     act(() => {
       useRecipeStore.setState({ recipes: [other] });
     });
 
+    expect(reviewButton(screen.getByTestId("recipe-changed-banner"))).toBeNull();
+  });
+
+  it("keeps the refusal above the empty state when that was the last recipe", async () => {
+    await confirmAfterChange(needsPr(), [needsPr({ terminals: [{ type: "terminal", env: {} }] })]);
+
+    act(() => {
+      useRecipeStore.setState({ recipes: [] });
+    });
+
+    expect(screen.getByTestId("recipe-runner-empty")).toBeTruthy();
     const banner = screen.getByTestId("recipe-changed-banner");
-    expect(banner.textContent).toContain("has since been deleted");
-    expect(within(banner).queryByRole("button", { name: /Review recipe/ })).toBeNull();
+    expect(banner.textContent).toMatch(/'Review'/);
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("recipe-changed-banner")).toBeNull();
   });
 
   it("goes away when dismissed", async () => {
-    const banner = await confirmAfterChange(
-      needsPr(),
-      needsPr({ terminals: [{ type: "terminal", env: {} }] })
-    );
+    const banner = await confirmAfterChange(needsPr(), [
+      needsPr({ terminals: [{ type: "terminal", env: {} }] }),
+      other,
+    ]);
 
     fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
-    await settle();
 
     expect(screen.queryByTestId("recipe-changed-banner")).toBeNull();
   });

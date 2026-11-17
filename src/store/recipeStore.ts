@@ -1186,16 +1186,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
   runRecipeWithResults: async (recipeId, worktreePath, worktreeId, context, options) => {
     const recipe = get().getRecipeById(recipeId);
-    if (!recipe) {
-      throw new Error(`Recipe ${recipeId} not found`);
-    }
     const expected = options?.expectedRecipe;
+    // A recipe deleted under the dialog changed too: the approval covered
+    // something that no longer exists.
     if (
       expected !== undefined &&
-      (recipe.id !== expected.id ||
+      (recipe?.id !== expected.id ||
         recipeApprovalDigest(recipe.terminals) !== expected.terminalsDigest)
     ) {
       throw new RecipeChangedSinceShownError();
+    }
+    if (!recipe) {
+      throw new Error(`Recipe ${recipeId} not found`);
     }
 
     // A recipe that needs its plugin's agent tools says so rather than starting
