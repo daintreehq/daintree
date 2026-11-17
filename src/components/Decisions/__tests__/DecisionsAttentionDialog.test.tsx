@@ -59,10 +59,10 @@ function makeItem(
   };
 }
 
-function tree(isOpen: boolean) {
+function tree(isOpen: boolean, onClose: () => void = vi.fn()) {
   return (
     <TooltipProvider>
-      <DecisionsAttentionDialog isOpen={isOpen} onClose={vi.fn()} />
+      <DecisionsAttentionDialog isOpen={isOpen} onClose={onClose} />
     </TooltipProvider>
   );
 }
@@ -356,12 +356,15 @@ describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
       const older = settleable<DecisionsAnswerDestinations>();
       const newer = settleable<DecisionsAnswerDestinations>();
       listAnswerDestinations.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-      render(tree(true));
+      const onClose = vi.fn();
+      render(tree(true, onClose));
       await listedRows(1);
 
       await openDestinations(3);
       expect(menuRows()).toEqual(["Looking…"]);
       await closeDestinations();
+      // Escape closed the menu alone: the same row reopens it, not a remounted list.
+      expect(onClose).not.toHaveBeenCalled();
       await openDestinations(3);
       expect(listAnswerDestinations).toHaveBeenCalledTimes(2);
 
