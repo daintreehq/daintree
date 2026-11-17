@@ -47,7 +47,7 @@ export function redactGceText(text: string): string {
     )
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(/\bya29\.[A-Za-z0-9._-]+/g, "[redacted]")
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]")
     .replace(/([?&](?:access_token|assertion|key)=)[^&\s]+/gi, "$1[redacted]")
     .slice(0, 500);
 }

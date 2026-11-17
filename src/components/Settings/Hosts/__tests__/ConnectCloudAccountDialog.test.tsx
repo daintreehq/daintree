@@ -210,6 +210,25 @@ describe("ConnectCloudAccountDialog", () => {
     });
   });
 
+  it("describes a project scope as where machines are created and billed", async () => {
+    cloudClient.checkAccountCredentials.mockResolvedValueOnce({
+      identity: "daintree@acme-build.iam.gserviceaccount.com",
+      scopes: [{ scope: { kind: "project", id: "acme-build", name: "acme-build" }, active: true }],
+    });
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={GCE} />);
+    chooseFile(
+      "cloud-account-credential-keyFile",
+      new File([KEY_FILE_TEXT], "build-key.json", { type: "application/json" })
+    );
+    await screen.findByText("build-key.json");
+    type("cloud-account-credential-project", "acme-build");
+    fireEvent.click(button("Check credentials"));
+    const scope = await screen.findByRole("radio", { name: /acme-build/ });
+    expect(scope.closest("label")?.textContent ?? scope.parentElement?.textContent).toContain(
+      "machines are created and billed here"
+    );
+  });
+
   it("drops the file it held when the next one can't be used", async () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={GCE} />);
     type("cloud-account-credential-project", "acme-build");

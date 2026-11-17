@@ -190,9 +190,9 @@ export class GceTokenSource {
       pending = this.exchange(key).finally(() => this.inFlight.delete(id));
       this.inFlight.set(id, pending);
     }
-    const fresh = await raceSignal(pending, signal);
-    this.remember(id, fresh);
-    return fresh.token;
+    const exchanged = await raceSignal(pending, signal);
+    this.remember(id, exchanged);
+    return exchanged.token;
   }
 
   private remember(id: string, token: CachedToken): void {

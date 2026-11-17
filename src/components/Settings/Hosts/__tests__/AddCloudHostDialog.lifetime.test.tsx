@@ -268,3 +268,26 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(lifetimeNote()).toBe("Acme puts it to sleep by itself once it's been idle for a while.");
   });
 });
+
+describe("AddCloudHostDialog for a provider that takes the key at create", () => {
+  it("offers only a new machine, since one made elsewhere never got Daintree's key", async () => {
+    const base = provider({ kind: "fixed-at-create", canChangeWhileStopped: true });
+    cloud.snapshot = {
+      providers: [
+        {
+          ...base,
+          capabilities: {
+            ...base.capabilities,
+            provisioning: { ...base.capabilities.provisioning, sshKey: "at-create" },
+          },
+        },
+      ],
+      accounts: [ACCOUNT],
+      hosts: [],
+    };
+    await show();
+    expect(screen.queryByRole("radio", { name: "Existing machine" })).toBeNull();
+    expect(client.listResources).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Create and connect" })).toBeTruthy();
+  });
+});

@@ -159,9 +159,11 @@ export function gceResource(instance: GceInstance, project: string): ProviderRes
     autoStopAt: live ? (instance.resourceStatus?.scheduling?.terminationTimestamp ?? null) : null,
     lifetimeSeconds: limited ? Number(seconds) : null,
     stoppedAt:
-      machine === "stopped"
-        ? (instance.lastStopTimestamp ?? instance.lastSuspendedTimestamp ?? null)
-        : null,
+      machine !== "stopped"
+        ? null
+        : instance.status === "SUSPENDED"
+          ? (instance.lastSuspendedTimestamp ?? null)
+          : (instance.lastStopTimestamp ?? null),
     createdAt: instance.creationTimestamp ?? null,
     stop: null,
     lastSnapshotAt: null,
@@ -181,8 +183,9 @@ export function gceInstanceName(name: string, idempotencyKey: string): string {
       .toLowerCase()
       .slice(0, 8) || "daintree";
   const slug = name
-    .toLowerCase()
     .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const room = 63 - suffix.length - 1;
@@ -219,6 +222,11 @@ function hasExternalAccess(instance: GceInstance): boolean {
   return (instance.networkInterfaces ?? []).some((nic) => (nic.accessConfigs ?? []).length > 0);
 }
 
+export interface GceProviderOptions {
+  now?: () => number;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
 export interface GceEndpoints {
   client: GceClient;
   tokens: GceTokenSource;
@@ -234,7 +242,16 @@ export class GceProvider implements CloudProvider {
   readonly id = "gce" as const;
   private readonly shutdown = new AbortController();
 
-  constructor(private readonly endpointsFor: (apiUrl: string) => GceEndpoints) {}
+  private readonly now: () => number;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+
+  constructor(
+    private readonly endpointsFor: (apiUrl: string) => GceEndpoints,
+    options: GceProviderOptions = {}
+  ) {
+    this.now = options.now ?? Date.now;
+    this.sleep = options.sleep ?? gceSleep;
+  }
 
   /** Stops every wait this provider is doing on its own (host keys, operations). */
   dispose(): void {
@@ -381,7 +398,7 @@ export class GceProvider implements CloudProvider {
       reason: null,
       locations: null,
     }));
-    const networks: CloudProvisioningChoice[] = subnetworks
+    const subnets = subnetworks
       .filter(
         (subnet) =>
           (subnet.purpose === undefined || subnet.purpose === "PRIVATE") &&
@@ -392,25 +409,26 @@ export class GceProvider implements CloudProvider {
         const region = lastSegment(subnet.region);
         if (!region || !GCE_NAME.test(region)) return [];
         const network = lastSegment(subnet.network) ?? subnet.name;
-        return [
-          {
-            id: `regions/${region}/subnetworks/${subnet.name}`,
-            label: network === subnet.name ? subnet.name : `${network} / ${subnet.name}`,
-            description: subnet.ipCidrRange ? `${subnet.ipCidrRange} in ${region}` : region,
-            available: true,
-            reason: null,
-            locations: offered
-              .filter((zone) => regionOf.get(zone.name) === region)
-              .map((zone) => zone.name),
-          },
-        ];
+        const choice: CloudProvisioningChoice = {
+          id: `regions/${region}/subnetworks/${subnet.name}`,
+          label: network === subnet.name ? subnet.name : `${network} / ${subnet.name}`,
+          description: subnet.ipCidrRange ? `${subnet.ipCidrRange} in ${region}` : region,
+          available: true,
+          reason: null,
+          locations: offered
+            .filter((zone) => regionOf.get(zone.name) === region)
+            .map((zone) => zone.name),
+        };
+        return [{ choice, onDefault: network === "default" }];
       })
       // The project's default network first, so it's what a zone starts with.
       .sort(
         (a, b) =>
-          Number(!a.label.startsWith("default")) - Number(!b.label.startsWith("default")) ||
-          a.label.localeCompare(b.label)
+          Number(b.onDefault) - Number(a.onDefault) ||
+          a.choice.label.localeCompare(b.choice.label) ||
+          a.choice.id.localeCompare(b.choice.id)
       );
+    const networks = subnets.map((entry) => entry.choice);
     const machineTypes: CloudMachineType[] = MACHINE_TYPES.map((type) => ({
       id: type.id,
       label: type.id,
@@ -699,7 +717,7 @@ export class GceProvider implements CloudProvider {
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
-    const deadline = Date.now() + HOST_KEY_WAIT_MS;
+    const deadline = this.now() + HOST_KEY_WAIT_MS;
     for (;;) {
       const current = await client.getInstance(ctx, zone, instance);
       if (current.status !== "RUNNING") {
@@ -718,7 +736,7 @@ export class GceProvider implements CloudProvider {
       if (address && hostKey) {
         return { user: GCE_SSH_USER, endpoint: { host: address, port: 22 }, hostKey };
       }
-      if (Date.now() + HOST_KEY_POLL_MS > deadline) {
+      if (this.now() + HOST_KEY_POLL_MS > deadline) {
         throw new GceApiError(
           "host-keys-pending",
           address
@@ -728,7 +746,7 @@ export class GceProvider implements CloudProvider {
           null
         );
       }
-      await gceSleep(HOST_KEY_POLL_MS, ctx.signal);
+      await this.sleep(HOST_KEY_POLL_MS, ctx.signal);
     }
   }
 
