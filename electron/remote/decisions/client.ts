@@ -97,7 +97,7 @@ interface HostQuestionsReport {
   questions: Omit<DecisionQuestionListItem, "remoteHost">[];
 }
 
-function ownerKey(state: OwnerStateAnnouncement): string {
+function ownerKey(state: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">): string {
   return `${state.installationId}\n${state.ownerDeviceId}`;
 }
 
@@ -295,12 +295,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly questionTurns = new Map<string, number>();
   /** Sessions whose Host answered a read of its questions UNSUPPORTED: from before #17230. */
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
-  /**
-   * The owner each session's Host last took an announcement from: a list it
-   * sends is that owner's, and only it. Set on the Host's answer, never before:
-   * the link keeps order, so whatever it sent for an earlier owner arrives first.
-   */
-  private readonly announcedOwners = new WeakMap<DecisionsHostSession, string>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
 
@@ -503,11 +497,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     payload: HostQuestionListPayload
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
-    if (!session.isOpen || owner === null || payload.hostId === null) return;
-    // Heard over the Host's current link, for the owner that link was last told of.
-    if (this.deps.sessionFor(hostId) !== session || this.announcedOwners.get(session) !== owner) {
+    if (!session.isOpen || owner === null || payload.hostId === null || payload.owner === null) {
       return;
     }
+    // Heard over the Host's current link, and served to the owner this computer speaks as now.
+    if (this.deps.sessionFor(hostId) !== session || ownerKey(payload.owner) !== owner) return;
     const questionHostId = payload.hostId;
     const questions: Omit<DecisionQuestionListItem, "remoteHost">[] = [];
     for (const raw of payload.questions) {
@@ -582,7 +576,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
     }
-    this.announcedOwners.set(session, ownerKey(state));
     // Whatever the owner said, the Host's questions as they stand now (#17230).
     void this.readQuestions(hostId, session);
     if (this.announced.get(hostId) !== turn) return;

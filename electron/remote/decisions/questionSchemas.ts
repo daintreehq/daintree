@@ -87,30 +87,46 @@ export const HostQuestionItemSchema = z
   })
   .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost">>;
 
+/** The owner a Host served a list to, as that owner's announcement named it. */
+const ListOwnerSchema = z
+  .object({
+    installationId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+    ownerDeviceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+  })
+  .strict();
+export type HostQuestionListOwner = z.infer<typeof ListOwnerSchema>;
+
 /**
- * A Host's list: the id its questions name it by, and every one of them.
- * `hostId` null: the Host serves no list now (its Decisions isn't running for
- * this owner), so it carries none. Each question is read on its own
- * ({@link HostQuestionItemSchema}), so one this Daintree can't read costs
- * only itself.
+ * A Host's list: the id its questions name it by, the owner it served them
+ * to, and every one of them. The owner travels with the list because nothing
+ * orders a list against the Host's answer to a later announcement: a Shell
+ * takes a list only for the owner it speaks as now. `hostId` null: the Host
+ * serves no list now (its Decisions isn't running for this owner), so it
+ * carries none. Each question is read on its own ({@link HostQuestionItemSchema}),
+ * so one this Daintree can't read costs only itself.
  */
 export const HostQuestionListSchema = z
   .object({
     hostId: Id.nullable(),
+    owner: ListOwnerSchema.nullable(),
     questions: z.array(z.unknown()).max(MAX_HOST_QUESTIONS),
   })
   .strict();
 export type HostQuestionListPayload = z.infer<typeof HostQuestionListSchema>;
 
-/** What a Host sends of its own list: its id, and its newest questions within the bound. */
+/** A Host's own questions, as its Decisions lists them: its id, and every one of them. */
 export interface HostQuestionList {
   hostId: string;
   questions: Omit<DecisionQuestionListItem, "remoteHost">[];
 }
 
-/** A Host's pushed list always names the Host: one that serves none sends nothing. */
+/** A Host's pushed list always names the Host and its owner: one that serves none sends nothing. */
 export const HostQuestionsChangedPayloadSchema = z
-  .object({ hostId: Id, questions: z.array(z.unknown()).max(MAX_HOST_QUESTIONS) })
+  .object({
+    hostId: Id,
+    owner: ListOwnerSchema,
+    questions: z.array(z.unknown()).max(MAX_HOST_QUESTIONS),
+  })
   .strict();
 
 export const HostQuestionReadSchema = z.discriminatedUnion("read", [

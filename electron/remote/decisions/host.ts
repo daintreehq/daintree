@@ -34,6 +34,7 @@ import {
   MAX_HOST_QUESTION_LIST_BYTES,
   MAX_HOST_QUESTIONS,
   type HostQuestionList,
+  type HostQuestionListPayload,
   type HostQuestionRead,
 } from "./questionSchemas.js";
 
@@ -70,21 +71,33 @@ type Answer = HostStatusResult | HostRequestResult | HostAcceptResult;
 const OFF = { result: "off" } as const;
 
 /** What a Shell this Host doesn't serve its questions to is told: a list of none. */
-const NO_QUESTIONS = { hostId: null, questions: [] } as const;
+const NO_QUESTIONS = { hostId: null, owner: null, questions: [] } as const;
+
+/** What one list may take besides its questions: the envelope, with the longest owner ids. */
+const LIST_ENVELOPE_BYTES = 256;
 
 /** The newest questions within what one message carries, by count and by size. */
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
-  // The envelope first, then each question with the comma between it and the next.
-  let bytes = Buffer.byteLength(JSON.stringify({ hostId: list.hostId, questions: [] }));
+  let bytes = LIST_ENVELOPE_BYTES + Buffer.byteLength(list.hostId);
   for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
     const question = list.questions[i]!;
-    bytes += Buffer.byteLength(JSON.stringify(question)) + 1;
+    // Each question, and the comma before it when one is already kept.
+    bytes += Buffer.byteLength(JSON.stringify(question)) + (kept.length > 0 ? 1 : 0);
     if (bytes > MAX_HOST_QUESTION_LIST_BYTES) break;
     kept.push(question);
   }
   if (kept.length === list.questions.length) return list;
   return { hostId: list.hostId, questions: kept.reverse() };
+}
+
+/** The list as sent to one session: named with the owner that session's announcement named. */
+function servedTo(list: HostQuestionList, owner: OwnerOf): HostQuestionListPayload {
+  return {
+    hostId: list.hostId,
+    owner: { installationId: owner.installationId, ownerDeviceId: owner.ownerDeviceId },
+    questions: list.questions,
+  };
 }
 
 type OwnerOf = Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">;
@@ -173,7 +186,7 @@ export function installDecisionsHostWith(
     return owner !== undefined && owner.enabled && runtime?.enrolledBy(owner) === true;
   };
 
-  const tellQuestions = (session: LinkSession, list: HostQuestionList): void => {
+  const tellQuestions = (session: LinkSession, list: HostQuestionListPayload): void => {
     const key = JSON.stringify(list);
     if (toldQuestions.get(session) === key || beforeQuestions.has(session)) return;
     toldQuestions.set(session, key);
@@ -194,8 +207,8 @@ export function installDecisionsHostWith(
     // A Host that stopped serving its questions says nothing: its owner keeps what it last heard.
     if (list === null) return;
     const sent = bounded(list);
-    for (const session of owners.keys()) {
-      if (servesQuestions(session)) tellQuestions(session, sent);
+    for (const [session, owner] of owners) {
+      if (servesQuestions(session)) tellQuestions(session, servedTo(sent, owner));
     }
   };
 
@@ -336,8 +349,9 @@ export function installDecisionsHostWith(
     if (!servesQuestions(session)) return payload.read === "list" ? NO_QUESTIONS : OFF;
     if (payload.read === "list") {
       const list = made.questions();
-      if (list === null) return NO_QUESTIONS;
-      const sent = bounded(list);
+      const owner = owners.get(session);
+      if (list === null || owner === undefined) return NO_QUESTIONS;
+      const sent = servedTo(bounded(list), owner);
       toldQuestions.set(session, JSON.stringify(sent));
       return sent;
     }
