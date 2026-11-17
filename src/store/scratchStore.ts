@@ -157,9 +157,10 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
  * `scratch:remove` missed.
  *
  * Keyed on the view's own workspace id, never on `currentScratch`: the removal is
- * broadcast to *every* view (cached ones included) and `currentScratch` is
- * replicated into all of them, so matching on it would wipe a sibling project
- * view's live panels.
+ * broadcast to *every* view (cached ones included), and `currentScratch` is live
+ * state that is null until a view hydrates, so it is no proof of which view is
+ * the scratch's own. Matching on it risks wiping a sibling project view's live
+ * panels.
  */
 async function closePanelsForRemovedScratch(scratchId: string): Promise<void> {
   if (!scratchId || getViewWorkspaceId() !== scratchId) return;

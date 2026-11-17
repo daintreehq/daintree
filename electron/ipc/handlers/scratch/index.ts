@@ -27,6 +27,7 @@ import {
   releaseCachedOwner,
 } from "../../../window/projectOwnership.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
+import { currentWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -159,8 +160,12 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           supersedePendingHostSwitch(scratchWindowId);
 
           // The sender view's own binding, captured before anything awaits: once
-          // the swap lands this view is the one left behind.
+          // the swap lands this view is the one left behind. The window's switch
+          // epoch too, so the activation can tell whether a project switch was
+          // asked for in this window while the swap waited.
           const departingWorkspaceId = ctx.projectId;
+          const switchEpoch =
+            scratchWindowId !== undefined ? currentWindowSwitch(scratchWindowId) : 0;
 
           // One live view per workspace across the app, as for a project
           // (#12596): a scratch another window shows, or is on its way to,
@@ -242,6 +247,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
               ptyClient: deps.ptyClient,
               workspaceClient: deps.worktreeService,
               outgoingWorkspaceId: departingWorkspaceId,
+              switchEpoch,
             });
           } finally {
             releaseClaim();

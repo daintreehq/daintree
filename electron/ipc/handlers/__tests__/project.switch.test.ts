@@ -191,6 +191,7 @@ import {
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { getAllAppWebContents } from "../../../window/webContentsRegistry.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
+import { beginWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import { resetGitMarkerCacheForTesting } from "../projectCrud/switch.js";
@@ -1990,6 +1991,30 @@ describe("project:switch concurrent worktree load", () => {
     await expect(first).rejects.toThrow("load timeout");
     await new Promise((r) => setTimeout(r, 10));
 
+    expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
+    expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
+  });
+
+  it("skips the failure restore once the window has moved to a scratch (#17186)", async () => {
+    let rejectSwap: (err: Error) => void = () => {};
+    const failingSwap = new Promise<{ view: unknown; isNew: boolean }>((_resolve, reject) => {
+      rejectSwap = reject;
+    });
+    const { invoke, worktreeService } = setup({ switchTo: () => failingSwap });
+
+    const first = invoke();
+    await vi.waitFor(() => expect(worktreeService.loadProject).toHaveBeenCalledTimes(1));
+
+    // A scratch lands in the window, which starts a switch there the way
+    // `activateScratchInWindow` does, and releases the window's host.
+    beginWindowSwitch(7);
+
+    rejectSwap(new Error("load timeout"));
+    await expect(first).rejects.toThrow("load timeout");
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Re-attaching the old project behind the scratch would hold its host
+    // foreground for a window that no longer shows it.
     expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
     expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
   });

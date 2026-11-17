@@ -241,6 +241,7 @@ let nextViewId = 20;
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  currentScratch.id = null;
   await h?.dispose();
   h = null;
   pvmState.active = null;
@@ -446,12 +447,16 @@ describe("switching hosts (integration harness)", () => {
         newWindow: false,
         projectId: "proj-1",
       });
+      // Only the way back may make it current again, not the first visit.
+      currentScratch.id = null;
+      const releasedBefore = workspace.releases.length;
       await expect(
         client.client.switchWindowHost(from(activeView()), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: scratchId });
       expect(pvmState.active).toBe(scratchId);
       // Activated as a scratch switch would: it is this machine's current workspace again.
       expect(currentScratch.id).toBe(scratchId);
+      expect(workspace.releases.length).toBeGreaterThan(releasedBefore);
     },
     TEST_TIMEOUT_MS
   );

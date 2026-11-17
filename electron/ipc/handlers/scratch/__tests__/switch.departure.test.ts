@@ -92,6 +92,7 @@ import { WorkspaceHostPool } from "../../../../services/workspace-client/Workspa
 import { resetProjectHistory } from "../../../../services/ProjectHistoryService.js";
 import { isAppError } from "../../../../utils/errorTypes.js";
 import { beginWindowSwitch, isCurrentWindowSwitch } from "../../../../window/windowSwitchEpochs.js";
+import { setRemoteVisibleProjectIdsProvider } from "../../../../window/activeProjectIds.js";
 import type { HandlerDependencies } from "../../../types.js";
 import type { WorkspaceClient } from "../../../../services/WorkspaceClient.js";
 
@@ -212,6 +213,8 @@ beforeEach(() => {
     status: "active",
   });
   registryMock.boundWorkspace = PROJECT_A;
+  // `clearAllMocks` keeps return values; the global pointer names nothing unless a test says so.
+  projectStoreMock.getCurrentProjectId.mockReturnValue(null);
   const scratch = { id: SCRATCH, name: "Spike", path: SCRATCH_PATH };
   scratchStoreMock.getScratchById.mockReturnValue(scratch);
   scratchStoreMock.setCurrentScratch.mockReturnValue(scratch);
@@ -267,6 +270,37 @@ describe("scratch:switch releases the project's workspace host", () => {
     // The window still shows the project, so it still holds its host.
     expect(pool.isWindowAttached(SENDER_ID, PROJECT_PATH)).toBe(true);
     expect(hosts[0]!.send).not.toHaveBeenCalledWith({ type: "background" });
+    pool.dispose();
+  });
+});
+
+describe("scratch:switch never detaches a project asked for while its swap waited", () => {
+  it("leaves the window on the project a later switch attached it to", async () => {
+    // The window's queue runs the scratch's swap first, but a project switch
+    // asked for meanwhile attaches the window to its project at the time it
+    // is asked for. The scratch landing afterwards must not undo that.
+    const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
+    await pool.loadProject(PROJECT_PATH, SENDER_ID);
+    let land: () => void = () => {};
+    const senderPvm = makePvm(PROJECT_A);
+    const landSwitch = senderPvm.switchTo.getMockImplementation()!;
+    senderPvm.switchTo.mockImplementationOnce(
+      (id: string) => new Promise((resolve) => (land = () => resolve(landSwitch(id))))
+    );
+    const { switchToScratch } = setup({
+      senderPvm,
+      worktreeService: { unregisterWindow: (windowId: number) => pool.unregisterWindow(windowId) },
+    });
+    const switching = switchToScratch();
+    await vi.waitFor(() => expect(senderPvm.switchTo).toHaveBeenCalled());
+
+    const projectB = path.resolve("/srv/project-b");
+    beginWindowSwitch(SENDER_ID);
+    await pool.loadProject(projectB, SENDER_ID);
+    land();
+    await switching;
+
+    expect(pool.isWindowAttached(SENDER_ID, projectB)).toBe(true);
     pool.dispose();
   });
 });
@@ -333,6 +367,34 @@ describe("scratch:switch moves the departing project to the background", () => {
     expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
   });
 
+  it("leaves a project a remote Shell still shows active", async () => {
+    const stop = setRemoteVisibleProjectIdsProvider(() => [PROJECT_A]);
+    try {
+      const { switchToScratch } = setup({});
+
+      await switchToScratch();
+
+      expect(projectRows.get(PROJECT_A)?.status).toBe("active");
+    } finally {
+      stop();
+    }
+  });
+
+  it("still brings the window to the scratch when the status write fails", async () => {
+    projectStoreMock.updateProjectStatus.mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    const { senderPvm, switchToScratch } = setup({});
+
+    // The window has already moved: its view must still hear it switched.
+    await expect(switchToScratch()).resolves.toEqual(expect.objectContaining({ id: SCRATCH }));
+
+    expect(senderPvm.views.get(SCRATCH)!.webContents.send).toHaveBeenCalledWith(
+      CHANNELS.SCRATCH_ON_SWITCH,
+      expect.objectContaining({ scratch: expect.objectContaining({ id: SCRATCH }) })
+    );
+  });
+
   it("leaves a closed row alone", async () => {
     projectRows.set(PROJECT_A, { ...projectRows.get(PROJECT_A)!, status: "closed" });
     const { switchToScratch } = setup({});
@@ -384,6 +446,7 @@ describe("scratch:switch keeps one live view of a scratch", () => {
     await expect(switchToScratch()).resolves.toEqual(expect.objectContaining({ id: SCRATCH }));
 
     expect(otherPvm.releaseCachedView).toHaveBeenCalledWith(SCRATCH);
+    expect(otherPvm.views.has(SCRATCH)).toBe(false);
     expect(senderPvm.switchTo).toHaveBeenCalledWith(SCRATCH, SCRATCH_PATH);
     expect(otherWindow.focus).not.toHaveBeenCalled();
   });
@@ -402,7 +465,9 @@ describe("scratch:switch keeps one live view of a scratch", () => {
     expect(senderPvm.switchTo).not.toHaveBeenCalled();
   });
 
-  it("switches to a scratch the sender's own window already holds", async () => {
+  it("reuses the sender's own view even when another window also holds one", async () => {
+    // A fleet from before the rule could hold two; activating the view this
+    // window already has creates nothing new, so it is never redirected.
     const senderPvm = makePvm(PROJECT_A, [PROJECT_A, SCRATCH]);
     const { switchToScratch } = setup({ senderPvm, otherPvm: makePvm(SCRATCH) });
 

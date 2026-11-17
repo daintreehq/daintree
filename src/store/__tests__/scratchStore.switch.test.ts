@@ -85,6 +85,16 @@ describe("scratchStore scratch:on-switch", () => {
   });
 
   it("ignores a scratch that belongs to another view (#17186)", async () => {
+    // A view of scratch A keeps showing A when told about B.
+    const { store, emitSwitch } = await loadStore();
+    store.setState({ currentScratch: SHOWN });
+
+    emitSwitch({ scratch: OTHER, switchId: "s1" });
+
+    expect(store.getState().currentScratch).toEqual(SHOWN);
+  });
+
+  it("leaves a project's view without a scratch when told about one", async () => {
     const { store, emitSwitch } = await loadStore("project-1");
 
     emitSwitch({ scratch: OTHER, switchId: "s1" });

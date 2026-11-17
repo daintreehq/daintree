@@ -52,6 +52,7 @@ import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
+import { currentWindowSwitch } from "../../window/windowSwitchEpochs.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -411,6 +412,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       await inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
+        const switchEpoch = currentWindowSwitch(windowId);
         if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
         const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path, undefined, {
           ...request,
@@ -430,6 +432,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             ptyClient: getPtyClient(),
             workspaceClient: getWorkspaceClientRef(),
             outgoingWorkspaceId: outgoingProjectId,
+            switchEpoch,
           });
         } else if (project && win && !win.isDestroyed()) {
           await completeLocalProjectActivation({

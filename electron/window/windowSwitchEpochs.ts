@@ -8,11 +8,16 @@ const windowSwitchEpochs = new Map<number, number>();
 
 /** Start a switch in `windowId`; every earlier switch's deferred work goes stale. */
 export function beginWindowSwitch(windowId: number): number {
-  const epoch = (windowSwitchEpochs.get(windowId) ?? 0) + 1;
+  const epoch = currentWindowSwitch(windowId) + 1;
   windowSwitchEpochs.set(windowId, epoch);
   return epoch;
 }
 
+/** The window's switch epoch now: 0 before its first switch. */
+export function currentWindowSwitch(windowId: number): number {
+  return windowSwitchEpochs.get(windowId) ?? 0;
+}
+
 export function isCurrentWindowSwitch(windowId: number, epoch: number): boolean {
-  return windowSwitchEpochs.get(windowId) === epoch;
+  return currentWindowSwitch(windowId) === epoch;
 }

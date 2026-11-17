@@ -8,11 +8,12 @@ import {
   collectActiveProjectIds,
   projectViewManagersFrom,
 } from "../../../window/activeProjectIds.js";
-import { beginWindowSwitch } from "../../../window/windowSwitchEpochs.js";
+import { beginWindowSwitch, isCurrentWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { notificationService } from "../../../services/NotificationService.js";
+import { logError } from "../../../utils/logger.js";
 import type { PtyClient } from "../../../services/PtyClient.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import type { WindowRegistry } from "../../../window/WindowRegistry.js";
@@ -44,17 +45,25 @@ export function activateScratchInWindow(options: {
    * which names whichever window switched last. Null when it showed none.
    */
   outgoingWorkspaceId: string | null;
+  /**
+   * The window's switch epoch (`currentWindowSwitch`) when the scratch was
+   * asked for, read before the swap was queued.
+   */
+  switchEpoch: number;
 }): Scratch {
   const { scratch, windowId, window, view, windowRegistry, ptyClient, workspaceClient } = options;
 
-  if (windowId !== undefined) {
-    // A deferred tail of an earlier project switch in this window (a failed
-    // swap's restore, a cloned project's load) would attach the window to that
-    // project again behind the scratch.
+  // A project switch asked for in this window while the scratch's swap waited
+  // has already moved the window to that project's host, at the time it was
+  // asked for, and its own view lands next: releasing the window now would
+  // detach the project it is about to show. Otherwise a scratch has no
+  // workspace host, so the pool drops the window as a holder of whatever it
+  // was attached to, and backgrounds that host once nothing else holds it.
+  // The new epoch outdates the deferred tail of any earlier project switch
+  // here (a failed swap's restore, a cloned project's load), which would
+  // otherwise attach the window to that project again behind the scratch.
+  if (windowId !== undefined && isCurrentWindowSwitch(windowId, options.switchEpoch)) {
     beginWindowSwitch(windowId);
-    // A scratch has no workspace host. The pool drops the window as a holder
-    // of whatever it was attached to and backgrounds that host once nothing
-    // else holds it.
     workspaceClient?.unregisterWindow(windowId);
   }
 
@@ -62,7 +71,13 @@ export function activateScratchInWindow(options: {
   // renderer's `getCurrentProject` does not race-restore the previous project.
   const updated = scratchStore.setCurrentScratch(scratch.id);
   projectStore.clearCurrentProject();
-  backgroundDepartedProject(options.outgoingWorkspaceId, windowRegistry);
+  // Bookkeeping: the window has already moved, so a failed write must not stop
+  // its terminals and its view from being brought to the scratch below.
+  try {
+    backgroundDepartedProject(options.outgoingWorkspaceId, windowRegistry);
+  } catch (error) {
+    logError("[ScratchSwitch] Failed to background the project the window left", error);
+  }
 
   // Re-persist which workspace each window is showing (#11492). Built from
   // `getActiveProjectId()` across every window, so it runs after the swap.
