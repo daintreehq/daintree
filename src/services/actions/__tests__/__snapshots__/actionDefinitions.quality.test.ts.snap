@@ -3354,7 +3354,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "ui",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show this project's links, your own links, the active worktree's pull request and its failing or running checks, and dev servers across worktrees beside the toolbar.",
+    "description": "Show this project's links, your own, the active worktree's pull request, and dev servers.",
     "examples": undefined,
     "id": "links.open",
     "keywords": [

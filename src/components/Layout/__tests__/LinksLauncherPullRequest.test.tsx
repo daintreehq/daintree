@@ -140,14 +140,20 @@ describe("LinksLauncherPullRequest loading", () => {
 
   it("holds the failure back until the floor ends, then announces it", () => {
     vi.useFakeTimers();
-    const { rerender } = render(section({ kind: "loading" }));
+    const { container, rerender } = render(section({ kind: "loading" }));
+    // The region is there, empty, before anything lands in it: a live region
+    // mounted together with its text is never announced.
+    const region = container.querySelector<HTMLElement>(
+      '[role="status"][aria-live="polite"]:not([aria-label])'
+    );
+    expect(region?.textContent).toBe("");
     act(() => vi.advanceTimersByTime(200));
     rerender(section({ kind: "error" }));
     expect(screen.queryByText("Couldn't load checks")).toBeNull();
 
     act(() => vi.advanceTimersByTime(250));
-    const message = screen.getByText("Couldn't load checks");
-    expect(message.closest('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.isConnected).toBe(true);
+    expect(region?.textContent).toBe("Couldn't load checks");
   });
 
   it("shows a quick answer without any skeleton", () => {
