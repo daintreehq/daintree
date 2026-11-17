@@ -2,8 +2,6 @@ import { parseHostScopedKey, type HostId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { forgetCrossHostTargetsOf } from "@/components/Fleet/crossHostFleet";
 import { forgetBuildMismatchNotices } from "@/components/Hosts/buildMismatchNotice";
-import { forgetHostFigures } from "@/components/Hosts/hostList";
-import { forgetHostProjects } from "@/components/Hosts/hostProjects";
 import { hostEnvDrafts } from "@/components/Settings/Hosts/hostEnvDrafts";
 import { QUICK_RUN_KEY_PREFIXES } from "@/components/Project/quickRunStorageKeys";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
@@ -65,10 +63,11 @@ const HOST_KEYED_STORES = [
 /**
  * Drop what this view's renderer keeps under a removed or re-pointed host's
  * id: prompt and URL history, split layouts, sidebar view picks, QuickRun's
- * toggles and build notices, unsaved environment edits, armed fleet agents,
- * project and worktree lists, and load history. Stored copies are scrubbed
- * first, then each store's own state, so its next write records the removal
- * rather than bringing it back.
+ * toggles and build notices, unsaved environment edits and armed fleet agents.
+ * Stored copies are scrubbed first, then each store's own state, so its next
+ * write records the removal rather than bringing it back. The host list's
+ * figures and the project catalogue clear themselves on the same event, since
+ * the Canopy window keeps them too.
  */
 export function forgetHostLocalState(hostId: HostId): void {
   try {
@@ -101,8 +100,6 @@ export function forgetHostLocalState(hostId: HostId): void {
   forgetBuildMismatchNotices(hostId);
   hostEnvDrafts.forget(hostId);
   forgetCrossHostTargetsOf(hostId);
-  forgetHostProjects(hostId);
-  forgetHostFigures(hostId);
 }
 
 /** Every view clears a host's state here when the host is removed from this device. */

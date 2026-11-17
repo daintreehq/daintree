@@ -125,6 +125,9 @@ function applyRemoteHostsEvent(event: RemoteHostsEvent): boolean {
       });
       return true;
     }
+    case "host-forgotten":
+      forgetHostFigures(event.hostId);
+      return true;
     default:
       return true;
   }
@@ -242,8 +245,9 @@ function setFollowingFigures(on: boolean): void {
 /**
  * Drop a removed or re-pointed host's figures: its summary and load history,
  * and anything a seed already on its way still carries of the old machine.
+ * Heard while anything follows the list, which figures always are.
  */
-export function forgetHostFigures(hostId: HostId): void {
+function forgetHostFigures(hostId: HostId): void {
   forgottenAt.set(hostId, ++forgetSequence);
   useHostMetricsStore.getState().forget(hostId);
   if (snapshot.hosts.some((h) => h.descriptor.id === hostId && h.summary !== null)) {

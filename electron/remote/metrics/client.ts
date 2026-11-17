@@ -311,6 +311,15 @@ export class HostMetricsClient {
     return this.rings.get(hostId)?.[0] ?? null;
   }
 
+  /**
+   * Drop a forgotten host's history now. A re-pointed host keeps its id, and
+   * the registry only moves on after its views have heard, so a seed or a
+   * list read in between would otherwise hand them the old machine's figures.
+   */
+  forgetHistory(hostId: HostId): void {
+    this.rings.delete(hostId);
+  }
+
   /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     return this.receipts.get(summary) ?? null;

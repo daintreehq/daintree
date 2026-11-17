@@ -723,6 +723,8 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
       }
     },
   },
+  // Before the views hear: whatever they read after that is the new machine's.
+  { name: "load history", run: (hostId) => getRemoteService("hostMetrics")?.forgetHistory(hostId) },
   {
     name: "view storage",
     run: (hostId) => broadcastLocal({ type: "host-forgotten", hostId }),

@@ -216,21 +216,34 @@ describe("SettingsDialog close with an unsaved edit on another machine (#17208)"
   });
 
   it("opens a fresh page on a host re-pointed while its page was showing", async () => {
+    const held = "Save or discard these changes to close Settings";
+    const shownValues = () =>
+      screen.getAllByLabelText<HTMLInputElement>(/^Value of /).map((input) => input.value);
     hostEnvDrafts.set("host-b", draft("C.UTF-8"));
     const onClose = await openOnEnvironment();
     await pressEscape();
-    await screen.findByText("Save or discard these changes to close Settings");
+    await screen.findByText(held);
+
+    // Twice over: each re-point is another machine, not only the first.
+    for (const edit of ["POSIX", "en_US.UTF-8"]) {
+      act(() => hostEnvDrafts.forget("host-b"));
+      await waitFor(() => expect(screen.queryByText(held)).toBeNull());
+      expect(shownValues()).not.toContain("C.UTF-8");
+      expect(hostEnvDrafts.get("host-b")).toBeUndefined();
+
+      // The fresh page keeps its own edit, which holds the close as before.
+      const hostValue = screen
+        .getAllByLabelText<HTMLInputElement>(/^Value of /)
+        .find((input) => input.value === "C")!;
+      fireEvent.change(hostValue, { target: { value: edit } });
+      expect(hostEnvDrafts.get("host-b")?.rows[0]?.value).toBe(edit);
+      await pressEscape();
+      expect(onClose).not.toHaveBeenCalled();
+      await screen.findByText(held);
+    }
 
     act(() => hostEnvDrafts.forget("host-b"));
-
-    await waitFor(() => {
-      expect(screen.queryByText("Save or discard these changes to close Settings")).toBeNull();
-    });
-    const values = screen
-      .getAllByLabelText<HTMLInputElement>(/^Value of /)
-      .map((input) => input.value);
-    expect(values).not.toContain("C.UTF-8");
-    expect(hostEnvDrafts.get("host-b")).toBeUndefined();
+    await waitFor(() => expect(screen.queryByText(held)).toBeNull());
     await pressEscape();
     expect(onClose).toHaveBeenCalledTimes(1);
   });

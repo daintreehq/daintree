@@ -1,27 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
 import { forgetHostLocalState, installForgetHostLocalState } from "../forgetHostLocalState";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
-import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
-import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
-import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
 import {
   _resetCrossHostFleetForTesting,
   armCrossHostTarget,
   getArmedCrossHostTargets,
 } from "@/components/Fleet/crossHostFleet";
-import {
-  _resetHostProjectsForTesting,
-  setHostProjectsLoader,
-  useHostProjectLists,
-  type HostProjectRef,
-} from "@/components/Hosts/hostProjects";
-import { useHostWorktreeListings } from "@/components/Hosts/hostWorktrees";
 import { hostEnvDrafts, type HostEnvDraft } from "@/components/Settings/Hosts/hostEnvDrafts";
 
 const LOCAL = "a".repeat(64);
@@ -153,96 +142,37 @@ describe("installForgetHostLocalState", () => {
 
 describe("forgetHostLocalState: what the host's id still holds in memory", () => {
   const HOSTS = ["studio", "studio-2"];
-  const listWorktrees = vi.fn<(payload: { hostId: string }) => Promise<HostWorktreeEntry[]>>();
-  const loadProjects = vi.fn<(hostId: string) => Promise<HostProjectRef[]>>();
-
-  const project = (hostId: string): HostProjectRef => ({
-    id: `${hostId}-app`,
-    name: "app",
-    path: "/srv/app",
-  });
-  const worktree = (hostId: string) =>
-    ({ hostId, projectId: `${hostId}-app`, worktreeId: "wt", name: "main" }) as HostWorktreeEntry;
   const draft = (value: string): HostEnvDraft => ({
     rows: [{ id: "r1", key: "TOKEN", value }],
     base: { record: {}, revision: "r1" },
     movedUnder: false,
   });
-  const summary = (hostId: string) => ({ hostId, sampledAt: 1 }) as HostMetricsSummary;
-
-  function renderCatalogue() {
-    return renderHook(() => ({
-      projects: useHostProjectLists(HOSTS),
-      worktrees: useHostWorktreeListings(HOSTS, true),
-    }));
-  }
 
   beforeEach(() => {
     localStorage.clear();
-    _resetHostProjectsForTesting();
     _resetCrossHostFleetForTesting();
-    useHostMetricsStore.getState().reset();
     hostEnvDrafts.clear();
-    listWorktrees.mockReset().mockImplementation(async ({ hostId }) => [worktree(hostId)]);
-    loadProjects.mockReset().mockImplementation(async (hostId) => [project(hostId)]);
-    vi.stubGlobal("electron", { hostMetrics: { listWorktrees } });
-    setHostProjectsLoader(loadProjects);
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
-    _resetHostProjectsForTesting();
     _resetCrossHostFleetForTesting();
     hostEnvDrafts.clear();
   });
 
-  it("clears the host's drafts, fleet agents, lists and load history, and no other host's", async () => {
-    const { result } = renderCatalogue();
-    await waitFor(() => {
-      expect(result.current.projects.size).toBe(2);
-      expect(result.current.worktrees.size).toBe(2);
-    });
+  it("clears the host's unsaved environment edit and armed agents, and no other host's", () => {
     for (const hostId of HOSTS) {
       armCrossHostTarget({ hostId, hostName: hostId, terminalId: "t1", title: "Claude" });
       hostEnvDrafts.set(hostId, draft(hostId));
-      useHostMetricsStore.getState().apply(summary(hostId));
     }
+    const identity = hostEnvDrafts.identity("studio");
 
-    act(() => forgetHostLocalState("studio"));
+    forgetHostLocalState("studio");
 
-    expect([...result.current.projects.keys()]).toEqual(["studio-2"]);
-    expect([...result.current.worktrees.keys()]).toEqual(["studio-2"]);
     expect(getArmedCrossHostTargets().map((t) => t.hostId)).toEqual(["studio-2"]);
     expect(hostEnvDrafts.get("studio")).toBeUndefined();
+    expect(hostEnvDrafts.identity("studio")).not.toBe(identity);
+    // The remaining host's edit is still the one a close holds on.
     expect(hostEnvDrafts.get("studio-2")).toEqual(draft("studio-2"));
     expect(hostEnvDrafts.firstUnsaved(() => true)).toBe("studio-2");
-    expect([...useHostMetricsStore.getState().history.keys()]).toEqual(["studio-2"]);
-  });
-
-  it("drops lists the old machine was still answering with", async () => {
-    let answerProjects!: () => void;
-    let answerWorktrees!: () => void;
-    loadProjects.mockImplementation(async (hostId) => {
-      if (hostId === "studio") await new Promise<void>((resolve) => (answerProjects = resolve));
-      return [project(hostId)];
-    });
-    listWorktrees.mockImplementation(async ({ hostId }) => {
-      if (hostId === "studio") await new Promise<void>((resolve) => (answerWorktrees = resolve));
-      return [worktree(hostId)];
-    });
-    const { result } = renderCatalogue();
-    await waitFor(() => {
-      expect([...result.current.projects.keys()]).toEqual(["studio-2"]);
-      expect([...result.current.worktrees.keys()]).toEqual(["studio-2"]);
-    });
-
-    act(() => forgetHostLocalState("studio"));
-    await act(async () => {
-      answerProjects();
-      answerWorktrees();
-    });
-
-    expect([...result.current.projects.keys()]).toEqual(["studio-2"]);
-    expect([...result.current.worktrees.keys()]).toEqual(["studio-2"]);
   });
 });
