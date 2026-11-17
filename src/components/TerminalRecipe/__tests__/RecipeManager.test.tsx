@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -40,7 +40,13 @@ vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/native
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: ReactNode }) => (
+    <div data-testid="tooltip-content">{children}</div>
+  ),
+}));
+const truncation = vi.hoisted(() => ({ isTruncated: false }));
+vi.mock("@/hooks/useTruncationDetection", () => ({
+  useTruncationDetection: () => ({ ref: () => {}, isTruncated: truncation.isTruncated }),
 }));
 // Items rendered inline so the row's menu can be read without opening it.
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -143,9 +149,37 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  truncation.isTruncated = false;
   notifyMock.mockReset();
   useProjectStore.setState({
     currentProject: { id: "proj", name: "proj", path: "/p", emoji: "🌲", lastOpened: 0 } as Project,
+  });
+});
+
+describe("RecipeManager — open triggers and clipped summaries (#17280)", () => {
+  it("holds the hover fill on the open More and Import triggers", () => {
+    seed({ global: GLOBAL });
+    renderManager();
+    const more = screen.getAllByRole("button", { name: /^More actions for recipe/ })[0]!;
+    const imp = screen.getAllByRole("button", { name: /Import/ })[0]!;
+    for (const el of [more, imp]) {
+      expect(el.className).toContain("aria-expanded:bg-overlay-hover");
+      expect(el.className).not.toContain("aria-expanded:bg-overlay-raised");
+    }
+  });
+
+  it("discloses the full terminal summary only when it is clipped", () => {
+    const summaryTips = () =>
+      screen
+        .queryAllByTestId("tooltip-content")
+        .filter((e) => /^\d+ terminals?/.test(e.textContent ?? ""));
+    seed({ global: GLOBAL });
+    renderManager();
+    expect(summaryTips()).toHaveLength(0);
+    cleanup();
+    truncation.isTruncated = true;
+    renderManager();
+    expect(summaryTips().length).toBeGreaterThan(0);
   });
 });
 
