@@ -100,18 +100,14 @@ export class CloudHosts {
       hostName: null,
     };
     const requestedAt = (this.deps.now ?? Date.now)();
-    const { hostId } = await this.lifecycle.create(
-      machine as CloudHostCreateRequest,
-      createdFor,
-      {
-        projectId,
-        worktreeId,
-        worktreePath: worktreeId,
-        label: worktreeName,
-        requestedAt,
-        createdMachine: true,
-      }
-    );
+    const { hostId } = await this.lifecycle.create(machine as CloudHostCreateRequest, createdFor, {
+      projectId,
+      worktreeId,
+      worktreePath: worktreeId,
+      label: worktreeName,
+      requestedAt,
+      createdMachine: true,
+    });
     return { hostId, requestedAt };
   }
 
