@@ -12,7 +12,9 @@ vi.mock("../crossHostFleet", () => ({
 import { FleetHostComposer } from "../FleetHostComposer";
 
 describe("FleetHostComposer", () => {
-  beforeEach(() => sendDraftToFleet.mockClear());
+  beforeEach(() => {
+    sendDraftToFleet.mockClear();
+  });
 
   const type = (value: string) =>
     fireEvent.change(screen.getByTestId("fleet-host-composer"), { target: { value } });
