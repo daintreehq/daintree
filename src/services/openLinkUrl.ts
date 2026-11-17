@@ -163,5 +163,9 @@ export async function openLinkUrl(url: string): Promise<void> {
     return;
   }
   // The store raises its own notice when the panel limit refuses the pane.
-  await store.addPanel({ kind: "browser", browserUrl: target, worktreeId: worktreeId ?? undefined });
+  await store.addPanel({
+    kind: "browser",
+    browserUrl: target,
+    worktreeId: worktreeId ?? undefined,
+  });
 }

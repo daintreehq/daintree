@@ -131,7 +131,11 @@ describe("openLinkUrl for a loopback address", () => {
     // The preview maps the address onto its own proxy; its stored URL is its own.
     expect(setBrowserUrl).not.toHaveBeenCalled();
     expect(navigatedTo()).toEqual([{ url: "http://localhost:5173/settings", terminalId: "p1" }]);
-    expect(dispatch).not.toHaveBeenCalledWith("system.openExternal", expect.anything(), expect.anything());
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("passes over a preview that isn't running, serves another port, or belongs elsewhere", async () => {

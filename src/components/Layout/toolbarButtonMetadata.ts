@@ -10,15 +10,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import {
-  FolderTree,
-  Folders,
-  History,
-  Link,
-  Package,
-  Plus,
-  Telescope,
-} from "@/components/icons";
+import { FolderTree, Folders, History, Link, Package, Plus, Telescope } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above

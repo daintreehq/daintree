@@ -18,7 +18,11 @@ import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { enterFocusedPanel } from "@/components/Terminal/contentGridFocus";
 import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
-import { hasLauncherLinks, useLinksLauncherLinks, type LinksLauncherLinks } from "@/hooks/useLinksLauncher";
+import {
+  hasLauncherLinks,
+  useLinksLauncherLinks,
+  type LinksLauncherLinks,
+} from "@/hooks/useLinksLauncher";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -93,7 +97,10 @@ function LinkRow({ rowId, title, url, addedByAssistant, onOpen }: LinkRowProps) 
       >
         <Globe className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span id={titleId} className="min-w-0 shrink-0 max-w-[60%] truncate text-sm text-text-primary">
+          <span
+            id={titleId}
+            className="min-w-0 shrink-0 max-w-[60%] truncate text-sm text-text-primary"
+          >
             {title}
           </span>
           <span
