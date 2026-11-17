@@ -143,6 +143,19 @@ describe("globalLinksStore", () => {
       expect(backing.get(PORTAL_KEY)).toBe(legacy);
     });
 
+    it("keeps the Portal's payload when the list on disk is at a version hydration refuses", async () => {
+      const legacy = portalPayload([portalLink("user-a", "user")]);
+      const backing = installLocalStorage({
+        [KEY]: JSON.stringify({ state: { links: [portalLink("user-a", "user")] }, version: 1 }),
+        [PORTAL_KEY]: legacy,
+      });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await loadStore();
+
+      expect(backing.get(PORTAL_KEY)).toBe(legacy);
+    });
+
     it("keeps the Portal's payload when the list on disk can't be read back", async () => {
       const legacy = portalPayload([portalLink("user-a", "user")]);
       const backing = installLocalStorage({ [KEY]: "{not json", [PORTAL_KEY]: legacy });
@@ -216,12 +229,16 @@ describe("globalLinksStore", () => {
       ["a payload with no state", JSON.stringify({ version: 0 })],
       ["a payload with no links", portalPayload([]).replace('"links":[]', '"other":1')],
       ["links that aren't a list", JSON.stringify({ state: { links: { a: 1 } }, version: 0 })],
-    ])("treats %s as no links", async (_label, raw) => {
-      const backing = installLocalStorage({ [PORTAL_KEY]: raw });
-      const { useGlobalLinksStore } = await loadStore();
-      expect(useGlobalLinksStore.getState().links).toEqual([]);
-      expect(stored(backing)).toEqual({ state: { links: [] }, version: 0 });
-    });
+    ])(
+      "treats %s as no links, keeping it since nothing shows it held none",
+      async (_label, raw) => {
+        const backing = installLocalStorage({ [PORTAL_KEY]: raw });
+        const { useGlobalLinksStore } = await loadStore();
+        expect(useGlobalLinksStore.getState().links).toEqual([]);
+        expect(stored(backing)).toEqual({ state: { links: [] }, version: 0 });
+        expect(backing.get(PORTAL_KEY)).toBe(raw);
+      }
+    );
 
     it("skips malformed entries and keeps the rest", async () => {
       installLocalStorage({

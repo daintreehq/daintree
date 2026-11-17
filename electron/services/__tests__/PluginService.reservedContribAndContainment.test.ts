@@ -232,6 +232,10 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import {
+  getPluginContextMenuItems,
+  unregisterPluginContextMenuItems,
+} from "../pluginContextMenuRegistry.js";
+import {
   clearPluginKeybindingRegistry,
   getPluginKeybindings,
 } from "../pluginKeybindingRegistry.js";
@@ -678,24 +682,57 @@ describe("reserved contribution point warnings", () => {
             { actionId: "portal.closeTab", combo: "Cmd+Shift+7", scope: "global" },
           ],
           menuItems: [{ label: "Open chat", actionId: "portal.toggle", location: "view" }],
+          toolbarButtons: [
+            { id: "chat", label: "Chat", iconId: "globe", actionId: "portal.toggle" },
+            {
+              id: "more",
+              label: "More",
+              iconId: "globe",
+              actionId: "portal.openUrl",
+              menu: [{ actionId: "acme.retired-action.open", label: "Open" }],
+            },
+          ],
+          contextMenus: [{ actionId: "portal.copyUrl", location: "browser", label: "Copy URL" }],
         },
       });
 
       const service = new PluginService(tmpDir, "0.7.5");
-      await service.initialize();
+      try {
+        await service.initialize();
 
-      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-action");
-      const registered = getPluginKeybindings()
-        .filter((entry) => entry.pluginId === "acme.retired-action")
-        .map((entry) => entry.item.combo);
-      expect(registered).toEqual(["Cmd+Shift+8"]);
-      expect(registerPluginMenuItem).not.toHaveBeenCalled();
-      const lines =
-        service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.retired-action")
-          ?.logLines ?? [];
-      expect(
-        lines.filter((l) => l.level === "warn" && l.message.includes("no longer has"))
-      ).toHaveLength(2);
+        expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-action");
+        const registered = getPluginKeybindings()
+          .filter((entry) => entry.pluginId === "acme.retired-action")
+          .map((entry) => entry.item.combo);
+        expect(registered).toEqual(["Cmd+Shift+8"]);
+        expect(registerPluginMenuItem).not.toHaveBeenCalled();
+        // The button with nothing but the retired action goes; the one with a
+        // menu keeps it, without the action.
+        expect(registerToolbarButton).toHaveBeenCalledTimes(1);
+        const button = vi.mocked(registerToolbarButton).mock.calls[0]![0];
+        expect(button.id).toBe("acme.retired-action.more");
+        expect(button.menu).toEqual([{ actionId: "acme.retired-action.open", label: "Open" }]);
+        expect(button).not.toHaveProperty("actionId");
+        expect(
+          getPluginContextMenuItems().filter((e) => e.pluginId === "acme.retired-action")
+        ).toEqual([]);
+        const lines =
+          service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.retired-action")
+            ?.logLines ?? [];
+        expect(
+          lines
+            .filter((l) => l.level === "warn" && l.message.includes("no longer has"))
+            .map((l) => l.message.split(" ")[0])
+        ).toEqual([
+          "toolbarButtons[0]",
+          "toolbarButtons[1]",
+          "menuItems[0]",
+          "keybindings[1]",
+          "contextMenus[0]",
+        ]);
+      } finally {
+        unregisterPluginContextMenuItems("acme.retired-action");
+      }
     });
 
     it("loads a plugin whose only binding is retired, registering nothing", async () => {

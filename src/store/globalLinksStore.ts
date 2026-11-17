@@ -10,6 +10,7 @@ import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import {
   GLOBAL_LINKS_STORAGE_KEY,
   globalListOnDiskHolds,
+  linksIn,
   readLegacyPortalPayload,
   readLegacyUserLinks,
   removeLegacyPortalPayload,
@@ -177,13 +178,15 @@ function isStored(key: string): boolean | null {
 /**
  * Removes the Portal's payload, which nothing else reads since the dock went
  * (#17256), once the global list on disk holds every link it kept. A payload
- * that couldn't be read stays, and so does one whose links the list lacks: a
- * move that couldn't read it, followed by an edit that wrote the list, must
- * not cost the person the links it never carried over.
+ * that couldn't be read stays, so does one holding no link list to check, and
+ * so does one whose links the list lacks: a move that couldn't read it,
+ * followed by an edit that wrote the list, must not cost the person the links
+ * it never carried over.
  */
 function retireLegacyPortalPayload(legacy: LegacyPortalPayload): void {
-  if (legacy.kind !== "read") return;
-  if (globalListOnDiskHolds(readLegacyUserLinks(legacy.envelope))) removeLegacyPortalPayload();
+  if (legacy.kind !== "read" || !linksIn(legacy.envelope)) return;
+  const links = readLegacyUserLinks(legacy.envelope);
+  if (globalListOnDiskHolds(links, PERSIST_VERSION)) removeLegacyPortalPayload();
 }
 
 /**

@@ -1625,20 +1625,33 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
-    it.each(["left", "right"] as const)(
-      "drops a retired Portal toggle saved on the %s side and in the pin map, closing the gap (#17256)",
-      async (side) => {
+    it.each([
+      [
+        "between buttons on the left",
+        ["terminal", "portal-toggle", "acme.thing"],
+        ["settings", "problems"],
+      ],
+      [
+        "ahead of a default on the left",
+        ["portal-toggle", "terminal", "acme.thing"],
+        ["settings", "problems"],
+      ],
+      [
+        "between buttons on the right",
+        ["terminal", "acme.thing"],
+        ["settings", "portal-toggle", "problems"],
+      ],
+    ])(
+      "drops a retired Portal toggle saved %s and in the pin map, closing the gap (#17256)",
+      async (_where, leftButtons, rightButtons) => {
         const blob = (withPortal: boolean) => {
-          const portal = withPortal ? ["portal-toggle"] : [];
+          const live = (ids: string[]) =>
+            withPortal ? ids : ids.filter((id) => id !== "portal-toggle");
           return JSON.stringify({
             state: {
               layout: {
-                leftButtons:
-                  side === "left"
-                    ? ["terminal", ...portal, "acme.thing"]
-                    : ["terminal", "acme.thing"],
-                rightButtons:
-                  side === "right" ? ["settings", ...portal, "problems"] : ["settings", "problems"],
+                leftButtons: live(leftButtons),
+                rightButtons: live(rightButtons),
                 pinnedButtons: {
                   ...(withPortal ? { "portal-toggle": true } : {}),
                   "copy-tree": false,

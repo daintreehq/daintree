@@ -40,8 +40,17 @@ export const RETIRED_BUILT_IN_ACTION_IDS = [
 
 const RETIRED: ReadonlySet<string> = new Set(RETIRED_BUILT_IN_ACTION_IDS);
 
-export function isRetiredBuiltInActionId(actionId: string | undefined): boolean {
-  return actionId !== undefined && RETIRED.has(actionId);
+/**
+ * Whether `actionId` names a retired built-in. An id inside the plugin's own
+ * namespace (`ownNamespacePrefix`, its name and a dot) is the plugin's own
+ * command, whatever it spells.
+ */
+export function isRetiredBuiltInActionId(
+  actionId: string | undefined,
+  ownNamespacePrefix?: string
+): boolean {
+  if (actionId === undefined || !RETIRED.has(actionId)) return false;
+  return ownNamespacePrefix === undefined || !actionId.startsWith(ownNamespacePrefix);
 }
 
 /** Contribution arrays whose entries name an action by `actionId`. */
@@ -61,5 +70,5 @@ export function retiredActionIdMessage(
   index: number,
   actionId: string
 ): string {
-  return `${contribution}[${index}] names "${actionId}", a built-in action Daintree no longer has — it loads but is dropped, and is not moved to another action. Remove it.`;
+  return `${contribution}[${index}] names "${actionId}", a built-in action Daintree no longer has — it loads, but the action never runs and is not moved to another. Remove it.`;
 }

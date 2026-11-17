@@ -184,8 +184,11 @@ function mergeButtonList(
   // No list of our own: still honor a default the user parked on the other side.
   if (!persisted) return defaults.filter((id) => !onOtherSide.has(id));
 
-  const positioned = new Set([...persisted, ...onOtherSide]);
-  const result = [...persisted];
+  // A retired button holds no slot, so a missing default lands where it would
+  // in the same list saved without it.
+  const live = persisted.filter((id) => !RETIRED_BUTTON_IDS.has(id));
+  const positioned = new Set([...live, ...onOtherSide]);
+  const result = [...live];
 
   // Find buttons in defaults that aren't positioned on either side (new buttons)
   for (let i = 0; i < defaults.length; i++) {

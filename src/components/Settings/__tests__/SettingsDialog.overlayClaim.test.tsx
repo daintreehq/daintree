@@ -61,6 +61,8 @@ describe("SettingsDialog overlay claim (#15029)", () => {
     await waitFor(() => expect(useUIStore.getState().overlayStack.length).toBeGreaterThan(0));
 
     rerender(<SettingsDialog isOpen={false} onClose={() => {}} defaultTab="general" />);
+    // Still painted while it fades out, so still covering what it covered.
+    expect(useUIStore.getState().overlayStack.length).toBeGreaterThan(0);
 
     await waitFor(() => expect(useUIStore.getState().overlayStack).toEqual([]));
   });

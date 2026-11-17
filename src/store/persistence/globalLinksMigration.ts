@@ -92,7 +92,7 @@ function readWithBackup(key: string): { live: string | null; backup: string | nu
 }
 
 /** The `state.links` list an envelope holds, or null when it holds none. */
-function linksIn(envelope: unknown): unknown[] | null {
+export function linksIn(envelope: unknown): unknown[] | null {
   if (!envelope || typeof envelope !== "object") return null;
   const state = field(envelope, "state");
   if (!state || typeof state !== "object") return null;
@@ -120,15 +120,20 @@ export function readLegacyPortalPayload(): LegacyPortalPayload {
 /**
  * Whether the global list on disk holds every one of `links`, read as its
  * hydration reads it: the live copy, or its backup when the live one is
- * corrupt. False when it can't be read or holds no list, so the Portal's copy
- * is never let go for a list that doesn't carry its links.
+ * corrupt, at the store's own `version`. False when it can't be read, holds no
+ * list, or is at a version hydration would refuse, so the Portal's copy is
+ * never let go for a list that doesn't carry its links.
  */
-export function globalListOnDiskHolds(links: readonly GlobalLink[]): boolean {
+export function globalListOnDiskHolds(links: readonly GlobalLink[], version: number): boolean {
   const stored = readWithBackup(GLOBAL_LINKS_STORAGE_KEY);
   if (!stored || stored.live === null) return false;
   const context = { store: "globalLinksStore", key: GLOBAL_LINKS_STORAGE_KEY };
   const live = safeJSONParse<unknown>(stored.live, context, undefined);
   const envelope = live !== undefined ? live : safeJSONParse<unknown>(stored.backup, context, null);
+  if (!envelope || typeof envelope !== "object") return false;
+  // Hydration refuses only a numbered version other than its own.
+  const storedVersion = field(envelope, "version");
+  if (typeof storedVersion === "number" && storedVersion !== version) return false;
   const list = linksIn(envelope);
   if (!list) return false;
   const ids = new Set<string>();

@@ -337,9 +337,11 @@ export class PluginContributionRegistrar {
       pluginDeclaresConnections(manifest);
 
     for (const btn of manifest.contributes.toolbarButtons) {
-      // A retired built-in action never fires: the button is dropped whole,
-      // and the post-commit log below says why it is missing.
-      if (isRetiredBuiltInActionId(btn.actionId)) continue;
+      // A retired built-in action never runs: a button with nothing else to
+      // offer is dropped, one with a popover or menu keeps those without it,
+      // and the post-commit log below says why.
+      const retiredAction = isRetiredBuiltInActionId(btn.actionId, ownPrefix);
+      if (retiredAction && btn.popover === undefined && !btn.menu?.length) continue;
       // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
       // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
       // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
@@ -383,7 +385,7 @@ export class PluginContributionRegistrar {
           ...base,
           popover: { viewId: btn.popover.viewId, panelKindId },
         });
-      } else if (btn.actionId !== undefined) {
+      } else if (btn.actionId !== undefined && !retiredAction) {
         registerToolbarButton({ ...base, actionId: qualifyActionId(btn.actionId) });
       } else if (base.menu !== undefined) {
         registerToolbarButton(base);
@@ -451,7 +453,7 @@ export class PluginContributionRegistrar {
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
-      if (isRetiredBuiltInActionId(menuItem.actionId)) continue;
+      if (isRetiredBuiltInActionId(menuItem.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, menuItem.when);
       registerPluginMenuItem(pluginId, {
         ...menuItem,
@@ -464,7 +466,7 @@ export class PluginContributionRegistrar {
       // scope would fire the key where its author never bound it. It is
       // dropped whole; the post-commit log below says why it is missing.
       if (isRetiredPluginKeybindingScope(keybinding.scope)) continue;
-      if (isRetiredBuiltInActionId(keybinding.actionId)) continue;
+      if (isRetiredBuiltInActionId(keybinding.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, keybinding.when);
       registerPluginKeybinding(pluginId, {
         ...keybinding,
@@ -476,7 +478,7 @@ export class PluginContributionRegistrar {
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
-      if (isRetiredBuiltInActionId(ctxMenu.actionId)) continue;
+      if (isRetiredBuiltInActionId(ctxMenu.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, ctxMenu.when);
       registerPluginContextMenuItem(pluginId, {
         ...ctxMenu,
@@ -792,7 +794,7 @@ export class PluginContributionRegistrar {
     for (const contribution of ACTION_ID_CONTRIBUTIONS) {
       const entries: readonly { actionId?: string }[] = manifest.contributes[contribution];
       for (const [index, entry] of entries.entries()) {
-        if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId)) {
+        if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId, ownPrefix)) {
           this.deps.recordPluginLog(
             plugin,
             pluginId,

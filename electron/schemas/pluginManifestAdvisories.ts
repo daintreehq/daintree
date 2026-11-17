@@ -108,11 +108,12 @@ export async function collectManifestAdvisories({
     }
   }
 
-  // Likewise a retired built-in action: the contribution naming it is dropped.
+  // Likewise a retired built-in action: the host never runs it.
+  const ownPrefix = `${manifest.name}.`;
   for (const contribution of ACTION_ID_CONTRIBUTIONS) {
     const entries: readonly { actionId?: string }[] = manifest.contributes[contribution];
     for (const [index, entry] of entries.entries()) {
-      if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId)) {
+      if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId, ownPrefix)) {
         warnings.push(retiredActionIdMessage(contribution, index, entry.actionId));
       }
     }

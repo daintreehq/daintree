@@ -105,7 +105,10 @@ export function validateContributedActionIds(
 
       // A retired built-in loads inert: the registrar drops the contribution
       // and the advisories say why, rather than failing the whole manifest.
-      if (BUILT_IN_ACTION_ID_SET.has(actionId) || isRetiredBuiltInActionId(actionId)) {
+      if (
+        BUILT_IN_ACTION_ID_SET.has(actionId) ||
+        isRetiredBuiltInActionId(actionId, ownNamespacePrefix)
+      ) {
         return;
       }
 
