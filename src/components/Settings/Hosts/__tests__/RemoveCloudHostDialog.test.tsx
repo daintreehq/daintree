@@ -161,7 +161,9 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
   it("keeps Boat's keep and delete choices and their words", () => {
     open(status({ createdFor: null }));
     expect(screen.getByRole("radio", { name: /Keep it on Boat/ })).toBeTruthy();
-    expect(dialogText()).toContain("It stays stopped in your account. You can add it back from Add host.");
+    expect(dialogText()).toContain(
+      "It stays stopped in your account. You can add it back from Add host."
+    );
     fireEvent.click(screen.getByRole("radio", { name: /Delete the machine too/ }));
     expect(screen.getByRole("button", { name: "Delete machine" })).toBeTruthy();
     expect(typedName()).not.toBeNull();
@@ -225,10 +227,7 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
   });
 
   it("needs no console for a host that never had a machine", async () => {
-    open(
-      status({ resourceId: null, machine: "not-created" }),
-      providerWith({ deletion: false })
-    );
+    open(status({ resourceId: null, machine: "not-created" }), providerWith({ deletion: false }));
     expect(dialogText()).toContain("No machine was created for it.");
     expect(screen.queryByTestId("remove-cloud-host-console")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Remove host" }));

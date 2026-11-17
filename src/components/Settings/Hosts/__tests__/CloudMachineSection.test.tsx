@@ -29,10 +29,7 @@ vi.mock("@/clients/cloudHostsClient", () => ({
 }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
-import {
-  BOAT_PROVIDER,
-  provider,
-} from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -173,8 +170,7 @@ describe("CloudMachineSection provisioning rows", () => {
 });
 
 describe("CloudMachineSection stopped billing (#17346)", () => {
-  const billing = () =>
-    screen.queryByTestId("cloud-machine-stopped-billing")?.textContent ?? null;
+  const billing = () => screen.queryByTestId("cloud-machine-stopped-billing")?.textContent ?? null;
   const stopped = status({
     resourceId: "bx_23456789",
     machine: "stopped",

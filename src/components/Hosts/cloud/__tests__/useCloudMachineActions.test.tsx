@@ -100,9 +100,7 @@ describe("useCloudMachineActions confirms by what the provider declares (#17346)
   it("points to the console from the Stop confirm when Daintree can't delete there", () => {
     show(status(), provider({ stoppedComputeBilled: true, deletion: false }));
     act(() => actions!.requestStop("build", "build"));
-    expect(dialogText()).toContain(
-      "To stop paying for it, delete the machine in Acme's console."
-    );
+    expect(dialogText()).toContain("To stop paying for it, delete the machine in Acme's console.");
   });
 
   it("keeps Boat's Start confirm, and says a stopped machine already bills where it does", () => {
