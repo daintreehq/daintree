@@ -327,8 +327,9 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
         }}
         aria-label={`${mark.chrome.label}${mark.state ? `, ${SESSION_LABELS[mark.state]}` : ""}: ${text}`}
         className={cn(
-          "flex h-5 w-full min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-left",
-          "text-text-secondary hover:text-text-primary transition-colors",
+          // 24px, the sidebar session row's own floor (WCAG 2.5.8).
+          "flex min-h-6 w-full min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-left",
+          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
           "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         )}
       >
@@ -634,8 +635,13 @@ export function WorktreeOverviewRow({
                 </TruncatedTooltip>
                 {isCurrent && <PaletteCurrentLabel />}
                 {exception && (
-                  <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
-                    <SEVERITY_GLYPH.error className="h-3.5 w-3.5" aria-hidden="true" />
+                  // The glyph carries the severity hue; the 11px words stay in
+                  // primary ink, which holds 4.5:1 on light themes.
+                  <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-text-primary">
+                    <SEVERITY_GLYPH.error
+                      className="h-3.5 w-3.5 text-status-error"
+                      aria-hidden="true"
+                    />
                     {exception}
                   </span>
                 )}
@@ -798,18 +804,17 @@ export function WorktreeOverviewRow({
                     <span>{pluralize(fileCount, "file")}</span>
                   )}
                   {(ahead > 0 || behind > 0) && (
-                    <span className="font-mono">
+                    // Numbers and the behind arrow stay neutral, as in
+                    // UpstreamSyncBadge: routine drift is not an alarm.
+                    <span className="font-mono text-text-secondary">
                       {ahead > 0 && (
-                        <span className="text-status-success" aria-label={`${ahead} ahead`}>
-                          ↑{ahead}
+                        <span aria-label={`${ahead} ahead`}>
+                          <span className="text-status-success">↑</span>
+                          {ahead}
                         </span>
                       )}
                       {ahead > 0 && behind > 0 && " "}
-                      {behind > 0 && (
-                        <span className="text-status-warning" aria-label={`${behind} behind`}>
-                          ↓{behind}
-                        </span>
-                      )}
+                      {behind > 0 && <span aria-label={`${behind} behind`}>↓{behind}</span>}
                     </span>
                   )}
                 </div>
