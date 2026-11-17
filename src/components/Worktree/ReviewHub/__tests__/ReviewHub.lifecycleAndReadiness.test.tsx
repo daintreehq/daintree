@@ -487,6 +487,48 @@ describe("ReviewHub", () => {
   });
 
   describe("autoStageOnOpen (issue #7886)", () => {
+    const overConflicts: Array<[string, Partial<StagingStatus>]> = [
+      [
+        "a halted merge with only an unrelated file unstaged",
+        {
+          repoState: "MERGING",
+          repoOperationId: "merge-a",
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
+        },
+      ],
+      [
+        "conflicts left with no operation in progress",
+        {
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
+        },
+      ],
+      ["a halted rebase between conflicts", { repoState: "REBASING", repoOperationId: "rb-1" }],
+    ];
+    it.each(overConflicts)("never stages everything over %s", async (_case, overrides) => {
+      // Staging everything would stage the conflicted file markers and all,
+      // which marks it resolved; opening the hub to continue is ordinary (#17559).
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [{ path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 }],
+          ...overrides,
+        })
+      );
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalled());
+      await act(async () => {});
+      expect(stageAllMock).not.toHaveBeenCalled();
+    });
+
     it("stages all unstaged files exactly once on open when no files are staged", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({

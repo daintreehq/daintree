@@ -1818,6 +1818,31 @@ describe("ReviewHub", () => {
         );
       });
 
+      it("keeps the abort confirm open over an ordinary abort failure", async () => {
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+        abortRepositoryOperationMock.mockRejectedValueOnce(new Error("fatal: index.lock exists"));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        const dialog = await screen.findByRole("alertdialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+
+        await waitFor(() => expect(abortRepositoryOperationMock).toHaveBeenCalledTimes(1));
+        await act(async () => {});
+        expect(screen.getByRole("alertdialog")).toBeTruthy();
+      });
+
+      it("treats a status with no identity field at all as unidentified", async () => {
+        // An older host answers without the field (#17559): it identifies nothing.
+        const legacy = resolvedMerge();
+        Reflect.deleteProperty(legacy, "repoOperationId");
+        getStagingStatusMock.mockResolvedValue(legacy);
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+        await screen.findByText(/Couldn't identify this merge/);
+        const abort = screen.getByRole("button", { name: /^Abort /i }) as HTMLButtonElement;
+        expect(abort.disabled).toBe(true);
+      });
+
       it("offers neither Abort nor Continue for a merge the read couldn't identify", async () => {
         getStagingStatusMock.mockResolvedValue(resolvedMerge({ repoOperationId: null }));
         render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);

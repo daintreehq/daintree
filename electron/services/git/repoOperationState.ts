@@ -176,6 +176,10 @@ export async function readRepoOperationId(
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile()) return null;
     const content = await handle.readFile("utf8");
+    // An open handle keeps reading a file another client has since unlinked,
+    // so the answer counts only while the path still names that same file.
+    const current = await fs.promises.stat(file, { bigint: true });
+    if (current.ino !== stat.ino || current.dev !== stat.dev) return null;
     return createHash("sha256")
       .update([state, anchor, String(stat.ino), String(stat.mtimeNs), content].join("\0"))
       .digest("hex")

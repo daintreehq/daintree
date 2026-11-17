@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +40,27 @@ describe("readRepoOperationId (#17559)", () => {
     expect(await readRepoOperationId(gitDir, "MERGING")).toBe(first);
 
     await recreate("MERGE_HEAD", `${OID_A}\n`);
-    expect(await readRepoOperationId(gitDir, "MERGING")).not.toBe(first);
+    const restarted = await readRepoOperationId(gitDir, "MERGING");
+    expect(restarted).toEqual(expect.any(String));
+    expect(restarted).not.toBe(first);
+  });
+
+  it("can't identify an anchor replaced while its open handle was being read", async () => {
+    write("MERGE_HEAD", `${OID_A}\n`);
+    const realOpen = fs.promises.open;
+    const opened = vi.spyOn(fs.promises, "open").mockImplementationOnce(async (...args) => {
+      const handle = await realOpen(...args);
+      // Another client replaces the merge after the handle has the old file.
+      fs.rmSync(path.join(gitDir, "MERGE_HEAD"));
+      write("MERGE_HEAD", `${OID_A}\n`);
+      return handle;
+    });
+    try {
+      expect(await readRepoOperationId(gitDir, "MERGING")).toBeNull();
+    } finally {
+      opened.mockRestore();
+    }
+    expect(await readRepoOperationId(gitDir, "MERGING")).toEqual(expect.any(String));
   });
 
   it("keeps a rebase's identity while its steps advance, for either backend, and not past a restart", async () => {
@@ -57,7 +77,9 @@ describe("readRepoOperationId (#17559)", () => {
       expect(await readRepoOperationId(gitDir, "REBASING")).toBe(first);
 
       await recreate(`${backend}/orig-head`, `${OID_A}\n`);
-      expect(await readRepoOperationId(gitDir, "REBASING")).not.toBe(first);
+      const restarted = await readRepoOperationId(gitDir, "REBASING");
+      expect(restarted).toEqual(expect.any(String));
+      expect(restarted).not.toBe(first);
     }
   });
 

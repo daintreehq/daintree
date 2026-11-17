@@ -1221,16 +1221,9 @@ describe("Git submenu — recovery rows", () => {
       worktree: integrable({ repoState: "REBASING" } as Partial<WorktreeState>),
     });
     gitRow(container, "Continue").click();
-    expect(dispatch).toHaveBeenCalledWith(
-      "worktree.openReviewHub",
-      { worktreeId: "wt-1" },
-      { source: "menu" }
-    );
-    expect(dispatch).not.toHaveBeenCalledWith(
-      "git.continueRepositoryOperation",
-      expect.anything(),
-      expect.anything()
-    );
+    expect(dispatch.mock.calls).toEqual([
+      ["worktree.openReviewHub", { worktreeId: "wt-1" }, { source: "menu" }],
+    ]);
   });
 
   it("passes the in-progress operation to abort, so the confirm can name it", () => {

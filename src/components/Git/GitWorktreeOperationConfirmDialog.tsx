@@ -302,7 +302,8 @@ function GitWorktreeOperationConfirmDialogInner() {
         }
         confirmLabel={nothingInProgress ? "Close" : `Abort ${label}`}
         cancelLabel="Keep working"
-        variant="destructive"
+        // A Close that only declines carries no danger to style.
+        variant={nothingInProgress ? "default" : "destructive"}
         hasPreview={notice !== null}
         // Held until this request's own read settles and identifies the
         // operation: the counts in the description are the whole reason to

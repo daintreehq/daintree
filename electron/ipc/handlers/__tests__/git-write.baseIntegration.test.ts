@@ -1288,7 +1288,11 @@ describe("abort and continue check the operation they were chosen for (#17559)",
       const { handler, gitRan } = setup(channel, state, currentId);
 
       const refusal = handler(null, CWD, CHOSEN) as Promise<void>;
-      await expect(refusal).rejects.toMatchObject({ reason: "repo-operation-changed" });
+      // Plain prose: the preload adds the transport prefix from the reason.
+      await expect(refusal).rejects.toMatchObject({
+        reason: "repo-operation-changed",
+        message: expect.not.stringContaining("[GitError"),
+      });
       await expect(refusal).rejects.toThrow(message);
       expect(gitRan()).toBe(0);
     });

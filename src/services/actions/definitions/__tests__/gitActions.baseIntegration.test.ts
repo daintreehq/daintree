@@ -484,6 +484,7 @@ describe("git.abortRepositoryOperation", () => {
     await settleConfirm(true, undefined, REBASE_A);
     await expect(pending).rejects.toThrow();
 
+    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH, REBASE_A);
     expect(refresh).toHaveBeenCalledWith(WT_ID);
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Git operation changed" })

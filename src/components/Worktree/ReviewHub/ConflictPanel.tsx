@@ -867,7 +867,7 @@ export function ConflictPanel({
     status.rebaseTotalSteps != null &&
     status.rebaseStep < status.rebaseTotalSteps;
   const summary = unidentified
-    ? `Couldn't identify this ${operationNoun} — Abort and Continue wait until it can be read`
+    ? "Abort and Continue wait until it can be read — Refresh to check again"
     : conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
       : mailboxNeedsChanges
@@ -927,11 +927,13 @@ export function ConflictPanel({
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <h3 className="text-sm font-semibold text-text-primary">
-                  {conflictCount > 0
-                    ? `Resolve ${operationNoun} conflicts`
-                    : mailboxNeedsChanges
-                      ? "Nothing staged for this patch"
-                      : `Ready to continue ${operationNoun}`}
+                  {unidentified
+                    ? `Couldn't identify this ${operationNoun}`
+                    : conflictCount > 0
+                      ? `Resolve ${operationNoun} conflicts`
+                      : mailboxNeedsChanges
+                        ? "Nothing staged for this patch"
+                        : `Ready to continue ${operationNoun}`}
                 </h3>
                 {operationState === "REBASING" &&
                   status.rebaseStep != null &&
