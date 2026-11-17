@@ -87,7 +87,8 @@ async function runCli(
   opts: CliOptions = {}
 ): Promise<{ argv: string[]; root: string }> {
   const result = await runCliWith([target], { ...opts, expectLaunch: true });
-  if (result.status !== 0) throw new Error(`daintree CLI exited ${result.status}: ${result.stderr}`);
+  if (result.status !== 0)
+    throw new Error(`daintree CLI exited ${result.status}: ${result.stderr}`);
   return result;
 }
 
