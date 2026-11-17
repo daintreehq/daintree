@@ -6,9 +6,9 @@ import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHos
 
 const client = vi.hoisted(() => ({
   update: vi.fn(async (payload: unknown) => payload),
-  checkAgentForwarding: vi.fn(
-    async (_hostId: string): Promise<HostAgentForwardingCheck> => ({ localAgent: true })
-  ),
+  checkAgentForwarding: vi.fn(async (_hostId: string): Promise<HostAgentForwardingCheck> => ({
+    localAgent: true,
+  })),
   listClipboardGrants: vi.fn(async () => []),
   listPluginViewConsents: vi.fn(async () => []),
   resetClipboardGrants: vi.fn(async () => undefined),

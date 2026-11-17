@@ -90,8 +90,10 @@ export class ShellAgentRelay {
       return;
     }
     this.disposers.push(
-      session.registerCallHandler(AgentForwardMethod.REQUEST, AgentRequestPayloadSchema, (payload) =>
-        this.request(payload.connectionId, payload.message)
+      session.registerCallHandler(
+        AgentForwardMethod.REQUEST,
+        AgentRequestPayloadSchema,
+        (payload) => this.request(payload.connectionId, payload.message)
       ),
       session.registerCallHandler(
         AgentForwardMethod.CLOSE,
@@ -205,7 +207,11 @@ export class ShellAgentRelay {
     return upstream;
   }
 
-  private exchange(connectionId: number, upstream: Upstream, message: Uint8Array): Promise<Uint8Array> {
+  private exchange(
+    connectionId: number,
+    upstream: Upstream,
+    message: Uint8Array
+  ): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         // A late reply can't be matched to anything once given up on, so the
@@ -219,9 +225,7 @@ export class ShellAgentRelay {
         },
         reject: (error) => {
           clearTimeout(timer);
-          reject(
-            new AppError({ code: "OUTCOME_UNKNOWN", message: error.message, cause: error })
-          );
+          reject(new AppError({ code: "OUTCOME_UNKNOWN", message: error.message, cause: error }));
         },
       };
       upstream.socket.write(frameAgentMessage(message));
