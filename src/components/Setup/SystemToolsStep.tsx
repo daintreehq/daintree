@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Spinner } from "@/components/ui/Spinner";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { AlertTriangle, ChevronRight, CircleCheck, CircleX, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { systemClient } from "@/clients";
@@ -42,7 +43,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
           <div className="text-sm font-medium text-text-primary truncate">{label}</div>
         </div>
         {loading ? (
-          <span className="text-2xs text-text-placeholder shrink-0">Checking…</span>
+          <span className="text-2xs text-text-secondary shrink-0">Checking…</span>
         ) : needsInstall ? (
           <div className="flex items-center gap-2 shrink-0 min-w-0">
             {versionMismatch && (
@@ -114,8 +115,15 @@ export function StatusIcon({
   check: PrerequisiteCheckResult | null;
   loading: boolean;
 }) {
+  // Reserves the icon slot while the Doherty gate holds the spinner back, so a
+  // sub-400ms check settles without a flash or a layout shift.
+  const showSpinner = useDohertyGate(loading);
   if (loading) {
-    return <Spinner className="text-text-secondary" />;
+    return showSpinner ? (
+      <Spinner className="text-text-secondary" />
+    ) : (
+      <span aria-hidden="true" className="w-4 h-4 shrink-0" />
+    );
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

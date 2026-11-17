@@ -528,7 +528,7 @@ export function AgentCliStep({
               return (
                 <label
                   key={agentId}
-                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors"
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-overlay-subtle transition-colors"
                 >
                   <Checkbox
                     size="sm"
@@ -550,7 +550,7 @@ export function AgentCliStep({
               );
             })}
           </div>
-          <p className="text-2xs text-text-placeholder">
+          <p className="text-2xs text-text-secondary">
             Auto-approve all actions. Use with caution.
           </p>
         </div>
