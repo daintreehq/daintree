@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BridgeError,
+  INVOLVEMENT_META,
   MemoryKeyStore,
   MemoryLocalStore,
   PolicyRegistry,
@@ -8,10 +9,12 @@ import {
   paneIdentityOf,
   type DecisionsBridge,
   type Identity,
+  type InvolvementView,
   type QuestionOrigin,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
 import {
+  buildSignedInvolvement,
   generateDeviceKeys,
   generateEpochKeyBytes,
   serializeDeviceKeys,
@@ -25,6 +28,7 @@ vi.mock("electron", () => ({
 }));
 
 import { QuestionBridge } from "../questionBridge.js";
+import { RetiredAttemptError } from "../relayTransport.js";
 import type { QuestionSource } from "../relayConnection.js";
 
 const ORIGIN: QuestionOrigin = {
@@ -81,6 +85,18 @@ function liveBridge() {
       expectsReply: true,
     })),
     listPending: vi.fn(async () => []),
+    getInvolvement: vi.fn(async (): Promise<InvolvementView> => ({
+      status: "available",
+      mode: "recommend",
+      normalMode: "recommend",
+      consultCount: 2,
+      revision: 3,
+      overrideActive: false,
+      until: null,
+      setAt: "2026-11-17T09:00:00.000Z",
+      lastSyncedAt: "2026-11-17T09:00:05.000Z",
+      stale: false,
+    })),
   };
 }
 
@@ -613,6 +629,104 @@ describe("QuestionBridge", () => {
   it("can't be made over a connection that has already ended", () => {
     identity = null;
     expect(() => bridge()).toThrow();
+  });
+
+  describe("get_involvement (#17228)", () => {
+    /** The copy an attempt keeps once it has verified a phone's preference with the relay. */
+    async function verifiedCopy(syncedAt: number): Promise<void> {
+      const phone = await generateDeviceKeys(false);
+      const record = await buildSignedInvolvement({
+        installationId: identity!.config.installationId,
+        signerDeviceId: "dev_phone_1234",
+        signingKey: phone.signing.privateKey,
+        revision: 2,
+        normalMode: "involve-early",
+        consultCount: 1,
+        override: null,
+        createdAt: "2026-11-17T08:00:00.000Z",
+      });
+      await store.setMeta(
+        INVOLVEMENT_META,
+        JSON.stringify({ record, high_water: 2, synced_at: syncedAt })
+      );
+    }
+
+    it("has none before a relay attempt has read one, and asks the relay nothing", async () => {
+      const b = bridge();
+
+      await expect(b.getInvolvement()).resolves.toEqual({
+        status: "unavailable",
+        reason: "not-synced",
+        lastSyncedAt: null,
+        stale: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(fetches).toBe(0);
+    });
+
+    it("answers from the live attempt while there is one", async () => {
+      const b = bridge();
+      await verifiedCopy(Date.parse("2026-11-17T08:30:00.000Z"));
+      live = liveBridge();
+
+      const view = await b.getInvolvement();
+
+      expect(live.getInvolvement).toHaveBeenCalledTimes(1);
+      expect(view).toBe(await live.getInvolvement.mock.results[0]!.value);
+      expect(view).toMatchObject({ status: "available", revision: 3, stale: false });
+    });
+
+    it("answers between attempts from the copy the last one verified, as possibly out of date", async () => {
+      const b = bridge();
+      await verifiedCopy(Date.parse("2026-11-17T08:30:00.000Z"));
+
+      await expect(b.getInvolvement()).resolves.toMatchObject({
+        status: "available",
+        mode: "involve-early",
+        revision: 2,
+        setAt: "2026-11-17T08:00:00.000Z",
+        lastSyncedAt: "2026-11-17T08:30:00.000Z",
+        stale: true,
+      });
+      expect(fetches).toBe(0);
+
+      // The next attempt's word replaces it as soon as it is live.
+      live = liveBridge();
+      await expect(b.getInvolvement()).resolves.toMatchObject({ revision: 3, stale: false });
+    });
+
+    it("reads again from what answers now when the live attempt retires partway through a read", async () => {
+      const b = bridge();
+      await verifiedCopy(Date.parse("2026-11-17T08:30:00.000Z"));
+      const retiring = liveBridge();
+      retiring.getInvolvement.mockImplementation(async () => {
+        live = null;
+        throw new RetiredAttemptError();
+      });
+      live = retiring;
+
+      await expect(b.getInvolvement()).resolves.toMatchObject({
+        status: "available",
+        revision: 2,
+        stale: true,
+      });
+      expect(retiring.getInvolvement).toHaveBeenCalledTimes(1);
+
+      const failing = liveBridge();
+      failing.getInvolvement.mockRejectedValue(new Error("store is full"));
+      live = failing;
+      await expect(b.getInvolvement()).rejects.toThrow("store is full");
+    });
+
+    it("never falls back to itself once the connection has ended", async () => {
+      const b = bridge();
+      await verifiedCopy(Date.parse("2026-11-17T08:30:00.000Z"));
+      live = liveBridge();
+      identity = null;
+
+      await expect(b.getInvolvement()).rejects.toMatchObject({ code: "forbidden" });
+      expect(live.getInvolvement).not.toHaveBeenCalled();
+    });
   });
 
   describe("a person's cancel", () => {

@@ -3,6 +3,7 @@ import {
   DecisionsBridge,
   paneIdentityOf,
   type DecisionView,
+  type InvolvementView,
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
@@ -15,7 +16,7 @@ import type {
 } from "../../../shared/types/decisionsQuestion.js";
 import { inScope, type QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
-import { holdingTerminalSink } from "./relayTransport.js";
+import { RetiredAttemptError, holdingTerminalSink } from "./relayTransport.js";
 
 /** The question a follow-up names, if it names one; the library refuses the rest. */
 function questionIdOf(input: unknown): string | null {
@@ -188,6 +189,28 @@ export class QuestionBridge extends DecisionsBridge {
     const run = this.posts.then(post);
     this.posts = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * `get_involvement` (#17228). The live attempt holds the reads that keep
+   * the preference fresh: it reads it as it starts and goes live, and again
+   * on each change hint a phone's update sends. So it answers while there is
+   * one. Between attempts this bridge answers from the same verified copy,
+   * which its own never-started sync can't call fresh: the library's stale
+   * preference, or its unavailable result when none was ever read. The
+   * handler names no pane, and the preference isn't any pane's. An attempt
+   * retired partway through a read has its store refused, so the read goes
+   * again to whichever bridge answers now.
+   */
+  override async getInvolvement(): Promise<InvolvementView> {
+    const live = this.connected();
+    if (live === null) return super.getInvolvement();
+    try {
+      return await live.getInvolvement();
+    } catch (error) {
+      if (!(error instanceof RetiredAttemptError)) throw error;
+      return this.getInvolvement();
+    }
   }
 
   override async listPending(pane?: PaneIdentity): Promise<DecisionView[]> {

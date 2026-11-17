@@ -61,16 +61,17 @@ async function clients() {
 }
 
 describe("DaintreeRelayClient (#16229)", () => {
-  // Every feature a 0.4.0 bridge can ask to declare, follow-ups and snapshots included.
+  // Every feature a 0.7.0 bridge can ask to declare, follow-ups and snapshots included.
   const asked: readonly ProtocolFeature[] = bridgeFeatures({
     followUps: true,
     snapshots: { onRefresh: () => {} },
   });
 
   // Daintree declares a feature only once it handles it; each joins with its own work, and changes this test.
-  it("declares follow-ups, pane snapshots and phone images on event pages and socket tickets (#16231, #16230, #16233)", async () => {
+  it("declares follow-ups, pane snapshots, phone images and involvement hints on event pages and socket tickets (#16231, #16230, #16233, #17228)", async () => {
     const { sent, stock, daintree } = await clients();
     expect(BRIDGE_FEATURES).toContain("phone-images-v1");
+    expect(BRIDGE_FEATURES).toContain("involvement-v1");
     expect(asked).toContain("pane-snapshots-v1");
 
     await stock.events(5, 10, asked);
@@ -81,15 +82,31 @@ describe("DaintreeRelayClient (#16229)", () => {
     await daintree.socketTicket(asked);
     const [page, ticket] = sent.slice(2);
     expect(page!.url.searchParams.get("features")).toBe(
-      "pane-snapshots-v1,phone-images-v1,thread-messages-v1"
+      "involvement-v1,pane-snapshots-v1,phone-images-v1,thread-messages-v1"
     );
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
     expect(ticket!.body).toHaveProperty("features", [
+      "involvement-v1",
       "pane-snapshots-v1",
       "phone-images-v1",
       "thread-messages-v1",
     ]);
+  });
+
+  it("leaves the release's owner-desktop answers and person declines undeclared until Daintree handles them (#17101, #17234)", async () => {
+    const { sent, daintree } = await clients();
+    const unhandled = ["owner-desktop-answers-v1", "person-declines-v1"] as const;
+    for (const feature of unhandled) expect(asked).toContain(feature);
+
+    await daintree.events(5, 10, asked);
+    await daintree.socketTicket(asked);
+
+    const declared = [
+      ...sent[0]!.url.searchParams.get("features")!.split(","),
+      ...(sent[1]!.body as { features: string[] }).features,
+    ];
+    for (const feature of unhandled) expect(declared).not.toContain(feature);
   });
 
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
@@ -108,7 +125,11 @@ describe("DaintreeRelayClient (#16229)", () => {
 
     await daintree.socketTicket(bridgeFeatures({ followUps: true }));
 
-    expect(sent[0]!.body).toHaveProperty("features", ["phone-images-v1", "thread-messages-v1"]);
+    expect(sent[0]!.body).toHaveProperty("features", [
+      "involvement-v1",
+      "phone-images-v1",
+      "thread-messages-v1",
+    ]);
   });
 
   it("keeps the library's defaults when the caller declares nothing", async () => {

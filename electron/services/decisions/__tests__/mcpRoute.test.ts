@@ -328,7 +328,7 @@ describe("/mcp/decisions (#16011)", () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
-  it("serves the four tools to a pane bearer with the MCP server off, each described in under 400 bytes", async () => {
+  it("serves the five tools to a pane bearer with the MCP server off, each described in under 400 bytes", async () => {
     await boot(false);
     add(pane("pane-a"));
     const port = await openRoute();
@@ -349,11 +349,32 @@ describe("/mcp/decisions (#16011)", () => {
       "ask_human",
       "cancel_question",
       "get_decision",
+      "get_involvement",
       "send_followup",
     ]);
     for (const tool of tools) {
       expect(Buffer.byteLength(tool.description, "utf8"), tool.name).toBeLessThan(400);
     }
+  });
+
+  it("answers get_involvement with the library's unavailable result before a relay attempt has read a preference (#17228)", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+
+    const read = await call(port, "pane-token-pane-a", "get_involvement", {});
+
+    expect(read.isError).not.toBe(true);
+    expect(read.structuredContent).toMatchObject({
+      status: "unavailable",
+      reason: "not-synced",
+      mode: null,
+      revision: null,
+      last_synced_at: null,
+      stale: true,
+    });
+    expect(read.content[0].text).toContain("Use your normal configured behaviour.");
+    expect(fetches).toBe(0);
   });
 
   // Daintree takes the relay's thread events (#16231), so `get_decision` returns the library's thread.
