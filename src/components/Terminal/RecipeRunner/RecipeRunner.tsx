@@ -16,6 +16,11 @@ interface RecipeRunnerProps {
 
 const MAX_FAILURE_NAMES = 2;
 
+// The failures still happened, so the banner stays; Retry goes, because the
+// steps it would start are no longer the ones that failed (#17446).
+const STALE_RETRY_DESCRIPTION =
+  "The recipe changed or was removed since this run, so its failed terminals can't be retried.";
+
 function formatFailureTitle(summary: SpawnFailureSummary): string {
   const failedCount = summary.failures.length;
   const startedCount = summary.totalCount - failedCount;
@@ -136,18 +141,26 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
             <InlineStatusBanner
               icon={XCircle}
               title={formatFailureTitle(runner.spawnFailureSummary)}
-              description={runner.spawnFailureSummary.failures[0]?.error}
+              description={
+                runner.canRetryFailed
+                  ? runner.spawnFailureSummary.failures[0]?.error
+                  : STALE_RETRY_DESCRIPTION
+              }
               severity="error"
-              action={{
-                id: "retry-failed",
-                label: "Retry failed",
-                icon: RefreshCw,
-                variant: "primary",
-                onClick: runner.handleRetryFailed,
-                title: "Retry the terminals that failed to start",
-                ariaLabel: "Retry failed terminals",
-                loading: runner.isRetryingFailed,
-              }}
+              action={
+                runner.canRetryFailed
+                  ? {
+                      id: "retry-failed",
+                      label: "Retry failed",
+                      icon: RefreshCw,
+                      variant: "primary",
+                      onClick: runner.handleRetryFailed,
+                      title: "Retry the terminals that failed to start",
+                      ariaLabel: "Retry failed terminals",
+                      loading: runner.isRetryingFailed,
+                    }
+                  : undefined
+              }
               onClose={runner.dismissSpawnFailures}
             />
           </div>

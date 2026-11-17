@@ -45,10 +45,24 @@ export interface UseRecipeRunnerOptions {
   defaultCwd: string | undefined;
 }
 
+type RanRecipe = NonNullable<RecipeRunOptions["expectedRecipe"]>;
+
 export interface SpawnFailureSummary {
+  /** The id the run was started with, which may be a row a team recipe shadows. */
+  recipeId: string;
+  /** The recipe that actually ran: its failure indices only mean anything against these steps. */
+  ranRecipe: RanRecipe;
   recipeName: string;
   totalCount: number;
   failures: Array<RecipeSpawnFailure & { displayName: string }>;
+}
+
+function isRecipeThatRan(recipe: TerminalRecipe | undefined, ran: RanRecipe): boolean {
+  return (
+    recipe !== undefined &&
+    recipe.id === ran.id &&
+    recipeApprovalDigest(recipe.terminals) === ran.terminalsDigest
+  );
 }
 
 export interface UseRecipeRunnerResult {
@@ -64,6 +78,11 @@ export interface UseRecipeRunnerResult {
   focusedItemId: string | undefined;
   suggestions: RunCommand[];
   spawnFailureSummary: SpawnFailureSummary | null;
+  /**
+   * False once the recipe behind the failure banner was edited, reordered,
+   * shadowed or deleted: its failed indices would now name other steps.
+   */
+  canRetryFailed: boolean;
   /** A plugin recipe's own variables the last run launched empty: no plugin supplied them. */
   unresolvedVars: string[];
   isRetryingFailed: boolean;
@@ -134,13 +153,21 @@ export function useRecipeRunner({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const pendingDeleteId = isDeleteOpen ? (deleteTarget?.id ?? null) : null;
 
+  // Subscribed rather than read through `getRecipeById` at render: an edit,
+  // reload or new shadowing team recipe has to withdraw Retry on its own.
+  const retryRecipeId = spawnFailureSummary?.recipeId;
+  const retryRecipe = useRecipeStore((s) =>
+    retryRecipeId === undefined ? undefined : s.getRecipeById(retryRecipeId)
+  );
+  const canRetryFailed =
+    spawnFailureSummary !== null && isRecipeThatRan(retryRecipe, spawnFailureSummary.ranRecipe);
+
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
   const isConfirmingDeleteRef = useRef(false);
   // Bumped by every delete request and worktree switch: a delete that settles
   // after either has no confirm left to answer.
   const deleteRequestRef = useRef(0);
-  const lastRunRecipeIdRef = useRef<string | null>(null);
   // The run waiting on the missing-variables confirm, so a worktree switch or
   // unmount can withdraw a question about a target that's no longer here.
   const pendingConfirmRef = useRef<AbortController | null>(null);
@@ -217,7 +244,6 @@ export function useRecipeRunner({
     // would delete a recipe out of its original context.
     deleteRequestRef.current += 1;
     setIsDeleteOpen(false);
-    lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
     return () => pendingConfirmRef.current?.abort();
   }, [activeWorktreeId]);
@@ -261,10 +287,16 @@ export function useRecipeRunner({
   );
 
   const summarizeFailures = useCallback(
-    (recipe: TerminalRecipe, results: RecipeSpawnResults): SpawnFailureSummary | null => {
+    (
+      recipeId: string,
+      recipe: TerminalRecipe,
+      results: RecipeSpawnResults
+    ): SpawnFailureSummary | null => {
       if (results.failed.length === 0) return null;
       if (allDeclined(results)) return null;
       return {
+        recipeId,
+        ranRecipe: { id: recipe.id, terminalsDigest: recipeApprovalDigest(recipe.terminals) },
         recipeName: recipe.name,
         totalCount: results.spawned.length + results.failed.length,
         failures: results.failed.map((f) => ({
@@ -338,7 +370,6 @@ export function useRecipeRunner({
         // A plugin's own variables only get values when the plugin runs the
         // recipe, so started from here they launch empty without asking.
         setUnresolvedVars(missing.plugin);
-        lastRunRecipeIdRef.current = recipeId;
 
         void (async () => {
           try {
@@ -350,7 +381,9 @@ export function useRecipeRunner({
               { spawnedBy: "recipe", ...(expectedRecipe && { expectedRecipe }) }
             );
             if (runGenerationRef.current === runId) {
-              setSpawnFailureSummary(summarizeFailures(recipe, results));
+              // `recipe` is what the store ran: its lookup happens in this same
+              // tick, and a confirm in between pins it through `expectedRecipe`.
+              setSpawnFailureSummary(summarizeFailures(recipeId, recipe, results));
             }
           } catch (error) {
             // The store throws synchronously when the recipe was deleted between
@@ -376,14 +409,16 @@ export function useRecipeRunner({
   );
 
   const handleRetryFailed = useCallback(() => {
-    const recipeId = lastRunRecipeIdRef.current;
     const summary = spawnFailureSummary;
-    if (!recipeId || !summary || summary.failures.length === 0) return;
+    if (!summary || summary.failures.length === 0) return;
     if (!defaultCwd) return;
     if (isRunningRef.current) return;
 
+    const { recipeId, ranRecipe } = summary;
     const recipe = getRecipeById(recipeId);
-    if (!recipe) return;
+    // The failures are indices into the steps that ran. After a reorder,
+    // removal or replacement the same index names a different step (#17446).
+    if (!recipe || !isRecipeThatRan(recipe, ranRecipe)) return;
 
     const indices = summary.failures.map((f) => f.index);
     const cwd = defaultCwd;
@@ -394,7 +429,7 @@ export function useRecipeRunner({
     const runId = ++runGenerationRef.current;
 
     // A retry is another launch: the worktree may have lost a value since.
-    gateOnMissingVariables(recipe, missing.builtIn, (expectedRecipe) => {
+    gateOnMissingVariables(recipe, missing.builtIn, () => {
       setIsRetryingFailed(true);
       void (async () => {
         try {
@@ -403,11 +438,9 @@ export function useRecipeRunner({
             cwd,
             activeWorktreeId ?? undefined,
             context,
-            {
-              spawnedBy: "recipe",
-              terminalIndices: indices,
-              ...(expectedRecipe && { expectedRecipe }),
-            }
+            // Pinned even without a confirm: the store refuses the run if an edit
+            // lands between this check and its own lookup.
+            { spawnedBy: "recipe", terminalIndices: indices, expectedRecipe: ranRecipe }
           );
           if (runGenerationRef.current !== runId) return;
           // Declining the confirm opened nothing, so the outstanding failures
@@ -419,8 +452,7 @@ export function useRecipeRunner({
             // Carry forward the original total so the banner copy stays anchored
             // to the original run ("Started X of Y") rather than the retry subset.
             setSpawnFailureSummary({
-              recipeName: recipe.name,
-              totalCount: summary.totalCount,
+              ...summary,
               failures: results.failed.map((f) => ({
                 ...f,
                 displayName: recipe.terminals[f.index]
@@ -668,6 +700,7 @@ export function useRecipeRunner({
     focusedItemId,
     suggestions,
     spawnFailureSummary,
+    canRetryFailed,
     unresolvedVars,
     isRetryingFailed,
     handleRun,
