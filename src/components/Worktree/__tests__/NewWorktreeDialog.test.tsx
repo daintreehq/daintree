@@ -1588,17 +1588,22 @@ describe("NewWorktreeDialog — branch loading skeleton timing", () => {
    * removal record still shows what was there.
    */
   function watchMounts(selector: string) {
-    const observer = new MutationObserver(() => {});
-    observer.observe(document.body, { childList: true, subtree: true });
     let seen = false;
+    const scan = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of [...record.addedNodes, ...record.removedNodes]) {
+          if (node instanceof Element && (node.matches(selector) || node.querySelector(selector)))
+            seen = true;
+        }
+      }
+    };
+    // Records are handed to the callback whenever microtasks run, and only the
+    // ones not yet delivered come back from takeRecords(), so both read them.
+    const observer = new MutationObserver(scan);
+    observer.observe(document.body, { childList: true, subtree: true });
     return {
       seen() {
-        for (const record of observer.takeRecords()) {
-          for (const node of [...record.addedNodes, ...record.removedNodes]) {
-            if (node instanceof Element && (node.matches(selector) || node.querySelector(selector)))
-              seen = true;
-          }
-        }
+        scan(observer.takeRecords());
         return seen;
       },
       stop: () => observer.disconnect(),
