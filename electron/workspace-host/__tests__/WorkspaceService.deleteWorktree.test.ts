@@ -2076,7 +2076,11 @@ describe("WorkspaceService.deleteWorktree", () => {
   });
 
   describe("unattended removal (#17321)", () => {
-    const guard = { expectedBranch: "feature/test", expectedHead: "a".repeat(40) };
+    const guard = {
+      expectedBranch: "feature/test",
+      expectedHead: "a".repeat(40),
+      notAfter: Number.MAX_SAFE_INTEGER,
+    };
     type Internals = {
       runLifecycleTeardown: (worktreeId: string, monitor: WorktreeMonitor) => Promise<void>;
       inventorySubmoduleRisk: (worktreePath: string) => Promise<SubmoduleDeleteRisk>;
@@ -2196,6 +2200,34 @@ describe("WorkspaceService.deleteWorktree", () => {
 
       expect(failure()).toMatch(/active/);
       expect(switchActive).not.toHaveBeenCalled();
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("refuses a request whose deadline passed, before any git", async () => {
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-late", "/test/worktree", false, false, undefined, false, {
+        unattended: { ...guard, notAfter: Date.now() - 1 },
+      });
+
+      expect(failure()).toMatch(/expired/);
+      expect(removeCalls()).toEqual([]);
+    });
+
+    it("refuses when the worktree became active during the last nested scan", async () => {
+      const monitor = createAndRegisterMonitor();
+      let scans = 0;
+      vi.spyOn(
+        service as unknown as { guardNestedWorktreeDelete: (m: WorktreeMonitor) => Promise<void> },
+        "guardNestedWorktreeDelete"
+      ).mockImplementation(async () => {
+        // The first scan runs before teardown; the second is the last before git.
+        if (++scans === 2) monitor.isCurrent = true;
+      });
+
+      await removeUnattended("req-active-in-scan");
+
+      expect(failure()).toMatch(/active/);
       expect(removeCalls()).toEqual([]);
     });
 

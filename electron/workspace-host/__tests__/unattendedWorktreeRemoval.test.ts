@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { verifyUnattendedCheckout } from "../unattendedWorktreeRemoval.js";
 
 const HEAD = "e".repeat(40);
-const guard = { expectedBranch: "feature/x", expectedHead: HEAD };
+const guard = {
+  expectedBranch: "feature/x",
+  expectedHead: HEAD,
+  notAfter: Number.MAX_SAFE_INTEGER,
+};
 
 function observed(overrides: Record<string, unknown> = {}) {
   return vi.fn(async () => ({

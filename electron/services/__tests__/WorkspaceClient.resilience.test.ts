@@ -3071,11 +3071,18 @@ describe("WorkspaceClient multi-process manager", () => {
   });
 
   describe("removeMergedWorktree (#17321)", () => {
-    const guard = { expectedBranch: "feature/x", expectedHead: "a".repeat(40) };
+    const guard = {
+      expectedBranch: "feature/x",
+      expectedHead: "a".repeat(40),
+      notAfter: Number.MAX_SAFE_INTEGER,
+    };
     const removeRequests = (host: MockHost) =>
       host.getAllRequests().filter((request) => request.type === "remove-merged-worktree");
 
-    async function start(confirm: () => Promise<boolean>, projectId = "id-for-/project-a") {
+    async function start(
+      confirm: () => Promise<boolean>,
+      projectId = `id-for-${pathResolve("/project-a")}`
+    ) {
       const pending = client.removeMergedWorktree("/project-a", projectId, "/wt/x", guard, confirm);
       await tick();
       return pending;

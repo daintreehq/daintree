@@ -5,6 +5,7 @@ import type { MergedWorktreeRemovalReceipt } from "../../../../shared/types/merg
 import type { ListedWorktree, MergedWorktreeReads } from "../evaluateMergedWorktrees.js";
 import {
   MERGED_WORKTREE_PENDING_SETTLE_MS,
+  MERGED_WORKTREE_REMOVAL_DEADLINE_MS,
   MERGED_WORKTREE_RECEIPT_CAP,
   MERGED_WORKTREE_RECEIPT_LEASE_MS,
   MERGED_WORKTREE_SWEEP_AFTER_ENABLE_MS,
@@ -138,7 +139,11 @@ describe("MergedWorktreeCleanupService", () => {
     expect(deps.removeWorktree).toHaveBeenCalledWith(
       project,
       "/wt/feature-x",
-      { expectedBranch: "feature/x", expectedHead: HEAD },
+      {
+        expectedBranch: "feature/x",
+        expectedHead: HEAD,
+        notAfter: NOW + MERGED_WORKTREE_REMOVAL_DEADLINE_MS,
+      },
       expect.any(Function)
     );
     expect(receipts()).toEqual([
@@ -230,19 +235,49 @@ describe("MergedWorktreeCleanupService", () => {
     expect(deps.removeWorktree).not.toHaveBeenCalled();
   });
 
-  it.each(["refused", "not-sent"] as const)(
-    "drops the receipt when the removal was %s, without asking the disk",
-    async (outcome) => {
-      const { service, deps, receipts } = setup({
-        removeWorktree: vi.fn(async () => ({ outcome, error: "The worktree has changes" })),
+  it("drops the receipt when the removal was never sent, without asking the disk", async () => {
+    const { service, deps, receipts } = setup({
+      removeWorktree: vi.fn(async () => ({
+        outcome: "not-sent" as const,
+        error: "The project's workspace host isn't running",
+      })),
+    });
+    await service.sweep();
+    expect(receipts()).toEqual([]);
+    expect(deps.announceReceipts).not.toHaveBeenCalled();
+    expect(deps.logWarn).toHaveBeenCalled();
+    expect(deps.pathExists).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [true, []],
+    [false, ["feature/x"]],
+  ])(
+    "lets the disk settle a refusal: checkout still there %s -> receipts %j",
+    async (stillThere, branches) => {
+      const { service, receipts } = setup({
+        removeWorktree: vi.fn(async () => ({
+          outcome: "refused" as const,
+          error: "fatal: could not remove .git/worktrees/feature-x",
+        })),
+        pathExists: vi.fn(async () => stillThere),
       });
       await service.sweep();
-      expect(receipts()).toEqual([]);
-      expect(deps.announceReceipts).not.toHaveBeenCalled();
-      expect(deps.logWarn).toHaveBeenCalled();
-      expect(deps.pathExists).not.toHaveBeenCalled();
+      expect(receipts().map((entry) => [entry.branch, entry.pending ?? false])).toEqual(
+        branches.map((branch) => [branch, false])
+      );
     }
   );
+
+  it("doesn't retry a checkout whose last removal never answered", async () => {
+    const harness = setup({
+      removeWorktree: vi.fn(async () => ({ outcome: "lost" as const, error: "TIMEOUT" })),
+    });
+    await harness.service.sweep();
+    await harness.service.sweep();
+    expect(harness.deps.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(harness.receipts()).toHaveLength(1);
+  });
 
   it("keeps a lost answer pending, and a later sweep settles it once the checkout is gone", async () => {
     let gone = false;

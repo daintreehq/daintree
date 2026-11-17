@@ -149,9 +149,15 @@ describe("MergedWorktreeCleanupSection (#17321)", () => {
     setEnabledMock.mockImplementationOnce(
       () => new Promise<void>((resolve) => (finishSave = resolve))
     );
-    previewMock.mockImplementation(async ({ projectId }) =>
-      projectId === "p2" ? { ...preview(true), worktrees: [] } : preview(false)
-    );
+    let p2Reads = 0;
+    previewMock.mockImplementation(({ projectId }) => {
+      if (projectId !== "p2") return Promise.resolve(preview(false));
+      // The reload the late save triggers never answers, so only the state
+      // already confirmed for p2 can keep its switch on.
+      return ++p2Reads === 1
+        ? Promise.resolve({ ...preview(true), worktrees: [] })
+        : new Promise<MergedWorktreeCleanupPreview>(() => {});
+    });
     const { findByText, getByRole, rerender } = render(
       <MergedWorktreeCleanupSection projectId="p1" />
     );

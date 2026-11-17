@@ -52,12 +52,14 @@ export const MERGED_WORKTREE_RECEIPT_CAP = 200;
  * them: a view files them and answers within moments.
  */
 export const MERGED_WORKTREE_RECEIPT_LEASE_MS = 60_000;
+/** The host refuses to start git for a request older than this. */
+export const MERGED_WORKTREE_REMOVAL_DEADLINE_MS = 10 * 60 * 1000;
 /**
  * A pending receipt whose checkout is still there this long after it was
- * written didn't go through: past the host's own removal timeout, so git has
- * finished or given up.
+ * written didn't go through: well past the deadline for git to start, so a
+ * removal still under way would have finished.
  */
-export const MERGED_WORKTREE_PENDING_SETTLE_MS = 30 * 60 * 1000;
+export const MERGED_WORKTREE_PENDING_SETTLE_MS = 60 * 60 * 1000;
 const DISPOSE_WAIT_MS = 5_000;
 
 export interface MergedWorktreeProject {
@@ -336,6 +338,17 @@ export class MergedWorktreeCleanupService {
     );
     for (const candidate of found) {
       if (candidate.status !== "removable") continue;
+      // One whose last removal never answered waits until that one is settled,
+      // or a retry would file a second receipt for one removal.
+      const unresolved = this.deps
+        .loadReceipts()
+        .some(
+          (entry) =>
+            entry.pending &&
+            entry.projectId === project.id &&
+            entry.worktreePath === candidate.worktreePath
+        );
+      if (unresolved) continue;
       const worktree = listed.find((entry) => path.resolve(entry.path) === candidate.worktreePath);
       if (!worktree) continue;
       if (this.deps.loadReceipts().length >= MERGED_WORKTREE_RECEIPT_CAP) {
@@ -396,7 +409,11 @@ export class MergedWorktreeCleanupService {
       .removeWorktree(
         project,
         candidate.worktreePath,
-        { expectedBranch: candidate.branch, expectedHead: candidate.head },
+        {
+          expectedBranch: candidate.branch,
+          expectedHead: candidate.head,
+          notAfter: this.now() + MERGED_WORKTREE_REMOVAL_DEADLINE_MS,
+        },
         confirm
       )
       .catch((error: unknown): UnattendedRemovalOutcome => ({
@@ -412,7 +429,12 @@ export class MergedWorktreeCleanupService {
     // A lost answer may still be a removal in progress: its receipt stays
     // pending, and later sweeps settle it from the disk.
     if (result.outcome === "lost") return;
-    const removed = result.outcome === "removed";
+    // The host may refuse after git already took the checkout (its admin
+    // directory failed to go): the disk says whether it is gone.
+    const removed =
+      result.outcome === "removed" ||
+      (result.outcome === "refused" &&
+        !(await this.deps.pathExists(candidate.worktreePath).catch(() => true)));
 
     try {
       const others = this.deps.loadReceipts().filter((entry) => entry.id !== receipt.id);

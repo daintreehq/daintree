@@ -4098,6 +4098,22 @@ export class WorkspaceService {
     }
     await verifyUnattendedCheckout(monitor.path, guard);
     // After the reads, so a selection or a setup started while they ran counts.
+    this.assertUnattendedStateHolds(worktreeId, monitor, guard);
+  }
+
+  /**
+   * The synchronous half of {@link assertUnattendedRemovalHolds}, also run
+   * after the nested-worktree scan, the last await before git: nothing it
+   * reads needs a disk or a process, so it can follow every other check.
+   */
+  private assertUnattendedStateHolds(
+    worktreeId: string,
+    monitor: WorktreeMonitor,
+    guard: UnattendedRemovalGuard
+  ): void {
+    if (Date.now() > guard.notAfter) {
+      throw new Error("The removal request expired before it could run");
+    }
     if (this.monitors.get(worktreeId) !== monitor) {
       throw new Error("The worktree was replaced while it was checked");
     }
@@ -4362,6 +4378,7 @@ export class WorkspaceService {
               await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
             }
             await this.guardNestedWorktreeDelete(monitor);
+            if (unattended) this.assertUnattendedStateHolds(worktreeId, monitor, unattended);
           };
           // Last, so no other await sits between them and the removal.
           await lastChecks();

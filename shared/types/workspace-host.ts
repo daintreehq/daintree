@@ -1365,6 +1365,12 @@ export interface WorkspaceClientConfig {
 export interface UnattendedRemovalGuard {
   expectedBranch: string;
   expectedHead: string;
+  /**
+   * Epoch ms after which the host refuses to start git: main stops waiting
+   * for an answer and later settles the removal from the disk, so a request
+   * that stalled past this can't remove a checkout main has given up on.
+   */
+  notAfter: number;
 }
 
 /**
