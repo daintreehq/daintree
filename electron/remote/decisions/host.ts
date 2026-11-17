@@ -75,7 +75,8 @@ const NO_QUESTIONS = { hostId: null, questions: [] } as const;
 /** The newest questions within what one message carries, by count and by size. */
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
-  let bytes = 0;
+  // The envelope first, then each question with the comma between it and the next.
+  let bytes = Buffer.byteLength(JSON.stringify({ hostId: list.hostId, questions: [] }));
   for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
     const question = list.questions[i]!;
     bytes += Buffer.byteLength(JSON.stringify(question)) + 1;

@@ -97,8 +97,12 @@ interface HostQuestionsReport {
   questions: Omit<DecisionQuestionListItem, "remoteHost">[];
 }
 
+function ownerKey(state: OwnerStateAnnouncement): string {
+  return `${state.installationId}\n${state.ownerDeviceId}`;
+}
+
 function ownerKeyOf(state: OwnerStateAnnouncement | null): string | null {
-  return state === null ? null : `${state.installationId}\n${state.ownerDeviceId}`;
+  return state === null ? null : ownerKey(state);
 }
 
 function sameReference(a: DecisionQuestionReference, b: DecisionQuestionReference): boolean {
@@ -291,7 +295,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly questionTurns = new Map<string, number>();
   /** Sessions whose Host answered a read of its questions UNSUPPORTED: from before #17230. */
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
-  /** The owner each session was last told of: a list it sends is that owner's, and only it. */
+  /**
+   * The owner each session's Host last took an announcement from: a list it
+   * sends is that owner's, and only it. Set on the Host's answer, never before:
+   * the link keeps order, so whatever it sent for an earlier owner arrives first.
+   */
   private readonly announcedOwners = new WeakMap<DecisionsHostSession, string>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
@@ -473,7 +481,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       // anything else is read again on the next announcement.
       if (codeOf(error) === "UNSUPPORTED") {
         this.beforeQuestions.add(session);
-        if (this.questionReports.delete(hostId)) this.questionsChanged();
+        if (this.deps.sessionFor(hostId) === session && this.questionReports.delete(hostId)) {
+          this.questionsChanged();
+        }
       }
       return;
     }
@@ -535,6 +545,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       DecisionsLinkMethod.QUESTIONS_CHANGED,
       HostQuestionsChangedPayloadSchema,
       (payload) => {
+        // A link a newer one replaced moves nothing of the newer one's.
+        if (this.deps.sessionFor(hostId) !== session) return null;
         // Newer than any read still waiting for its answer.
         this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
         this.hearQuestions(hostId, session, payload);
@@ -561,8 +573,6 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private async announce(hostId: string, session: DecisionsHostSession): Promise<void> {
     const state = this.deps.ownerState();
     if (state === null) return;
-    const ownerKey = ownerKeyOf(state);
-    if (ownerKey !== null) this.announcedOwners.set(session, ownerKey);
     const turn = (this.announced.get(hostId) ?? 0) + 1;
     this.announced.set(hostId, turn);
     let raw: unknown;
@@ -572,6 +582,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       // A Host from before Hosts ran Decisions, or a link that went: nothing to keep.
       return;
     }
+    this.announcedOwners.set(session, ownerKey(state));
     // Whatever the owner said, the Host's questions as they stand now (#17230).
     void this.readQuestions(hostId, session);
     if (this.announced.get(hostId) !== turn) return;

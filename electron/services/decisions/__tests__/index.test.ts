@@ -1529,6 +1529,7 @@ describe("Decisions entry", () => {
         await running({ questionSummaries });
         const second = { ...ON_HOST, questionId: "0190f0aa11112222333344445555bb02" };
         let connected = true;
+        let failure: "disconnected" | "outcome-unknown" = "disconnected";
         const readHostQuestion = vi.fn((_questionHostId: string, read: DecisionsHostQuestionRead) =>
           Promise.resolve(
             connected && read.read === "summaries"
@@ -1541,7 +1542,7 @@ describe("Decisions entry", () => {
                     ],
                   },
                 }
-              : { ok: false as const, failure: "disconnected" as const }
+              : { ok: false as const, failure }
           )
         );
         const withdraw = publishHostPort({
@@ -1570,6 +1571,14 @@ describe("Decisions entry", () => {
           ).resolves.toEqual({
             result: "read",
             summaries: [{ questionId: ON_HOST.questionId, result: "host-not-connected" }],
+          });
+          // One that went out and got no answer isn't the Host being away: it couldn't be read.
+          failure = "outcome-unknown";
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "unreadable" }],
           });
         } finally {
           withdraw();

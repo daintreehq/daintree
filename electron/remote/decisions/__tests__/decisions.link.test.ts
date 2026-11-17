@@ -1061,6 +1061,30 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
 
   const STUDIO = { hostId: HOST, name: "Studio" };
 
+  /**
+   * A Host's side of the link reduced to its announcements: it takes each
+   * owner's word and answers `runtime()`, or refuses one `refuse` names. Read
+   * for its questions it has none to give, so the test sends its lists itself;
+   * with `knowsQuestions` false it is a build from before them.
+   */
+  function answerAnnouncements(
+    session: LinkSession,
+    runtime: () => DecisionsHostRuntime = () => RUNNING,
+    refuse: (owner: OwnerStateAnnouncement) => boolean = () => false,
+    knowsQuestions = true
+  ) {
+    session.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), (payload) => {
+      if (refuse(payload as OwnerStateAnnouncement)) throw new Error("not now");
+      return { runtime: runtime() };
+    });
+    if (knowsQuestions) {
+      session.registerCallHandler(DecisionsLinkMethod.QUESTIONS, z.unknown(), () => ({
+        hostId: null,
+        questions: [],
+      }));
+    }
+  }
+
   it("takes an image part as large as a Host's Decisions reads them", () => {
     expect(MAX_HOST_IMAGE_PART_BYTES).toBe(QUESTION_IMAGE_PART_BYTES);
   });
@@ -1080,9 +1104,23 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(heard.length).toBeGreaterThan(0);
     expect(heard.length).toBeLessThan(all.length);
     expect(heard).toEqual(all.slice(-heard.length));
-    expect(Buffer.byteLength(JSON.stringify(heard))).toBeLessThanOrEqual(
-      MAX_HOST_QUESTION_LIST_BYTES
-    );
+    expect(
+      Buffer.byteLength(JSON.stringify({ hostId: QHOST, questions: heard }))
+    ).toBeLessThanOrEqual(MAX_HOST_QUESTION_LIST_BYTES);
+  });
+
+  it("sends at most its newest 2000 questions, a worktree id as long as a path included", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const all = Array.from({ length: 2_001 }, (_, i) => item(i + 1));
+    all[2_000] = { ...all[2_000]!, worktreeId: `/srv/worktrees/${"w".repeat(300)}` };
+    decisions.set({ hostId: QHOST, questions: all });
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+    expect(shell.client.hostQuestions()[0]!.questions).toEqual(all.slice(1));
   });
 
   it("is asked of the Host, and its changes are told to the Shell", () => {
@@ -1323,17 +1361,48 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     ]);
   });
 
+  it("reads a question with a long thread whole", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [item(1)] });
+    const thread = Array.from({ length: 5_000 }, (_, i) => ({
+      type: "expired" as const,
+      entryId: `entry_${i}`,
+      sentAt: "2026-11-02T10:01:00.000Z",
+    }));
+    decisions.answerWith((read) =>
+      read.read === "content"
+        ? { result: "read", question: { ...content(read.reference), thread } }
+        : null
+    );
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    expect(read?.ok && read.value.result === "read" ? read.value.question.thread : null).toEqual(
+      thread
+    );
+  });
+
   it("keeps only what names the Host's own id, and lists neither of two Hosts naming the same one", async () => {
     const studio = await pair();
     const lab = await pair();
     const LAB = { hostId: "lab-01", name: "Lab" };
+    // Each says it is enrolled by this owner as it takes the announcement.
+    answerAnnouncements(studio.host);
+    answerAnnouncements(lab.host);
     const shell = shellOf([STUDIO, LAB]);
     shell.open(HOST, studio.client);
     shell.open(LAB.hostId, lab.client);
-
-    // Each says it is enrolled by this owner, as an announcement's answer would.
-    await studio.host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: RUNNING });
-    await lab.host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: RUNNING });
+    await vi.waitFor(() => {
+      expect(shell.client.runtimeOf(HOST)?.runtime).toEqual(RUNNING);
+      expect(shell.client.runtimeOf(LAB.hostId)?.runtime).toEqual(RUNNING);
+    });
     const foreign = { ...item(2), reference: { ...item(2).reference, hostId: "qhost_other_001" } };
     await studio.host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, {
       hostId: QHOST,
@@ -1356,9 +1425,11 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
 
   it("lists nothing it heard for another owner identity, or for a Host no longer enrolled", async () => {
     const { host, client } = await pair();
+    answerAnnouncements(host, () => ({ state: "not-enrolled" }));
     const shell = shellOf([STUDIO]);
     shell.open(HOST, client);
-    // Nothing a Host sends counts before it has reported itself enrolled by this owner.
+    await vi.waitFor(() => expect(shell.client.runtimeOf(HOST)).not.toBeNull());
+    // Nothing a Host sends counts while it doesn't report itself enrolled by this owner.
     await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, { hostId: QHOST, questions: [item(1)] });
     expect(shell.client.hostQuestions()).toEqual([]);
     await host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: RUNNING });
@@ -1385,22 +1456,84 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(shell.client.hostQuestions()).toEqual([]);
   });
 
-  it("keeps no list sent over a link this Shell was never told the owner over, or one it no longer uses", async () => {
+  it("keeps no list for an owner its Host hasn't taken, nor from a link a newer one replaced", async () => {
     const { host, client } = await pair();
+    const other = { ...OWNER, installationId: "inst_owner_9876543210" };
+    answerAnnouncements(
+      host,
+      () => RUNNING,
+      (owner) => owner.installationId === other.installationId
+    );
     const shell = shellOf([STUDIO]);
     shell.open(HOST, client);
-    await host.call(DecisionsLinkMethod.HOST_RUNTIME, { runtime: RUNNING });
-    // The owner changed after this link was last told: a list sent over it isn't the new owner's.
-    shell.setOwner({ ...OWNER, installationId: "inst_owner_9876543210" });
+    await vi.waitFor(() => expect(shell.client.runtimeOf(HOST)?.runtime).toEqual(RUNNING));
     await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, { hostId: QHOST, questions: [item(1)] });
-    shell.setOwner(OWNER);
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]);
+
+    // The owner here changed, and the Host refused the new one: what it still sends is the old owner's.
+    shell.setOwner(other);
+    shell.client.announceOwnerState();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, { hostId: QHOST, questions: [item(2)] });
     expect(shell.client.hostQuestions()).toEqual([]);
+    shell.setOwner(OWNER);
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]);
 
     // A newer link replaced it: what the older one still sends is dropped.
     const newer = await pair();
     shell.open(HOST, newer.client);
-    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, { hostId: QHOST, questions: [item(1)] });
-    expect(shell.client.hostQuestions()).toEqual([]);
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, { hostId: QHOST, questions: [item(3)] });
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]);
+  });
+
+  it("drops what a Host listed once it comes back as a build from before Host questions", async () => {
+    const first = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [item(1)] });
+    serveQuestions(first.host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, first.client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+    first.host.close("test");
+
+    const older = await pair();
+    answerAnnouncements(
+      older.host,
+      () => RUNNING,
+      () => false,
+      false
+    );
+    shell.changed.mockClear();
+    shell.open(HOST, older.client);
+
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toEqual([]));
+    expect(shell.changed).toHaveBeenCalled();
+  });
+
+  it("returns nothing it read to a session whose owner turned Decisions off meanwhile", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [item(1)] });
+    let finish!: () => void;
+    const held = new Promise<void>((resolve) => (finish = resolve));
+    decisions.answerWith(async (read) => {
+      await held;
+      return read.read === "content" ? { result: "read", question: content(read.reference) } : null;
+    });
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    const reading = shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    await vi.waitFor(() => expect(decisions.reads).toHaveLength(1));
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, { ...OWNER, enabled: false });
+    finish();
+
+    expect(await reading).toEqual({ ok: true, value: { result: "off" } });
   });
 
   it("asks a Host from before Host questions once per link, and lists none of its questions", async () => {
