@@ -460,12 +460,47 @@ describe("CloudMachineKeys", () => {
   it("revokes a key Boat made other than asked, by its id", async () => {
     const env = setup();
     env.machineKeys.issue.mockRejectedValueOnce(
-      new UnusableMachineKeyError("sak_broad", "Boat issued a key other than the one asked for.")
+      new UnusableMachineKeyError(
+        "sak_broad",
+        env.clock.now + 30 * DAY,
+        "Boat issued a key other than the one asked for."
+      )
     );
     await env.keys.arm(HOST, env.session);
     await env.keys.revokePending();
     expect(env.delivered).toEqual([]);
     expect(env.machineKeys.revoke).toHaveBeenCalledWith(expect.anything(), "sak_broad");
     expect(env.store.machineKeys()).toEqual([]);
+  });
+
+  it("keeps trying to revoke a rejected key Boat gave no expiry, past the usual lifetime", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValueOnce(
+      new UnusableMachineKeyError("sak_forever", null, "Boat issued a key other than asked.")
+    );
+    env.machineKeys.revoke.mockRejectedValue(new BoatApiError("server", "x", 500, null, null));
+    await env.keys.arm(HOST, env.session);
+    await env.keys.revokePending();
+    env.clock.now += 40 * DAY;
+    await env.keys.revokePending();
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ keyId: "sak_forever", state: "revoke" }),
+    ]);
+    await expect(env.keys.settleAccount(ACCOUNT)).rejects.toBeInstanceOf(AppError);
+  });
+
+  it("says why when the account's own key isn't on this device, and asks Boat for nothing", async () => {
+    const env = setup();
+    env.accounts.credentials.mockRejectedValueOnce(
+      new AppError({
+        code: "PERMISSION",
+        message: "Cloud account key is missing",
+        userMessage: "Personal's API key isn't on this device any more.",
+      })
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.machineKeys.issue).not.toHaveBeenCalled();
+    expect(env.store.machineKeys()).toEqual([]);
+    expect(env.keys.problemFor(BINDING)).toMatch(/isn't on this device any more/);
   });
 });

@@ -13,10 +13,13 @@ declare module "../runtime.js" {
   }
 }
 
-async function readAgentWork(): Promise<HostWorkReading["agents"]> {
+async function readAgentWork(fresh = false): Promise<HostWorkReading["agents"]> {
   const pty = getPtyClient();
   if (!pty) return null;
-  const { terminals, degraded } = await getSharedTerminalSnapshot(pty);
+  // Before acting on idleness, nothing a poller took up to a second ago will do.
+  const { terminals, degraded } = fresh
+    ? await pty.getAllTerminalsWithCompletenessAsync()
+    : await getSharedTerminalSnapshot(pty);
   return degraded ? null : agentWorkOf(terminals);
 }
 
@@ -28,6 +31,10 @@ export function installHostIdle(sessionHost: { readonly servesViews: boolean }):
   const tracker = new HostIdleTracker({
     read: async () => {
       const agents = await readAgentWork();
+      return { agents, shellViews: sessionHost.servesViews };
+    },
+    readFresh: async () => {
+      const agents = await readAgentWork(true);
       return { agents, shellViews: sessionHost.servesViews };
     },
     idleAfterMinutes: () => hostIdleMinutesOf(store.get("hostIdle")?.idleAfterMinutes),

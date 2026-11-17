@@ -110,6 +110,8 @@ export interface IssuedMachineKey {
 export class UnusableMachineKeyError extends Error {
   constructor(
     readonly keyId: string,
+    /** When the provider said it expires; null when it vouched for none, so it works until revoked. */
+    readonly expiresAt: number | null,
     message: string
   ) {
     super(message);

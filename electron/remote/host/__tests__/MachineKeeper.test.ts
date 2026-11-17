@@ -294,12 +294,15 @@ describe("MachineKeeper", () => {
     await h.pass();
     h.advance(31 * MINUTE);
     h.driver.stop.mockImplementationOnce(async () => {
-      // Boat takes it, and the answer never comes back.
-      h.machine.stop = { id: "stop_own", status: "pending", error: null };
+      // The answer never comes back, and Boat doesn't show the stop yet.
       throw new Error("socket hang up");
     });
     await h.pass();
     expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    h.advance(30_000);
+    await h.pass();
+    expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    h.machine.stop = { id: "stop_own", status: "pending", error: null };
 
     // Boat took it after all and is saving.
     for (let i = 0; i < 3; i++) {
@@ -467,6 +470,28 @@ describe("MachineKeeper", () => {
     answer!(resource(h.machine, h.now()));
     await pass;
     expect(h.driver.renew).not.toHaveBeenCalled();
+  });
+
+  it("takes keys in the order they came, and says what it holds once they're settled", async () => {
+    const h = setup();
+    let release: () => void = () => {};
+    h.driver.inspect.mockImplementationOnce(
+      () =>
+        new Promise<ProviderResource>((resolve) => {
+          release = () => resolve(resource(h.machine, h.now()));
+        })
+    );
+    // A key from a link since gone is still being checked when a newer one arrives.
+    const older = h.keeper.arm(h.request({ grantId: "mk_old" }));
+    const newer = h.keeper.arm(h.request({ grantId: "mk_new" }));
+    const asked = h.keeper.settledStatus();
+    await vi.waitFor(() => expect(h.driver.inspect).toHaveBeenCalledTimes(1));
+    // The newer one waits its turn rather than checking alongside.
+    expect(h.keeper.status().grantId).toBeNull();
+    release();
+    await Promise.all([older, newer]);
+    expect((await asked).grantId).toBe("mk_new");
+    expect(h.keeper.status().grantId).toBe("mk_new");
   });
 
   it("makes no request before it holds a key", async () => {

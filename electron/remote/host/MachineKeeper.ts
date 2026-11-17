@@ -79,6 +79,8 @@ export class MachineKeeper {
   /** A stop seen under way, or this machine's own sent (its outcome perhaps unknown), until it runs again. */
   private stopping: { since: number; own: boolean } | null = null;
   private marker: string | null = null;
+  /** Arms in the order they came, so a late one from a link since gone can't land over a newer one. */
+  private arms: Promise<unknown> = Promise.resolve();
   private disposed = false;
 
   constructor(private readonly deps: MachineKeeperDeps) {}
@@ -108,11 +110,24 @@ export class MachineKeeper {
     return Math.max(at ?? 0, this.now()) < held.expiresAt;
   }
 
+  /** What it holds once every key handed to it so far has been taken or refused. */
+  async settledStatus(): Promise<MachineKeeperStatus> {
+    await this.arms;
+    return this.status();
+  }
+
   /**
    * Holds this key in place of any other, once a first read through it shows
-   * it works for the machine it names. Refused, the key it held stays.
+   * it works for the machine it names. Refused, the key it held stays. Keys
+   * are taken one at a time, in the order they came.
    */
-  async arm(request: MachineKeeperArmRequest): Promise<MachineKeeperStatus> {
+  arm(request: MachineKeeperArmRequest): Promise<MachineKeeperStatus> {
+    const taken = this.arms.then(() => this.armNow(request));
+    this.arms = taken.catch(() => {});
+    return taken;
+  }
+
+  private async armNow(request: MachineKeeperArmRequest): Promise<MachineKeeperStatus> {
     if (this.disposed) {
       throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
     }

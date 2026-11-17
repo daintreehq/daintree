@@ -1866,6 +1866,8 @@ export class CloudHostLifecycle {
     // A binding forgotten while the request was out keeps no mark behind.
     if (!written) return false;
     this.observedTicket.set(bindingId, ticket);
+    // Whoever's read shows the deadline moved, or the run ending, settles an earlier failure to move it.
+    if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
     if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);
     return true;
   }
@@ -2081,8 +2083,9 @@ export class CloudHostLifecycle {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
       if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
-      // Refused because the machine had begun stopping by itself: that is no failure to report.
-      if (await this.stoppedMeanwhile(bindingId, provider, credentials)) return;
+      // Refused because the machine had begun stopping by itself, or someone
+      // else moved the deadline meanwhile: that is no failure to report.
+      if (await this.settledMeanwhile(bindingId, provider, credentials)) return;
       const described = provider.describeError(error);
       this.recordError(bindingId, {
         code: "lifetime-renewal",
@@ -2092,12 +2095,19 @@ export class CloudHostLifecycle {
     }
   }
 
-  /** The provider last said the machine isn't running, is stopping, or has its deadline well off. */
+  /**
+   * The provider last said the run is ending or over, or its deadline is well
+   * off: positive evidence only, never a state it couldn't read.
+   */
   private renewalSettled(bindingId: string): boolean {
     const binding = this.deps.store.binding(bindingId);
     const observation = binding?.observation;
     if (!binding || !observation) return false;
-    if (machineOf(binding) !== "running" || stopUnderWay(observation.stop)) return true;
+    const machine = machineOf(binding);
+    if (machine === "stopping" || machine === "stopped" || stopUnderWay(observation.stop)) {
+      return true;
+    }
+    if (machine !== "running") return false;
     const deadline = Date.parse(observation.autoStopAt ?? "");
     return (
       binding.lifetimeSeconds !== null &&
@@ -2115,22 +2125,15 @@ export class CloudHostLifecycle {
     this.deps.changed();
   }
 
-  /** After a failed renewal: whether the provider now says the machine is stopping or stopped. */
-  private async stoppedMeanwhile(
+  /** After a failed renewal: whether the provider now says the run is ending, or its deadline moved well off. */
+  private async settledMeanwhile(
     bindingId: string,
     provider: CloudProvider,
     credentials: ProviderCredentials
   ): Promise<boolean> {
     try {
       await this.inspectInto(bindingId, provider, credentials);
-      // An answer a newer one overtook leaves that newer one in the binding to judge by.
-      const observation = this.deps.store.binding(bindingId)?.observation;
-      if (!observation) return false;
-      return (
-        observation.machine === "stopping" ||
-        observation.machine === "stopped" ||
-        stopUnderWay(observation.stop)
-      );
+      return this.renewalSettled(bindingId);
     } catch {
       return false;
     }

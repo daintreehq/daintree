@@ -556,6 +556,26 @@ describe("machine keys (#17361)", () => {
     }
   });
 
+  it("keeps the id of a key whose scope doesn't read, so it can still be revoked and found", async () => {
+    const { client } = clientWith([
+      jsonResponse(201, {
+        ok: true,
+        apiKey: { id: "sak_42", name: "daintree-mk_1", expiresAt, scope: null },
+        secret: "boat_live_machinesecretvalue",
+      }),
+      jsonResponse(200, {
+        ok: true,
+        apiKeys: [{ id: "sak_42", name: "daintree-mk_1", scope: "everything", expiresAt: 5 }],
+      }),
+    ]);
+    const keys = new BoatProvider(() => client).machineKeys;
+    const refused = await keys
+      .issue(credentials, "bx_23456789", { name: "daintree-mk_1", ttlDays: 30 })
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ keyId: "sak_42", expiresAt: Date.parse(expiresAt) });
+    expect(await keys.findByName(credentials, "daintree-mk_1")).toEqual(["sak_42"]);
+  });
+
   it("tells key creation switched off apart from a machine shortage", () => {
     const provider = new BoatProvider(() => {
       throw new Error("unused");

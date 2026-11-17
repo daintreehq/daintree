@@ -20,7 +20,13 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isSafeSshUser, normalizeHostKey, parseSshEndpoint } from "../sshEndpoint.js";
 import { BoatApiError, BoatClient, type BoatRequestContext } from "./BoatClient.js";
-import type { BoatActionResponse, BoatApiKey, BoatLimits, BoatSandbox } from "./boatSchemas.js";
+import {
+  boatApiKeyScopeSchema,
+  type BoatActionResponse,
+  type BoatApiKey,
+  type BoatLimits,
+  type BoatSandbox,
+} from "./boatSchemas.js";
 import { BOAT_SIZE_MULTIPLIERS, BOAT_SIZE_SPECS, boatMachineState } from "./boatState.js";
 
 const SIZE_ORDER = ["small", "default", "large", "xlarge"];
@@ -134,7 +140,8 @@ export const BOAT_MACHINE_KEY_ACTIONS: readonly string[] = [
  * would leave the machine looking kept when it isn't.
  */
 function scopedToMachine(key: BoatApiKey, resourceId: string): boolean {
-  const scope = key.scope;
+  const parsed = boatApiKeyScopeSchema.safeParse(key.scope);
+  const scope = parsed.success ? parsed.data : null;
   if (!scope?.actions || !Array.isArray(scope.sandboxes)) return false;
   const actions = new Set(scope.actions);
   if (
@@ -168,11 +175,13 @@ class BoatMachineKeys implements MachineKeyIssuer {
       actions: [...BOAT_MACHINE_KEY_ACTIONS],
       sandboxIds: [resourceId],
     });
-    const expiresAt = Date.parse(created.apiKey.expiresAt ?? "");
+    const said = created.apiKey.expiresAt;
+    const expiresAt = typeof said === "string" ? Date.parse(said) : Number.NaN;
     if (!Number.isFinite(expiresAt) || !scopedToMachine(created.apiKey, resourceId)) {
       // Never handed to the machine; revoked by its id like any other key nothing should hold.
       throw new UnusableMachineKeyError(
         created.apiKey.id,
+        Number.isFinite(expiresAt) ? expiresAt : null,
         "Boat issued a key other than the one asked for, so it wasn't used."
       );
     }

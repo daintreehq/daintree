@@ -209,20 +209,26 @@ export const boatErrorEnvelopeSchema = z
 
 const scopeSetSchema = z.union([z.literal("*"), z.array(z.string())]);
 
-/** An API key's metadata; Boat never returns a secret here. */
+/** What a key may do and reach, read on its own: one that doesn't read is no evidence of anything. */
+export const boatApiKeyScopeSchema = z
+  .object({
+    actions: z.array(z.string()).optional(),
+    sandboxes: scopeSetSchema.optional(),
+    environments: scopeSetSchema.optional(),
+  })
+  .loose();
+
+/**
+ * An API key's metadata; Boat never returns a secret here. Its id and name
+ * read whatever its scope says, so a key with a scope this build can't read
+ * can still be found and revoked.
+ */
 export const boatApiKeySchema = z
   .object({
     id: z.string().min(1),
     name: z.string().optional().default(""),
-    expiresAt: nullableString,
-    scope: z
-      .object({
-        actions: z.array(z.string()).optional(),
-        sandboxes: scopeSetSchema.optional(),
-        environments: scopeSetSchema.optional(),
-      })
-      .loose()
-      .optional(),
+    expiresAt: z.unknown().optional(),
+    scope: z.unknown().optional(),
   })
   .loose();
 

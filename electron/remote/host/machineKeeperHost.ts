@@ -50,7 +50,7 @@ export function installMachineKeeperHost(server: MachineKeeperHostServer): () =>
       session.registerCallHandler(
         MachineKeeperLinkMethod.STATUS,
         MachineKeeperStatusRequestSchema,
-        () => keeper.status()
+        () => keeper.settledStatus()
       ),
       session.registerCallHandler(MachineKeeperLinkMethod.ARM, MachineKeeperArmSchema, (request) =>
         keeper.arm(request)

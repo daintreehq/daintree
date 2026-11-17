@@ -1952,6 +1952,38 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     expect(lifecycle.statuses()[0]!.lastError).toBeNull();
   });
 
+  it("clears a failed renewal when any read shows the deadline moved, not only its own", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("keeps a failed renewal shown while the machine's state can't be read", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    state.machine = resource({ machine: "unknown", rawState: "weird" });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+  });
+
   it("still reports a failed renewal when the machine is in error rather than stopping", async () => {
     const { lifecycle, provider, state } = await keeper(
       { connected: true, busy: true, shown: false },

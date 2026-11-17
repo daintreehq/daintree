@@ -52,6 +52,18 @@ export interface CloudMachineKeysDeps {
   now?: () => number;
 }
 
+/**
+ * When a key stops working by itself. One issued with no expiry the provider
+ * vouched for works until revoked; one whose create lost its answer was asked
+ * for with the usual lifetime.
+ */
+function expiryOf(key: StoredMachineKey): number {
+  if (key.expiresAt !== null) return key.expiresAt;
+  return key.keyId !== null
+    ? Number.POSITIVE_INFINITY
+    : key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS;
+}
+
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   return typeof error.code === "string" ? error.code : null;
@@ -148,11 +160,7 @@ export class CloudMachineKeys {
     const now = this.now();
     const live = this.deps.store
       .machineKeys()
-      .filter(
-        (key) =>
-          key.accountId === accountId &&
-          (key.expiresAt ?? key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS) > now
-      );
+      .filter((key) => key.accountId === accountId && expiryOf(key) > now);
     if (live.length === 0) return;
     const message = `Daintree couldn't yet revoke the ${live.length === 1 ? "key it gave a machine" : `keys it gave ${live.length} machines`} on this account. Try again once the provider can be reached; each such key expires by itself within ${MACHINE_KEY_TTL_DAYS} days.`;
     throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
@@ -314,7 +322,21 @@ export class CloudMachineKeys {
     if (!binding || !account) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     const issuer = provider.machineKeys!;
-    const credentials: ProviderCredentials = await this.deps.accounts.credentials(account);
+    let credentials: ProviderCredentials;
+    try {
+      credentials = await this.deps.accounts.credentials(account);
+    } catch (error) {
+      // The account's own key is missing or unusable here: say so, ask nothing of the provider.
+      const said =
+        error instanceof AppError && error.userMessage ? error.userMessage : String(error);
+      this.setProblem(
+        bindingId,
+        `This machine can't stop itself when idle: ${said}`,
+        account.keyHint,
+        true
+      );
+      return;
+    }
     // Nothing is asked for a link that went, or a run that ended, while the key was read.
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     const id = `mk_${crypto.randomBytes(8).toString("hex")}`;
@@ -346,6 +368,7 @@ export class CloudMachineKeys {
         this.deps.store.updateMachineKey(id, (current) => ({
           ...current,
           keyId: error.keyId,
+          expiresAt: error.expiresAt,
           state: "revoke",
         }));
         this.setProblem(
@@ -451,8 +474,7 @@ export class CloudMachineKeys {
       if ((key.state !== "revoke" && !abandoned) || this.issuing.has(key.id)) continue;
       if (accountId === undefined && (this.revokeRetryAt.get(key.id) ?? 0) > now) continue;
       // Off by itself already.
-      const expiresAt = key.expiresAt ?? key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS;
-      if (expiresAt <= now) {
+      if (expiryOf(key) <= now) {
         this.forget(key.id);
         continue;
       }

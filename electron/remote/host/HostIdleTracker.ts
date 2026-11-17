@@ -16,6 +16,8 @@ export interface HostWorkReading {
 
 export interface HostIdleTrackerDeps {
   read(): Promise<HostWorkReading>;
+  /** A read that reuses nothing taken before it started; `read` when absent. */
+  readFresh?(): Promise<HostWorkReading>;
   /** The idle time set on this host, read again for every observation. */
   idleAfterMinutes(): number;
   clock?(): ElapsedStamp;
@@ -102,7 +104,7 @@ export class HostIdleTracker {
   /** One check; a check already under way is shared rather than doubled. */
   check(): Promise<void> {
     if (this.disposed) return Promise.resolve();
-    this.reading ??= this.readOnce().finally(() => {
+    this.reading ??= this.readOnce(this.deps.read).finally(() => {
       this.reading = null;
     });
     return this.reading;
@@ -113,8 +115,12 @@ export class HostIdleTracker {
    * before the latest work. For whatever acts on idleness, just before it does.
    */
   async checkFresh(): Promise<void> {
-    await this.reading;
-    return this.check();
+    while (this.reading) await this.reading;
+    if (this.disposed) return;
+    this.reading = this.readOnce(this.deps.readFresh ?? this.deps.read).finally(() => {
+      this.reading = null;
+    });
+    return this.reading;
   }
 
   observation(): HostIdleObservation {
@@ -143,11 +149,11 @@ export class HostIdleTracker {
     this.abandonRead?.();
   }
 
-  private async readOnce(): Promise<void> {
+  private async readOnce(read: () => Promise<HostWorkReading>): Promise<void> {
     const noted = this.workNoted;
     let reading: HostWorkReading | null;
     try {
-      reading = await Promise.race([this.deps.read(), this.readDeadline()]);
+      reading = await Promise.race([read.call(this.deps), this.readDeadline()]);
     } catch {
       reading = null;
     } finally {
