@@ -89,7 +89,7 @@ describe("needs attention", () => {
       expect(threadNeedsAttention(r, new Map())).toBe(false);
       // Handled with nothing marked, so it keeps nothing of its question waiting.
       expect(isHandled(r, new Map())).toBe(true);
-      expect(withoutHandled([r], new Map([[qid(9), 1]]))).toEqual([]);
+      expect(withoutHandled([r], new Map())).toEqual([]);
     }
     const withdrawn = row(2, { local_status: "cancelled", delivery_status: "needs-attention" });
     expect(answerNeedsAttention(withdrawn, new Map())).toBe(true);

@@ -313,8 +313,8 @@ function keepingCancelled(current: QuestionRow, patch: Partial<QuestionRow>): Pa
  * applied to it (#17234): when the relay commits a create and a phone's
  * decline or answer is applied before the create's response is read, as when
  * a lost response has the create sent again, the library would record the
- * question `open` at the create's older seq. A reopen is a later event, and
- * still applies.
+ * question `open` at the create's older seq and clear the code a later
+ * delivery recorded. A reopen is a later event, and still applies.
  */
 function keepingLaterEvent(
   current: QuestionRow,
@@ -328,7 +328,7 @@ function keepingLaterEvent(
   ) {
     return patch;
   }
-  const { local_status: _status, remote_event_seq: _seq, ...rest } = patch;
+  const { local_status: _status, remote_event_seq: _seq, error_code: _code, ...rest } = patch;
   return rest;
 }
 
@@ -646,7 +646,8 @@ export class DaintreeLocalStore implements LocalStore {
    * reported to the relay. Reads three partial indexes, so it costs next to
    * nothing when nothing waits. A person's decline (#17234) keeps its row
    * `desktop-received` after delivery drops its notice for a run that has
-   * gone, so a cancelled row waits only while an entry is still to be typed.
+   * gone, so a cancelled row waits only while an entry is still to be typed;
+   * entries it can't read are taken as waiting, and never fail the read.
    */
   hasPendingDelivery(): Promise<boolean> {
     return this.enqueue("read", () => {
@@ -657,8 +658,12 @@ export class DaintreeLocalStore implements LocalStore {
              WHEN local_status <> 'cancelled' THEN 1
              WHEN json_valid(answers_json) THEN EXISTS (
                SELECT 1 FROM json_each(q.answers_json) AS entry
-               WHERE json_extract(entry.value, '$.deliver') = 1
-                 AND json_extract(entry.value, '$.delivered') = 0
+               WHERE CASE
+                 WHEN entry.type = 'object' THEN
+                   json_extract(entry.value, '$.deliver') = 1
+                   AND json_extract(entry.value, '$.delivered') = 0
+                 ELSE 1
+               END
              )
              ELSE 1
            END

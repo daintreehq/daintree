@@ -912,9 +912,13 @@ describe("DaintreeLocalStore ordering and failures", () => {
     await store.updateQuestion("q1", { delivery_status: "pending-host" });
     expect(await store.hasPendingDelivery()).toBe(false);
 
-    // Entries that can't be read are taken as waiting, as before.
-    await store.updateQuestion("q1", { answers_json: "not json" });
-    expect(await store.hasPendingDelivery()).toBe(true);
+    // Entries that can't be read are taken as waiting, and never fail the read.
+    for (const unreadable of ["not json", '["damaged"]', "[5]", '{"deliver":true}']) {
+      await store.updateQuestion("q1", { answers_json: unreadable });
+      expect(await store.hasPendingDelivery()).toBe(true);
+    }
+    await store.updateQuestion("q1", { answers_json: answers({ ...DECLINE, deliver: false }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
   });
 
   it("says a follow-up waits while one waits to be typed or its receipt to be sent (#16231)", async () => {
@@ -1090,7 +1094,7 @@ describe("DaintreeLocalStore ordering and failures", () => {
     const store = new DaintreeLocalStore(sqlite);
     // Declined on the phone at seq 9, before the create's response (seq 4) was read.
     await store.commitNewQuestion(
-      row("q1", 1, { local_status: "cancelled", remote_event_seq: 9 }),
+      row("q1", 1, { local_status: "cancelled", remote_event_seq: 9, error_code: "pane_gone" }),
       item("o1", "q1")
     );
     await store.commitNewQuestion(row("q2", 2), item("o2", "q2"));
@@ -1103,6 +1107,7 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.getQuestion("q1")).toMatchObject({
       local_status: "cancelled",
       remote_event_seq: 9,
+      error_code: "pane_gone",
     });
     expect(await store.getQuestion("q2")).toMatchObject({
       local_status: "open",

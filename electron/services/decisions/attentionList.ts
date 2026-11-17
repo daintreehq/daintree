@@ -141,7 +141,8 @@ export function withoutHandled(
   rows: readonly QuestionRow[],
   handled: HandledAnswers
 ): QuestionRow[] {
-  return handled.size === 0 ? [...rows] : rows.filter((row) => !isHandled(row, handled));
+  // A stopped decline is handled with nothing marked, so every read filters.
+  return rows.filter((row) => !isHandled(row, handled));
 }
 
 /** What would be typed in, the delivery engine's own test: marked for delivery and not yet delivered. */
