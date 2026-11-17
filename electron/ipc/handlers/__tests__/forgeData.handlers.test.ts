@@ -601,6 +601,17 @@ describe("registerForgeDataHandlers", () => {
     it.each([
       // eslint-disable-next-line no-sparse-arrays
       ["a sparse list", { deployments: [, { ...preview }] }],
+      [
+        "a sparse list whose iterator skips the hole",
+        {
+          // eslint-disable-next-line no-sparse-arrays
+          deployments: Object.assign([, { ...preview }], {
+            *[Symbol.iterator]() {
+              yield { ...preview };
+            },
+          }),
+        },
+      ],
       ["a non-array result", { deployments: "live" }],
       ["a deployment without an id", { deployments: [{ ...preview, id: "" }] }],
       ["a blank environment", { deployments: [{ ...preview, environment: "  " }] }],

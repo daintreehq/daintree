@@ -1224,7 +1224,8 @@ function requireValidDeployments(value: unknown): ForgeDeployment[] {
   // By index, not by iteration: a hole (or an iterator that skips one) reads as
   // `undefined` and fails validation instead of silently dropping a row.
   const rows: ForgeDeployment[] = Array.from({ length: raw.length }, (_, index) => {
-    const d = raw[index] as Partial<Deployment> | null | undefined;
+    const d = (Object.hasOwn(raw, index) ? raw[index] : undefined) as
+      Partial<Deployment> | null | undefined;
     if (
       !d ||
       typeof d !== "object" ||
