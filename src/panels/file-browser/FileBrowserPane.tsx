@@ -54,6 +54,8 @@ import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
+import { navigateFileBrowserView } from "./guardedFileBrowserView";
+import type { FileBrowserViewPatch } from "@/store/slices/panelRegistry/fileBrowser";
 import { pickCursorReplacement, type CursorSighting } from "./treeCursor";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
@@ -116,31 +118,15 @@ export function FileBrowserPane({
   onTabRename,
   onAddTab,
 }: FileBrowserPaneProps) {
-  const updateFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
   const project = useProjectStore((state) => state.currentProject);
   const { dirty, conflict } = useFileDocumentFlags(id);
-  const navigationRequest = useRef(0);
+  // Every write goes through the guarded path shared with the reveal actions,
+  // so a selection change over unsaved edits asks first wherever it came from.
   const setFileBrowserView = useCallback(
-    (panelId: string, patch: Parameters<typeof updateFileBrowserView>[1]) => {
-      const current = usePanelStore.getState().panelsById[panelId];
-      const changesDocument =
-        "browserSelectedPath" in patch &&
-        current?.kind === "file-browser" &&
-        (patch.browserSelectedPath ?? undefined) !== current.browserSelectedPath;
-      if (!changesDocument) {
-        updateFileBrowserView(panelId, patch);
-        return;
-      }
-      const request = ++navigationRequest.current;
-      if (!getFileDocumentProjection(panelId)?.dirty) {
-        updateFileBrowserView(panelId, patch);
-        return;
-      }
-      void consultPanelCloseGuards([panelId]).then((proceed) => {
-        if (proceed && navigationRequest.current === request) updateFileBrowserView(panelId, patch);
-      });
+    (panelId: string, patch: FileBrowserViewPatch) => {
+      void navigateFileBrowserView(panelId, patch);
     },
-    [updateFileBrowserView]
+    []
   );
   const handleClose = useCallback(() => {
     if (location !== "dialog" || !getFileDocumentProjection(id)?.dirty) {
@@ -1302,8 +1288,17 @@ export function FileBrowserPane({
   // for an entry picked out of a folder listing whose parent is collapsed. Git
   // still covers what that cannot: a path whose parent directory has not been
   // listed at all, where there is no node to consult either way.
+  //
+  // Unsaved edits are a witness too. The document behind a dirty draft is
+  // released the moment the selection moves, so a dirty panel's draft is
+  // always the selected file's — and when that file is deleted or moved
+  // underneath it, the tree drops the row while the draft stands. Without
+  // this the viewer would fall back to the deleted-file body, which has no
+  // editor and so no way to save the draft somewhere else (#17197).
   const isSelectedReadableFile =
-    selectedNode === undefined ? isSelectedChangedFile : selectedNode.isDirectory === false;
+    selectedNode === undefined
+      ? isSelectedChangedFile || dirty
+      : selectedNode.isDirectory === false;
   // `selectionFilteredHidden` is part of the gate, not decoration: resolving the
   // node from the listings map means it survives the filter that removed its
   // row, so without this an entry hidden by the dotfile toggle would keep its
