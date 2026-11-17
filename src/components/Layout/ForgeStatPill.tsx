@@ -190,6 +190,7 @@ export function ForgeStatPill({
         className="p-0 w-[450px]"
         persistThroughChildOverlays={persistThroughChildOverlays}
         keepMounted={keepMounted}
+        restoreFocusOnClose
       >
         <div
           id={dropdownId}
