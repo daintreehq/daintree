@@ -318,7 +318,7 @@ describe("resolveUnknownOutcome", () => {
       };
     }
 
-    it("gives an operation still running at reconnection its full follow-up window", async () => {
+    it("keeps following an operation still running when the link comes back after the window's length", async () => {
       const { client } = fakeClient([running, running, succeeded]);
       const link = heldLink();
 
@@ -328,6 +328,8 @@ describe("resolveUnknownOutcome", () => {
         pollIntervalMs: 2_000,
         settleTimeoutMs: 5 * 60_000,
       });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus).not.toHaveBeenCalled();
       await link.reconnectAfter(SIX_MINUTES);
       await vi.advanceTimersByTimeAsync(4_000);
 
@@ -336,21 +338,30 @@ describe("resolveUnknownOutcome", () => {
       expect(link.waitForConnected).toHaveBeenCalledOnce();
     });
 
-    it("doesn't spend the window while the machine sleeps between polls", async () => {
+    it("charges a poll wait that fires late after a sleep only its scheduled length", async () => {
       const { client } = fakeClient([running, running, succeeded]);
+      // The first poll's timer fires six minutes late, as it would on a machine
+      // that slept through it: every clock moves on by that much.
+      const scheduled = globalThis.setTimeout;
+      const late = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementationOnce(((callback: () => void, ms?: number) =>
+          scheduled(callback, (ms ?? 0) + SIX_MINUTES)) as typeof setTimeout);
+      try {
+        const pending = resolveUnknownOutcome("op-1", {
+          waitForConnected: async () => {},
+          client,
+          pollIntervalMs: 2_000,
+          settleTimeoutMs: 5 * 60_000,
+        });
+        await vi.advanceTimersByTimeAsync(SIX_MINUTES + 2_000);
+        expect(client.getStatus).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(2_000);
 
-      const pending = resolveUnknownOutcome("op-1", {
-        waitForConnected: async () => {},
-        client,
-        pollIntervalMs: 2_000,
-        settleTimeoutMs: 5 * 60_000,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(client.getStatus).toHaveBeenCalledOnce();
-      vi.setSystemTime(Date.now() + SIX_MINUTES);
-      await vi.advanceTimersByTimeAsync(4_000);
-
-      await expect(pending).resolves.toEqual(succeeded);
+        await expect(pending).resolves.toEqual(succeeded);
+      } finally {
+        late.mockRestore();
+      }
     });
 
     it("keeps what is left of the window across later drops, without refilling it", async () => {
@@ -373,20 +384,27 @@ describe("resolveUnknownOutcome", () => {
       }).then((outcome) => {
         result = outcome;
       });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus).not.toHaveBeenCalled();
       await link.reconnectAfter(SIX_MINUTES);
       // 2s spent; the next read finds the link down.
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(client.getStatus).toHaveBeenCalledTimes(2);
       await link.reconnectAfter(SIX_MINUTES);
       // 4s spent; down again.
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(client.getStatus).toHaveBeenCalledTimes(4);
       await link.reconnectAfter(SIX_MINUTES);
-      expect(result).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await pending;
+      expect(client.getStatus).toHaveBeenCalledTimes(5);
 
-      expect(result).toEqual(running);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(client.getStatus).toHaveBeenCalledTimes(5);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
       expect(client.getStatus).toHaveBeenCalledTimes(6);
+      expect(result).toEqual(running);
       expect(link.waitForConnected).toHaveBeenCalledTimes(3);
+      await pending;
     });
   });
 

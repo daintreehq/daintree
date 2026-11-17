@@ -1597,10 +1597,18 @@ describe("runHostOperation", () => {
       };
       const run = vi.fn(() => Promise.reject(lost()));
 
-      const pending = runHostOperation("op-1", run, {
+      let settled: { value?: unknown; error?: unknown } | undefined;
+      void runHostOperation("op-1", run, {
         fromResult,
         resolve: (opId, options) => resolveUnknownOutcome(opId, { ...options, client }),
-      });
+      }).then(
+        (value) => {
+          settled = { value };
+        },
+        (error: unknown) => {
+          settled = { error };
+        }
+      );
       await vi.advanceTimersByTimeAsync(0);
       expect(client.getStatus).not.toHaveBeenCalled();
       vi.setSystemTime(Date.now() + 6 * 60_000);
@@ -1609,7 +1617,7 @@ describe("runHostOperation", () => {
         .applyConnection({ status: "connected", rttMs: 1, handshake: HANDSHAKE });
       await vi.advanceTimersByTimeAsync(2_000);
 
-      await expect(pending).resolves.toBe("cloned");
+      expect(settled).toEqual({ value: "cloned" });
       expect(run).toHaveBeenCalledOnce();
       expect(client.getStatus).toHaveBeenCalledTimes(2);
       expect(useHostConnectionStore.getState().checking).toBe(0);

@@ -15,9 +15,9 @@ export interface ResolveUnknownOutcomeOptions {
   signal?: AbortSignal;
   /**
    * How long to follow an operation the Host still reports as running before
-   * handing back that running outcome. Spent only by the waits between polls
-   * once the Host has answered, so time offline — waiting for the link, or a
-   * machine asleep mid-wait — never uses it up.
+   * handing back that running outcome. Spent only by the waits between polls,
+   * each at its scheduled length, so neither the wait for the link to come
+   * back nor a machine asleep mid-wait uses it up.
    */
   settleTimeoutMs?: number;
   pollIntervalMs?: number;
