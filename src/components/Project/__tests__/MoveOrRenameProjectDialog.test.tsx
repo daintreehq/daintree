@@ -376,7 +376,7 @@ describe("MoveOrRenameProjectDialog", () => {
       });
       await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
       expect(previewRelocation).toHaveBeenCalledWith(
-        expect.objectContaining({ newPath: expect.stringContaining("あ".repeat(85)) })
+        expect.objectContaining({ newPath: expect.stringMatching(/\/あ{85}$/) })
       );
     } finally {
       _resetHostPlatformForTests();

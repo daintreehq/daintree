@@ -78,6 +78,14 @@ describe("checkDestination", () => {
     }
   );
 
+  it.runIf(process.platform === "linux")(
+    "refuses a parent folder that is too long in bytes, though short in characters",
+    async () => {
+      const check = await checkDestination(path.join(root, "あ".repeat(100), "repo"), [URL]);
+      expect(check).toMatchObject({ status: "invalid" });
+    }
+  );
+
   it("suggests no sibling whose name would be too long", async () => {
     const taken = path.join(root, "t".repeat(254));
     fs.mkdirSync(taken);
@@ -141,6 +149,23 @@ describe("suggestDestination", () => {
     });
     expect(check).toMatchObject({ status: "free", path: path.join(projects, "app") });
   });
+
+  it.runIf(process.platform === "linux")(
+    "skips a mirrored path whose folder is too long in bytes, though short in characters",
+    async () => {
+      const home = path.join(root, "home-long-bytes");
+      const projects = path.join(home, "Projects");
+      fs.mkdirSync(projects, { recursive: true });
+      const check = await suggestDestination({
+        homeDir: home,
+        projectsDir: projects,
+        homeRelativePath: `Projects/${"あ".repeat(100)}/app`,
+        repoName: "app",
+        remoteUrls: [URL],
+      });
+      expect(check).toMatchObject({ status: "free", path: path.join(projects, "app") });
+    }
+  );
 
   it("ignores a relative path that climbs out of home", async () => {
     const home = path.join(root, "home-c");

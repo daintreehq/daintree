@@ -723,9 +723,6 @@ describe("ProjectRelocationCoordinator — case-only rename", () => {
       await expect(
         coordinator.relocate({ projectId: PROJECT_ID, mode: "move", newPath })
       ).rejects.toMatchObject({ reason: "invalid-destination" });
-      expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
-      expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
-      expect(fsState.renameCalls).toEqual([]);
 
       const preview = await coordinator.previewRelocate({
         projectId: PROJECT_ID,
@@ -733,6 +730,10 @@ describe("ProjectRelocationCoordinator — case-only rename", () => {
         newPath,
       });
       expect(preview.blockers.map((blocker) => blocker.reason)).toEqual(["invalid-destination"]);
+      // Neither the apply nor the preview may have touched the running project.
+      expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
+      expect(fsState.renameCalls).toEqual([]);
     };
 
     it("rejects a name over 255 characters before anything is stopped", async () => {
