@@ -256,13 +256,18 @@ describe("TerminalDecisionsChip", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("terminal-decisions-row-line")).toHaveLength(1)
     );
-    const popover = () => screen.getByTestId("popover-content").textContent;
-    const withDraft = popover();
+    // The delivery notes alone: a row's relative time could tick between reads.
+    const notes = () =>
+      [...screen.getByTestId("popover-content").querySelectorAll("p")]
+        .map((note) => note.textContent)
+        .join("\n");
+    const withDraft = notes();
+    expect(withDraft).not.toBe("");
 
     typeInAComposer([]);
-    expect(popover()).not.toBe(withDraft);
+    expect(notes()).not.toBe(withDraft);
     typeInAComposer([draft]);
-    expect(popover()).toBe(withDraft);
+    expect(notes()).toBe(withDraft);
   });
 
   it("reads no drafts for a pane whose only answers need a person", async () => {
