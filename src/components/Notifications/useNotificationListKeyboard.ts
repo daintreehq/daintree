@@ -158,6 +158,12 @@ export function useNotificationListKeyboard({
         }
         case "e": {
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // One-shot: a held key would archive each successor as focus moves
+          // onto it, so the result would depend on the keyboard repeat rate.
+          if (e.repeat) {
+            e.preventDefault();
+            return;
+          }
           // Nothing in the Archived tab. `e` is learned as archive, and it used
           // to turn into a permanent delete here, so the same key that filed
           // something away destroyed it one tab over. The row's × is the
@@ -174,6 +180,11 @@ export function useNotificationListKeyboard({
           // unread. Lowercase only — uppercase `U` is reserved for a future
           // bulk action and would conflict with Shift-modified navigation.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // One-shot toggle: repeat would flip read state back and forth.
+          if (e.repeat) {
+            e.preventDefault();
+            return;
+          }
           // Archived rows are filed; the store won't unread them, so the key
           // would do nothing while looking like it should.
           if (filter === "archived") return;
@@ -189,6 +200,12 @@ export function useNotificationListKeyboard({
           // thread-level concept). The dropdown-open guard at the top of
           // this handler keeps subsequent j/k from double-navigating.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Closing the menu restores focus to the row, so a held key would
+          // reopen it without a fresh press.
+          if (e.repeat) {
+            e.preventDefault();
+            return;
+          }
           // Filed rows don't snooze; the row menu doesn't offer it either.
           if (filter === "archived") return;
           const row = flatRows[activeIndex];

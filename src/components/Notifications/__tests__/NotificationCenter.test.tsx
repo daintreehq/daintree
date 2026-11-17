@@ -3041,6 +3041,31 @@ describe("archived tab and 'e' archive keybinding", () => {
     expect(archived.seenAsToast).toBe(true);
   });
 
+  it("a held 'e' archives only the originally focused row", async () => {
+    setEntries([
+      makeEntry({ id: "a", message: "First" }),
+      makeEntry({ id: "b", message: "Second" }),
+      makeEntry({ id: "c", message: "Third" }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e", repeat: true });
+      fireEvent.keyDown(list, { key: "e", repeat: true });
+    });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.filter((e) => e.archivedAt !== null)).toHaveLength(1);
+  });
+
   it("'e' on a thread archives every non-archived entry in the thread", async () => {
     setEntries([
       makeEntry({ id: "t1", message: "first", correlationId: "thread" }),
