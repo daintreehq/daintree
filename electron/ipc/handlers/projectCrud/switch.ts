@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
+import { typedHandleWithContext } from "../../utils.js";
 import {
   getWindowForWebContents,
   getProjectForWebContents,
@@ -69,6 +69,7 @@ import type {
 import type { TabGroup } from "../../../../shared/types/panel.js";
 import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
+import { beginWindowSwitch, isCurrentWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 
 export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -396,13 +397,6 @@ function markMainReceived(trace: ProjectSwitchTrace, operation: SwitchOperation)
     });
   });
 }
-
-// Monotonic per-window switch epoch. A swap-failure restore (below) is
-// deferred until the failed target's early worktree load settles; by then a
-// newer switch may own the window, and restoring the old mapping would
-// clobber it. Bumped at every activateProjectView entry; the restore only
-// runs if its epoch is still current.
-const windowSwitchEpochs = new Map<number, number>();
 
 const pendingOutgoingPersists = new Map<string, Promise<void>>();
 
@@ -841,11 +835,11 @@ async function activateProjectView(
     markPerformance(name, { switchId: trace.switchId, projectId, ...meta });
   };
 
-  let switchEpoch = 0;
-  if (windowId !== undefined) {
-    switchEpoch = (windowSwitchEpochs.get(windowId) ?? 0) + 1;
-    windowSwitchEpochs.set(windowId, switchEpoch);
-  }
+  // A swap-failure restore (below) is deferred until the failed target's early
+  // worktree load settles; by then a newer switch may own the window, and
+  // restoring the old mapping would clobber it. The restore only runs if this
+  // switch is still the window's current one.
+  const switchEpoch = windowId !== undefined ? beginWindowSwitch(windowId) : 0;
 
   // Start the workspace-host git load CONCURRENTLY with the view swap. The two
   // have no data dependency (loadProject takes explicit path + windowId), and
@@ -936,7 +930,7 @@ async function activateProjectView(
       void (loadWorktrees ?? Promise.resolve())
         .catch(() => {})
         .then(() => {
-          if (windowSwitchEpochs.get(windowId) !== switchEpoch) return undefined;
+          if (!isCurrentWindowSwitch(windowId, switchEpoch)) return undefined;
           if (previousPath === project.path) return undefined; // mapping already correct
           if (previousPath) {
             return worktreeService.loadProject(previousPath, windowId);
@@ -983,18 +977,21 @@ async function activateProjectView(
   }
 
   // Mutually exclusive with scratch: switching to a project clears any
-  // active scratch pointer + notifies renderers so palette/UI state stays
-  // coherent. Without this, `currentScratchId` would linger in app_state
-  // and `scratchStore.getCurrentScratch()` would return stale data.
+  // active scratch pointer. Without this, `currentScratchId` would linger in
+  // app_state and `scratchStore.getCurrentScratch()` would return stale data.
   // Wrapped because some test environments don't initialize the shared DB —
   // a project switch must not fail because optional cross-store cleanup did.
   try {
     if (scratchStore.getCurrentScratchId() !== null) {
       scratchStore.clearCurrentScratch();
-      broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: null, switchId: "" });
     }
   } catch (err) {
     console.warn("[ProjectSwitch] Failed to clear active scratch:", err);
+  }
+  // Only the view this window now shows hears that it holds no scratch. A
+  // broadcast would also clear the scratch another window is showing (#17186).
+  if (!view.webContents.isDestroyed()) {
+    view.webContents.send(CHANNELS.SCRATCH_ON_SWITCH, { scratch: null, switchId: "" });
   }
 
   // Update the main process global state. The outgoing id comes from the
@@ -1131,11 +1128,11 @@ async function activateProjectView(
       awaitingClone &&
       windowId !== undefined &&
       !isAwaitingClone(projectStore.getProjectById(projectId)) &&
-      windowSwitchEpochs.get(windowId) === switchEpoch
+      isCurrentWindowSwitch(windowId, switchEpoch)
     ) {
       try {
         await deps.worktreeService.loadProject(project.path, windowId);
-        if (windowSwitchEpochs.get(windowId) === switchEpoch && !view.webContents.isDestroyed()) {
+        if (isCurrentWindowSwitch(windowId, switchEpoch) && !view.webContents.isDestroyed()) {
           deps.worktreeService.attachDirectPort(windowId, view.webContents);
           const host = deps.worktreeService.getHostForProject(project.path);
           if (host && deps.worktreePortBroker) {

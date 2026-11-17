@@ -5,9 +5,9 @@
  * This is the only view-local workspace identity in the renderer, and it is
  * immutable for the life of the WebContents: main seeds it at view creation and
  * verifies the handshake on load. `useScratchStore`'s `currentScratch`, by
- * contrast, is broadcast to *every* view (including cached ones), so it says
- * what the user is looking at globally — never which workspace *this* view owns.
- * Anything that must not act on a sibling view's state has to key off this.
+ * contrast, is live state that switches and hydration write, and is null in a
+ * scratch view until it hydrates — never proof of which workspace *this* view
+ * owns. Anything that must not act on a sibling view's state has to key off this.
  */
 export function getViewWorkspaceId(): string | null {
   if (typeof window === "undefined") return null;

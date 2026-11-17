@@ -52,6 +52,7 @@ import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
+import { currentWindowSwitch } from "../../window/windowSwitchEpochs.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -411,6 +412,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       await inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
+        const switchEpoch = currentWindowSwitch(windowId);
         if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
         const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path, undefined, {
           ...request,
@@ -419,6 +421,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         recordWindowSwitch(windowId, from, workspace.id);
         const registry = getWindowRegistry();
         const win = registry?.getByWindowId(windowId)?.browserWindow;
+        const outgoingProjectId = from !== null && isLocalProjectKey(from) ? from : null;
         if (scratch && win && !win.isDestroyed()) {
           activateScratchInWindow({
             scratch,
@@ -427,6 +430,9 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             view: view.webContents,
             windowRegistry: registry,
             ptyClient: getPtyClient(),
+            workspaceClient: getWorkspaceClientRef(),
+            outgoingWorkspaceId: outgoingProjectId,
+            switchEpoch,
           });
         } else if (project && win && !win.isDestroyed()) {
           await completeLocalProjectActivation({
@@ -434,7 +440,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             project,
             view,
             isNew,
-            outgoingProjectId: from !== null && isLocalProjectKey(from) ? from : null,
+            outgoingProjectId,
             switchId: crypto.randomUUID(),
             clients: {
               workspace: getWorkspaceClientRef(),

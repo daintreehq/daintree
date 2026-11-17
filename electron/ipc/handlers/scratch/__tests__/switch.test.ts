@@ -33,6 +33,9 @@ vi.mock("../../../../services/ScratchStore.js", () => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   clearCurrentProject: vi.fn(),
+  // No departing project row here: a project left for a scratch is covered by
+  // switch.departure.test.ts.
+  getProjectById: vi.fn(() => null),
   // The global "last window to switch" pointer. History deliberately does not
   // read it (#11936) — this stays only because other code in the handler does.
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
@@ -87,7 +90,10 @@ function getHandler(channel: string) {
   ) => Promise<unknown>;
 }
 
-const fakeEvent = { sender: { id: 1 }, senderFrame: { url: "http://localhost:5173" } };
+const fakeEvent = {
+  sender: { id: 1, isDestroyed: () => false, send: vi.fn() },
+  senderFrame: { url: "http://localhost:5173" },
+};
 
 // Real id shapes, because the reader that consumes this history routes its
 // existence checks on them: a scratch is a UUIDv4, a project 64 hex characters.

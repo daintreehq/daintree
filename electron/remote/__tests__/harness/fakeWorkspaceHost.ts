@@ -54,14 +54,20 @@ export class FakeWorkspaceHost {
 export function createFakeWorkspaceClient(hosts: Map<string, FakeWorkspaceHost>) {
   /** The projects main loaded into a window, as a local switch does. */
   const loads: Array<{ projectPath: string; windowId: number }> = [];
+  /** The windows main let go of their workspace, as a switch to a scratch does. */
+  const releases: number[] = [];
   return {
     loads,
+    releases,
     getHostForProject: (projectPath: string) => hosts.get(projectPath) ?? null,
     loadProject: async (projectPath: string, windowId: number) => {
       loads.push({ projectPath, windowId });
       return "warm" as const;
     },
     attachDirectPort: () => undefined,
+    unregisterWindow: (windowId: number) => {
+      releases.push(windowId);
+    },
     // Every host here is up from the start and never replaced under a view.
     isWindowAttached: () => true,
     on: () => undefined,
