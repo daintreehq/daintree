@@ -159,6 +159,15 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     // button, so without this the banner asks for a review nothing offers.
     cta: { kind: "review-push", label: "Review push" },
   },
+  "pull-rebase-review-stale": {
+    message:
+      getGitRecoveryHint("pull-rebase-review-stale") ??
+      "The branch changed since the pull and rebase was previewed. Nothing was rebased.",
+    detailPolicy: "hide",
+    // Opens a fresh confirm rather than retrying: the preview it was approved
+    // against is exactly what went stale.
+    cta: { kind: "pull-rebase", label: "Pull and rebase" },
+  },
   "hook-rejected": {
     message: getGitRecoveryHint("hook-rejected") ?? "A server-side hook rejected the push.",
     detailPolicy: "collapse",

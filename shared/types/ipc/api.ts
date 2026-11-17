@@ -1297,7 +1297,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       opId?: string,
       review?: import("../git.js").GitPushReview
     ): Promise<void>;
-    pullRebase(cwd: string): Promise<void>;
+    /**
+     * Pull the branch's upstream and rebase onto it.
+     *
+     * `review` is what a confirm showed (#17188): with it the pull refuses
+     * (`pull-rebase-review-stale`) unless the worktree is still on that branch
+     * at that commit. Omit it only where no confirm previewed the pull.
+     */
+    pullRebase(cwd: string, review?: import("../git.js").GitPullRebaseReview): Promise<void>;
     forcePushWithLease(cwd: string, branchName: string, leaseSha: string): Promise<void>;
     listRemoteCommits(
       cwd: string,

@@ -27,6 +27,7 @@ import type {
   GitBaseIntegrationKind,
   GitCommitResult,
   GitPushCommitPreview,
+  GitPullRebaseReview,
   GitPushReview,
   GitRebaseCommitPreview,
   GitRemoteCommitPreview,
@@ -322,6 +323,92 @@ function readPushReview(payload: GitPushPayload): GitPushReview | null {
   };
 }
 
+/**
+ * The branch and commit a pull-and-rebase payload pins, or `null` when it pins
+ * neither (#17188).
+ *
+ * Both or neither, for the reason push takes all four: a pin that kept the
+ * commit but lost the branch would pass a checkout of another branch sitting on
+ * the same commit, and rebase a branch nobody saw named.
+ */
+function readPullRebaseReview(payload: {
+  expectedBranch?: unknown;
+  expectedHeadOid?: unknown;
+}): GitPullRebaseReview | null {
+  const { expectedBranch: branch, expectedHeadOid: headOid } = payload;
+  if (branch === undefined && headOid === undefined) return null;
+  if (
+    typeof branch !== "string" ||
+    !branch ||
+    typeof headOid !== "string" ||
+    !FULL_OID_PATTERN.test(headOid)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid pull and rebase review" });
+  }
+  return { branch, headOid: headOid.toLowerCase() };
+}
+
+function pullRebaseReviewStaleError(
+  cwd: string,
+  branchName: string,
+  detail: string
+): GitOperationError {
+  const message = `The branch changed since this pull and rebase was previewed: ${detail}. Nothing was rebased. Pull and rebase again to see what it would replay now.`;
+  return new GitOperationError(
+    "pull-rebase-review-stale",
+    encodeGitOperationErrorMessage("pull-rebase-review-stale", message, { branchName }),
+    { cwd, op: "pull-rebase", rawMessage: message, branchName }
+  );
+}
+
+/**
+ * Refuse the pull if the worktree is on another branch than its confirm showed
+ * (#17188).
+ *
+ * The confirm listed the commits a rebase of THIS branch would replay, and an
+ * agent switching branches while it sat open makes that a different operation.
+ * Running it anyway is the "if X changed, use Y" substitution the
+ * destructive-action rules forbid. Checked before anything resolves the
+ * upstream, so a switch to a detached HEAD or an untracked branch is reported
+ * as the switch it is rather than as a missing upstream.
+ */
+function requirePreviewedBranch(
+  branchName: string,
+  review: GitPullRebaseReview,
+  cwd: string
+): void {
+  if (branchName === review.branch) return;
+  throw pullRebaseReviewStaleError(
+    cwd,
+    branchName,
+    branchName === "HEAD"
+      ? `this worktree is on a detached HEAD, not '${review.branch}'`
+      : `this worktree switched from '${review.branch}' to '${branchName}'`
+  );
+}
+
+/**
+ * Refuse the pull if the branch gained, lost or rewrote commits since its
+ * confirm was shown (#17188). Read last before the pull, so the comparison is
+ * against the freshest state this handler can see.
+ */
+async function requirePreviewedHead(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  branchName: string,
+  review: GitPullRebaseReview,
+  cwd: string
+): Promise<void> {
+  const tip = await readOid(git, "HEAD");
+  if (tip?.toLowerCase() === review.headOid) return;
+  throw pullRebaseReviewStaleError(
+    cwd,
+    branchName,
+    tip
+      ? `'${branchName}' moved to a different commit`
+      : `'${branchName}' no longer resolves to a commit`
+  );
+}
+
 function pushReviewStaleError(cwd: string, branchName: string, detail: string): GitOperationError {
   const message = `The branch changed since this push was reviewed: ${detail}. Nothing was pushed. Review the push again to see what it would publish now.`;
   return new GitOperationError(
@@ -587,6 +674,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               total: 0,
               behind: 0,
               incoming: [],
+              headOid: await readOid(git, localRef),
             };
           }
 
@@ -618,10 +706,15 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           const behind = await countCommitsInRange(git, [incomingRange]);
           const incomingLog =
             behind > 0 ? await git.log([`--max-count=${limit}`, incomingRange]) : null;
+          // Read LAST, as the base-integration preview does: this is what the
+          // pull is held to, so a commit landing mid-read surfaces as a
+          // refusal on submit instead of an unnoticed substitution (#17188).
+          const headOid = await readOid(git, localRef);
 
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
             rangeBasis: "tracked",
+            headOid,
             total,
             behind,
             commits: log.all.map((commit) => ({
@@ -1531,15 +1624,23 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandleWithContext(CHANNELS.GIT_PUSH, handlePush));
 
-  const handlePullRebase = async (payload: { cwd: string }): Promise<void> => {
+  const handlePullRebase = async (payload: {
+    cwd: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+  }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_PULL_REBASE, 3, 10_000);
     validateCwd(payload?.cwd);
+    // Parsed before anything runs, so a malformed pin is refused rather than
+    // read as "no pin" and the pull run unchecked.
+    const review = readPullRebaseReview(payload);
 
     const git = await createAuthenticatedGit(payload.cwd);
 
     try {
       const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
       const branchName = branch.trim();
+      if (review) requirePreviewedBranch(branchName, review, payload.cwd);
       // Pull from the branch's UPSTREAM, not a hardcoded origin (#11746) and not
       // its push target: in a triangular workflow a branch tracks
       // `origin/release/topic` while pushing to `fork/topic`, and `git pull`
@@ -1554,6 +1655,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       );
       await requireNoOperationInProgress(git, payload.cwd, "pull-rebase");
       await requireNoTrackedChanges(git, payload.cwd, "pull-rebase");
+      // Absent for a caller no confirm previewed (an agent dispatch), which
+      // keeps today's unpinned behaviour.
+      if (review) await requirePreviewedHead(git, branchName, review, payload.cwd);
       // The same pins the base rebase carries, for the same reason: each closes
       // a gap between what the confirm previewed and what git would do under a
       // user's config. `rebase.updateRefs` moves OTHER local branches pointing
