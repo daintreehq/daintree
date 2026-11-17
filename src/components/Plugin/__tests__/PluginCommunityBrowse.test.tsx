@@ -160,6 +160,29 @@ describe("PluginCommunityBrowse", () => {
     ).toBe(true);
   });
 
+  it("explains a known capability through a keyboard-reachable tooltip, never a native title", async () => {
+    browseCatalog.mockResolvedValue(available([SESSION]));
+    renderBrowse();
+    await screen.findByRole("list", { name: "Capabilities" });
+
+    const capabilities = screen.getByRole("list", { name: "Capabilities" });
+    expect(capabilities.querySelector("[title]")).toBeNull();
+
+    const trigger = within(capabilities).getByText("Read app data").closest("[tabindex]");
+    expect(trigger).not.toBeNull();
+    expect(trigger?.getAttribute("tabindex")).toBe("0");
+
+    await act(async () => {
+      (trigger as HTMLElement).focus();
+    });
+    const tip = await screen.findAllByText(/user-data-read/);
+    expect(tip.length).toBeGreaterThan(0);
+
+    // A name this build doesn't know is already shown whole: nothing to explain.
+    const unknown = within(capabilities).getByText("future:thing");
+    expect(unknown.closest("[tabindex]")).toBeNull();
+  });
+
   it("searches by id, repository and capability, and clears a search that matched nothing", async () => {
     browseCatalog.mockResolvedValue(available());
     renderBrowse();

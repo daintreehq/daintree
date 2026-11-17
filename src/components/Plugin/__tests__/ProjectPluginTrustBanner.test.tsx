@@ -101,21 +101,22 @@ describe("ProjectPluginTrustBanner", () => {
     renderBanner();
     openPrompt([{ id: "acme.dashboard", displayName: name }]);
 
-    // The name is quoted and carries its full text as a title, so a bounded
-    // render still discloses the whole string. The quotes sit outside the
-    // element that holds the name, so a cut name still closes. Whether the
-    // name actually clips, and the warning never does, is pixel geometry —
-    // the capture harness owns that.
-    const quoted = screen.getByTitle(name);
+    // The name is quoted, and the full text is disclosed by a themed tooltip
+    // only once it actually clips, never by a native title. The quotes sit
+    // outside the element that holds the name, so a cut name still closes.
+    // Whether the name actually clips, and the warning never does, is pixel
+    // geometry — the capture harness owns that.
+    const inner = screen.getByText(name);
+    const quoted = inner.parentElement as HTMLElement;
     expect(quoted.textContent).toBe(`'${name}'`);
-    expect(quoted.firstElementChild?.textContent).toBe(name);
+    expect(document.querySelector("[title]")).toBeNull();
   });
 
   it("falls back to the plugin id when the manifest's name has nothing visible in it", () => {
     renderBanner();
     openPrompt([{ id: "acme.dashboard", displayName: "   " }]);
 
-    expect(screen.getByTitle("acme.dashboard").textContent).toBe("'acme.dashboard'");
+    expect(screen.getByText("acme.dashboard").parentElement?.textContent).toBe("'acme.dashboard'");
   });
 
   it("offers exactly the three answers, and no per-capability choice", () => {

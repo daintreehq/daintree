@@ -1560,6 +1560,16 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(screen.getByTestId("context-section-unavailable")).toBeTruthy();
   });
 
+  it("discloses a clipped section name through the themed tooltip, never a native title", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    setEntries([makeEntry({ message: "Stray", context: { worktreeId: "wt-unknown" } })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const header = screen.getByTestId("context-section-header");
+    expect(header.querySelector("[title]")).toBeNull();
+  });
+
   it("marks a gone main worktree unavailable even when its name is the project's", () => {
     useNotificationSettingsStore.setState({ groupByContext: true });
     useProjectStore.setState({

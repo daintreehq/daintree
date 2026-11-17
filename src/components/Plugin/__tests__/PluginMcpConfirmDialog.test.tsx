@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginMcpConfirmDialog,
@@ -200,6 +200,44 @@ describe("PluginMcpConfirmDialog title bounds", () => {
   });
 });
 
+describe("PluginMcpConfirmDialog design contract", () => {
+  it("renders no native title tooltip on the identity rows", () => {
+    enqueue({});
+    const { baseElement } = render(<PluginMcpConfirmDialog />);
+    const flightdeck = screen.getByText("flightdeck-mcp");
+    expect(flightdeck.hasAttribute("title")).toBe(false);
+    expect(baseElement.querySelector("[role=dialog] span[title]")).toBeNull();
+  });
+
+  it.each([
+    ["annotation-changed", "danger"],
+    ["raw-changed", "warning"],
+  ] as const)(
+    "puts the %s heading in Callout's neutral title, not status ink",
+    (reason, severity) => {
+      enqueue({ reason });
+      render(<PluginMcpConfirmDialog />);
+      const callout = document.querySelector(`[data-callout="${severity}"]`);
+      expect(callout).not.toBeNull();
+      const heading = within(callout as HTMLElement).getByText(changeHeadingFor(reason) as string);
+      expect(heading.className).toContain("text-text-primary");
+      expect(callout?.querySelector(".text-status-danger, .text-status-warning")).toBe(
+        callout?.querySelector("[data-severity-glyph]")
+      );
+    }
+  );
+
+  it("draws the arguments block with the radius token and a semantic border", () => {
+    enqueue({ dangerTier: "D2", argsSummary: '{\n  "app": "prod"\n}' });
+    render(<PluginMcpConfirmDialog />);
+    const pre = screen.getByText(/"app": "prod"/);
+    expect(pre.className).toContain("rounded-[var(--radius-md)]");
+    expect(pre.className).toContain("border-border-default");
+    expect(pre.className).not.toMatch(/(^|\s)rounded(\s|$)/);
+    expect(pre.className).not.toContain("border-tint");
+  });
+});
+
 describe("PluginMcpConfirmDialog structure", () => {
   it("is a dialog rather than an alertdialog once it carries capability or argument content", () => {
     // APG reserves alertdialog for a brief, important message read out whole.
@@ -249,6 +287,8 @@ describe("PluginMcpConfirmDialog structure", () => {
     // "queue is invisible" defect the hint exists to fix.
     expect(text).toContain("remembered until this tool changes");
     expect(text.indexOf("1 more request")).toBeLessThan(text.indexOf("remembered"));
+    // A standalone block line starts a sentence, the same as the unqueued hint.
+    expect(region?.textContent).toContain("Remembered until this tool changes");
   });
 
   it("moves focus off the button that approved the last request when the next is promoted", async () => {

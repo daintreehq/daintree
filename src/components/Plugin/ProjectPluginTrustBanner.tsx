@@ -1,6 +1,7 @@
 import { Puzzle, XCircle } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
 import { useRemoteTrustSentence } from "./remotePluginTrust";
@@ -28,7 +29,7 @@ export function ProjectPluginTrustBanner() {
  * The name is the plugin's own words, and they sit next to ours. Quoting and
  * weighting it keeps that seam visible, and bounding it keeps a name padded
  * with reassurances from crowding the warning off the line — the full string
- * is one hover away, never lost.
+ * is one hover or focus away, never lost.
  */
 function PluginName({ id, name }: { id: string; name: string }) {
   // A manifest may declare a name with nothing visible in it; the id is the
@@ -38,11 +39,12 @@ function PluginName({ id, name }: { id: string; name: string }) {
   // The quotes sit outside the clipped span so a truncated name still closes:
   // the seam between its words and ours is the whole point of quoting it.
   return (
-    <span
-      className="inline-flex max-w-64 items-baseline align-bottom font-medium text-text-primary"
-      title={shown}
-    >
-      &apos;<span className="min-w-0 truncate">{shown}</span>&apos;
+    <span className="inline-flex max-w-64 items-baseline align-bottom font-medium text-text-primary">
+      &apos;
+      <TruncatedTooltip content={shown}>
+        <span className="min-w-0 truncate">{shown}</span>
+      </TruncatedTooltip>
+      &apos;
     </span>
   );
 }

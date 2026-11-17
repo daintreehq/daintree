@@ -39,7 +39,7 @@ const DESCRIPTION_MAX_HEIGHT = "max-h-[9rem]";
  * they are shown outright or offered behind a disclosure does.
  */
 const ARGS_PRE =
-  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-text-primary";
+  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-border-default rounded-[var(--radius-md)] max-h-40 overflow-y-auto px-2 py-1.5 text-text-primary";
 
 /**
  * Singleton dialog driven by the plugin-MCP consent queue. Mounted once near
@@ -241,10 +241,7 @@ function IdentityRow({
     <div className="flex items-baseline gap-2 text-xs">
       <span className="shrink-0 w-[5.5rem] text-text-secondary">{label}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span
-          className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}
-          title={value}
-        >
+        <span className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}>
           {value}
         </span>
         {trailing}
@@ -276,18 +273,8 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
   if (heading === null) return null;
 
   return (
-    <Callout severity={isRaisedDanger ? "danger" : "warning"}>
-      <div className="space-y-1">
-        <div
-          className={cn(
-            SECTION_LABEL_CLASS,
-            isRaisedDanger ? "text-status-danger" : "text-status-warning"
-          )}
-        >
-          {heading}
-        </div>
-        <div>{changeBodyFor(reason, tier)}</div>
-      </div>
+    <Callout severity={isRaisedDanger ? "danger" : "warning"} title={heading}>
+      {changeBodyFor(reason, tier)}
     </Callout>
   );
 }
@@ -431,7 +418,7 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
     return (
       <span aria-live="polite" className="min-w-0 leading-tight">
         <span className="block">{pluralize(queueDepth, "more request")} waiting</span>
-        <span className="block">remembered until this tool changes</span>
+        <span className="block">Remembered until this tool changes</span>
       </span>
     );
   }
