@@ -269,8 +269,15 @@ describe("where the stored token may go", () => {
 
   it("marks records as kept only after the replay's own record is written", async () => {
     const { host, storageApi } = makeHost({ siteUrl: "https://acme.atlassian.net" });
+    let land!: () => void;
+    storageApi.set.mockImplementationOnce(() => new Promise<void>((resolve) => (land = resolve)));
     replaying(host, "legacy");
-    const dispose = await activate(host);
+    const activating = activate(host);
+    await vi.waitFor(() => expect(storageApi.set).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(storageApi.set).toHaveBeenCalledTimes(1);
+    land();
+    const dispose = await activating;
     expect(storageApi.set.mock.calls.map(([key]) => key)).toEqual([
       "credentialProvenance",
       "credentialProvenanceTracked",

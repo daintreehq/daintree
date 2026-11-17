@@ -74,6 +74,10 @@ describe("normalizeDataCenterUrl", () => {
     ["https://example.com/jira/issues?return=/x?jql=ENG", "https://example.com/jira/issues"],
     ["https://example.com/jira/rest/api/2/myself", "https://example.com/jira"],
     ["https://example.com/jira/plugins/servlet/desk", "https://example.com/jira"],
+    [
+      "https://example.com/gateway/plugins/servlet/browse/ENG-12",
+      "https://example.com/gateway/plugins/servlet",
+    ],
     ["jira.example.com:8443/jira", "https://jira.example.com:8443/jira"],
     ["https://10.0.0.5:8443/jira", "https://10.0.0.5:8443/jira"],
     ["https://[::1]:8443", "https://[::1]:8443"],

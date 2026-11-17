@@ -1383,6 +1383,21 @@ describe("Server and Data Center", () => {
       }
     );
 
+    it("doesn't let either serverInfo answer lift the token's cooldown", async () => {
+      await connect();
+      routeDc({ "POST /search": () => json({}, 401) });
+      await expect(jiraForgeProvider.listIssues(DC_REPO, {})).rejects.toThrow("rejected");
+      fetchMock.mockReset();
+      fetchMock
+        .mockImplementationOnce(async () => json({}, 403))
+        .mockImplementationOnce(async () => json(SERVER_INFO))
+        .mockImplementationOnce(async () => json({}, 401));
+      await jiraForgeProvider.validateToken("pat-1");
+      fetchMock.mockReset();
+      await expect(jiraForgeProvider.listIssues(DC_REPO, {})).rejects.toThrow("rejected");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("refuses a Cloud-shaped account behind a Data Center address", async () => {
       routeDc({
         "GET /serverInfo": () => json(SERVER_INFO),
