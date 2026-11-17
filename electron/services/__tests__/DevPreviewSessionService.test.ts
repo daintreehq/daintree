@@ -2300,6 +2300,28 @@ describe("DevPreviewSessionService — cross-worktree snapshot", () => {
     expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ cwd: "/plain" });
   });
 
+  it("restart of a placeholder the user also stopped starts it and clears the stop", async () => {
+    service.dispose();
+    ptyClient = createPtyClientMock();
+    const onPersistUserStopped = vi.fn();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [manifestEntry({ panelId: "panel-r", worktreeId: "wt-1" })],
+      () => {},
+      onAllSessionsChanged,
+      [{ projectId: "project-1", panelId: "panel-r", worktreeId: "wt-1" }],
+      onPersistUserStopped
+    );
+
+    const state = await service.restart({ panelId: "panel-r", projectId: "project-1" });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe("starting");
+    expect(state.userStopped).toBeUndefined();
+    expect(onPersistUserStopped).toHaveBeenLastCalledWith([]);
+  });
+
   it("a stop queued ahead of restart leaves a restore placeholder stopped", async () => {
     service.dispose();
     ptyClient = createPtyClientMock();

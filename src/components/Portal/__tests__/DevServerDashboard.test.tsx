@@ -269,14 +269,30 @@ describe("DevServerDashboard", () => {
     });
 
     it("numbers the rows that share a worktree name, in every accessible name", () => {
-      mockSessions([failed(), running()]);
+      // Snapshot order is the reverse of key order: numbers follow the key.
+      mockSessions([running(), failed()]);
       render(<DevServerDashboard />);
-      expect(screen.getByText("feature-foo · panel 1")).toBeTruthy();
-      expect(screen.getByText("feature-foo · panel 2")).toBeTruthy();
-      const restartNames = screen
-        .getAllByRole("button", { name: /^Restart dev server for / })
-        .map((b) => b.getAttribute("aria-label"));
-      expect(new Set(restartNames).size).toBe(2);
+      const [runningRow, failedRow] = rows();
+      expect(within(failedRow!).getByText("feature-foo · panel 1")).toBeTruthy();
+      expect(within(runningRow!).getByText("feature-foo · panel 2")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText("Dismiss error for feature-foo · panel 1"));
+      expect(stop).toHaveBeenLastCalledWith({ panelId: "p-app", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo · panel 1"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-app", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo · panel 2"));
+      expect(stop).toHaveBeenLastCalledWith({ panelId: "p-storybook", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo · panel 2"));
+      expect(restart).toHaveBeenLastCalledWith({
+        panelId: "p-storybook",
+        projectId: "project-1",
+      });
+    });
+
+    it("numbers a restored placeholder's Start like its siblings", () => {
+      mockSessions([session({ panelId: "p-app", status: "restored-stopped" }), running()]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Start dev server for feature-foo · panel 1"));
+      expect(restart).toHaveBeenCalledWith({ panelId: "p-app", projectId: "project-1" });
     });
 
     it("keeps each row's number when the snapshot reorders", () => {
@@ -287,6 +303,24 @@ describe("DevServerDashboard", () => {
       rerender(<DevServerDashboard />);
       const failedRow = rows().find((li) => within(li).queryByText("Error") !== null)!;
       expect(within(failedRow).getByText(/^feature-foo · panel /).textContent).toBe(before);
+    });
+
+    it("orders by the whole key, project first, when names collide across projects", () => {
+      projectsState = {
+        projects: [
+          { id: "project-1", name: "Atlas" },
+          { id: "project-2", name: "Atlas" },
+        ],
+      };
+      mockSessions([
+        session({ projectId: "project-2", panelId: "p-a", worktreeId: undefined }),
+        session({ projectId: "project-1", panelId: "p-z", worktreeId: undefined }),
+      ]);
+      render(<DevServerDashboard />);
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas · panel 1"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-z", projectId: "project-1" });
+      fireEvent.click(screen.getByLabelText("Restart dev server for Atlas · panel 2"));
+      expect(restart).toHaveBeenLastCalledWith({ panelId: "p-a", projectId: "project-2" });
     });
 
     it("leaves a lone row in the worktree unnumbered", () => {
@@ -372,16 +406,25 @@ describe("DevServerDashboard", () => {
       expect(restart).toHaveBeenCalledWith({ panelId: "panel-1", projectId: "project-1" });
     });
 
-    it("never titles the row with the raw panel id when the workspace is unknown", () => {
+    it("calls an unknown project's row a workspace, never its raw panel id", () => {
       projectsState = { projects: [] };
       mockSessions([session({ panelId: "dev-preview-8f2c", worktreeId: undefined })]);
       render(<DevServerDashboard />);
       expect(screen.queryByText("dev-preview-8f2c")).toBeNull();
-      const restartButton = screen.getByRole("button", {
-        name: /^Restart dev server for /,
-      }) as HTMLButtonElement;
-      expect(restartButton.getAttribute("aria-label")).not.toContain("dev-preview-8f2c");
+      expect(screen.getByText("Workspace")).toBeTruthy();
+      const restartButton = screen.getByLabelText(
+        "Restart dev server for Workspace"
+      ) as HTMLButtonElement;
       expect(restartButton.disabled).toBe(false);
+    });
+
+    it("calls a scratch whose name hasn't loaded a scratch workspace", () => {
+      scratchesState = { scratches: [] };
+      mockSessions([session({ projectId: SCRATCH_ID, worktreeId: undefined })]);
+      render(<DevServerDashboard />);
+      expect(screen.getByText("Scratch workspace")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText("Stop dev server for Scratch workspace"));
+      expect(stop).toHaveBeenCalledWith({ panelId: "panel-1", projectId: SCRATCH_ID });
     });
   });
 
