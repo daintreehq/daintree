@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CloudHostCreatedFor } from "../../../../shared/types/cloudHosts.js";
-import { CloudHostStore, type CloudHostsValue, type StoredCloudBinding } from "../CloudHostStore.js";
+import {
+  CloudHostStore,
+  type CloudHostsValue,
+  type StoredCloudBinding,
+} from "../CloudHostStore.js";
 
 /** A settings file: what goes in comes back out as JSON, and survives a new store over it. */
 function disk() {

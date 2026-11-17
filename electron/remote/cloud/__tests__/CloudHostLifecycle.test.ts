@@ -808,7 +808,11 @@ describe("CloudHostLifecycle worktree marks", () => {
     lifetimeHours: 2,
   });
   /** A lost answer to a create the provider did act on, when `made`. */
-  const loseAnswer = (provider: CloudProvider, state: { machine: ProviderResource }, made: boolean) =>
+  const loseAnswer = (
+    provider: CloudProvider,
+    state: { machine: ProviderResource },
+    made: boolean
+  ) =>
     vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
       if (made) state.machine = resource({ name: "build-box", labels: sent.labels });
       throw new BoatApiError("network", "lost", null, null, null);
@@ -843,9 +847,7 @@ describe("CloudHostLifecycle worktree marks", () => {
       })
     );
     const next = restart(lifecycle);
-    await vi.waitFor(() =>
-      expect(next.lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789")
-    );
+    await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789"));
     expect(next.lifecycle.statuses()[0]).toMatchObject({
       createdFor: MARK,
       machineName: "build-box",
