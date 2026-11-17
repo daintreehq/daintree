@@ -502,6 +502,8 @@ describe("stack traces", () => {
     fireEvent.click(stackToggle()!);
     const run = screen.getByRole("button", { name: /2 library frames/ });
     expect(run.getAttribute("aria-expanded")).toBe("false");
+    // A 24px target, like the stack toggle above it (WCAG 2.5.8).
+    expect(run.className).toContain("min-h-6");
     expect(screen.getByText("beginWork").closest("[hidden]")).toBeTruthy();
 
     fireEvent.click(run);

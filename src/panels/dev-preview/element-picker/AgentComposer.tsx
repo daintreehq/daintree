@@ -1005,7 +1005,7 @@ function RequestPreview({
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
-        className="-mx-1 flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+        className="-mx-1 flex min-h-6 min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1 py-0.5 text-left text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
       >
         <ChevronRight
           aria-hidden="true"
