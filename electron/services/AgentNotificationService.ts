@@ -748,13 +748,15 @@ class AgentNotificationService {
     // Master toggle — skip all notifications when disabled
     if (settings.enabled === false) return;
 
-    // Put aside: the cleanup above still runs, but nothing new pages for it.
-    if (putAside) return;
-
     // Schedule waiting escalation for docked agents (independent of watched status)
     // Suppress during spawn grace period — agents that initialize directly into waiting
-    // should not trigger escalation sounds.
-    if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
+    // should not trigger escalation sounds. A run put aside gets no reminder.
+    if (
+      state === "waiting" &&
+      terminalId &&
+      !putAside &&
+      !this.isWithinSpawnGrace(agentId, terminalId)
+    ) {
       this.scheduleWaitingEscalation(
         terminalId,
         projectId,
@@ -768,6 +770,9 @@ class AgentNotificationService {
     if (state === "working" && previousState !== "working" && terminalId) {
       this.scheduleWorkingPulse(terminalId, projectId, settings);
     }
+
+    // Put aside: the cleanup above still ran, but no banner goes out for it.
+    if (putAside) return;
 
     // Skip if all OS notification types are disabled (off by default).
     if (!settings.completedEnabled && !settings.waitingEnabled) {
