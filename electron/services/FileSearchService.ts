@@ -175,7 +175,9 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 
 function normalizeQuery(rawQuery: string): string {
   const trimmed = rawQuery.trim().slice(0, MAX_QUERY_LENGTH);
-  let normalized = trimmed;
+  // Indexed paths are POSIX-style everywhere; only Windows treats `\` as a
+  // separator, so POSIX keeps matching a literal backslash in a filename.
+  let normalized = process.platform === "win32" ? trimmed.replace(/\\/g, "/") : trimmed;
   if (normalized.startsWith("./")) normalized = normalized.slice(2);
   if (normalized.startsWith("/")) normalized = normalized.slice(1);
   return normalized.replace(/\/+/g, "/");
