@@ -400,6 +400,62 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(spawnPos).toBeLessThan(gitRemovePos);
   });
 
+  it("gives a forced delete of a dirty worktree the same teardown time limit as a plain delete", async () => {
+    // `force` is disclosed as consent to discard uncommitted work, and the
+    // confirm surfaces describe teardown the same either way. A forced delete
+    // that stopped `docker compose down` earlier than a plain one would leave
+    // the services it was meant to stop running, with nothing having said so.
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      const norm = n(p as string);
+      if (norm.endsWith("/test/root/.daintree/config.json")) return undefined;
+      if (norm === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(
+      JSON.stringify({ teardown: ["docker compose down"] })
+    );
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(() => {
+      const child = {
+        pid: 99,
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === "close") setTimeout(() => cb(0), 0);
+        }),
+        kill: vi.fn(),
+      };
+      return child as any;
+    });
+    const runCommands = vi.spyOn(service["lifecycleService"], "runCommands");
+
+    const teardownLimit = async (force: boolean) => {
+      runCommands.mockClear();
+      mockSendEvent.mockClear();
+      const monitor = createAndRegisterMonitor();
+      if (force) {
+        dirtyBothWays(monitor, {
+          worktreeId: "/test/worktree",
+          rootPath: "/test/worktree",
+          changedFileCount: 1,
+          changes: [{ path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 }],
+        });
+      }
+      await service.deleteWorktree(`req-limit-${force}`, "/test/worktree", force);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(runCommands).toHaveBeenCalledTimes(1);
+      expect(runCommands.mock.calls[0]?.[0]).toEqual(["docker compose down"]);
+      return runCommands.mock.calls[0]?.[1]?.timeoutMs;
+    };
+
+    const plain = await teardownLimit(false);
+    expect(plain).toBeGreaterThan(0);
+    expect(await teardownLimit(true)).toBe(plain);
+  });
+
   it("skips unapproved teardown commands and still removes the worktree", async () => {
     vi.mocked(service["lifecycleService"]["approvals"].isApproved).mockResolvedValue(false);
     const fsModule = await import("fs/promises");

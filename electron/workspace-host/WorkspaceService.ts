@@ -4044,11 +4044,7 @@ export class WorkspaceService {
     });
   }
 
-  private async runLifecycleTeardown(
-    worktreeId: string,
-    monitor: WorktreeMonitor,
-    force: boolean
-  ): Promise<void> {
+  private async runLifecycleTeardown(worktreeId: string, monitor: WorktreeMonitor): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
     // about to be gone. A clone would still be writing into it, so its child
     // must have exited and its staging gone before git removes the tree.
@@ -4060,7 +4056,7 @@ export class WorkspaceService {
     if (!ctx) {
       return;
     }
-    await this.lifecycleService.runLifecycleTeardown(worktreeId, monitor, force, ctx);
+    await this.lifecycleService.runLifecycleTeardown(worktreeId, monitor, ctx);
   }
 
   async deleteWorktree(
@@ -4206,7 +4202,7 @@ export class WorkspaceService {
       }
 
       attachmentsReserved = true;
-      await this.runLifecycleTeardown(worktreeId, monitor, force);
+      await this.runLifecycleTeardown(worktreeId, monitor);
 
       // Mark the metadata-subdir basename pending so the watcher event our own
       // `git worktree remove` produces is recognized and dropped — without

@@ -713,7 +713,7 @@ describe("WorkspaceService.createWorktree", () => {
     await flushAsyncTail();
     const midConfig = service["monitors"].get(path.resolve("/test/worktree-clone-mid-config"))!;
     expect(releaseConfig).toBeDefined();
-    const teardown = service["runLifecycleTeardown"](midConfig.path, midConfig, false);
+    const teardown = service["runLifecycleTeardown"](midConfig.path, midConfig);
     releaseConfig();
     await teardown;
     await flushAsyncTail();
@@ -742,7 +742,7 @@ describe("WorkspaceService.createWorktree", () => {
     });
     await flushAsyncTail();
     const beforeStep = service["monitors"].get(path.resolve("/test/worktree-clone-before-step"))!;
-    await service["runLifecycleTeardown"](beforeStep.path, beforeStep, false);
+    await service["runLifecycleTeardown"](beforeStep.path, beforeStep);
     releaseInclude();
     await flushAsyncTail();
     await flushAsyncTail();
@@ -776,7 +776,7 @@ describe("WorkspaceService.createWorktree", () => {
     await flushAsyncTail();
     const monitor = service["monitors"].get(path.resolve("/test/worktree-clone-teardown"))!;
     let tornDown = false;
-    const teardown = service["runLifecycleTeardown"](monitor.path, monitor, false).then(() => {
+    const teardown = service["runLifecycleTeardown"](monitor.path, monitor).then(() => {
       tornDown = true;
     });
     // A second canceller, as a retried delete would be, waits on the same run.

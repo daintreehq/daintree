@@ -1419,7 +1419,6 @@ export class WorktreeLifecycleService {
   async runLifecycleTeardown(
     worktreeId: string,
     monitor: WorktreeMonitor,
-    force: boolean,
     ctx: WorkspaceHostContext
   ): Promise<void> {
     const projectRootPath = ctx.projectRootPath;
@@ -1584,7 +1583,6 @@ export class WorktreeLifecycleService {
     }
 
     const commands = config.teardown.map(sub);
-    const timeoutMs = force ? 15_000 : 120_000;
 
     monitor.setLifecycleStatus({
       phase: "teardown",
@@ -1602,7 +1600,11 @@ export class WorktreeLifecycleService {
       const result = await this.runCommands(commands, {
         cwd: monitor.path,
         env,
-        timeoutMs,
+        // The same limit whether or not the delete is forced: `force` is
+        // consent to discard uncommitted work, and nothing that asks for it
+        // says it would also cut short the scripts that stop this worktree's
+        // services (#17190).
+        timeoutMs: DEFAULT_TIMEOUT_MS,
         logDir: this.teardownLogDir(projectRootPath, monitor.name),
         onProgress: (commandIndex, totalCommands, command) => {
           const m = ctx.getMonitor(worktreeId);
