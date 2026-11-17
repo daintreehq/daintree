@@ -376,6 +376,9 @@ export interface GeneratedElectronAPI {
     stopHost(
       ...args: IpcInvokeMap["cloud-hosts:stop-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:stop-host"]["result"]>;
+    trustHostKey(
+      ...args: IpcInvokeMap["cloud-hosts:trust-host-key"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:trust-host-key"]["result"]>;
     validateAccount(
       ...args: IpcInvokeMap["cloud-hosts:validate-account"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:validate-account"]["result"]>;

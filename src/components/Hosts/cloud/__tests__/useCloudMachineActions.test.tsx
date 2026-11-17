@@ -50,6 +50,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     observedAt: Date.now(),
     lastEndpoint: null,
     hostKeyFingerprint: null,
+    hostKeyReview: null,
     keptRunningAt: null,
     ...overrides,
   };

@@ -416,6 +416,26 @@ export interface CloudHostCreatedFor {
 }
 
 /**
+ * A server key the machine presented that nobody has confirmed, for a
+ * provider that can't vouch for one. The machine isn't dialled until the
+ * person trusts it; nothing ever trusts it for them.
+ */
+export interface CloudHostKeyReview {
+  /** `first-connect`: no key is trusted yet. `changed`: it differs from the trusted key. */
+  reason: "first-connect" | "changed";
+  /** SHA256 fingerprint of the key it presents now, as ssh-keygen -l prints it. */
+  fingerprint: string;
+  /** Its algorithm as ssh-keygen -l names it: ED25519, ECDSA, RSA. */
+  keyType: string;
+  /** When the machine presented it. */
+  seenAt: number;
+  /** The trusted key's fingerprint, when the key changed. */
+  previousFingerprint: string | null;
+  /** When the person trusted that key, when the key changed. */
+  previousTrustedAt: number | null;
+}
+
+/**
  * One cloud host's lifecycle, joined to its Remote Host by `hostId`.
  * Observations, with the time they were made: a stale one says so rather
  * than passing for current.
@@ -462,6 +482,8 @@ export interface CloudHostStatus {
   lastEndpoint: string | null;
   /** SHA256 fingerprint of the pinned server key. */
   hostKeyFingerprint: string | null;
+  /** A presented key waiting for the person to trust it; null when there is none. */
+  hostKeyReview: CloudHostKeyReview | null;
   /** When this device last moved the machine's auto-stop forward because it was in use here. */
   keptRunningAt: number | null;
 }

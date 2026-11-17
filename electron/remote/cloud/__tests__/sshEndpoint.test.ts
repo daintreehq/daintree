@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   formatSshEndpoint,
   hostKeyFingerprint,
+  hostKeyTypeLabel,
   isSafeSshUser,
+  keyscanTypeOf,
   normalizeHostKey,
+  parseKeyscanOutput,
   parseSshEndpoint,
 } from "../sshEndpoint.js";
 
@@ -77,5 +80,46 @@ describe("isSafeSshUser", () => {
     expect(isSafeSshUser("user")).toBe(true);
     expect(isSafeSshUser("-oProxyCommand")).toBe(false);
     expect(isSafeSshUser("a b")).toBe(false);
+  });
+});
+
+describe("parseKeyscanOutput", () => {
+  const ed25519 = `ssh-ed25519 ${Buffer.alloc(51, 1).toString("base64")}`;
+  const ecdsa = `ecdsa-sha2-nistp256 ${Buffer.alloc(104, 2).toString("base64")}`;
+  const rsa = `ssh-rsa ${Buffer.alloc(279, 3).toString("base64")}`;
+
+  it("reads every key, strongest first, whatever order ssh-keyscan printed them in", () => {
+    const output = [
+      "# [203.0.113.10]:22001 SSH-2.0-OpenSSH_9.6",
+      `[203.0.113.10]:22001 ${rsa}`,
+      `[203.0.113.10]:22001 ${ecdsa}`,
+      `[203.0.113.10]:22001 ${ed25519}`,
+      "",
+    ].join("\r\n");
+    expect(parseKeyscanOutput(output)).toEqual([ed25519, ecdsa, rsa]);
+  });
+
+  it("drops duplicates, comments trailing a key, and lines that aren't keys", () => {
+    const output = [
+      `2001:db8::1 ${ed25519} trailing comment`,
+      `2001:db8::1 ${ed25519}`,
+      "2001:db8::1 ssh-ed25519 AAAA",
+      "2001:db8::1 ssh-dss AAAAB3NzaC1kc3MAAACBAP",
+      "not a key line",
+    ].join("\n");
+    expect(parseKeyscanOutput(output)).toEqual([ed25519]);
+  });
+
+  it("is empty when the machine answered with nothing", () => {
+    expect(parseKeyscanOutput("")).toEqual([]);
+    expect(parseKeyscanOutput("# 203.0.113.10:22 SSH-2.0-OpenSSH_9.6\n")).toEqual([]);
+  });
+
+  it("names each algorithm as ssh-keygen -l does", () => {
+    expect([ed25519, ecdsa, rsa].map(hostKeyTypeLabel)).toEqual(["ED25519", "ECDSA", "RSA"]);
+  });
+
+  it("asks ssh-keyscan for each key's own algorithm", () => {
+    expect([ed25519, ecdsa, rsa].map(keyscanTypeOf)).toEqual(["ed25519", "ecdsa", "rsa"]);
   });
 });

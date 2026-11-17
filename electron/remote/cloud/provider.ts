@@ -54,8 +54,12 @@ export interface ProviderResource {
 export interface ProviderSshAccess {
   user: string;
   endpoint: SshEndpoint;
-  /** The server's public key, `type base64`. */
-  hostKey: string;
+  /**
+   * The server's public key, `type base64`. Null from a provider whose API
+   * can't vouch for one (`sshTrust: "confirm-on-first-connect"`): the person
+   * confirms the key the machine presents instead.
+   */
+  hostKey: string | null;
 }
 
 export interface ProviderCatalog {

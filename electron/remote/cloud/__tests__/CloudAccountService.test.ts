@@ -196,6 +196,8 @@ describe("CloudAccountService", () => {
       intent: null,
       observation: null,
       access: null,
+      trustedHostKey: null,
+      offeredHostKey: null,
       lastError: null,
       createdAt: 0,
     });

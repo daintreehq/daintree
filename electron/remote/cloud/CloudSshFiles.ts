@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CommandRunner } from "../client/commandRunner.js";
 import { closeSshMaster } from "../client/sshTransport.js";
-import { sshExecutable } from "../client/sshExecutable.js";
+import { sshExecutable, sshKeyscanExecutable } from "../client/sshExecutable.js";
 import { isValidCloudBindingId } from "../../../shared/types/remoteHosts.js";
-import { formatSshEndpoint, type SshEndpoint } from "./sshEndpoint.js";
+import { formatSshEndpoint, parseKeyscanOutput, type SshEndpoint } from "./sshEndpoint.js";
 import { isValidCloudAccountId } from "./CloudHostStore.js";
 
 /**
@@ -15,7 +15,8 @@ import { isValidCloudAccountId } from "./CloudHostStore.js";
  * forward, the stdio bridge, `-O exit`) goes through the wrapper, so all of
  * them use the same port, key and pinned host key.
  *
- * The config pins the server key the provider's authenticated API returned
+ * The config pins the server key the provider's authenticated API returned,
+ * or the one the person confirmed when the provider can't vouch for any
  * (`StrictHostKeyChecking yes` against an app-owned known_hosts keyed by an
  * alias, never the recycled address), uses a Daintree-generated key per
  * account and nothing from the user's agent, and turns off every forward.
@@ -167,6 +168,33 @@ export class CloudSshFiles {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The server keys the machine presents right now, strongest first, for a
+   * provider whose API can't vouch for one. Nothing here trusts them: the
+   * person confirms one, and ssh then pins it. Empty when the machine didn't
+   * answer with any.
+   */
+  async scanHostKeys(
+    endpoint: SshEndpoint,
+    options: { types?: string; signal?: AbortSignal } = {}
+  ): Promise<string[]> {
+    const scanned = await this.run(
+      sshKeyscanExecutable(),
+      [
+        "-T",
+        "10",
+        "-p",
+        String(endpoint.port),
+        "-t",
+        options.types ?? "ed25519,ecdsa,rsa",
+        endpoint.host,
+      ],
+      { timeoutMs: 20_000, signal: options.signal }
+    );
+    if (scanned.spawnError) throw new Error(`ssh-keyscan couldn't run: ${scanned.spawnError}`);
+    return parseKeyscanOutput(scanned.stdout);
   }
 
   /** What an endpoint shows as, for diagnostics. */

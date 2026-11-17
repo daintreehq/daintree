@@ -18,6 +18,7 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   refreshHost: "cloud-hosts:refresh-host",
   deleteMachine: "cloud-hosts:delete-machine",
   setLifetime: "cloud-hosts:set-lifetime",
+  trustHostKey: "cloud-hosts:trust-host-key",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLOUD_HOSTS_METHOD_CHANNELS;

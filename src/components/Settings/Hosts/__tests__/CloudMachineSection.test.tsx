@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
   CloudHostStatus,
   CloudHostsSnapshot,
   CloudProviderInfo,
 } from "@shared/types/cloudHosts";
 
-const { cloud } = vi.hoisted(() => ({
+const { cloud, trustHostKey, connect } = vi.hoisted(() => ({
   cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
+  trustHostKey: vi.fn(),
+  connect: vi.fn(),
 }));
 vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/Hosts/cloud/cloudHostsState")>()),
@@ -25,7 +27,10 @@ vi.mock("@/components/Hosts/cloud/useCloudMachineActions", () => ({
   }),
 }));
 vi.mock("@/clients/cloudHostsClient", () => ({
-  cloudHostsClient: { retryCreate: vi.fn(), setLifetime: vi.fn() },
+  cloudHostsClient: { retryCreate: vi.fn(), setLifetime: vi.fn(), trustHostKey },
+}));
+vi.mock("@/clients/remoteHostsClient", () => ({
+  remoteHostsClient: { connect },
 }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
@@ -60,6 +65,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     observedAt: null,
     lastEndpoint: null,
     hostKeyFingerprint: null,
+    hostKeyReview: null,
     keptRunningAt: null,
     ...overrides,
   };
@@ -74,7 +80,11 @@ function show(current: CloudHostStatus) {
 
 const createdFor = () => screen.queryByTestId("cloud-machine-created-for")?.textContent ?? null;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  trustHostKey.mockReset();
+  connect.mockReset();
+});
 
 describe("CloudMachineSection created-for row", () => {
   it("shows the worktree on this device while the machine is still being created", () => {
@@ -208,5 +218,135 @@ describe("CloudMachineSection stopped billing (#17346)", () => {
     cleanup();
     showWith(status({ resourceId: "bx_23456789", machine: "running", operation: null }), billed);
     expect(billing()).toContain("Acme keeps billing a stopped machine for compute");
+  });
+});
+
+describe("CloudMachineSection host key review", () => {
+  const running = {
+    resourceId: "dr_1234",
+    machine: "running" as const,
+    operation: null,
+    observedAt: Date.now(),
+  };
+  const review = () => screen.queryByTestId("cloud-host-key-review")?.textContent ?? null;
+
+  it("shows nothing to review for a machine whose key is pinned", () => {
+    show(status({ ...running, hostKeyFingerprint: "SHA256:old" }));
+    expect(review()).toBeNull();
+    expect(screen.queryByRole("button", { name: /trust/i })).toBeNull();
+  });
+
+  it("shows a first key's fingerprint and trusts exactly that one before dialling", async () => {
+    trustHostKey.mockResolvedValue(undefined);
+    connect.mockResolvedValue(undefined);
+    show(
+      status({
+        ...running,
+        hostKeyReview: {
+          reason: "first-connect",
+          fingerprint: "SHA256:first",
+          keyType: "ED25519",
+          seenAt: 1,
+          previousFingerprint: null,
+          previousTrustedAt: null,
+        },
+      })
+    );
+    expect(review()).toContain("ED25519 SHA256:first");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+    });
+    expect(trustHostKey).toHaveBeenCalledWith("build", "SHA256:first");
+    expect(connect).toHaveBeenCalledWith("build");
+  });
+
+  it("warns that a changed key is a new identity and shows both fingerprints", () => {
+    show(
+      status({
+        ...running,
+        hostKeyFingerprint: "SHA256:old",
+        hostKeyReview: {
+          reason: "changed",
+          fingerprint: "SHA256:new",
+          keyType: "ECDSA",
+          seenAt: 2,
+          previousFingerprint: "SHA256:old",
+          previousTrustedAt: 1,
+        },
+      })
+    );
+    expect(review()).toMatch(/identity changed/i);
+    expect(review()).toContain("Trusted SHA256:old");
+    expect(review()).toContain("Now ECDSA SHA256:new");
+    expect(screen.getByRole("button", { name: "Trust new key" })).toBeTruthy();
+  });
+
+  it("says why a trust was refused and doesn't dial", async () => {
+    trustHostKey.mockRejectedValue(
+      Object.assign(new Error("changed"), {
+        name: "AppError",
+        code: "VALIDATION",
+        userMessage: "The machine's host key changed again since it was shown.",
+      })
+    );
+    show(
+      status({
+        ...running,
+        hostKeyReview: {
+          reason: "first-connect",
+          fingerprint: "SHA256:first",
+          keyType: "ED25519",
+          seenAt: 1,
+          previousFingerprint: null,
+          previousTrustedAt: null,
+        },
+      })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "The machine's host key changed again since it was shown."
+    );
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("never shows one key's refusal under a different key", async () => {
+    let reject!: (error: unknown) => void;
+    trustHostKey.mockImplementation(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    const offered = (fingerprint: string) =>
+      status({
+        ...running,
+        hostKeyReview: {
+          reason: "first-connect",
+          fingerprint,
+          keyType: "ED25519",
+          seenAt: 1,
+          previousFingerprint: null,
+          previousTrustedAt: null,
+        },
+      });
+    const view = show(offered("SHA256:first"));
+    fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
+    cloud.snapshot = { providers: [], accounts: [], hosts: [offered("SHA256:second")] };
+    view.rerender(
+      <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+    );
+    await act(async () => {
+      reject(
+        Object.assign(new Error("changed"), {
+          name: "AppError",
+          code: "VALIDATION",
+          userMessage: "The machine's host key changed again since it was shown.",
+        })
+      );
+    });
+    expect(review()).toContain("SHA256:second");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
