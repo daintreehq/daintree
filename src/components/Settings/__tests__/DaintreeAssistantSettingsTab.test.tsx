@@ -2497,7 +2497,10 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     const banner = await screen.findByTestId("assistant-dropped-agent-banner");
     expect(within(banner).queryByRole("button", { name: "Dismiss" })).toBeNull();
-    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss removed agent notice" }));
+    const dismiss = within(banner).getByRole("button", { name: "Dismiss removed agent notice" });
+    // Callout's dismiss slot is a direct child of the root; the action slot sits a row deeper.
+    expect(dismiss.parentElement?.parentElement).toBe(banner);
+    fireEvent.click(dismiss);
 
     expect(helpPanelState.clearDroppedPreferredAgent).toHaveBeenCalledTimes(1);
   });
