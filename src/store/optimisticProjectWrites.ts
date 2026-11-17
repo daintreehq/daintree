@@ -88,3 +88,17 @@ function spliceOut(claim: FieldClaim, write: OptimisticProjectWrite): void {
     return;
   }
 }
+
+/** Copies `keys` from `row`, presence included; the same object when they already match. */
+export function syncProjectFields(project: Project, row: Project, keys: string[]): Project {
+  const prev = project as unknown as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...project };
+  for (const key of keys) {
+    if (Object.hasOwn(row, key)) next[key] = (row as unknown as Record<string, unknown>)[key];
+    else delete next[key];
+  }
+  const same = keys.every(
+    (k) => Object.hasOwn(next, k) === Object.hasOwn(prev, k) && Object.is(next[k], prev[k])
+  );
+  return same ? project : (next as unknown as Project);
+}

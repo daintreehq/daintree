@@ -48,6 +48,7 @@ import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   applyOptimisticProjectUpdate,
   rollbackOptimisticProjectUpdate,
+  syncProjectFields,
   type OptimisticProjectWrite,
 } from "./optimisticProjectWrites";
 import {
@@ -1352,13 +1353,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         });
         // Reloads replace list rows but never currentProject, so its own write
         // history can predate Main's value. Like the success path, re-sync it
-        // from the list row; only a row that is gone leaves it to its claims.
+        // from the list row (this write's fields only), or its claims if no row.
         const row = projects.find((p) => p.id === id);
         return {
           projects: rolledBack ? projects : state.projects,
           currentProject:
             state.currentProject?.id === id
-              ? (row ?? rollbackOptimisticProjectUpdate(state.currentProject, write))
+              ? row
+                ? syncProjectFields(state.currentProject, row, Object.keys(updates))
+                : rollbackOptimisticProjectUpdate(state.currentProject, write)
               : state.currentProject,
           error: "Failed to update project",
         };

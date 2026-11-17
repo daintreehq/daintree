@@ -107,6 +107,7 @@ describe("projectStore.updateProject rollback", () => {
 
   it("keeps another project's saved edit when a late write for a different project fails", async () => {
     const calls = holdUpdates();
+    useProjectStore.setState({ currentProject: { ...A, lastCompletionSeenAt: 5 } });
     const writeA = useProjectStore.getState().updateProject("a", { name: "Alpha 2", emoji: "🚀" });
     const writeB = useProjectStore.getState().updateProject("b", { name: "Bravo 2", emoji: "🔥" });
 
@@ -120,6 +121,7 @@ describe("projectStore.updateProject rollback", () => {
     expect(project("a")).toMatchObject({ name: "Alpha", emoji: "🌲" });
     expect(project("b")).toMatchObject({ name: "Bravo 2", emoji: "🔥" });
     expect(useProjectStore.getState().currentProject).toMatchObject({ id: "a", name: "Alpha" });
+    expect(useProjectStore.getState().currentProject?.lastCompletionSeenAt).toBe(5);
     expect(useProjectStore.getState().error).toBe("Failed to update project");
   });
 
@@ -231,7 +233,7 @@ describe("projectStore.updateProject rollback", () => {
     calls[0]!.reject(new Error("nope"));
     await failed(first);
     expect(useProjectStore.getState().projects).toBe(before);
-    expect(useProjectStore.getState().currentProject).toBe(project("a"));
+    expect(useProjectStore.getState().currentProject).toEqual(project("a"));
     expect(project("a")?.name).toBe("Alpha 2");
 
     calls[1]!.reject(new Error("nope"));
