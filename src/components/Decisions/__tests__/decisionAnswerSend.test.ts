@@ -163,6 +163,49 @@ describe("following an answer by its id (#17102)", () => {
     expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("settled");
   });
 
+  it("sends an answer main hasn't committed again under its id on Retry, however often", async () => {
+    place("answer-a", { kind: "lost" });
+    useDecisionsAnswerStore.getState().update(KEY, (record) => ({
+      ...record,
+      submission: record.submission && { ...record.submission, resubmitted: true },
+    }));
+    getAnswerResult.mockResolvedValue({ result: "not-found" });
+    getQuestionContent.mockResolvedValue({
+      result: "read",
+      question: {
+        questionId: "q1",
+        alias: 1,
+        terminalId: "t1",
+        reference: REFERENCE,
+        revision: 1,
+        question: "Ship it?",
+        context: null,
+        kind: "choice",
+        options: [{ id: "yes", label: "Yes", description: null }],
+        allowText: false,
+        requirement: "human-required",
+        askedAt: "2026-11-02T10:00:00.000Z",
+        expiresAt: null,
+        status: "open",
+        deliveryStatus: "relay-queued",
+        attachments: [],
+        thread: [],
+      },
+    });
+    answerQuestion.mockRejectedValue(new Error("lost"));
+
+    // On its own, a second time: never; it waits for the person.
+    await followAnswer(KEY);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(readAnswerRecord(KEY).submission?.phase.kind).toBe("lost");
+
+    await followAnswer(KEY, true);
+    await followAnswer(KEY, true);
+    expect(answerQuestion).toHaveBeenCalledTimes(2);
+    for (const [sent] of answerQuestion.mock.calls) expect(sent).toEqual(payload("answer-a"));
+    expect(readAnswerRecord(KEY).submission?.answerId).toBe("answer-a");
+  });
+
   it("lets go of an answer never committed whose question is gone, keeping the draft", async () => {
     place("answer-a", { kind: "lost" });
     getAnswerResult.mockResolvedValue({ result: "not-found" });

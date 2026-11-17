@@ -109,11 +109,13 @@ class DeadlineError extends Error {
 
 /** `call`, or a rejection once the deadline passes; a reply after that is ignored. */
 function withDeadline<T>(call: () => Promise<T>): Promise<T> {
+  // Called first, so one that throws at once never leaves a deadline armed.
+  const pending = call();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new DeadlineError()), MAIN_DEADLINE_MS);
   });
-  return Promise.race([call(), deadline]).finally(() => clearTimeout(timer));
+  return Promise.race([pending, deadline]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -150,12 +152,14 @@ async function submitOnce(key: string, claim: Claim): Promise<"replied" | "lost"
 const following = new Set<string>();
 
 /**
- * Reads where the claimed submission stands, by its id. One main never
- * committed is sent again under the same id, once, and only while the
- * question still takes it at the revision it was signed against; one never
- * committed twice is let go, so the person can send it again.
+ * Reads where the claimed submission stands, by its id. One main hasn't
+ * committed is sent again under the same id, and only while the question
+ * still takes it at the revision it was signed against: once on its own, and
+ * after that on each Retry (`retry`). Its id is never given up while a send
+ * of it could still be under way, so it can never be answered twice: main
+ * returns the stored outcome for the same answer under the same id.
  */
-async function follow(key: string, claim: Claim): Promise<void> {
+async function follow(key: string, claim: Claim, retry: boolean): Promise<void> {
   const lock = `${key}\u0000${claim.answerId}`;
   if (following.has(lock)) return;
   following.add(lock);
@@ -184,8 +188,8 @@ async function follow(key: string, claim: Claim): Promise<void> {
       case "not-found":
         break;
     }
-    if (submission.resubmitted) {
-      drop(key, claim, "unsent");
+    if (submission.resubmitted && !retry) {
+      setPhase(key, claim, { kind: "lost" });
       return;
     }
     let fresh;
@@ -197,7 +201,7 @@ async function follow(key: string, claim: Claim): Promise<void> {
     if (claimed(key, claim) === null) return;
     // Nothing was committed under its id, so a question that is gone or can't
     // be opened lets it go; one that couldn't be read just now leaves Retry.
-    if (fresh === null || fresh.result === "not-running") {
+    if (fresh === null || fresh.result === "not-running" || fresh.result === "off") {
       setPhase(key, claim, { kind: "lost" });
       return;
     }
@@ -223,12 +227,15 @@ async function follow(key: string, claim: Claim): Promise<void> {
   }
 }
 
-/** Reads where the record's answer stands now: a queued one's progress, or a lost one's Retry. */
-export function followAnswer(key: string): Promise<void> {
+/**
+ * Reads where the record's answer stands now: a queued one's progress, or,
+ * with `retry`, the person's Retry of one whose standing couldn't be confirmed.
+ */
+export function followAnswer(key: string, retry = false): Promise<void> {
   const store = useDecisionsAnswerStore.getState();
   const submission = store.records[key]?.submission ?? null;
   if (submission === null) return Promise.resolve();
-  return follow(key, { generation: store.generation, answerId: submission.answerId });
+  return follow(key, { generation: store.generation, answerId: submission.answerId }, retry);
 }
 
 /**
@@ -289,6 +296,6 @@ export async function sendAnswer(
   // Main may have committed it before the reply was lost: read it by its id rather than guess.
   if ((await submitOnce(key, claim)) === "lost") {
     setPhase(key, claim, { kind: "checking" });
-    await follow(key, claim);
+    await follow(key, claim, false);
   }
 }

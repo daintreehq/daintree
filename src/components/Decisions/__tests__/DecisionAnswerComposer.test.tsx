@@ -609,35 +609,42 @@ describe("answering a question from the view (#17102)", () => {
     expect(useDecisionsAnswerStore.getState().records).toEqual({});
   });
 
-  it("lets an answer main never committed go again once, then lets the person send it anew", async () => {
+  it("sends an unconfirmed answer again only under its own id: once on its own, then on Retry", async () => {
     answerQuestion.mockRejectedValue(new Error("lost"));
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
-    // Lost, never committed, sent again under its id, and lost again.
+    // Lost, not found under its id, sent again under it, and lost again.
     await waitFor(() => expect(status()).toMatch(/Couldn't confirm/));
     expect(answerQuestion).toHaveBeenCalledTimes(2);
-    expect(answerQuestion.mock.calls[1]![0]).toEqual(answerQuestion.mock.calls[0]![0]);
+    // Its fate unknown, it is never offered for a fresh Send.
+    expect(screen.queryByTestId("decision-answer-composer")).toBeNull();
 
-    // Still never committed: let go, so a new Send goes under a new id.
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
-    const notice = await screen.findByTestId("decision-answer-notice");
-    expect(notice.textContent).toMatch(/nothing reached the relay/);
-    expect(answerQuestion).toHaveBeenCalledTimes(2);
-    expect(option("Ship it").checked).toBe(true);
-
-    // Sent anew: the same choice, under a new id.
     answerQuestion.mockImplementation(async (sent) => ({
       result: "submitted",
       answerId: sent.answerId,
       outcome: { status: "sent" },
     }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    await waitFor(() => expect(status()).toBe("Answer sent"));
+    expect(answerQuestion).toHaveBeenCalledTimes(3);
+    const [first, second, third] = answerQuestion.mock.calls.map(([sent]) => sent);
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+  });
+
+  it("shows the question as it is now when Retry finds it closed", async () => {
+    answerQuestion.mockRejectedValue(new Error("lost"));
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(answerQuestion).toHaveBeenCalledTimes(3));
-    const [first, , third] = answerQuestion.mock.calls.map(([sent]) => sent);
-    expect(third!.selectedOptionIds).toEqual(["yes"]);
-    expect(third!.answerId).not.toBe(first!.answerId);
-    await waitFor(() => expect(status()).toMatch(/sent/i));
+    await waitFor(() => expect(status()).toMatch(/Couldn't confirm/));
+
+    // Cancelled since, with nothing yet telling the view.
+    questions.q1 = question("q1", { status: "cancelled" });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    await waitFor(() => expect(status()).toMatch(/was cancelled, so your answer wasn't sent/));
+    expect(answerQuestion).toHaveBeenCalledTimes(2);
   });
 
   it("keeps following an answer when main's connection ends under it, since it may be committed", async () => {

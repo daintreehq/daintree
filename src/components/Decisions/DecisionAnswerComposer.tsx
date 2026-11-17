@@ -279,7 +279,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
             size="compact"
             action={
               lost ? (
-                <Button variant="outline" size="xs" onClick={() => void followAnswer(key)}>
+                <Button variant="outline" size="xs" onClick={() => void followAnswer(key, true)}>
                   Retry
                 </Button>
               ) : undefined

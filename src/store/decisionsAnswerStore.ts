@@ -31,16 +31,15 @@ export interface AnswerSubmission {
   /** How the question was read, to read it again before an answer never committed goes again. */
   target: DecisionQuestionTarget;
   phase: AnswerPhase;
-  /** A `not-found` standing submits it again once, under the same id. */
+  /** It was sent again on its own once already; after that only Retry sends it again, under the same id. */
   resubmitted: boolean;
 }
 
 /**
  * Why the last Send ended with nothing sent: the question's last read found
- * it closed or changed, or it couldn't be read; or (`unsent`) main twice
- * reported no answer committed under its id, so it can go again under a new one.
+ * it closed or changed, or it couldn't be read.
  */
-export type AnswerHold = "closed" | "changed" | "unreadable" | "not-running" | "failed" | "unsent";
+export type AnswerHold = "closed" | "changed" | "unreadable" | "not-running" | "failed";
 
 export interface AnswerRecord {
   draft: AnswerDraft | null;

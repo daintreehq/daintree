@@ -73,7 +73,6 @@ const HOLDS: Record<AnswerHold, string> = {
   "not-running":
     "Decisions isn't connected to its relay right now, so nothing was sent. Reconnect it in Settings → Decisions.",
   failed: "This question couldn't be read again before sending, so nothing was sent.",
-  unsent: "Your answer couldn't be sent, and nothing reached the relay. Send it again.",
 };
 
 /** Why a Send stopped before anything was signed. */
