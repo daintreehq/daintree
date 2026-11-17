@@ -159,6 +159,25 @@ describe("AuditRingStore", () => {
     ]);
   });
 
+  it("serializes only the appended record when a flushed full ring takes one more", async () => {
+    const records = Array.from({ length: 500 }, (_, i) => rec(`r${i}`));
+    store.writeAll("pluginAuditLog", records, 500);
+    await settle();
+
+    const stringify = vi.spyOn(JSON, "stringify");
+    store.writeAll("pluginAuditLog", [...records.slice(1), rec("r500")], 500);
+    const serialized = stringify.mock.calls.length;
+    stringify.mockRestore();
+    await settle();
+
+    expect(serialized).toBe(1);
+    expect(sentOps()[1]).toMatchObject({
+      op: "ringApply",
+      upserts: [{ recordId: "r500" }],
+      deletes: ["r0"],
+    });
+  });
+
   it("persists an in-place update as a single row update that keeps the record's position", async () => {
     const records = [rec("a"), rec("b"), rec("c")];
     store.writeAll("mcpAuditLog", records, 10);
