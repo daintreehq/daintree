@@ -291,8 +291,19 @@ export function createTrashReceipts() {
 
 const LEFT_THE_TRASH = "That terminal has left the trash.";
 
+/** What a bulk mark-read did: the marks the hosts made, and the hosts that made none. */
+export interface MarkAllReadReport {
+  marks: CanopyReadMark[];
+  /** Hosts whose call failed: their runs are still as they were. */
+  refused: HostId[];
+}
+
 export interface AllHostsRoute {
   api: CanopyApi;
+  /** `api.markAllRead`, and which hosts didn't answer; throws when none did. */
+  markAllReadReport: (
+    targets: Parameters<CanopyApi["markAllRead"]>[0]
+  ) => Promise<MarkAllReadReport>;
   terminalApi: CanopyTerminalApi;
   /** Each host's screens searched on that host, its answer or its failure kept apart. */
   searchScreens: CanopyScreenSearch;
@@ -354,6 +365,25 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     );
   };
 
+  // The marks of the hosts that answered stand; a host that didn't is named so
+  // the caller can say its runs were left unread. When none answered the
+  // failure is the answer.
+  const markAllReadReport = async (
+    targets: Parameters<CanopyApi["markAllRead"]>[0]
+  ): Promise<MarkAllReadReport> => {
+    const groups = [...groupByHost(targets, (target) => target.runId)];
+    const settled = await mapLimited(groups, SEARCH_CONCURRENCY, aliveNow(), ([hostId, group]) =>
+      apiFor(hostId)
+        .markAllRead(group.map(({ item, id }) => ({ ...item, runId: id })))
+        .then((marks) => marks.map((mark): CanopyReadMark => keyed(hostId, mark)))
+    );
+    const marks = answered(settled).flat();
+    const refused = groups.flatMap(([hostId], index) =>
+      settled[index]!.status === "rejected" ? [hostId] : []
+    );
+    return { marks, refused };
+  };
+
   const api: CanopyApi = {
     setShown: async (runIds) => {
       const groups = groupByHost(runIds, (key) => key);
@@ -371,19 +401,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     reread: (key, ...rest) => routed(key, (host, id) => host.reread(id, ...rest)),
     runBranch: (key, ...rest) => routed(key, (host, id) => host.runBranch(id, ...rest)),
     rename: (key, ...rest) => routed(key, (host, id) => host.rename(id, ...rest)),
-    markAllRead: async (targets) => {
-      const groups = groupByHost(targets, (target) => target.runId);
-      const settled = await mapLimited(
-        [...groups],
-        SEARCH_CONCURRENCY,
-        aliveNow(),
-        ([hostId, group]) =>
-          apiFor(hostId)
-            .markAllRead(group.map(({ item, id }) => ({ ...item, runId: id })))
-            .then((marks) => marks.map((mark): CanopyReadMark => keyed(hostId, mark)))
-      );
-      return answered(settled).flat();
-    },
+    markAllRead: async (targets) => (await markAllReadReport(targets)).marks,
     restoreReads: async (restores) => {
       const groups = groupByHost(restores, (restore) => restore.mark.runId);
       answered(
@@ -706,6 +724,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   };
   return {
     api,
+    markAllReadReport,
     terminalApi,
     searchScreens,
     close: () => {

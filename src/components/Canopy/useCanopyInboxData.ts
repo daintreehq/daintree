@@ -265,6 +265,7 @@ export function useCanopyInboxData({
     participants: present,
     api,
     searchScreens,
+    markAllReadReport: route?.markAllReadReport ?? null,
     terminalApi,
     readings,
     canopy,
