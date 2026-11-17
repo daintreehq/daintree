@@ -670,18 +670,20 @@ describe("CanopyView search", () => {
     });
     expect(cards(container)).toHaveLength(0);
 
-    // A search for the query before says nothing once another is typed.
+    // A search for a query says nothing once another is typed, even typed back.
     refresh(NOW + 3);
     await screenSearchSettled();
     await search("segv");
     await screenSearchSettled();
-    expect(answers).toHaveLength(5);
+    await search("segfault");
+    await screenSearchSettled();
+    expect(answers).toHaveLength(6);
     await act(async () => {
       answers[3]!(["asking"]);
     });
     expect(cards(container)).toHaveLength(0);
     await act(async () => {
-      answers[4]!([]);
+      answers[5]!([]);
     });
     expect(cards(container)).toHaveLength(0);
   });

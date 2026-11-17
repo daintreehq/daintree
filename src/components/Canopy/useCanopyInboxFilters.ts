@@ -359,7 +359,8 @@ export function useCanopyInboxFilters({
       : searchGap === null
         ? found
         : `${found} so far. ${searchGap}`;
-  const announceKey = `${searchKey}|${unreadOnly}|${searchGap ?? ""}|${workersShown ? screenRetry : ""}`;
+  // A Retry answered with the same gap is said again: one that closes the gap says so anyway.
+  const announceKey = `${searchKey}|${unreadOnly}|${searchGap === null ? "" : `${searchGap}|${screenRetry}`}`;
   const announcedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!searching) {
