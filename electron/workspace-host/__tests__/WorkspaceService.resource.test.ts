@@ -1074,7 +1074,7 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
 
-    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+    await service["runLifecycleTeardown"]("/test/worktree", monitor);
 
     const resourceTeardownIdx = phases.indexOf("resource-teardown");
     const teardownIdx = phases.indexOf("teardown");
@@ -1099,7 +1099,7 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
 
-    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+    await service["runLifecycleTeardown"]("/test/worktree", monitor);
 
     expect(monitor.resourceStatus?.ssh).toBeUndefined();
     expect(monitor.resourceStatus?.lastStatus).toBe("ready");
@@ -1127,7 +1127,7 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
     const childProcessModule = await import("child_process");
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(0));
 
-    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+    await service["runLifecycleTeardown"]("/test/worktree", monitor);
 
     expect(phases).not.toContain("resource-teardown");
     expect(phases).toContain("teardown");
@@ -1165,7 +1165,7 @@ describe("WorkspaceService.runLifecycleTeardown — resource teardown integratio
       origSetLifecycleStatus(status);
     });
 
-    await service["runLifecycleTeardown"]("/test/worktree", monitor, false);
+    await service["runLifecycleTeardown"]("/test/worktree", monitor);
 
     expect(phases).toContain("resource-teardown");
     expect(phases).toContain("teardown");
