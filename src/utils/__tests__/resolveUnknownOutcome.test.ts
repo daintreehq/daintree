@@ -296,8 +296,11 @@ describe("resolveUnknownOutcome", () => {
       vi.useRealTimers();
     });
 
-    /** A link that stays down until the test brings it back after a gap. */
-    function heldLink() {
+    /**
+     * A link that stays down until the test brings it back after a gap, with
+     * no status read made while it is down.
+     */
+    function heldLink(client: ReturnType<typeof fakeClient>["client"]) {
       let reconnect: (() => void) | null = null;
       const waitForConnected = vi.fn(
         () =>
@@ -309,7 +312,9 @@ describe("resolveUnknownOutcome", () => {
         waitForConnected,
         reconnectAfter: async (gapMs: number) => {
           expect(reconnect).not.toBeNull();
-          vi.setSystemTime(Date.now() + gapMs);
+          const readsBefore = client.getStatus.mock.calls.length;
+          await vi.advanceTimersByTimeAsync(gapMs);
+          expect(client.getStatus).toHaveBeenCalledTimes(readsBefore);
           const up = reconnect!;
           reconnect = null;
           up();
@@ -320,7 +325,7 @@ describe("resolveUnknownOutcome", () => {
 
     it("keeps following an operation still running when the link comes back after the window's length", async () => {
       const { client } = fakeClient([running, running, succeeded]);
-      const link = heldLink();
+      const link = heldLink(client);
 
       const pending = resolveUnknownOutcome("op-1", {
         waitForConnected: link.waitForConnected,
@@ -339,28 +344,43 @@ describe("resolveUnknownOutcome", () => {
     });
 
     it("charges a poll wait that fires late after a sleep only its scheduled length", async () => {
-      const { client } = fakeClient([running, running, succeeded]);
+      const { client } = fakeClient([running]);
+      let result: OperationOutcome | undefined;
       // The first poll's timer fires six minutes late, as it would on a machine
       // that slept through it: every clock moves on by that much.
+      const fakeSetTimeout = Object.getOwnPropertyDescriptor(globalThis, "setTimeout")!;
       const scheduled = globalThis.setTimeout;
-      const late = vi
-        .spyOn(globalThis, "setTimeout")
-        .mockImplementationOnce(((callback: () => void, ms?: number) =>
-          scheduled(callback, (ms ?? 0) + SIX_MINUTES)) as typeof setTimeout);
+      let slept = false;
+      Object.defineProperty(globalThis, "setTimeout", {
+        ...fakeSetTimeout,
+        value: ((callback: () => void, ms?: number) => {
+          const delayMs = (ms ?? 0) + (slept ? 0 : SIX_MINUTES);
+          slept = true;
+          return scheduled(callback, delayMs);
+        }) as typeof setTimeout,
+      });
       try {
         const pending = resolveUnknownOutcome("op-1", {
           waitForConnected: async () => {},
           client,
           pollIntervalMs: 2_000,
-          settleTimeoutMs: 5 * 60_000,
+          settleTimeoutMs: 3_000,
+        }).then((outcome) => {
+          result = outcome;
         });
         await vi.advanceTimersByTimeAsync(SIX_MINUTES + 2_000);
+        // The late wait cost 2s of the 3s window, so 1s is left to wait.
         expect(client.getStatus).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(2_000);
-
-        await expect(pending).resolves.toEqual(succeeded);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(client.getStatus).toHaveBeenCalledTimes(2);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(client.getStatus).toHaveBeenCalledTimes(3);
+        expect(result).toEqual(running);
+        await pending;
       } finally {
-        late.mockRestore();
+        // Back to the fake clock's own timer, so its uninstall puts the real one back.
+        Object.defineProperty(globalThis, "setTimeout", fakeSetTimeout);
       }
     });
 
@@ -373,7 +393,7 @@ describe("resolveUnknownOutcome", () => {
         running,
         running,
       ]);
-      const link = heldLink();
+      const link = heldLink(client);
       let result: OperationOutcome | undefined;
 
       const pending = resolveUnknownOutcome("op-1", {
