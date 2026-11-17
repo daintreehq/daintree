@@ -13,7 +13,7 @@ export function setupResourceListeners(): DisposableStore {
       window.electron.terminal.onResourceMetrics((data) => {
         const rmStore = useResourceMonitoringStore.getState();
         if (rmStore.enabled) {
-          rmStore.updateMetrics(data.metrics);
+          rmStore.updateMetrics(data.metrics, data.timestamp);
         }
       })
     )

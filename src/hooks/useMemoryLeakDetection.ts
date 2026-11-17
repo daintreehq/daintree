@@ -49,48 +49,89 @@ export const MEMORY_HISTORY_SIZE = 30;
 export const STARTUP_SKIP_SAMPLES = 30;
 export const CONSECUTIVE_REQUIRED = 20;
 export const MIN_MEMORY_KB = 512_000; // 500 MB
-export const MIN_SLOPE_KB_PER_SAMPLE = 137; // ~200 MB/hour at 2.5s intervals
+// 137 KB per 2.5s poll, the rate the detector was tuned at (~193 MB/hour).
+export const MIN_SLOPE_KB_PER_HOUR = 197_280;
 export const PLATEAU_WINDOW = 5;
-export const PLATEAU_RANGE_THRESHOLD_KB = MIN_SLOPE_KB_PER_SAMPLE * PLATEAU_WINDOW;
+// Five readings span four gaps, so at the nominal 2.5s cadence this allows the
+// same 685 KB range as the per-sample figure it replaces, and it scales with
+// the window's actual span.
+export const PLATEAU_RANGE_KB_PER_HOUR =
+  (MIN_SLOPE_KB_PER_HOUR * PLATEAU_WINDOW) / (PLATEAU_WINDOW - 1);
 export const ALERT_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+
+const MS_PER_HOUR = 3_600_000;
+
+export interface LeakPoint {
+  memoryKb: number;
+  /** When the host took the reading (epoch ms), not when this view got it. */
+  sampledAt: number;
+}
 
 export interface LeakState {
   sampleCount: number;
-  memHistory: number[];
+  history: LeakPoint[];
   consecutiveIncreases: number;
   lastAlertAt: number;
   dismissed: boolean;
 }
 
-export function computeSlope(values: number[]): number {
-  const n = values.length;
+/**
+ * Least-squares growth in KB/hour against sampling time. The census polls
+ * every 2.5s and backs off to 15s when nothing changes, so a fit against the
+ * sample index would read the same series six times too fast at the slow end.
+ */
+export function computeGrowthKbPerHour(points: LeakPoint[]): number {
+  const n = points.length;
   if (n < 2) return 0;
-  let sumI = 0;
+  // Centred on the first point so the sums stay small and exact.
+  const t0 = points[0]!.sampledAt;
+  const y0 = points[0]!.memoryKb;
+  let sumT = 0;
   let sumY = 0;
-  let sumIY = 0;
-  let sumI2 = 0;
-  for (let i = 0; i < n; i++) {
-    sumI += i;
-    sumY += values[i]!;
-    sumIY += i * values[i]!;
-    sumI2 += i * i;
+  let sumTY = 0;
+  let sumT2 = 0;
+  for (const point of points) {
+    const t = point.sampledAt - t0;
+    const y = point.memoryKb - y0;
+    sumT += t;
+    sumY += y;
+    sumTY += t * y;
+    sumT2 += t * t;
   }
-  const denom = n * sumI2 - sumI * sumI;
+  const denom = n * sumT2 - sumT * sumT;
   if (denom === 0) return 0;
-  return (n * sumIY - sumI * sumY) / denom;
+  return ((n * sumTY - sumT * sumY) / denom) * MS_PER_HOUR;
 }
 
-export function isPlateau(values: number[]): boolean {
-  if (values.length < PLATEAU_WINDOW) return false;
-  const win = values.slice(-PLATEAU_WINDOW);
-  const min = Math.min(...win);
-  const max = Math.max(...win);
-  return max - min < PLATEAU_RANGE_THRESHOLD_KB;
+export function isPlateau(points: LeakPoint[]): boolean {
+  if (points.length < PLATEAU_WINDOW) return false;
+  const win = points.slice(-PLATEAU_WINDOW);
+  const values = win.map((point) => point.memoryKb);
+  const spanMs = win[win.length - 1]!.sampledAt - win[0]!.sampledAt;
+  return (
+    Math.max(...values) - Math.min(...values) < (PLATEAU_RANGE_KB_PER_HOUR * spanMs) / MS_PER_HOUR
+  );
 }
 
-export function evaluateTerminal(memoryKb: number, state: LeakState, now: number): boolean {
+export function evaluateTerminal(point: LeakPoint, state: LeakState, now: number): boolean {
+  if (!Number.isFinite(point.sampledAt)) return false;
+  const last = state.history[state.history.length - 1];
+  if (last !== undefined) {
+    // The same instant again carries no elapsed time to fit against.
+    if (point.sampledAt === last.sampledAt) return false;
+    // Time ran backwards (a clock step): readings from before it can't be
+    // fitted with these, and waiting for the old clock to catch up could
+    // silence the detector for as long as the step was.
+    if (point.sampledAt < last.sampledAt) {
+      state.sampleCount = 0;
+      state.history = [];
+      state.consecutiveIncreases = 0;
+    }
+  }
+
+  const { memoryKb } = point;
   state.sampleCount++;
-  state.memHistory = [...state.memHistory, memoryKb].slice(-MEMORY_HISTORY_SIZE);
+  state.history = [...state.history, point].slice(-MEMORY_HISTORY_SIZE);
 
   if (state.sampleCount < STARTUP_SKIP_SAMPLES) return false;
   if (state.dismissed) return false;
@@ -99,21 +140,20 @@ export function evaluateTerminal(memoryKb: number, state: LeakState, now: number
     return false;
   }
 
-  if (isPlateau(state.memHistory)) {
+  if (isPlateau(state.history)) {
     state.consecutiveIncreases = 0;
     return false;
   }
 
-  const prev = state.memHistory[state.memHistory.length - 2];
-  if (prev !== undefined && memoryKb > prev) {
+  const prev = state.history[state.history.length - 2];
+  if (prev !== undefined && memoryKb > prev.memoryKb) {
     state.consecutiveIncreases++;
   } else {
     state.consecutiveIncreases = 0;
   }
 
   if (state.consecutiveIncreases >= CONSECUTIVE_REQUIRED) {
-    const slope = computeSlope(state.memHistory);
-    if (slope >= MIN_SLOPE_KB_PER_SAMPLE) {
+    if (computeGrowthKbPerHour(state.history) >= MIN_SLOPE_KB_PER_HOUR) {
       if (now - state.lastAlertAt >= ALERT_COOLDOWN_MS) {
         return true;
       }
@@ -127,15 +167,14 @@ function formatMb(kb: number): string {
   return `${Math.round(kb / 1024)} MB`;
 }
 
-function formatGrowthRate(slopeKbPerSample: number): string {
-  const mbPerHour = (slopeKbPerSample / 1024) * (3600 / 2.5);
-  return `${Math.round(mbPerHour)} MB/hr`;
+function formatGrowthRate(kbPerHour: number): string {
+  return `${Math.round(kbPerHour / 1024)} MB/hr`;
 }
 
 export function createLeakState(): LeakState {
   return {
     sampleCount: 0,
-    memHistory: [],
+    history: [],
     consecutiveIncreases: 0,
     lastAlertAt: 0,
     dismissed: false,
@@ -170,29 +209,34 @@ export function useMemoryLeakDetection(enabled: boolean): void {
       // Only the terminals this poll sampled: each PTY host shard polls on its
       // own, and counting another shard's poll as a repeat of this terminal's
       // last reading resets its growth streak (#17194).
-      for (const [id, sample] of Object.entries(curr.lastBatch.samples)) {
+      const { samples, sampledAt } = curr.lastBatch;
+      for (const [id, sample] of Object.entries(samples)) {
         let leakState = stateMap.get(id);
         if (!leakState) {
           leakState = createLeakState();
           stateMap.set(id, leakState);
         }
 
-        const shouldAlert = evaluateTerminal(sample.memoryKb, leakState, now);
+        const shouldAlert = evaluateTerminal(
+          { memoryKb: sample.memoryKb, sampledAt },
+          leakState,
+          now
+        );
 
         if (shouldAlert) {
           leakState.lastAlertAt = now;
 
           const terminal = usePanelStore.getState().panelsById[id];
           const terminalTitle = terminal?.title ?? id;
-          const slope = computeSlope(leakState.memHistory);
+          const growth = computeGrowthKbPerHour(leakState.history);
 
           notify({
             type: "warning",
             priority: "high",
             duration: 0,
             title: `Memory leak detected \u2014 ${terminalTitle}`,
-            message: `RSS: ${formatMb(sample.memoryKb)} (growing ${formatGrowthRate(slope)})`,
-            inboxMessage: `Memory leak: ${terminalTitle} at ${formatMb(sample.memoryKb)}, growing ${formatGrowthRate(slope)}`,
+            message: `RSS: ${formatMb(sample.memoryKb)} (growing ${formatGrowthRate(growth)})`,
+            inboxMessage: `Memory leak: ${terminalTitle} at ${formatMb(sample.memoryKb)}, growing ${formatGrowthRate(growth)}`,
             correlationId: `memory-leak-${id}`,
             context: {
               panelId: id,

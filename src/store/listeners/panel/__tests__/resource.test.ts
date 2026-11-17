@@ -18,9 +18,11 @@ vi.mock("@/store/persistence/draftInputPersistence", () => ({
   },
 }));
 
+const updateMetricsMock = vi.hoisted(() => vi.fn());
+const monitoring = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/store/resourceMonitoringStore", () => ({
   useResourceMonitoringStore: {
-    getState: () => ({ enabled: false, updateMetrics: vi.fn() }),
+    getState: () => ({ enabled: monitoring.enabled, updateMetrics: updateMetricsMock }),
   },
 }));
 
@@ -105,6 +107,47 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     expect(stopLiveSyncMock).not.toHaveBeenCalled();
     d.dispose();
     expect(stopLiveSyncMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("setupResourceListeners — resource metrics", () => {
+  let deliver: (data: { metrics: Record<string, unknown>; timestamp: number }) => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitoring.enabled = true;
+    (globalThis as unknown as { window: Window }).window.electron = {
+      terminal: {
+        onResourceMetrics: vi.fn((callback: typeof deliver) => {
+          deliver = callback;
+          return () => {};
+        }),
+      },
+    } as unknown as Window["electron"];
+  });
+
+  afterEach(() => {
+    monitoring.enabled = false;
+  });
+
+  it("hands the host's sampling time to the store with the batch", () => {
+    const d = setupResourceListeners();
+    const metrics = { t1: { cpuPercent: 1, memoryKb: 2, breakdown: [], processCount: 1 } };
+
+    deliver({ metrics, timestamp: 1_700_000_015_000 });
+
+    expect(updateMetricsMock).toHaveBeenCalledWith(metrics, 1_700_000_015_000);
+    d.dispose();
+  });
+
+  it("drops a batch while monitoring is off", () => {
+    monitoring.enabled = false;
+    const d = setupResourceListeners();
+
+    deliver({ metrics: {}, timestamp: 1 });
+
+    expect(updateMetricsMock).not.toHaveBeenCalled();
+    d.dispose();
   });
 });
 
