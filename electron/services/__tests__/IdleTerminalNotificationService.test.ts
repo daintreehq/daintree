@@ -431,7 +431,12 @@ describe("IdleTerminalNotificationService", () => {
         () =>
           new Promise((resolve) => {
             release = () =>
-              resolve({ terminals: [makeTerminal()], degraded: false, shardsFailed: 0, shardsTotal: 1 });
+              resolve({
+                terminals: [makeTerminal()],
+                degraded: false,
+                shardsFailed: 0,
+                shardsTotal: 1,
+              });
           })
       );
       const service = makeService();
