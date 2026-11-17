@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { FleetHostComposer } from "../FleetHostComposer";
@@ -62,10 +62,15 @@ function renderComposer() {
   return above;
 }
 
-const IME_SIGNALS = [
-  { signal: "isComposing", init: { isComposing: true } },
-  { signal: "keyCode 229", init: { keyCode: 229 } },
-];
+const KEY_CODE = { Enter: 13, Escape: 27 } as const;
+
+/** Both signals an IME's key can carry; the first keeps the key's own legacy code. */
+function imeSignals(key: keyof typeof KEY_CODE) {
+  return [
+    { signal: "isComposing", init: { isComposing: true, keyCode: KEY_CODE[key] } },
+    { signal: "keyCode 229", init: { keyCode: 229 } },
+  ];
+}
 
 describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
   let electronBefore: PropertyDescriptor | undefined;
@@ -83,15 +88,16 @@ describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
   });
 
   afterEach(() => {
+    cleanup();
     if (electronBefore) Object.defineProperty(window, "electron", electronBefore);
     else Reflect.deleteProperty(window, "electron");
     resetArming();
   });
 
-  it.each(IME_SIGNALS)(
+  it.each(imeSignals("Enter"))(
     "keeps the draft and sends nothing when an IME's Enter confirms a candidate ($signal)",
     async ({ init }) => {
-      renderComposer();
+      const above = renderComposer();
       typeDraft("ni hao");
 
       let notPrevented = false;
@@ -104,10 +110,12 @@ describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
       expect(submitFleet).not.toHaveBeenCalled();
       expect(field().value).toBe("ni hao");
       expect(document.activeElement).toBe(field());
+      // Nothing stops this key on its way up: only Escape has a ribbon shortcut to keep off.
+      expect(above).toHaveBeenCalledTimes(1);
     }
   );
 
-  it.each(IME_SIGNALS)(
+  it.each(imeSignals("Escape"))(
     "keeps the draft, and the fleet, when an IME's Escape dismisses its candidates ($signal)",
     ({ init }) => {
       const above = renderComposer();
@@ -123,7 +131,7 @@ describe("FleetHostComposer — an IME's Enter and Escape (#17450)", () => {
     }
   );
 
-  it.each(IME_SIGNALS)(
+  it.each(imeSignals("Escape"))(
     "keeps an IME's Escape from the ribbon even when nothing is typed yet ($signal)",
     ({ init }) => {
       const above = renderComposer();

@@ -430,8 +430,9 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
   });
 
   describe("an IME's Enter and Escape in an override field (#17450)", () => {
-    const IME_SIGNALS = [
-      { signal: "isComposing", init: { isComposing: true } },
+    // The first keeps the key's own legacy code, so only `isComposing` marks it.
+    const imeSignals = (keyCode: number) => [
+      { signal: "isComposing", init: { isComposing: true, keyCode } },
       { signal: "keyCode 229", init: { keyCode: 229 } },
     ];
 
@@ -464,7 +465,7 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
       expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
     }
 
-    it.each(IME_SIGNALS)(
+    it.each(imeSignals(13))(
       "keeps the edit, the focus and the popover when an IME's Enter confirms a candidate ($signal)",
       ({ init }) => {
         const behind = renderBehind();
@@ -478,7 +479,7 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
       }
     );
 
-    it.each(IME_SIGNALS)(
+    it.each(imeSignals(27))(
       "keeps the edit, the focus and the popover when an IME's Escape dismisses its candidates ($signal)",
       ({ init }) => {
         const behind = renderBehind();
