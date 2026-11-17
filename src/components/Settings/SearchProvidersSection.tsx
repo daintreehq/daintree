@@ -144,6 +144,8 @@ export function SearchProvidersSection({
     const latestWrite = latestWriteRef.current;
     latestWrite.set(key, request);
     setPending((prev) => new Map(prev).set(key, { shown, request }));
+    // A new choice supersedes the failed one; its own failure brings Retry back.
+    setSaveError((prev) => (prev?.key === key ? null : prev));
     bridge
       .setSearchProviderShown(key, shown)
       .then((list) => {

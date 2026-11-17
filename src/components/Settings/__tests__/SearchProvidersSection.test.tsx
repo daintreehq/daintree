@@ -233,6 +233,49 @@ describe("SearchProvidersSection", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
 
+  it("drops a failed choice's Retry as soon as the row is switched again", async () => {
+    getSearchProviders.mockResolvedValue([provider()]);
+    setSearchProviderShown
+      .mockRejectedValueOnce(new Error("store locked"))
+      .mockReturnValueOnce(new Promise(() => {}));
+    render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
+    const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
+
+    fireEvent.click(toggle);
+    await screen.findByRole("button", { name: "Retry" });
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it.each(["before", "after"] as const)(
+    "shows no read error when a refresh fails %s a newer write's answer",
+    async (order) => {
+      getSearchProviders.mockResolvedValue([provider()]);
+      const { rerender, container } = render(
+        <SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />
+      );
+      const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
+      let failRead!: (error: Error) => void;
+      getSearchProviders.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          failRead = reject;
+        })
+      );
+      rerender(
+        <SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="reloaded" />
+      );
+      const write = deferred<PluginSearchProviderInfo[]>();
+      setSearchProviderShown.mockReturnValueOnce(write.promise);
+      fireEvent.click(toggle);
+
+      // The write's answer no longer lists this plugin, so the section goes.
+      if (order === "before") await act(async () => failRead(new Error("bridge down")));
+      await act(async () => write.resolve([]));
+      if (order === "after") await act(async () => failRead(new Error("bridge down")));
+      expect(container.textContent).toBe("");
+    }
+  );
+
   it("keeps a later choice's failure when an earlier one succeeds after it", async () => {
     getSearchProviders.mockResolvedValue([provider()]);
     const off = deferred<PluginSearchProviderInfo[]>();
