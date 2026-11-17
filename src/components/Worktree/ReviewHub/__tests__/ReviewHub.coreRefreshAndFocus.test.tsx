@@ -1306,7 +1306,8 @@ describe("ReviewHub", () => {
       const parent = button.parentElement!;
       const removeChild = parent.removeChild.bind(parent);
       parent.removeChild = <T extends Node>(child: T): T => {
-        if (child === button) stagedFilter.focus();
+        const removed: Node = child;
+        if (removed === button) stagedFilter.focus();
         return removeChild(child);
       };
       try {
