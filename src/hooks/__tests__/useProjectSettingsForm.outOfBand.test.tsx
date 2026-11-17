@@ -66,6 +66,7 @@ import type { ActionCallbacks, ActionRegistry } from "@/services/actions/actionT
 import { registerProjectActions } from "@/services/actions/definitions/projectActions";
 import { registerEnvActions } from "@/services/actions/definitions/envActions";
 import { useProjectSettingsForm } from "../useProjectSettingsForm";
+import { useProjectSettings } from "../useProjectSettings";
 
 const PROJECT_ID = "proj-1";
 
@@ -165,6 +166,36 @@ describe("useProjectSettingsForm saving alongside another settings writer (#1643
 
     expect(stored().devServerCommand).toBe("npm start");
     expect(stored().daintreeMcpTier).toBe("full");
+  });
+
+  it("keeps Quick Run pins and unpins made beside the dialog's saves, in either order (#17199)", async () => {
+    const hook = await renderClosedForm();
+    await openForm(hook);
+    const quickRun = renderHook(() => useProjectSettings(PROJECT_ID));
+    const lint = { id: "rc-2", name: "Lint", command: "npm run lint" };
+
+    act(() => {
+      hook.result.current.setDevServerCommand("npm start");
+    });
+    await act(async () => {
+      await Promise.all([quickRun.result.current.promoteToSaved(lint), hook.result.current.flush()]);
+    });
+
+    expect(stored().devServerCommand).toBe("npm start");
+    expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run dev", "npm run lint"]);
+
+    act(() => {
+      hook.result.current.setDevServerCommand("npm run serve");
+    });
+    await act(async () => {
+      await Promise.all([
+        hook.result.current.flush(),
+        quickRun.result.current.removeFromSaved("npm run dev"),
+      ]);
+    });
+
+    expect(stored().devServerCommand).toBe("npm run serve");
+    expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run lint"]);
   });
 });
 
