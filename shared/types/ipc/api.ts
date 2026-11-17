@@ -40,6 +40,7 @@ export type { VoiceInputError, VoiceInputStatus };
 import type {
   AuthValidation,
   ForgeProviderEntry,
+  ForgePullRequestTerm,
   ResolvedForgeProvider,
   PushErrorClassification,
   Issue,
@@ -1974,6 +1975,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * request page, the fact that the branch isn't pushed, or nothing.
      */
     getNewPRLink(payload: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink>;
+    /**
+     * What a registered forge provider calls a pull request ("merge-request"
+     * on GitLab), or `null` when that provider can't be used.
+     */
+    getPullRequestTerm(payload: { providerId: string }): Promise<ForgePullRequestTerm | null>;
     /**
      * Assign an issue to a user via the resolved forge provider, returning the
      * issue's resulting assignee list. Forges may silently drop an assignee the

@@ -1,5 +1,6 @@
 import type {
   AuthValidation,
+  ChecksCapability,
   Credentials,
   ForgeProviderImpl,
   ForgeUser,
@@ -34,6 +35,7 @@ import {
   findPRsByNumbersImpl,
   getCIStatusImpl,
   getCIStatusesImpl,
+  getChecksImpl,
   getGitLabCacheGeneration,
   getIssueImpl,
   getIssueTooltipImpl,
@@ -116,6 +118,10 @@ const identityCapability: IdentityCapability = {
       rawData: { source: "GitLabAuth.validated" },
     };
   },
+};
+
+const checksCapability: ChecksCapability = {
+  getChecks: getChecksImpl,
 };
 
 const tooltipCapability: TooltipCapability = {
@@ -346,6 +352,7 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
   },
 
   identity: identityCapability,
+  checks: checksCapability,
   tooltips: tooltipCapability,
   releases: releaseCapability,
   repoStats: repoStatsCapability,

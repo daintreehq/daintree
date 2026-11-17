@@ -886,6 +886,415 @@ describe("getCIStatus", () => {
   });
 });
 
+describe("checks.getChecks", () => {
+  const getChecks = (iid: number) => gitlabForgeProvider.checks!.getChecks(REPO, iid);
+
+  // Signed in by default: the commit statuses list is only read with a token.
+  beforeEach(async () => {
+    await connectAs("https://gitlab.com", "glpat-secret");
+  });
+  const SHA = "c0ffee";
+  const pipelineOf = (overrides: Record<string, unknown> = {}) => ({
+    id: 77,
+    sha: SHA,
+    ref: "refs/merge-requests/3/head",
+    status: "running",
+    ...overrides,
+  });
+  const mrWith =
+    (pipeline: Record<string, unknown> = {}) =>
+    () =>
+      jsonResponse({ iid: 3, state: "opened", head_pipeline: pipelineOf(pipeline) });
+
+  type ListRoute = (page: string) => Response;
+  /** Answers only the pages a test names; any other page is a request it didn't expect. */
+  const pages =
+    (byPage: Record<string, () => Response>): ListRoute =>
+    (page) =>
+      byPage[page]?.() ?? jsonResponse({ message: `unexpected page ${page}` }, { status: 500 });
+
+  /** Answers the MR read and each list by path, so call order doesn't matter. */
+  function routeChecks(routes: {
+    mr: () => Response;
+    jobs?: ListRoute;
+    bridges?: ListRoute;
+    statuses?: ListRoute;
+  }) {
+    const empty = pages({ "1": () => jsonResponse([]) });
+    fetchMock().mockImplementation(async (input: unknown) => {
+      const url = new URL(String(input));
+      const page = url.searchParams.get("page") ?? "1";
+      if (url.pathname.endsWith("/jobs")) return (routes.jobs ?? empty)(page);
+      if (url.pathname.endsWith("/bridges")) return (routes.bridges ?? empty)(page);
+      if (url.pathname.endsWith("/statuses")) return (routes.statuses ?? empty)(page);
+      return routes.mr();
+    });
+  }
+
+  const requestedUrls = () => fetchMock().mock.calls.map((call) => requestUrl(call));
+
+  it("lists the head pipeline's jobs and trigger jobs as checks", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({
+        "1": () =>
+          jsonResponse([
+            {
+              id: 1,
+              name: "rspec",
+              stage: "test",
+              status: "failed",
+              allow_failure: false,
+              web_url: "https://gitlab.com/group/project/-/jobs/1",
+            },
+            { id: 2, name: "lint", stage: "test", status: "running", allow_failure: false },
+            { id: 3, name: "build", stage: "build", status: "success", allow_failure: false },
+          ]),
+      }),
+      bridges: pages({
+        "1": () =>
+          jsonResponse([
+            {
+              id: 4,
+              name: "deploy-docs",
+              stage: "deploy",
+              status: "pending",
+              allow_failure: false,
+              web_url: "https://gitlab.com/group/project/-/jobs/4",
+              downstream_pipeline: {
+                id: 90,
+                status: "pending",
+                web_url: "https://gitlab.com/group/docs/-/pipelines/90",
+              },
+            },
+          ]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map(({ rawData: _raw, ...check }) => check)).toEqual([
+      {
+        name: "rspec",
+        status: "completed",
+        conclusion: "failure",
+        detailsUrl: "https://gitlab.com/group/project/-/jobs/1",
+        workflow: "test",
+      },
+      { name: "lint", status: "in_progress", workflow: "test" },
+      { name: "build", status: "completed", conclusion: "success", workflow: "build" },
+      {
+        name: "deploy-docs",
+        status: "queued",
+        // A trigger job's result lives in the pipeline it started.
+        detailsUrl: "https://gitlab.com/group/docs/-/pipelines/90",
+        workflow: "deploy",
+      },
+    ]);
+    expect(requestedUrls()).toEqual(
+      expect.arrayContaining([
+        "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/jobs?include_retried=false&per_page=100&page=1",
+        "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/bridges?per_page=100&page=1",
+        `https://gitlab.com/api/v4/projects/group%2Fproject/repository/commits/${SHA}/statuses?pipeline_id=77&ref=refs%2Fmerge-requests%2F3%2Fhead&per_page=100&page=1`,
+      ])
+    );
+  });
+
+  it("adds the statuses an external CI posted into the pipeline, once each", async () => {
+    routeChecks({
+      mr: mrWith(),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "success" }]) }),
+      statuses: pages({
+        "1": () =>
+          jsonResponse([
+            // The job the jobs list already gave.
+            { id: 1, name: "rspec", status: "success", pipeline_id: 77 },
+            {
+              id: 500,
+              name: "jenkins",
+              status: "failed",
+              pipeline_id: 77,
+              target_url: "https://ci.example/job/42",
+            },
+            // Another pipeline on the same commit, from a GitLab older than 17.9.
+            { id: 400, name: "jenkins-branch", status: "failed", pipeline_id: 76 },
+          ]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(
+      result?.checks.map(({ name, conclusion, detailsUrl }) => [name, conclusion, detailsUrl])
+    ).toEqual([
+      ["rspec", "success", undefined],
+      ["jenkins", "failure", "https://ci.example/job/42"],
+    ]);
+  });
+
+  it("reports the checks of a pipeline only an external CI ran", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      statuses: pages({
+        "1": () => jsonResponse([{ id: 500, name: "jenkins", status: "failed", pipeline_id: 77 }]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["jenkins"]);
+  });
+
+  it("maps GitLab's job vocabulary onto check statuses and conclusions", async () => {
+    const statuses: Array<[Record<string, unknown>, string, string | undefined]> = [
+      [{ status: "created" }, "queued", undefined],
+      [{ status: "waiting_for_resource" }, "queued", undefined],
+      [{ status: "waiting_for_callback" }, "queued", undefined],
+      [{ status: "preparing" }, "queued", undefined],
+      [{ status: "pending" }, "queued", undefined],
+      [{ status: "scheduled" }, "queued", undefined],
+      [{ status: "canceling" }, "in_progress", undefined],
+      [{ status: "failed", failure_reason: "job_execution_timeout" }, "completed", "timed_out"],
+      [{ status: "failed", failure_reason: "stuck_or_timeout_failure" }, "completed", "timed_out"],
+      [{ status: "failed", failure_reason: "script_failure" }, "completed", "failure"],
+      [{ status: "canceled" }, "completed", "cancelled"],
+      [{ status: "skipped" }, "completed", "skipped"],
+      [{ status: "manual", allow_failure: false }, "completed", "action_required"],
+      [{ status: "manual", allow_failure: true }, "completed", "neutral"],
+      [{ status: "some_future_status" }, "completed", undefined],
+    ];
+    routeChecks({
+      mr: mrWith(),
+      jobs: pages({
+        "1": () =>
+          jsonResponse(statuses.map(([fields], i) => ({ id: i + 1, name: `job-${i}`, ...fields }))),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.status, check.conclusion])).toEqual(
+      statuses.map(([, status, conclusion]) => [status, conclusion])
+    );
+  });
+
+  it("marks an allowed-to-fail job as not gating the merge", async () => {
+    routeChecks({
+      mr: mrWith({ status: "success" }),
+      jobs: pages({
+        "1": () =>
+          jsonResponse([
+            { id: 1, name: "flaky", status: "failed", allow_failure: true },
+            { id: 2, name: "unit", status: "failed", allow_failure: false },
+          ]),
+      }),
+    });
+
+    const [allowed, gating] = (await getChecks(3))!.checks;
+
+    expect(allowed).toMatchObject({ conclusion: "failure", required: false });
+    expect(gating.conclusion).toBe("failure");
+    // GitLab doesn't say whether a pipeline gates the merge, so nothing claims it does.
+    expect(gating).not.toHaveProperty("required");
+  });
+
+  it("reads every list of a fork's pipeline from the project it ran in", async () => {
+    routeChecks({ mr: mrWith({ project_id: 4242 }) });
+
+    await getChecks(3);
+
+    const lists = requestedUrls().filter((url) => !url.includes("/merge_requests/"));
+    expect(lists).toHaveLength(3);
+    for (const url of lists) {
+      expect(url).toMatch(/^https:\/\/gitlab\.com\/api\/v4\/projects\/4242\//);
+    }
+  });
+
+  it("pages every list to the end", async () => {
+    const twoPages = (prefix: string, firstId: number) =>
+      pages({
+        "1": () =>
+          jsonResponse([{ id: firstId, name: `${prefix}-1`, status: "success" }], {
+            headers: { "x-next-page": "2" },
+          }),
+        "2": () => jsonResponse([{ id: firstId + 1, name: `${prefix}-2`, status: "success" }]),
+      });
+    routeChecks({
+      mr: mrWith(),
+      jobs: twoPages("job", 1),
+      bridges: twoPages("bridge", 10),
+      statuses: twoPages("external", 20),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual([
+      "job-1",
+      "job-2",
+      "bridge-1",
+      "bridge-2",
+      "external-1",
+      "external-2",
+    ]);
+  });
+
+  it("reads past a full page that arrived without pagination headers", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      name: `job-${i + 1}`,
+      status: "success",
+    }));
+    routeChecks({
+      mr: mrWith(),
+      // No `x-next-page` at all: a proxy that strips headers, not a last page.
+      jobs: pages({
+        "1": () => jsonResponse(fullPage),
+        "2": () => jsonResponse([{ id: 101, name: "job-101", status: "failed" }]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks).toHaveLength(101);
+    expect(result?.checks.at(-1)?.name).toBe("job-101");
+  });
+
+  it.each([
+    ["newer first", [9, 4]],
+    ["older first", [4, 9]],
+  ])("keeps only the latest attempt of a retried trigger job (%s)", async (_order, ids) => {
+    const attempt = (id: number) => ({
+      id,
+      name: "downstream",
+      status: id === 9 ? "running" : "failed",
+    });
+    routeChecks({
+      mr: mrWith(),
+      bridges: pages({ "1": () => jsonResponse(ids.map(attempt)) }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.name, check.status])).toEqual([
+      ["downstream", "in_progress"],
+    ]);
+  });
+
+  it("rejects a read whose pages shifted under it", async () => {
+    routeChecks({
+      mr: mrWith(),
+      // A retry between the two reads pushed job 2 back onto the second page.
+      jobs: pages({
+        "1": () =>
+          jsonResponse(
+            [
+              { id: 3, name: "c", status: "success" },
+              { id: 2, name: "b", status: "success" },
+            ],
+            { headers: { "x-next-page": "2" } }
+          ),
+        "2": () => jsonResponse([{ id: 2, name: "b", status: "success" }]),
+      }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/changed mid-read/);
+  });
+
+  it("rejects rather than returning a list that pagination cut short", async () => {
+    routeChecks({
+      mr: mrWith(),
+      // A next page that points back at itself never ends.
+      jobs: () =>
+        jsonResponse([{ name: "loop", status: "success" }], { headers: { "x-next-page": "1" } }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/pagination stalled/);
+  });
+
+  it("rejects a job it can't name instead of leaving it out", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, status: "failed" }]) }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/no name/);
+  });
+
+  it("returns no checks for a merge request with no pipeline", async () => {
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened", head_pipeline: null }) });
+
+    await expect(getChecks(3)).resolves.toEqual({ checks: [] });
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when GitLab leaves the pipeline out, rather than reporting no checks", async () => {
+    // GitLab omits `head_pipeline` for an account that can't read pipelines.
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened" }) });
+
+    await expect(getChecks(3)).rejects.toThrow(/didn't report the merge request's pipeline/);
+  });
+
+  it("rejects a pipeline it can't place on a commit", async () => {
+    routeChecks({ mr: mrWith({ sha: undefined }) });
+
+    await expect(getChecks(3)).rejects.toThrow(/no commit/);
+  });
+
+  it("lists a public pipeline's own jobs when read without a token", async () => {
+    // GitLab serves the job lists anonymously, but never the commit statuses.
+    gitlabForgeProvider.setCredentials?.(null);
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "failed" }]) }),
+      statuses: () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["rspec"]);
+    expect(requestedUrls().some((url) => url.includes("/statuses"))).toBe(false);
+  });
+
+  it("rejects a signed-in read whose statuses fail on a later page", async () => {
+    // A token that expires mid-read: the external check on page 1 must not be
+    // dropped in favour of a list that looks complete.
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "success" }]) }),
+      statuses: pages({
+        "1": () =>
+          jsonResponse([{ id: 500, name: "jenkins", status: "failed", pipeline_id: 77 }], {
+            headers: { "x-next-page": "2" },
+          }),
+        "2": () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+      }),
+    });
+
+    await expect(getChecks(3)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("returns null for a merge request that doesn't exist", async () => {
+    routeChecks({ mr: () => jsonResponse({ message: "404 Not found" }, { status: 404 }) });
+
+    await expect(getChecks(3)).resolves.toBeNull();
+  });
+
+  // Only the merge request read may answer "no such merge request"; once it is
+  // found, a list that fails is a read that failed, whatever the status.
+  it.each(
+    (["jobs", "bridges", "statuses"] as const).flatMap((list) =>
+      [401, 403, 404, 429].map((status) => [list, status] as const)
+    )
+  )("rejects when the %s list answers %i", async (list, status) => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      [list]: () => jsonResponse({ message: `${status}` }, { status }),
+    });
+
+    await expect(getChecks(3)).rejects.toMatchObject({ status });
+  });
+});
+
 function mrNode(iid: number, pipeline: { status: string } | null = { status: "SUCCESS" }) {
   return {
     iid: String(iid),

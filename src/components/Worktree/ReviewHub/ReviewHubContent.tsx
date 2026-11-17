@@ -54,6 +54,7 @@ import {
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
 import { useNewPRLink } from "./useNewPRLink";
+import { usePullRequestTerm } from "./usePullRequestTerm";
 import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -1069,6 +1070,10 @@ export function ReviewHubContent({
     return null;
   });
 
+  // The provider a linked pull request came from; asked whatever the chip shows
+  // so the word is in hand by the time a pull request appears.
+  const prTerm = usePullRequestTerm(forgeHealthProviderId);
+
   const providerHealth = useForgeProviderHealthStore(
     forgeHealthProviderId
       ? selectForgeProviderHealth(forgeHealthProviderId)
@@ -1803,6 +1808,7 @@ export function ReviewHubContent({
                 worktreePR={worktreePR}
                 worktreePath={worktreePath}
                 newPRLink={newPRLink}
+                prTerm={prTerm}
                 onOpenExternal={(url) => void systemClient.openExternal(url)}
               />
             </div>

@@ -1,4 +1,5 @@
 import type {
+  CheckRun,
   CIStatus,
   FetchOptions,
   Issue,
@@ -15,6 +16,7 @@ import type {
 } from "../../../../shared/types/forge.js";
 import type {
   GitLabIssue,
+  GitLabJob,
   GitLabMergeRequest,
   GitLabProject,
   GitLabRelease,
@@ -28,6 +30,8 @@ import {
   getRateLimitSnapshot,
   resetRateLimitSnapshots,
   resetReadFlights,
+  resolveRequestAuth,
+  type QueryValue,
 } from "./GitLabClient.js";
 import { BoundedCache } from "./boundedCache.js";
 import { GITLAB_API_TIMEOUT_MS, getInstanceHost } from "./GitLabAuth.js";
@@ -35,6 +39,7 @@ import { encodeProjectId, repoFullPath } from "./gitlabRemote.js";
 import {
   absolutizeAvatarUrl,
   gitlabIssueToForgeIssue,
+  gitlabJobToCheckRun,
   gitlabReleaseToForgeRelease,
   graphqlMergeRequestToForgePR,
   issueToTooltipData,
@@ -468,6 +473,193 @@ function ciStatusFromPipeline(status: unknown, rawData: unknown): CIStatus | und
     pending: state === "pending" ? 1 : 0,
     rawData,
   };
+}
+
+/** Jobs per page on a pipeline's job lists: GitLab's maximum. */
+const CHECKS_PAGE_SIZE = 100;
+
+/**
+ * Ceiling on pages walked per job list by one {@link getChecksImpl} call, 1000
+ * jobs, far past any real pipeline. It exists so a next-page header that never
+ * runs out can't loop against a rate-limited API, and it rejects rather than
+ * truncating.
+ */
+const MAX_CHECK_PAGES = 10;
+
+async function listPipelineJobs(
+  host: string,
+  path: string,
+  query: Record<string, QueryValue>,
+  fresh: boolean,
+  incomplete: (why: string) => Error
+): Promise<GitLabJob[]> {
+  const jobs: GitLabJob[] = [];
+  const seenPages = new Set<string>();
+  const seenIds = new Set<number>();
+  let page = "1";
+  for (let i = 0; i < MAX_CHECK_PAGES; i++) {
+    seenPages.add(page);
+    const result = await gitlabRestPage<GitLabJob>({
+      host,
+      path,
+      query: { ...query, per_page: CHECKS_PAGE_SIZE, page },
+      ...(fresh ? { fresh: true } : {}),
+    });
+    for (const job of result.items) {
+      const id = job && typeof job === "object" ? job.id : undefined;
+      // Offset pages over a list that changed between reads: a retry adds an
+      // attempt at the top, so an entry read already comes round again while
+      // the job it pushed down is never read at all.
+      if (typeof id === "number") {
+        if (seenIds.has(id)) throw incomplete("the pipeline changed mid-read");
+        seenIds.add(id);
+      }
+      jobs.push(job);
+    }
+    let next = result.nextCursor;
+    // A full page with no next page may be a proxy that dropped GitLab's
+    // pagination headers rather than the last page; the next page settles it.
+    if (next === null && result.items.length >= CHECKS_PAGE_SIZE) {
+      next = String(Number.parseInt(page, 10) + 1);
+    }
+    if (next === null) return jobs;
+    // A next page that repeats one already read would loop, or drop the rest.
+    if (seenPages.has(next)) throw incomplete("pagination stalled");
+    page = next;
+  }
+  throw incomplete(`more than ${MAX_CHECK_PAGES * CHECKS_PAGE_SIZE} jobs`);
+}
+
+/**
+ * GitLab names every job in a pipeline uniquely, so two entries sharing a name
+ * are attempts of one job: a retried trigger job (the bridges list documents no
+ * `include_retried`), or a job retried between the job and status reads. The
+ * newer attempt replaces the older in place. Entries without ids to compare are
+ * all kept, since dropping one would hide a check.
+ */
+function latestAttempts(jobs: readonly GitLabJob[]): GitLabJob[] {
+  const out: GitLabJob[] = [];
+  const indexByName = new Map<string, number>();
+  for (const job of jobs) {
+    const name = job && typeof job === "object" ? job.name : undefined;
+    const at = typeof name === "string" ? indexByName.get(name) : undefined;
+    if (at === undefined) {
+      if (typeof name === "string") indexByName.set(name, out.length);
+      out.push(job);
+      continue;
+    }
+    const keptId = out[at].id;
+    if (typeof keptId === "number" && typeof job.id === "number") {
+      if (job.id > keptId) out[at] = job;
+    } else {
+      out.push(job);
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-job CI detail for one merge request: every job, trigger job and external
+ * commit status in its head pipeline, the latest attempt of each.
+ *
+ * `null` only when the merge request doesn't exist, and `{ checks: [] }` only
+ * when GitLab says it has no pipeline. Anything else that stops a complete read
+ * rejects: a short list would answer "which job failed?" wrongly.
+ */
+export async function getChecksImpl(
+  repo: RepoRef,
+  prNumber: number,
+  options?: FetchOptions
+): Promise<{ checks: CheckRun[] } | null> {
+  const fresh = options?.fresh === true;
+  let mr: GitLabMergeRequest;
+  try {
+    const { data } = await gitlabRest<GitLabMergeRequest>({
+      host: repo.host,
+      path: `/projects/${encodeProjectId(repo)}/merge_requests/${prNumber}`,
+      ...(fresh ? { fresh: true } : {}),
+    });
+    mr = data;
+  } catch (err) {
+    return nullOn404(err);
+  }
+
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read all checks for merge request !${prNumber}: ${why}`);
+  if (!mr || typeof mr !== "object" || Array.isArray(mr)) {
+    throw incomplete("GitLab returned an unreadable merge request");
+  }
+
+  const pipeline = mr.head_pipeline;
+  // Only an explicit `null` says no pipeline has run. GitLab leaves the field
+  // out for an account that can't read pipelines, and "no checks" is the wrong
+  // answer to give it.
+  if (pipeline === null) return { checks: [] };
+  if (!pipeline || typeof pipeline !== "object") {
+    throw incomplete("GitLab didn't report the merge request's pipeline");
+  }
+  const pipelineId = pipeline.id;
+  if (typeof pipelineId !== "number" || !Number.isSafeInteger(pipelineId) || pipelineId <= 0) {
+    throw incomplete("GitLab reported a pipeline with no id");
+  }
+  // A fork's merge request usually runs its pipeline in the fork, where the
+  // pipeline id belongs to the fork's project rather than this one.
+  const projectId =
+    typeof pipeline.project_id === "number" &&
+    Number.isSafeInteger(pipeline.project_id) &&
+    pipeline.project_id > 0
+      ? String(pipeline.project_id)
+      : encodeProjectId(repo);
+  const sha = pipeline.sha;
+  if (typeof sha !== "string" || !sha) {
+    throw incomplete("GitLab reported a pipeline with no commit");
+  }
+  const base = `/projects/${projectId}/pipelines/${pipelineId}`;
+  // The commit statuses list wants a signed-in account even on a public
+  // project, where the job lists don't. A read that goes out without a token
+  // can only list the pipeline's own jobs; one that carries a token reads the
+  // statuses too, and any failure there rejects like the rest.
+  const signedIn = (await resolveRequestAuth(repo.host)).token !== null;
+
+  const [jobs, bridges, statuses] = await Promise.all([
+    listPipelineJobs(repo.host, `${base}/jobs`, { include_retried: false }, fresh, incomplete),
+    listPipelineJobs(repo.host, `${base}/bridges`, {}, fresh, incomplete),
+    // An external CI (Jenkins posting commit statuses) lands in the pipeline as
+    // statuses neither job list returns. This list holds every kind, so only
+    // the ones the job lists didn't already give are kept.
+    signedIn
+      ? listPipelineJobs(
+          repo.host,
+          `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/statuses`,
+          {
+            pipeline_id: pipelineId,
+            ...(typeof pipeline.ref === "string" && pipeline.ref ? { ref: pipeline.ref } : {}),
+          },
+          fresh,
+          incomplete
+        )
+      : Promise.resolve<GitLabJob[]>([]),
+  ]);
+
+  const listed = new Set<number>();
+  for (const job of [...jobs, ...bridges]) {
+    if (job && typeof job === "object" && typeof job.id === "number") listed.add(job.id);
+  }
+  const external = statuses.filter((status) => {
+    if (!status || typeof status !== "object") return true;
+    if (typeof status.id === "number" && listed.has(status.id)) return false;
+    // GitLab before 17.9 ignores `pipeline_id` and answers for every pipeline
+    // on the commit.
+    return status.pipeline_id === undefined || status.pipeline_id === pipelineId;
+  });
+
+  const checks: CheckRun[] = [];
+  for (const job of latestAttempts([...jobs, ...bridges, ...external])) {
+    const check = gitlabJobToCheckRun(job);
+    if (!check) throw incomplete("GitLab returned a job with no name");
+    checks.push(check);
+  }
+  return { checks };
 }
 
 function mergeRequestKey(repo: RepoRef, iid: number): string {

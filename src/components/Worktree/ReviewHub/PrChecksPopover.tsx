@@ -21,6 +21,8 @@ import { pluralize } from "@/lib/pluralize";
 import { PrMergeControl } from "./PrMergeControl";
 import { PrMergeConfirmDialog } from "./PrMergeConfirmDialog";
 import { describeMergeOutcome, type PrMergeOutcome, type PrMergeRequest } from "./prMergeModel";
+import { pullRequestWords, type PullRequestWords } from "./prWords";
+import type { ForgePullRequestTerm } from "@shared/types/forge";
 
 /**
  * Set on the trigger — which is always in the hub's own DOM — while the
@@ -55,6 +57,8 @@ interface PrChecksPopoverProps {
   worktreePath: string;
   prNumber: number;
   prUrl: string;
+  /** What the forge calls a pull request; omitted reads as "pull-request". */
+  prTerm?: ForgePullRequestTerm;
   /**
    * The trigger's state in full sentences, as its accessible description. Its
    * name is the badge's own text, so the name always holds the words on screen.
@@ -85,11 +89,14 @@ export function PrChecksPopover({
   worktreePath,
   prNumber,
   prUrl,
+  prTerm,
   triggerDescription,
   onOpenExternal,
   onMergeOutcome,
   children,
 }: PrChecksPopoverProps) {
+  const words = pullRequestWords(prTerm);
+  const prRef = words.ref(prNumber);
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<ChecksState>({ kind: "idle" });
   const [sendHint, setSendHint] = useState<string | null>(null);
@@ -211,12 +218,18 @@ export function PrChecksPopover({
 
   const handleSend = useCallback(() => {
     if (state.kind !== "loaded") return;
-    const text = composePrChecksAgentText({ prNumber, prUrl, worktreePath, rows: state.rows });
+    const text = composePrChecksAgentText({
+      prNumber,
+      prUrl,
+      prTerm,
+      worktreePath,
+      rows: state.rows,
+    });
     if (!text) return;
     if (
       openSendToAgentPaletteWithText({
         text,
-        sourceLabel: `PR #${prNumber}`,
+        sourceLabel: `${words.short} ${prRef}`,
         title: "Failing checks",
       })
     ) {
@@ -225,7 +238,7 @@ export function PrChecksPopover({
       return;
     }
     setSendHint("Open an agent terminal, then try sending again.");
-  }, [state, prNumber, prUrl, worktreePath]);
+  }, [state, prNumber, prUrl, prTerm, worktreePath, words, prRef]);
 
   // The floor is the half that stops a glitch: the Doherty gate only suppresses
   // an early skeleton, and without a minimum dwell a read landing at 410ms puts
@@ -246,7 +259,7 @@ export function PrChecksPopover({
           mounted empty for the whole life of the chip. */}
       <p role="status" aria-live="polite" className="sr-only">
         {open
-          ? [describeState(state, prNumber, showSkeleton, sendHint), mergeStatusText]
+          ? [describeState(state, words, prRef, showSkeleton, sendHint), mergeStatusText]
               .filter(Boolean)
               .join(". ")
           : outcomeAnnouncement}
@@ -272,7 +285,7 @@ export function PrChecksPopover({
         <PopoverContent
           ref={contentRef}
           align="start"
-          aria-label={`CI checks for pull request #${prNumber}`}
+          aria-label={`CI checks for ${words.noun} ${prRef}`}
           data-testid="pr-checks-popover"
           // A fixed width, not a content-sized one: the footer actions must not
           // move between a refresh that fails and one that lists a long matrix.
@@ -313,7 +326,7 @@ export function PrChecksPopover({
                   <InlineStatusBanner
                     severity="error"
                     title="Couldn't load checks"
-                    description="The check results couldn't be read. Retry, or open the pull request to see them there."
+                    description={`The check results couldn't be read. Retry, or open the ${words.noun} to see them there.`}
                     {...QUIET_BANNER}
                   />
                 </ChecksBanner>
@@ -322,7 +335,7 @@ export function PrChecksPopover({
                 <ChecksBanner testId="pr-checks-missing">
                   <InlineStatusBanner
                     severity="warning"
-                    title={`Pull request #${prNumber} wasn't found`}
+                    title={`${words.title} ${prRef} wasn't found`}
                     description="It may have been deleted, or moved to another repository. Retry, or open it to check."
                     {...QUIET_BANNER}
                   />
@@ -363,6 +376,7 @@ export function PrChecksPopover({
           <PrMergeControl
             worktreePath={worktreePath}
             prNumber={prNumber}
+            prTerm={prTerm}
             reloadKey={mergeReloadKey}
             onRequest={handleMergeRequest}
             onOpenExternal={onOpenExternal}
@@ -410,7 +424,7 @@ export function PrChecksPopover({
                 className={FOOTER_BUTTON_MOTION}
               >
                 <ExternalLink aria-hidden="true" />
-                Open pull request
+                Open {words.noun}
               </Button>
             )}
           </div>
@@ -594,7 +608,8 @@ function describeOutcome(row: PrCheckRow): string {
 
 function describeState(
   state: ChecksState,
-  prNumber: number,
+  words: PullRequestWords,
+  prRef: string,
   showSkeleton: boolean,
   sendHint: string | null
 ): string {
@@ -604,9 +619,9 @@ function describeState(
     case "error":
       return "Couldn't load checks.";
     case "no-pr":
-      return `Pull request #${prNumber} wasn't found.`;
+      return `${words.title} ${prRef} wasn't found.`;
     case "empty":
-      return `No CI checks have reported on pull request #${prNumber} yet.`;
+      return `No CI checks have reported on ${words.noun} ${prRef} yet.`;
     case "loaded": {
       const failing = state.rows.filter((row) => row.isFailure).length;
       const total = state.rows.length;
