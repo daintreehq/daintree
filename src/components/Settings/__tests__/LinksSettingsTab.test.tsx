@@ -15,6 +15,7 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
 import { LinksSettingsTab } from "../LinksSettingsTab";
 
@@ -255,14 +256,24 @@ describe("LinksSettingsTab editing a link", () => {
     }
   });
 
-  it("keeps the editor open on an Escape that dismisses an IME's candidates", () => {
-    renderTab();
-    fireEvent.click(button("Edit Wiki"));
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), {
-      key: "Escape",
-      isComposing: true,
-    });
-    expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
+  it.each([
+    { signal: "isComposing", init: { isComposing: true } },
+    { signal: "keyCode 229", init: { keyCode: 229 } },
+  ])("leaves the editor and the dialog open on an IME's Escape ($signal)", ({ init }) => {
+    const outside = vi.fn();
+    document.addEventListener("keydown", outside);
+    try {
+      renderTab();
+      fireEvent.click(button("Edit Wiki"));
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), {
+        key: "Escape",
+        ...init,
+      });
+      expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
+      expect(outside).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", outside);
+    }
   });
 
   it("drops the draft when another view removes the link, and an Undo there brings back a plain row", () => {
@@ -280,6 +291,15 @@ describe("LinksSettingsTab editing a link", () => {
     act(() => useGlobalLinksStore.getState().restoreLink(WIKI, { order: ["docs", "wiki", "ci"] }));
     expect(screen.queryByRole("textbox", { name: "Link name" })).toBeNull();
     expect(button("Edit Wiki")).toBeTruthy();
+  });
+
+  it("leaves focus where the person moved it when another view removes the edited link", () => {
+    renderTab();
+    fireEvent.click(button("Edit Wiki"));
+    const addUrl = screen.getByRole("textbox", { name: "New link URL" });
+    addUrl.focus();
+    act(() => useGlobalLinksStore.getState().removeLink("wiki"));
+    expect(document.activeElement).toBe(addUrl);
   });
 });
 
@@ -307,7 +327,7 @@ describe("LinksSettingsTab removing a link", () => {
     renderTab();
     fireEvent.click(button("Remove Wiki"));
     const firstUndo = lastUndo();
-    firstUndo();
+    act(() => useGlobalLinksStore.getState().restoreLink(WIKI, { order: ["docs", "wiki", "ci"] }));
     fireEvent.click(button("Edit Wiki"));
     fireEvent.change(screen.getByRole("textbox", { name: "Link name" }), {
       target: { value: "Notes" },
@@ -329,6 +349,8 @@ describe("LinksSettingsTab removing a link", () => {
     };
     remove("Remove Wiki");
     expect(document.activeElement).toBe(button("Remove CI"));
+    // Keeping focus in the list is not asking for that button's tooltip.
+    expect(isTooltipSuppressedForElement(button("Remove CI"))).toBe(true);
 
     remove("Remove CI");
     expect(document.activeElement).toBe(button("Remove Team docs"));

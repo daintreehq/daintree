@@ -208,15 +208,12 @@ export function LinksSettingsTab() {
       if (isEnterToSubmit(event)) {
         event.preventDefault();
         submit();
-      } else if (
-        event.key === "Escape" &&
-        cancel &&
-        // An IME's Escape dismisses its candidates, not the editor.
-        !event.nativeEvent.isComposing &&
-        event.nativeEvent.keyCode !== 229
-      ) {
-        event.preventDefault();
+      } else if (event.key === "Escape" && cancel) {
+        // Kept from the dialog either way: Settings closing would lose the draft.
         event.stopPropagation();
+        // An IME's Escape dismisses its candidates, not the editor.
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+        event.preventDefault();
         cancel();
       }
     };
