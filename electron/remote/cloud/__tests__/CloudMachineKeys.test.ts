@@ -473,6 +473,26 @@ describe("CloudMachineKeys", () => {
     expect(env.store.machineKeys()).toEqual([]);
   });
 
+  it("keeps a rejected key's own expiry, and forgets it only once that passes", async () => {
+    const env = setup();
+    const expiresAt = env.clock.now + 45 * DAY;
+    env.machineKeys.issue.mockRejectedValueOnce(
+      new UnusableMachineKeyError("sak_long", expiresAt, "Boat issued a key other than asked.")
+    );
+    env.machineKeys.revoke.mockRejectedValue(new BoatApiError("server", "x", 500, null, null));
+    await env.keys.arm(HOST, env.session);
+    await env.keys.revokePending();
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ keyId: "sak_long", expiresAt }),
+    ]);
+    env.clock.now += 40 * DAY;
+    await env.keys.revokePending();
+    expect(env.store.machineKeys()).toHaveLength(1);
+    env.clock.now += 6 * DAY;
+    await env.keys.revokePending();
+    expect(env.store.machineKeys()).toEqual([]);
+  });
+
   it("keeps trying to revoke a rejected key Boat gave no expiry, past the usual lifetime", async () => {
     const env = setup();
     env.machineKeys.issue.mockRejectedValueOnce(
@@ -502,5 +522,8 @@ describe("CloudMachineKeys", () => {
     expect(env.machineKeys.issue).not.toHaveBeenCalled();
     expect(env.store.machineKeys()).toEqual([]);
     expect(env.keys.problemFor(BINDING)).toMatch(/isn't on this device any more/);
+    // Replaced and linked again at once: nothing holds it back.
+    await env.keys.arm(HOST, env.newSession());
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
   });
 });

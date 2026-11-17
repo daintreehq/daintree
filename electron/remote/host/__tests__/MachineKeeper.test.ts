@@ -299,8 +299,11 @@ describe("MachineKeeper", () => {
     });
     await h.pass();
     expect(h.driver.stop).toHaveBeenCalledTimes(1);
-    h.advance(30_000);
+    const reads = h.driver.inspect.mock.calls.length;
+    h.advance(40_000);
     await h.pass();
+    // Looked again past any backoff, and didn't send it again.
+    expect(h.driver.inspect.mock.calls.length).toBeGreaterThan(reads);
     expect(h.driver.stop).toHaveBeenCalledTimes(1);
     h.machine.stop = { id: "stop_own", status: "pending", error: null };
 
@@ -492,6 +495,45 @@ describe("MachineKeeper", () => {
     await Promise.all([older, newer]);
     expect((await asked).grantId).toBe("mk_new");
     expect(h.keeper.status().grantId).toBe("mk_new");
+  });
+
+  it("turns away a key whose turn came too late for its sender to still be waiting", async () => {
+    const h = setup();
+    let release: () => void = () => {};
+    h.driver.inspect.mockImplementationOnce(
+      () =>
+        new Promise<ProviderResource>((resolve) => {
+          release = () => resolve(resource(h.machine, h.now()));
+        })
+    );
+    const first = h.keeper.arm(h.request({ grantId: "mk_first" }));
+    const late = h.keeper.arm(h.request({ grantId: "mk_late" }));
+    await vi.waitFor(() => expect(h.driver.inspect).toHaveBeenCalledTimes(1));
+    h.advance(25_000);
+    release();
+    await first;
+    await expect(late).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(h.keeper.status().grantId).toBe("mk_first");
+  });
+
+  it("takes a key on trust when its first read hangs, even past an ignored abort", async () => {
+    const h = setup();
+    const keeper = new MachineKeeper({
+      idle: h.tracker,
+      driverFor: () => ({ ...h.driver, inspect: () => new Promise<ProviderResource>(() => {}) }),
+      now: h.now,
+      tickMs: 10 * HOUR,
+      verifyTimeoutMs: 5,
+    });
+    try {
+      await expect(keeper.arm(h.request())).resolves.toMatchObject({ grantId: "mk_1" });
+      // And the next key isn't held up behind it.
+      await expect(keeper.arm(h.request({ grantId: "mk_2" }))).resolves.toMatchObject({
+        grantId: "mk_2",
+      });
+    } finally {
+      keeper.dispose();
+    }
   });
 
   it("makes no request before it holds a key", async () => {

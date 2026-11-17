@@ -2104,7 +2104,12 @@ export class CloudHostLifecycle {
     const observation = binding?.observation;
     if (!binding || !observation) return false;
     const machine = machineOf(binding);
-    if (machine === "stopping" || machine === "stopped" || stopUnderWay(observation.stop)) {
+    if (
+      machine === "stopping" ||
+      machine === "stopped" ||
+      machine === "deleted" ||
+      stopUnderWay(observation.stop)
+    ) {
       return true;
     }
     if (machine !== "running") return false;

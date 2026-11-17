@@ -162,7 +162,7 @@ export class CloudMachineKeys {
       .machineKeys()
       .filter((key) => key.accountId === accountId && expiryOf(key) > now);
     if (live.length === 0) return;
-    const message = `Daintree couldn't yet revoke the ${live.length === 1 ? "key it gave a machine" : `keys it gave ${live.length} machines`} on this account. Try again once the provider can be reached; each such key expires by itself within ${MACHINE_KEY_TTL_DAYS} days.`;
+    const message = `Daintree couldn't yet revoke the ${live.length === 1 ? "key it gave a machine" : `keys it gave ${live.length} machines`} on this account. Try again once the provider can be reached.`;
     throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
   }
 
@@ -335,6 +335,8 @@ export class CloudMachineKeys {
         account.keyHint,
         true
       );
+      // Nothing was asked of the provider: a replaced key is tried as soon as the link comes back.
+      this.issueNotBefore.delete(bindingId);
       return;
     }
     // Nothing is asked for a link that went, or a run that ended, while the key was read.

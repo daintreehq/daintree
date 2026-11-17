@@ -47,6 +47,10 @@ const RETRY_MAX_MS = 10 * 60_000;
 /** A stop this machine sent shows as under way at once; still running and not stopping after this, it was overtaken. */
 const STOP_SETTLE_MS = 60_000;
 const VERIFY_TIMEOUT_MS = 10_000;
+/** A key whose turn comes later than this after it arrived is turned away: its sender has stopped waiting. */
+const ARM_WAIT_MS = 20_000;
+
+class VerifyTimeout extends Error {}
 
 /** What changes when the machine is stopped, so a stop and start between two looks still shows. */
 function stopMarker(resource: ProviderResource): string {
@@ -122,7 +126,13 @@ export class MachineKeeper {
    * are taken one at a time, in the order they came.
    */
   arm(request: MachineKeeperArmRequest): Promise<MachineKeeperStatus> {
-    const taken = this.arms.then(() => this.armNow(request));
+    const receivedAt = this.now();
+    const taken = this.arms.then(() => {
+      if (this.now() - receivedAt > ARM_WAIT_MS) {
+        throw new AppError({ code: "CANCELLED", message: "Waited too long behind other keys" });
+      }
+      return this.armNow(request);
+    });
     this.arms = taken.catch(() => {});
     return taken;
   }
@@ -140,11 +150,19 @@ export class MachineKeeper {
     }
     let first: ProviderResource | null = null;
     const check = new AbortController();
-    const timer = setTimeout(() => check.abort(), this.deps.verifyTimeoutMs ?? VERIFY_TIMEOUT_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Its own clock, so a driver that ignores the abort still can't hold every later key up.
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        check.abort();
+        reject(new VerifyTimeout("The first read took too long"));
+      }, this.deps.verifyTimeoutMs ?? VERIFY_TIMEOUT_MS);
+    });
     try {
-      first = await driver.inspect(check.signal);
+      first = await Promise.race([driver.inspect(check.signal), timeout]);
     } catch (error) {
-      const failure = driver.failure(error);
+      const failure: MachineKeeperFailure =
+        error instanceof VerifyTimeout ? { kind: "retry" } : driver.failure(error);
       if (failure.kind === "lost") {
         throw new AppError({
           code: "VALIDATION",

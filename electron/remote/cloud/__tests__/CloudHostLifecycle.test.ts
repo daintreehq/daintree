@@ -1970,6 +1970,22 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     expect(lifecycle.statuses()[0]!.lastError).toBeNull();
   });
 
+  it("reports no failed renewal when the machine's own keeper moved the deadline as it failed", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({
+        machine: "running",
+        autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+      });
+      throw new BoatApiError("conflict", "busy", 409, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
   it("keeps a failed renewal shown while the machine's state can't be read", async () => {
     const { lifecycle, provider, state } = await keeper(
       { connected: true, busy: true, shown: false },
