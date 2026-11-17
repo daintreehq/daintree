@@ -65,6 +65,7 @@ function provider(id: string, name: string, provisioning: CloudProvisioning): Cl
       lifetime: { kind: "renewable" },
       sshTrust: "pinned-from-api",
       transport: "direct",
+      tunnel: null,
       provisioning,
       deletion: true,
     },

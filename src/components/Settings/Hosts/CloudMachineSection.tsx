@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -6,6 +7,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { systemClient } from "@/clients/systemClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { useCloudMachineActions } from "@/components/Hosts/cloud/useCloudMachineActions";
 import {
@@ -144,6 +146,13 @@ export function CloudMachineSection({
   const actionError = machines.errorFor(hostId) ?? error;
   const shownError =
     actionError ?? (status.operation === null ? (status.lastError?.message ?? null) : null);
+  const tunnel = provider?.capabilities.tunnel ?? null;
+  // Offered only beside the error that names the command, never beside another one.
+  const tunnelMissing =
+    tunnel !== null &&
+    actionError === null &&
+    status.operation === null &&
+    status.lastError?.code === "ssh-tunnel-command-missing";
   const presetValue =
     status.lifetimeSeconds === null
       ? "never"
@@ -254,6 +263,18 @@ export function CloudMachineSection({
             </>
           }
           error={shownError ? <span role="alert">{shownError}</span> : undefined}
+          errorAction={
+            tunnelMissing ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void systemClient.openExternal(tunnel.installUrl)}
+              >
+                <ExternalLink aria-hidden="true" />
+                Get {tunnel.command}
+              </Button>
+            ) : undefined
+          }
           control={
             <div className="flex items-center gap-1.5">
               {status.resourceId === null && status.operation === null && status.lastError && (
@@ -335,6 +356,16 @@ export function CloudMachineSection({
           label="Account"
           description={`${providerName} · ${status.accountName}${status.ownership === "imported" ? " · Added from the account" : ""}`}
         />
+        {provider?.capabilities.sshTrust === "provider-tunnel" && (
+          <SettingsRow
+            label="Identity"
+            description={
+              <span data-testid="cloud-machine-identity">
+                {`Vouched for by ${providerName}'s tunnel instead of a pinned host key. The machine's key can change when ${providerName} rebuilds or moves it, so it isn't checked.`}
+              </span>
+            }
+          />
+        )}
         {status.createdFor && (
           <SettingsRow
             label="Created for"
@@ -411,6 +442,12 @@ export function CloudMachineSection({
                 <>
                   {" "}
                   <FactSeparator /> SSH {status.lastEndpoint}
+                </>
+              )}
+              {tunnel && (
+                <>
+                  {" "}
+                  <FactSeparator /> Tunnel {[tunnel.command, ...tunnel.args].join(" ")}
                 </>
               )}
               {status.hostKeyFingerprint && (

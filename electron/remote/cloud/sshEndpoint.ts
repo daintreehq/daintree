@@ -14,6 +14,23 @@ function validHost(host: string): boolean {
   return net.isIP(host) !== 0 || HOSTNAME.test(host);
 }
 
+/**
+ * An endpoint safe to write into an ssh config. No `%`: an IPv6 zone id
+ * (`fe80::1%en0`) is an address to Node but a token to ssh.
+ */
+export function isValidSshEndpoint(endpoint: SshEndpoint | null | undefined): boolean {
+  return (
+    typeof endpoint === "object" &&
+    endpoint !== null &&
+    typeof endpoint.host === "string" &&
+    !endpoint.host.includes("%") &&
+    validHost(endpoint.host) &&
+    Number.isInteger(endpoint.port) &&
+    endpoint.port >= 1 &&
+    endpoint.port <= 65535
+  );
+}
+
 function validPort(text: string): number | null {
   if (!/^\d{1,5}$/.test(text)) return null;
   const port = Number(text);

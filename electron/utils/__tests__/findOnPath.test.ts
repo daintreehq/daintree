@@ -187,9 +187,20 @@ describe.skipIf(process.platform === "win32")("findOnPath", () => {
       vi.spyOn(fs.promises, "access").mockImplementation(() => new Promise<void>(() => {}));
 
       const started = Date.now();
-      expect(await fresh.findOnPath("tool", { env: env(a), timeoutMs: 30 })).toBeNull();
+      const onTimeout = vi.fn();
+      expect(await fresh.findOnPath("tool", { env: env(a), timeoutMs: 30, onTimeout })).toBeNull();
       expect(await fresh.findAllOnPath("tool", { env: env(a), timeoutMs: 30 })).toEqual([]);
       expect(Date.now() - started).toBeLessThan(2_000);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it("says nothing about a timeout when the lookup finished, found or not", async () => {
+      const a = dir("a");
+      file(a, "tool", 0o755);
+      const onTimeout = vi.fn();
+      expect(await findOnPath("tool", { env: env(a), onTimeout })).toBe(path.join(a, "tool"));
+      expect(await findOnPath("missing", { env: env(a), onTimeout })).toBeNull();
+      expect(onTimeout).not.toHaveBeenCalled();
     });
 
     it("drops a lookup that timed out in the queue, and runs fresh work once the slots free", async () => {

@@ -4,6 +4,7 @@ import {
   type CloudProviderNamespace,
 } from "../../../shared/types/cloudHosts.js";
 import type { CloudProvider } from "./provider.js";
+import { sshDeclarationProblem } from "./sshTunnel.js";
 
 /** Who registers a provider, and so which ids it may take. */
 export type CloudProviderOwner = CloudProviderNamespace;
@@ -44,10 +45,13 @@ export class CloudProviderRegistry {
           : `Cloud provider ${id} is outside plugin ${owner.pluginId}'s namespace`
       );
     }
-    const described = provider.info(process.platform).id;
-    if (described !== id) {
-      throw new Error(`Cloud provider ${id} describes itself as ${JSON.stringify(described)}`);
+    const info = provider.info(process.platform);
+    if (info.id !== id) {
+      throw new Error(`Cloud provider ${id} describes itself as ${JSON.stringify(info.id)}`);
     }
+    // Its tunnel runs on this device, and its trust decides whether a key is pinned.
+    const sshProblem = sshDeclarationProblem(info.capabilities);
+    if (sshProblem) throw new Error(`Cloud provider ${id}: ${sshProblem}`);
     if (this.entries.has(id)) throw new Error(`Cloud provider ${id} is already registered`);
     const registration: Registration = { provider, apiUrl: options.apiUrl, owner };
     this.entries.set(id, registration);

@@ -55,9 +55,9 @@ export interface ProviderSshAccess {
   user: string;
   endpoint: SshEndpoint;
   /**
-   * The server's public key, `type base64`. Null from a provider whose API
-   * can't vouch for one (`sshTrust: "confirm-on-first-connect"`): the person
-   * confirms the key the machine presents instead.
+   * The server's public key, `type base64`. Null when the provider doesn't
+   * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
+   * person confirms the key the machine presents (`"confirm-on-first-connect"`).
    */
   hostKey: string | null;
 }

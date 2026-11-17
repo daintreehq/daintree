@@ -5,6 +5,7 @@ import type {
   CloudHostStatus,
   CloudHostsSnapshot,
   CloudProviderInfo,
+  CloudSshTrust,
 } from "@shared/types/cloudHosts";
 
 const { cloud, trustHostKey, connect } = vi.hoisted(() => ({
@@ -32,6 +33,8 @@ vi.mock("@/clients/cloudHostsClient", () => ({
 vi.mock("@/clients/remoteHostsClient", () => ({
   remoteHostsClient: { connect },
 }));
+const { openExternal } = vi.hoisted(() => ({ openExternal: vi.fn(async () => {}) }));
+vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 
 import { CloudMachineSection } from "../CloudMachineSection";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
@@ -71,8 +74,31 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   };
 }
 
-function show(current: CloudHostStatus) {
-  cloud.snapshot = { providers: [], accounts: [], hosts: [current] };
+/** A provider reached through its own CLI, or directly; its machines' identity as `sshTrust` says. */
+function tunnelProvider(
+  sshTrust: CloudSshTrust,
+  tunnelled: boolean,
+  id = "boat",
+  name = "Acme"
+): CloudProviderInfo {
+  const command = name.toLowerCase();
+  return {
+    ...BOAT_PROVIDER,
+    id,
+    name,
+    capabilities: {
+      ...BOAT_PROVIDER.capabilities,
+      sshTrust,
+      transport: tunnelled ? "provider-command" : "direct",
+      tunnel: tunnelled
+        ? { command, args: ["tunnel", "%h"], installUrl: `https://${command}.test/cli` }
+        : null,
+    },
+  };
+}
+
+function show(current: CloudHostStatus, providers: CloudProviderInfo[] = []) {
+  cloud.snapshot = { providers, accounts: [], hosts: [current] };
   return render(
     <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
   );
@@ -348,5 +374,69 @@ describe("CloudMachineSection host key review", () => {
     });
     expect(review()).toContain("SHA256:second");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("CloudMachineSection SSH identity", () => {
+  const running = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({ resourceId: "bx_23456789", machine: "running", operation: null, ...overrides });
+  const identity = () => screen.queryByTestId("cloud-machine-identity")?.textContent ?? null;
+
+  it("says when the provider's tunnel, not a pinned key, vouches for the machine", () => {
+    show(running({ lastEndpoint: "root@ab12cd34ef.acme.test" }), [
+      tunnelProvider("provider-tunnel", true),
+    ]);
+    expect(identity()).toMatch(/^Vouched for by Acme's tunnel instead of a pinned host key/);
+    expect(screen.getByText(/Tunnel acme tunnel %h/)).toBeTruthy();
+  });
+
+  it("adds nothing for a pinned key, through a tunnel or not", () => {
+    show(running({ hostKeyFingerprint: "SHA256:abc" }), [tunnelProvider("pinned-from-api", false)]);
+    expect(identity()).toBeNull();
+    expect(screen.queryByText(/Tunnel /)).toBeNull();
+    cleanup();
+    show(running({ hostKeyFingerprint: "SHA256:abc" }), [tunnelProvider("pinned-from-api", true)]);
+    expect(identity()).toBeNull();
+    expect(screen.getByText(/Tunnel acme tunnel %h/)).toBeTruthy();
+    expect(screen.getByText(/Host key SHA256:abc/)).toBeTruthy();
+  });
+
+  it("offers the missing command's page beside the error that names it", () => {
+    const message = "Acme machines are reached through its acme command, which isn't installed.";
+    show(running({ lastError: { code: "ssh-tunnel-command-missing", message, at: 1 } }), [
+      tunnelProvider("provider-tunnel", true, "acme.clouds.other", "Other"),
+      tunnelProvider("provider-tunnel", true),
+    ]);
+    expect(screen.getByRole("alert").textContent).toBe(message);
+    expect(screen.queryByRole("button", { name: "Get other" })).toBeNull();
+    const get = screen.getByRole("button", { name: "Get acme" });
+    // On the error's own line, not among the machine's controls.
+    expect(screen.getByRole("alert").closest("[id]")?.contains(get)).toBe(true);
+    fireEvent.click(get);
+    expect(openExternal).toHaveBeenCalledWith("https://acme.test/cli");
+  });
+
+  it("offers no install page while the tunnel works or another error is shown", () => {
+    show(running(), [tunnelProvider("provider-tunnel", true)]);
+    expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
+    cleanup();
+    // The missing-command error is still on file, but an operation's stage is what shows.
+    show(
+      running({
+        lastError: { code: "ssh-tunnel-command-missing", message: "missing", at: 1 },
+        operation: { id: "op", kind: "stopping", startedAt: 0, stage: "Stopping" },
+      }),
+      [tunnelProvider("provider-tunnel", true)]
+    );
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain("Stopping");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
+    cleanup();
+    show(
+      running({ lastError: { code: "ssh-authorization", message: "SSH access failed", at: 1 } }),
+      [tunnelProvider("provider-tunnel", true)]
+    );
+    expect(screen.getByRole("alert").textContent).toBe("SSH access failed");
+    expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
   });
 });

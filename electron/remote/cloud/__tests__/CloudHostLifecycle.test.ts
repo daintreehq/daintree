@@ -7,6 +7,7 @@ import type {
   CloudHostCreatedFor,
   CloudHostCreateRequest,
   CloudHostImportRequest,
+  CloudProviderCapabilities,
   CloudProviderId,
   CloudProvisioning,
   CloudSshTransport,
@@ -23,6 +24,19 @@ import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type { CloudProvider, ProviderCatalog, ProviderResource } from "../provider.js";
 import type { CommandRunner } from "../../client/commandRunner.js";
+
+const pathLookup = vi.hoisted(() => ({ timesOut: false }));
+vi.mock("../../../utils/findOnPath.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../utils/findOnPath.js")>();
+  return {
+    ...real,
+    findOnPath: (command: string, options?: { onTimeout?: () => void }) => {
+      if (!pathLookup.timesOut) return real.findOnPath(command, options);
+      options?.onTimeout?.();
+      return Promise.resolve(null);
+    },
+  };
+});
 
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 
@@ -150,6 +164,7 @@ async function setup(
     adapt?: (provider: CloudProvider) => void;
     sshTrust?: CloudSshTrust;
     transport?: CloudSshTransport;
+    findCommand?: (command: string) => Promise<string | null>;
   } = {}
 ) {
   const state = { machine: resource(initial) };
@@ -228,6 +243,7 @@ async function setup(
       sleep: async () => {},
       activity: options.activity,
       now: options.now,
+      findCommand: options.findCommand,
     });
     return { store, accounts, lifecycle };
   };
@@ -375,6 +391,16 @@ describe("CloudHostLifecycle access", () => {
     expect((await fs.stat(route.configPath)).mode & 0o077).toBe(0);
   });
 
+  it("reuses a direct machine's route after a restart without asking for access again", async () => {
+    const { lifecycle, provider, bindingId, restart } = await imported({ machine: "running" });
+    const route = await lifecycle.ensureAccess(bindingId);
+    const written = await fs.readFile(route.configPath, "utf8");
+    const next = restart(lifecycle).lifecycle;
+    await next.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(route.configPath, "utf8")).toBe(written);
+  });
+
   it("reuses fresh access and resolves it again after a start", async () => {
     const { lifecycle, provider, bindingId, state } = await imported({ machine: "running" });
     await lifecycle.ensureAccess(bindingId);
@@ -384,6 +410,231 @@ describe("CloudHostLifecycle access", () => {
     await lifecycle.startMachine("build");
     await lifecycle.ensureAccess(bindingId);
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("CloudHostLifecycle access through a provider's tunnel", () => {
+  const INSTALL_URL = "https://example.com/acme-cli";
+  const TUNNEL = { command: "acme", args: ["tunnel", "%h"], installUrl: INSTALL_URL };
+  const TUNNEL_ACCESS = {
+    user: "root",
+    endpoint: { host: "ab12cd34ef.acme.example", port: 22 },
+    hostKey: null,
+  };
+
+  type Declared = Pick<CloudProviderCapabilities, "sshTrust" | "transport" | "tunnel">;
+
+  /**
+   * A provider whose machines are reached through its `acme` CLI, as `declared`
+   * says at each call. The finder knows only `acme`, at `installed.path`.
+   */
+  async function tunnelled(sshTrust: CloudSshTrust, installed: { path?: string | null }) {
+    const declared: Declared = { sshTrust, transport: "provider-command", tunnel: TUNNEL };
+    const findCommand = vi.fn(async (command: string) =>
+      command === "acme" ? (installed.path ?? null) : "/usr/bin/unexpected"
+    );
+    const env = await setup({ machine: "running" }, "path" in installed ? { findCommand } : {});
+    const base = env.provider.info.bind(env.provider);
+    env.provider.info = (platform) => {
+      const info = base(platform);
+      return { ...info, name: "Acme", capabilities: { ...info.capabilities, ...declared } };
+    };
+    vi.mocked(env.provider.authorizeSsh).mockImplementation(async () =>
+      declared.sshTrust === "provider-tunnel"
+        ? TUNNEL_ACCESS
+        : { ...TUNNEL_ACCESS, hostKey: HOST_KEY }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    return { ...env, declared, findCommand, bindingId: env.store.bindings()[0]!.id };
+  }
+
+  it("names a missing command and where to get it, without asking for access", async () => {
+    const { lifecycle, provider, bindingId, findCommand } = await tunnelled("provider-tunnel", {
+      path: null,
+    });
+    const error = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    const { message, detail } = error as UnusableConnectionError;
+    for (const said of [message, detail]) {
+      expect(said).toContain("acme command");
+      expect(said).toContain(INSTALL_URL);
+    }
+    expect(findCommand).toHaveBeenCalledWith("acme");
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "ssh-tunnel-command-missing",
+      message: detail,
+    });
+  });
+
+  it("dials through the tunnel once it is installed, and says nothing was pinned", async () => {
+    const installed = { path: null as string | null };
+    const { lifecycle, bindingId } = await tunnelled("provider-tunnel", installed);
+    await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("ssh-tunnel-command-missing");
+    installed.path = "/Users/Jo Smith/.local/bin/acme";
+    const route = await lifecycle.ensureAccess(bindingId);
+    const config = await fs.readFile(route.configPath, "utf8");
+    expect(config).toContain('  ProxyCommand "/Users/Jo Smith/.local/bin/acme" "tunnel" "%h"\n');
+    expect(config).toContain("  StrictHostKeyChecking no\n");
+    expect(lifecycle.statuses()[0]).toMatchObject({
+      lastError: null,
+      lastEndpoint: "root@ab12cd34ef.acme.example",
+      hostKeyFingerprint: null,
+    });
+  });
+
+  it("looks for the command again before reusing access, and retires the old route when it moved", async () => {
+    const installed = { path: "/opt/acme/bin/acme" as string | null };
+    const { lifecycle, provider, bindingId, files } = await tunnelled("provider-tunnel", installed);
+    await lifecycle.ensureAccess(bindingId);
+    const generation = lifecycle.accessGeneration(bindingId);
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(lifecycle.accessGeneration(bindingId)).toBe(generation);
+
+    installed.path = null;
+    await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+
+    installed.path = "/usr/local/bin/acme";
+    // What the master being closed was opened with: the old command's route.
+    const closedWith: string[] = [];
+    const close = vi.spyOn(files, "closeMaster").mockImplementation(async (_dir, id) => {
+      closedWith.push(await fs.readFile(files.route(id).configPath, "utf8"));
+    });
+    const route = await lifecycle.ensureAccess(bindingId);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(closedWith[0]).toContain('ProxyCommand "/opt/acme/bin/acme"');
+    expect(await fs.readFile(route.configPath, "utf8")).toContain(
+      'ProxyCommand "/usr/local/bin/acme"'
+    );
+    expect(lifecycle.accessGeneration(bindingId)).not.toBe(generation);
+  });
+
+  it("asks again, and pins, when the provider stops vouching for its machines through the tunnel", async () => {
+    const { lifecycle, provider, bindingId, declared } = await tunnelled("provider-tunnel", {
+      path: "/opt/acme/bin/acme",
+    });
+    await lifecycle.ensureAccess(bindingId);
+    declared.sshTrust = "pinned-from-api";
+    const route = await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(route.configPath, "utf8")).toContain("StrictHostKeyChecking yes");
+    expect(lifecycle.statuses()[0]?.hostKeyFingerprint).toMatch(/^SHA256:/);
+  });
+
+  it("asks again, and unpins, when the provider starts vouching for its machines through the tunnel", async () => {
+    const { lifecycle, provider, bindingId, declared } = await tunnelled("pinned-from-api", {
+      path: "/opt/acme/bin/acme",
+    });
+    await lifecycle.ensureAccess(bindingId);
+    declared.sshTrust = "provider-tunnel";
+    const route = await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(route.configPath, "utf8")).toContain("StrictHostKeyChecking no");
+    expect(lifecycle.statuses()[0]?.hostKeyFingerprint).toBeNull();
+  });
+
+  it("clears what stood in the way of SSH once a dial gets through, and nothing else", async () => {
+    const { lifecycle, store, bindingId } = await tunnelled("provider-tunnel", {
+      path: "/opt/acme/bin/acme",
+    });
+    await lifecycle.ensureAccess(bindingId);
+    const setError = (code: "ssh-authorization" | "billing") =>
+      store.updateBinding(bindingId, (current) => ({
+        ...current,
+        lastError: { code, message: code, at: 1 },
+      }));
+    setError("billing");
+    await lifecycle.ensureAccess(bindingId);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing");
+    setError("ssh-authorization");
+    await lifecycle.ensureAccess(bindingId);
+    expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+  });
+
+  it("retries a PATH lookup that ran out of time rather than calling the command missing", async () => {
+    const { lifecycle, provider, bindingId } = await tunnelled("provider-tunnel", {});
+    pathLookup.timesOut = true;
+    const error = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    pathLookup.timesOut = false;
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+  });
+
+  it("refuses a declaration that changed after registering, leaving what was stored", async () => {
+    const { lifecycle, provider, store, bindingId, declared } = await tunnelled("provider-tunnel", {
+      path: "/opt/acme/bin/acme",
+    });
+    store.updateBinding(bindingId, (current) => ({
+      ...current,
+      lastError: { code: "billing", message: "billing", at: 1 },
+    }));
+    declared.tunnel = null;
+    const error = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect((error as UnusableConnectionError).detail).toMatch(/needs a tunnel/);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("billing");
+    declared.tunnel = TUNNEL;
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses an earlier run's route only while it is what the provider declares now", async () => {
+    const { lifecycle, provider, bindingId, declared, restart } = await tunnelled(
+      "pinned-from-api",
+      { path: "/opt/acme/bin/acme" }
+    );
+    await lifecycle.ensureAccess(bindingId);
+    const unchanged = restart(lifecycle).lifecycle;
+    await unchanged.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+
+    Object.assign(declared, { transport: "direct", tunnel: null });
+    const next = restart(unchanged).lifecycle;
+    const route = await next.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(route.configPath, "utf8")).not.toContain("ProxyCommand");
+  });
+
+  it("takes a key exactly when the provider doesn't vouch through the tunnel", async () => {
+    const refused = async (sshTrust: CloudSshTrust, hostKey: string | null) => {
+      const { lifecycle, provider, bindingId } = await tunnelled(sshTrust, {
+        path: "/opt/acme/bin/acme",
+      });
+      vi.mocked(provider.authorizeSsh).mockResolvedValueOnce({ ...TUNNEL_ACCESS, hostKey });
+      await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(
+        UnusableConnectionError
+      );
+      return lifecycle.statuses()[0]?.lastError;
+    };
+    expect(await refused("provider-tunnel", HOST_KEY)).toMatchObject({
+      code: "ssh-authorization",
+      message: expect.stringMatching(/returned a host key to pin/),
+    });
+    expect(await refused("pinned-from-api", null)).toMatchObject({
+      code: "ssh-authorization",
+      message: expect.stringMatching(/didn't say which host key the machine has/),
+    });
+  });
+
+  it("still pins the key when the tunnel only carries the connection", async () => {
+    const { lifecycle, bindingId } = await tunnelled("pinned-from-api", {
+      path: "/opt/acme/bin/acme",
+    });
+    const route = await lifecycle.ensureAccess(bindingId);
+    const config = await fs.readFile(route.configPath, "utf8");
+    expect(config).toContain('ProxyCommand "/opt/acme/bin/acme" "tunnel" "%h"');
+    expect(config).toContain("StrictHostKeyChecking yes");
+    expect(lifecycle.statuses()[0]?.hostKeyFingerprint).toMatch(/^SHA256:/);
   });
 });
 

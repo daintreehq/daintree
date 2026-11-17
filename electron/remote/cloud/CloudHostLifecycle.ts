@@ -19,6 +19,7 @@ import {
   type CloudOperationKind,
   type CloudProviderId,
   type CloudProvisioningSelection,
+  type CloudSshTrust,
 } from "../../../shared/types/cloudHosts.js";
 import {
   cloudConnection,
@@ -37,14 +38,24 @@ import {
   type StoredCloudBinding,
   type StoredCloudObservation,
 } from "./CloudHostStore.js";
-import type { CloudSshFiles, CloudSshRoute } from "./CloudSshFiles.js";
+import { findOnPath } from "../../utils/findOnPath.js";
+import type {
+  CloudSshAccessRecord,
+  CloudSshFiles,
+  CloudSshResolvedTunnel,
+  CloudSshRoute,
+} from "./CloudSshFiles.js";
 import {
   formatSshEndpoint,
   hostKeyFingerprint,
   hostKeyTypeLabel,
+  isSafeSshUser,
+  isValidSshEndpoint,
   keyscanTypeOf,
+  normalizeHostKey,
   type SshEndpoint,
 } from "./sshEndpoint.js";
+import { sshDeclarationProblem } from "./sshTunnel.js";
 import type {
   CloudProvider,
   ProviderCredentials,
@@ -139,6 +150,77 @@ export interface CloudHostLifecycleDeps {
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
+  findCommand?: (command: string) => Promise<string | null>;
+}
+
+const PATH_LOOKUP_MS = 5_000;
+
+/**
+ * Where a tunnel's command is on PATH, or null when it isn't there. A lookup
+ * that ran out of time (a hung mount on PATH) proves nothing, so it fails as
+ * something to retry rather than as a command to install.
+ */
+async function findTunnelCommand(command: string): Promise<string | null> {
+  let timedOut = false;
+  const found = await findOnPath(command, {
+    timeoutMs: PATH_LOOKUP_MS,
+    onTimeout: () => {
+      timedOut = true;
+    },
+  });
+  if (found === null && timedOut) {
+    throw new TransportError(
+      `Looking for ${command} on this device took too long`,
+      `Daintree couldn't finish looking for ${command} on this device's PATH.`
+    );
+  }
+  return found;
+}
+
+/** One way of reaching a machine: a new one closes the master the old one opened. */
+function routeGeneration(access: CloudSshAccessRecord): string {
+  return JSON.stringify([
+    access.user,
+    access.endpoint.host,
+    access.endpoint.port,
+    access.hostKey,
+    access.tunnel?.commandPath ?? null,
+    access.tunnel?.args ?? [],
+  ]);
+}
+
+/**
+ * The key to pin from what the provider returned, or why it can't be used.
+ * A provider that vouches with its API returns a key, and one that vouches
+ * through its tunnel returns none; anything else is a provider bug, never a
+ * quiet change of what is trusted.
+ */
+function checkedAccess(
+  resolved: ProviderSshAccess,
+  trust: CloudSshTrust,
+  providerName: string
+): { hostKey: string | null } | { problem: string } {
+  if (
+    typeof resolved?.user !== "string" ||
+    !isSafeSshUser(resolved.user) ||
+    !isValidSshEndpoint(resolved.endpoint)
+  ) {
+    return { problem: `${providerName} didn't return a usable SSH address for the machine` };
+  }
+  if (trust === "provider-tunnel") {
+    return resolved.hostKey === null
+      ? { hostKey: null }
+      : {
+          problem: `${providerName} returned a host key to pin for a machine it vouches for through its tunnel`,
+        };
+  }
+  // The person's confirmation supplies the key; the API's is never taken for it.
+  if (trust === "confirm-on-first-connect") return { hostKey: null };
+  const hostKey = normalizeHostKey(resolved.hostKey);
+  return hostKey === null
+    ? { problem: `${providerName} didn't say which host key the machine has` }
+    : { hostKey };
 }
 
 function invalid(message: string): AppError {
@@ -1126,15 +1208,36 @@ export class CloudHostLifecycle {
       const said = `Daintree can't reach ${nameOf(provider)} machines through the provider's own connection yet.`;
       throw new UnusableConnectionError(said, said);
     }
+    // Before any reuse: a tunnel's command can be uninstalled or moved at any time.
+    const policy = await this.sshPolicy(bindingId, provider);
     const access = binding.access;
     if (
       access &&
       this.now() - access.obtainedAt < ACCESS_TTL_MS &&
       // A key confirmed by the person is pinned only while it is still the trusted one.
       (!confirmed || access.hostKey === binding.trustedHostKey?.key) &&
+      // Access resolved under another trust (a provider that changed what it vouches with) is asked for again.
+      (access.hostKey === null) === (policy.trust === "provider-tunnel") &&
       (await this.deps.files.exists(bindingId))
     ) {
-      return this.deps.files.route(bindingId);
+      const record: CloudSshAccessRecord = {
+        user: access.user,
+        endpoint: { host: access.host, port: access.port },
+        hostKey: access.hostKey,
+        tunnel: policy.tunnel,
+      };
+      const generation = routeGeneration(record);
+      const written = this.writtenRoutes.get(bindingId);
+      // Files an earlier run wrote are reused only when they are what this access writes now.
+      if (
+        written === generation ||
+        (written === undefined &&
+          (await this.deps.files.isCurrent(bindingId, binding.accountId, record)))
+      ) {
+        this.writtenRoutes.set(bindingId, generation);
+        this.clearAccessErrors(bindingId);
+        return this.deps.files.route(bindingId);
+      }
     }
     let resolved: ProviderSshAccess;
     try {
@@ -1152,37 +1255,41 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, { ...described, code: "ssh-authorization", message: said });
       throw new UnusableConnectionError(said, said);
     }
-    let hostKey: string;
-    if (confirmed) {
-      // Whatever the API said about the key, only the person's confirmation vouches for it.
-      hostKey = await this.confirmedHostKey(bindingId, resolved.endpoint);
-    } else if (resolved.hostKey) {
-      hostKey = resolved.hostKey;
-    } else {
-      const said = `SSH access couldn't be set up: ${nameOf(provider)} didn't say which host key the machine has.`;
+    const checked = checkedAccess(resolved, policy.trust, nameOf(provider));
+    if ("problem" in checked) {
+      const said = `SSH access couldn't be set up: ${checked.problem}`;
       this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
       throw new UnusableConnectionError(said, said);
     }
-    const pinned = { user: resolved.user, endpoint: resolved.endpoint, hostKey };
-    // A master opened to the old address or key must not carry a dial to the new
-    // one; the same route written again leaves a live link's master alone.
-    const generation = `${pinned.endpoint.host}:${pinned.endpoint.port}:${pinned.hostKey}`;
+    const record: CloudSshAccessRecord = {
+      user: resolved.user,
+      endpoint: resolved.endpoint,
+      // Whatever the API said about the key, only the person's confirmation vouches for it.
+      hostKey: confirmed
+        ? await this.confirmedHostKey(bindingId, resolved.endpoint)
+        : checked.hostKey,
+      tunnel: policy.tunnel,
+    };
+    // A master opened to the old address, key or tunnel must not carry a dial to
+    // the new one; the same route written again leaves a live link's master alone.
+    const generation = routeGeneration(record);
     const written = this.writtenRoutes.get(bindingId);
     if (written === undefined || written !== generation) {
       await this.deps.files.closeMaster(this.deps.clientDir, bindingId);
     }
-    const route = await this.deps.files.write(bindingId, binding.accountId, pinned);
+    const route = await this.deps.files.write(bindingId, binding.accountId, record);
     this.writtenRoutes.set(bindingId, generation);
     this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
       access: {
-        user: pinned.user,
-        host: pinned.endpoint.host,
-        port: pinned.endpoint.port,
-        hostKey: pinned.hostKey,
+        user: record.user,
+        host: record.endpoint.host,
+        port: record.endpoint.port,
+        hostKey: record.hostKey,
         obtainedAt: this.now(),
       },
     }));
+    this.clearAccessErrors(bindingId);
     return route;
   }
 
@@ -1323,10 +1430,61 @@ export class CloudHostLifecycle {
     );
   }
 
+  /** Reaching the machine worked: what last stood in its way no longer does. */
+  private clearAccessErrors(bindingId: string): void {
+    const code = this.deps.store.binding(bindingId)?.lastError?.code;
+    if (code !== "ssh-authorization" && code !== "ssh-tunnel-command-missing") return;
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.lastError?.code === code ? { ...current, lastError: null } : current
+    );
+  }
+
+  /**
+   * How the provider says its machines are reached and trusted, with its
+   * tunnel's command found on this device. A missing command is the person's
+   * to install, so the host names it and where to get it instead of letting
+   * ssh fail without saying why.
+   */
+  private async sshPolicy(
+    bindingId: string,
+    provider: CloudProvider
+  ): Promise<{ trust: CloudSshTrust; tunnel: CloudSshResolvedTunnel | null }> {
+    const info = provider.info(process.platform);
+    const { capabilities } = info;
+    const problem = sshDeclarationProblem(capabilities);
+    if (problem) {
+      // Registration refuses these, so only a provider whose description changed since gets here.
+      const said = `${info.name} machines can't be reached: ${problem}`;
+      throw new UnusableConnectionError(said, said);
+    }
+    if (!capabilities.tunnel) return { trust: capabilities.sshTrust, tunnel: null };
+    const { command, args, installUrl } = capabilities.tunnel;
+    const missingCode: CloudHostErrorCode = "ssh-tunnel-command-missing";
+    const lastError = this.deps.store.binding(bindingId)?.lastError ?? null;
+    const commandPath = await (this.deps.findCommand ?? findTunnelCommand)(command);
+    if (!commandPath) {
+      const said = `${info.name} machines are reached through its ${command} command, which isn't installed on this device or isn't on Daintree's PATH. Install it from ${installUrl}, then connect again.`;
+      if (lastError?.code !== missingCode || lastError.message !== said) {
+        this.recordError(bindingId, { code: missingCode, message: said, at: this.now() });
+      }
+      throw new UnusableConnectionError(said, said);
+    }
+    return { trust: capabilities.sshTrust, tunnel: { commandPath, args: [...args] } };
+  }
+
   /** A stable key for one resolution of access: a new one means a new transport. */
   accessGeneration(bindingId: string): string | null {
     const access = this.deps.store.binding(bindingId)?.access;
-    return access ? `${access.host}:${access.port}:${access.hostKey}` : null;
+    if (!access) return null;
+    return (
+      this.writtenRoutes.get(bindingId) ??
+      routeGeneration({
+        user: access.user,
+        endpoint: { host: access.host, port: access.port },
+        hostKey: access.hostKey,
+        tunnel: null,
+      })
+    );
   }
 
   // --- Operations and observation ----------------------------------------

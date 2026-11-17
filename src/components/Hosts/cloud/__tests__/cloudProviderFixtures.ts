@@ -24,6 +24,7 @@ export const BOAT_PROVIDER: CloudProviderInfo = {
     lifetime: { kind: "renewable" },
     sshTrust: "pinned-from-api",
     transport: "direct",
+    tunnel: null,
     provisioning: { location: "none", image: "none", network: "none", sshKey: "after-create" },
     deletion: true,
   },

@@ -277,3 +277,30 @@ describe("CloudHostStore host keys", () => {
     expect(read.offeredHostKey).toBeNull();
   });
 });
+
+describe("CloudHostStore SSH access", () => {
+  const PINNED = {
+    user: "user",
+    host: "203.0.113.10",
+    port: 22001,
+    hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+    obtainedAt: 5,
+  };
+
+  it("keeps a pinned key and a tunnel's explicit no-key across a restart", () => {
+    for (const access of [PINNED, { ...PINNED, hostKey: null }]) {
+      const backend = disk();
+      new CloudHostStore(backend).putBinding(binding({ access }));
+      expect(new CloudHostStore(backend).binding("cb_abcdefgh12")?.access).toEqual(access);
+    }
+  });
+
+  it("never reads a missing or empty key as one the tunnel vouched for", () => {
+    const { hostKey: _dropped, ...keyless } = PINNED;
+    for (const access of [keyless, { ...PINNED, hostKey: "" }, { ...PINNED, hostKey: 42 }]) {
+      const backend = disk();
+      backend.write({ version: 1, accounts: [], bindings: [{ ...binding(), access }] });
+      expect(new CloudHostStore(backend).binding("cb_abcdefgh12")?.access).toBeNull();
+    }
+  });
+});
