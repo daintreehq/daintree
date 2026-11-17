@@ -120,7 +120,7 @@ npm test -- src/components/__tests__/Foo.test.tsx  # Tests covering your change
 npm run test:watch -- <path>  # Watch mode
 ```
 
-Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
+Don't run the whole suite locally (15-20 minutes): PR CI runs the tests your diff reaches behind `ci-ok`, together with `npm run check`, and the daily stabilization run covers the whole suite. E2E does not run on PRs. Fix failures outside your files from the CI log.
 
 Tests live in `__tests__/` directories adjacent to source. Use Vitest. Bug fixes need a regression test that fails without the fix. Mock the dependencies of the code under test, never the seam being fixed: an IPC bug gets a real IPC round-trip, a PTY spawn bug a real spawn. Elsewhere, mock IPC via `vi.mock()`.
 
@@ -198,16 +198,19 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 ## CI
 
-`.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
+`.github/workflows/ci.yml` runs on pull requests to `main` and `develop`, and never on a push: the daily stabilization run checks the merged tree, and the release workflows check what ships. A PR takes only the jobs its diff needs, because every open PR shares the org's 20 concurrent runners (5 on macOS):
 
-1. **static** and **lint** (Ubuntu): typecheck, codegen and drift guards, format, and the ESLint ratchet (the pieces of `npm run check`)
-2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
-3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
-4. **host-scripts-macos** (macOS): `electron/remote/client/__tests__/hostInstaller.realShell.test.ts`, so the host installer's swap and rollback scripts run under a Mac's `/bin/sh` and BSD tools as well as Linux's
-5. **build** (Ubuntu only): production build verification
-6. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
+1. **changes** (Ubuntu): reads the diff against the PR's base and decides which jobs below run. A draft runs nothing until it is marked ready for review.
+2. **static** (Ubuntu): typecheck, codegen and drift guards, and format. Runs for every PR, docs-only ones included, since Markdown is formatted too.
+3. **lint** (Ubuntu): the ESLint ratchet. Skipped for a docs-only diff.
+4. **test** (Ubuntu): `vitest run --changed <base>`, the test files that import a changed file, on one runner, the perf scenario liveness guard included when the diff reaches it. A change to any `package.json`, the Vitest or Vite config, or `vitest.setup.ts` and what it imports runs the whole suite. A test that reads a file through `fs` rather than importing it isn't selected; the daily stabilization run covers it. The job summary says how many files ran.
+5. **host-scripts-macos** (macOS): `electron/remote/client/__tests__/hostInstaller.realShell.test.ts` under a Mac's `/bin/sh` and BSD tools, only when the `test` job's selection includes it or the PR changes `ci.yml` or the install action
+6. **packages** (Ubuntu): packs the plugin packages and builds a scaffolded plugin against them, only when the diff touches `packages/` or their direct inputs in the app (shared types, plugin schemas and services, the plugin UI kit and its styles, the sample project, the build scripts), a README alone excepted; the daily stabilization run builds and smoke-tests them every time
+7. **plugin-catalog** (Ubuntu): only when `plugins/catalog.json` changes
+8. **build** (Ubuntu): production build, bundle-boundary checks, and smoke. Skipped for a docs-only diff.
+9. **ci-ok**: aggregate gate that fails if any job failed or was cancelled; a skipped job passes. The sole required status check.
 
-`static` and `lint` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
+A manual dispatch (`gh workflow run CI --ref <branch>`) runs every job except `plugin-catalog`, with the whole unit suite. `warm-caches.yml` saves the caches these jobs restore on `develop`, since a PR can only restore caches from its own branch or its base. `static` and `lint` default to Ubuntu on PRs but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
 
 ## Compiler bailout tooling
 

@@ -1,14 +1,14 @@
 ---
 name: stabilize
 disable-model-invocation: true
-description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as a routine or ambient health check, and not as a step inside another workflow. This is a deliberate, expensive workflow. Once a human explicitly starts it with /stabilize (Claude Code) or $stabilize (Codex) — typically the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip (local only), build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — fixing real failures in batches and re-validating each fix with the narrowest run that proves it, plus release dry-runs when releasing. The budget is ONE full stabilize.yml run per OS; everything after it is a scoped re-run. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
+description: "USE ONLY WHEN EXPLICITLY INVOKED — by a human with /stabilize (Claude Code) or $stabilize (Codex), or by the daily scheduled stabilization run on the stabilization machine. Never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as an ad-hoc health check, and not as a step inside another workflow. This is a deliberate, expensive workflow, and it is the only place the merged develop tree is fully tested: PR CI runs only the unit tests each diff reaches and nothing runs on pushes to develop. Once started — daily, the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip (local only), build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — attributing every failure to the merged pull request that caused it (reading the PR's diff, description and own CI run to say what broke and why PR CI missed it), fixing real failures in batches and re-validating each fix with the narrowest run that proves it, plus release dry-runs when releasing. The budget is ONE full stabilize.yml run per OS; everything after it is a scoped re-run. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
 ---
 
 # Stabilize
 
-> **Run this ONLY when a human explicitly invokes it.** Stabilize is a deliberate, expensive workflow — not an ambient health check and not a finishing step. Do NOT trigger it proactively: not after adding a feature, not after fixing a bug, not on completing a task, and not as a stage folded into another workflow. This is enforced, not merely requested — the frontmatter sets `disable-model-invocation: true`, so the model cannot auto-select it; a human starts it explicitly with `/stabilize` (Claude Code) or `$stabilize` (Codex), typically the night before a release or as a one-off whole-tree validation. If you are here because you just finished some other work, that is not a reason to stabilize — stop.
+> **Run this ONLY when explicitly invoked**: by a human with `/stabilize` (Claude Code) or `$stabilize` (Codex), or by the daily scheduled run on the stabilization machine. Stabilize is a deliberate, expensive workflow — not an ad-hoc health check and not a finishing step. Do NOT trigger it proactively: not after adding a feature, not after fixing a bug, not on completing a task, and not as a stage folded into another workflow. This is enforced, not merely requested — the frontmatter sets `disable-model-invocation: true`, so the model cannot auto-select it. If you are here because you just finished some other work, that is not a reason to stabilize — stop.
 
-Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable loop that should finish in hours, not a day — the clock is dominated by how many times you re-run things, so read **Run Budget** before you start. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND every `stabilize.yml` piece has passed on Linux and then on Windows on the branch (see **What "green" means**) (plus release dry-runs when stabilizing for a release) AND — if any fixes were made — they have been squashed into a single commit, merged into `develop`, and pushed to origin, with the working tree left back on `develop`. A run that needed no fixes commits nothing and simply deletes its branch. See **Finalization** for both close-out cases and their "done means" checklists.
+Drive the Daintree tree to green and keep it there. It runs once a day against `develop`, and it is the first time the merged tree meets the whole surface: `ci.yml` runs on pull requests only, and there it normally runs only the unit tests the PR's diff reaches (`vitest run --changed`), no E2E, and Ubuntu apart from one macOS host-script test. `ci.yml` never runs on a push to `develop` (only cache-warming and publish workflows do). So a failure here is usually a merged PR that was green on its own, and part of the job is finding which one and why its CI missed it (see **Find the PR that broke it**). This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable loop that should finish in hours, not a day — the clock is dominated by how many times you re-run things, so read **Run Budget** before you start. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND every `stabilize.yml` piece has passed on Linux and then on Windows on the branch (see **What "green" means**) (plus release dry-runs when stabilizing for a release) AND — if any fixes were made — they have been squashed into a single commit, merged into `develop`, and pushed to origin, with the working tree left back on `develop`. A run that needed no fixes commits nothing and simply deletes its branch. See **Finalization** for both close-out cases and their "done means" checklists.
 
 There is no issue-creation step anywhere in this flow. You are the triage. Do not open or update a `nightly-failure` issue — that mechanism was retired with the scheduled nightly.
 
@@ -77,7 +77,8 @@ Track:
 - The green ledger: per OS, which pieces (`check`, `test`, `perf-liveness`, `build`, `integration`, `core`, each `full-*`, `nightly`) have passed and in which run URL. This is what proves the OS green — see **Run Budget**. A piece closes when everything in it has passed somewhere: the specs that passed in the discovery run plus a successful scoped confirmation (any rung) of each spec that failed — you do not need to re-run the whole bucket to close it. `integration` is Linux-only; mark it not-applicable for Windows. Pieces that never executed (their `e2e-build` failed) stay pending, not green.
 - Full-run count per OS against the budget of one, with the justification for any second one.
 - Any active release dry-run URLs and conclusions.
-- Failure queue: job, platform, step, suite/spec, suspected cause, flake-vs-real classification, current status.
+- The attribution window: the `last_green_sha` it starts from and the `origin/develop` SHA you branched from, and the PRs merged between them.
+- Failure queue: job, platform, step, suite/spec, the PR that caused it (or flake / pre-existing / unattributed), the mechanism in one line, why that PR's CI didn't catch it, flake-vs-real classification, current status.
 - Narrow validation commands already run.
 
 ## The Loop
@@ -95,6 +96,7 @@ Three OS stages, run strictly in order. Each must be fully green before the next
    npm run knip
    npm run build
    npm run test:smoke
+   npm run packages:build && node scripts/ci/packages-consumer-smoke.mjs   # PR CI runs this only when the diff touches the packages' direct inputs
    npm run build:e2e   # E2E launches the BUILT app — without this it tests whatever bundle was there before
    # E2E — the release-gated surface in one Playwright invocation:
    npx playwright test \
@@ -105,7 +107,7 @@ Three OS stages, run strictly in order. Each must be fully green before the next
    npm run test:e2e:nightly
    ```
 
-2. Work the whole failure list as one batch. Playwright launches the built app and never rebuilds it, so after any fix that touches app code run `npm run build:e2e` once (with the app not running) before re-running specs — one rebuild per batch, reused for every spec in it; otherwise the "proof" is a pass against the old bundle. For each failure, reproduce the narrowest surface locally, classify it (real vs flake — see below), then fix the app/test/workflow and re-run that narrow surface until it is consistently green.
+2. Attribute every failure before fixing it (see **Find the PR that broke it**): the culprit PR's diff usually names the fix. Then work the whole failure list as one batch. Playwright launches the built app and never rebuilds it, so after any fix that touches app code run `npm run build:e2e` once (with the app not running) before re-running specs — one rebuild per batch, reused for every spec in it; otherwise the "proof" is a pass against the old bundle. For each failure, reproduce the narrowest surface locally, classify it (real vs flake — see below), then fix the app/test/workflow and re-run that narrow surface until it is consistently green.
 3. After the batch is fixed, re-run the failed specs; re-run a whole owning suite only when a production-code fix plausibly reaches the rest of it. Do NOT re-run the full local gate: suites that passed in the baseline stay passed unless a production-code fix reaches them, in which case add just those suites.
 4. Local is green when every piece has passed — in the baseline or in a step-3 re-run. Do not dispatch any GitHub run while a locally-runnable surface is still red. `knip` and everything else OS-agnostic is now finished for good; it is not repeated on CI.
 
@@ -139,7 +141,7 @@ Only after the full local gate is green do you touch GitHub Actions, and the fir
 
    The `failure-report-*` artifacts (one per shard, each containing a `failure-report.json`) list the failing specs with `projectName` + `titlePath`; the `failed-specs-*` artifacts hold the `--test-list` input for a scoped re-run. The merged `stabilize-merged-playwright-report` artifact has traces/screenshots.
 
-8. Classify each failure (real vs flake), then act:
+8. Attribute each failure to a PR (see **Find the PR that broke it**) and classify it (real vs flake), then act:
    - **Real, reproducible on a local-runnable surface (macOS/Linux-agnostic):** reproduce, fix, and prove it locally with the narrow spec (rung 1) — not the full local gate.
    - **Real, genuinely Linux-specific:** iterate that one spec on Linux with `e2e-single.yml` (`-f platform=linux`, below); fix; reconfirm.
    - **Flake:** confirm with a scoped re-run (below). If it passes consistently, note it and move on; if a spec keeps flaking, harden it (treat the flake as the bug) or, if it is already tracked as known-flaky, leave it to the quarantine flow (`.github/workflows/stale-quarantine.yml`).
@@ -166,6 +168,38 @@ Only after Linux is fully green do you dispatch Windows. Windows is always the l
 11. When stabilizing for a release, additionally run the per-OS release dry-runs and drive each to green (see "Release dry runs"). These are independent per OS, so they need not be serialized the way the test stages are.
 
 If a run is still in progress when reporting status, give the run URL, elapsed time, current failed/pending jobs, the flake-vs-real classification so far, and the next action. Do not present the work as complete while any required surface is still red or running.
+
+## Find the PR that broke it
+
+PR CI is deliberately thin: it runs `static`, `lint`, `build` and smoke, and normally only the unit tests that import a file the PR changed (the whole suite only when a `package.json`, the Vitest config or its setup changes); no E2E, no Windows. Every PR that merged since the last green stabilization was green under that, so most failures here come from one of those PRs. Find it before you fix anything: its diff and description usually say what the fix should be, and the reason its CI missed the failure is worth reporting.
+
+**The window.** The stabilization machine keeps `.tmp/stabilize-state.json` in the checkout this skill runs from (gitignored, never committed): `{"last_green_sha": "<sha>", "at": "<ISO time>"}`. `last_green_sha` is an attribution cursor, the `develop` commit the last fully green run branched from; it moves only when a run ends green (see **Finalization**), so a red run's window carries into the next one. The window is `last_green_sha..<the origin/develop SHA you branched from>`. With no state file, write one before anything else, with the cursor at the first-parent commit `develop` was at 24 hours before the branch point, so a first run that stops red still keeps its window:
+
+```bash
+cursor=$(git rev-list -1 --first-parent --before="$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" <branch-point>)
+```
+
+Git ancestry decides what is in the window, not a date search. List every first-parent commit in it; a merge's subject names its PR, and anything else is a direct push (a previous stabilization, a release bump):
+
+```bash
+git log --first-parent --format='%H %cI %s' <last_green_sha>..<branch-point>   # "Merge pull request #N from …"
+```
+
+**Attribute each failure:**
+
+1. Name what the failing test exercises: the test or spec file, its imports, and the source files in the stack trace or error.
+2. Find the PRs in the window that touched any of those: `git log --first-parent --format='%h %s' <last_green_sha>..<branch-point> -- <paths>`, or intersect each PR's file list (`gh pr view N --json files`). Widen to the area (the owning directory, the IPC channel, the store) when nothing touches the exact files.
+3. Read each candidate: `gh pr view N --json title,body,files,url`, `gh pr diff N`, and its own CI run (`gh pr checks N`, then `gh run view <run-id>`). The `test` job's summary says how many unit test files the PR's diff selected; `gh run view <run-id> --log | grep <test path>` shows whether the failing test was among them.
+4. Name the cause, one of:
+   - **PR regression, test not selected**: the PR broke it and its CI never ran the test, because the test reaches the changed code through something other than an import (an `fs` read, a generated file, a dynamic path, a subprocess), or because it is an E2E spec or another OS.
+   - **Merge interaction**: two PRs each green alone, broken together (one changed a contract, the other added a caller of the old one). Name both.
+   - **PR regression, test selected**: the PR's own run had it green, so it is order- or environment-dependent, or a flake the PR didn't trip. Treat it with the flake triage below before calling it a regression.
+   - **Flake**: the flake triage below shows it, whatever the window holds.
+   - **Pre-existing**: it fails the same way at `last_green_sha` too (run the narrow repro there, in a scratch worktree). The last run either missed it or confirmed it as a flake.
+   - **Unattributed**: no PR in the window touches anything the test exercises, it isn't shown to be a flake, and it doesn't reproduce at `last_green_sha`. Often the environment (a runner image, a dependency resolved at install, the date). Say so; don't force it into another category.
+5. When file overlap leaves it ambiguous and the failure reproduces locally in a few minutes, bisect the window instead of guessing, in a scratch worktree. The cursor is not automatically a good commit (a Case 2 run branched from a tree that needed fixes), so first prove both ends: the repro fails at the branch point and passes at `last_green_sha`. If it fails there too it is pre-existing; move the good end further back only if you need the origin. Then `git bisect start --first-parent <branch-point> <good>` and `git bisect run <the narrow repro command>`.
+
+Record the PR, the mechanism and the "why CI missed it" in the failure queue. The fix still lands in the stabilize branch: never revert, reopen or push to the culprit PR's branch. When the same escape repeats across runs (say, tests that read their fixtures through `fs`), say so in the final report: that is the signal to make the test import its input or to widen `forceRerunTriggers`, not to add work to every PR.
 
 ## Intelligent Flake Triage
 
@@ -203,7 +237,7 @@ Authoritative files:
 - `.github/workflows/e2e.yml` — the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`, `nightly`, `demo`.
 - `.github/workflows/e2e-single.yml` — the preferred CI loop for one failing spec. Accepts `platform`, `suite`, `test_file`, optional `grep`, `workers`, `retries`.
 - `.github/workflows/release-macos.yml` / `release-linux.yml` / `release-windows.yml` — per-OS release workflows (#8052), each triggered by the same `v*` tag and each supporting `dry_run=true`. Independent — fix and re-run only the failing OS('s) workflow.
-- `.github/workflows/ci.yml` — per-push/PR gate (`check` + sharded `test` + `build`/smoke on Ubuntu). `ci-ok` is the sole required status check.
+- `.github/workflows/ci.yml` — the PR gate, pull requests only (never on push): `static` + `lint` + the unit tests the diff reaches (`vitest run --changed <base>`, one job) + `build`/smoke on Ubuntu, with the macOS host-script test, `packages` and `plugin-catalog` only when the diff needs them. `ci-ok` is the sole required status check. Each run's `test` job summary records how many unit test files the PR selected, which is what **Find the PR that broke it** reads.
 - `scripts/ci/run-single-e2e.mjs` validates that a single E2E spec belongs to the selected suite.
 - `docs/e2e-testing.md` and `docs/release.md` explain suite boundaries and dry-run expectations.
 
@@ -367,6 +401,14 @@ git diff --quiet origin/develop...HEAD && echo "NO CHANGES — Case 1" || echo "
 git diff --stat origin/develop...HEAD   # see exactly what (if anything) the branch changed
 ```
 
+In both cases, finish by recording where the next run's attribution window starts. Use the `origin/develop` SHA you branched from — not the tip after a final rebase, because the PRs merged after the branch point were never validated by this run:
+
+```bash
+mkdir -p .tmp && printf '{"last_green_sha":"%s","at":"%s"}\n' "<branch-point-sha>" "$(git show -s --format=%cI <branch-point-sha>)" > .tmp/stabilize-state.json
+```
+
+Write it only when every OS is green (Case 1 or Case 2 done). A run that ends with something still red leaves the old file (or the bootstrap one from the start of the run), so the next window still includes the PR that broke it.
+
 ### Case 1 — nothing needed fixing (the tree was already green)
 
 If the diff against the base is empty and the ledger is complete — every piece green locally, on Linux, and on Windows, whether in a discovery run or via a scoped flake confirmation — there is **nothing to commit and nothing to merge**. A discovery run that went red on a confirmed flake still counts; do not chase an all-green run to qualify. `develop` at the SHA you branched from is the state you validated (report that SHA). Do NOT fabricate a commit to record that stabilization ran — an empty `chore(ci): stabilize develop` commit (like `915a9aeda`) is the precise failure this skill forbids: it adds a meaningless SHA and history entry while changing nothing. The proof of a clean run is your final report and the run URLs.
@@ -428,9 +470,9 @@ npm run check && npm run test     # the only re-validation a rebase earns
 # then repeat step 5
 ```
 
-`develop` moves constantly, so on any stabilization longer than an hour this is the normal path, not an exception — and it must NOT restart validation. **Never re-dispatch `stabilize.yml` and never re-run E2E because of this rebase.** The commits you rebased over each passed `ci.yml` on their own PR; what you validated was your fixes, and they are unchanged. Chasing "everything green at the exact merged SHA" is unachievable on a moving branch and is how a finished stabilization turns into a second one. The single exception is a concrete interaction with your fixes: the rebase hit a conflict in a file they touched, or `git diff ORIG_HEAD..origin/develop --stat` shows upstream changed the same code or added a new caller of it. Then re-run the narrow specs covering that code (rung 1, plus rung 2 on the OS the fix was for), and nothing more. An unrelated upstream diff earns nothing.
+`develop` moves constantly, so on any stabilization longer than an hour this is the normal path, not an exception — and it must NOT restart validation. **Never re-dispatch `stabilize.yml` and never re-run E2E because of this rebase.** The commits you rebased over each passed `ci.yml` on their own PR and are the next daily run's to validate; what you validated was your fixes, and they are unchanged. Chasing "everything green at the exact merged SHA" is unachievable on a moving branch and is how a finished stabilization turns into a second one. The single exception is a concrete interaction with your fixes: the rebase hit a conflict in a file they touched, or `git diff ORIG_HEAD..origin/develop --stat` shows upstream changed the same code or added a new caller of it. Then re-run the narrow specs covering that code (rung 1, plus rung 2 on the OS the fix was for), and nothing more. An unrelated upstream diff earns nothing.
 
-**Once `develop` is pushed you are finished.** Do not run the local gate, dispatch `stabilize.yml`, or watch any E2E against `develop` afterwards. The push triggers `ci.yml` on its own; a failure there is an ordinary CI failure, not a reason to start stabilizing again.
+**Once `develop` is pushed and the state file is written you are finished.** Do not run the local gate, dispatch `stabilize.yml`, or watch any E2E against `develop` afterwards. Nothing runs on the push; the next daily run picks up from here.
 
 **Done means (Case 2)** — all four must be true before you report completion:
 
@@ -439,4 +481,4 @@ npm run check && npm run test     # the only re-validation a rebase earns
 - `develop` has been pushed to origin.
 - The stabilize branch has been deleted locally and on origin.
 
-Final response must include the branch name (now deleted), the final commit SHA on `develop` (or, in Case 1, an explicit "no commit — develop was already green"), the green ledger (per OS, the run URL in which each piece passed — normally one discovery run plus the scoped re-runs — plus any release dry-run URLs), how many full `stabilize.yml` runs each OS took against the budget of one, the local checks run, the flakes hardened, and confirmation that `develop` was pushed (Case 2) or untouched (Case 1).
+Final response must include the attribution for every failure (the PR, linked, what in it broke what, and why its CI didn't catch it — or flake / pre-existing / unattributed), the branch name (now deleted), the final commit SHA on `develop` (or, in Case 1, an explicit "no commit — develop was already green"), the green ledger (per OS, the run URL in which each piece passed — normally one discovery run plus the scoped re-runs — plus any release dry-run URLs), how many full `stabilize.yml` runs each OS took against the budget of one, the local checks run, the flakes hardened, and confirmation that `develop` was pushed (Case 2) or untouched (Case 1).

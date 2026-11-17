@@ -8,7 +8,7 @@
 
 Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as they are, with your existing config and login. Daintree reads each terminal to show which runs are working, waiting or finished, and gives every worktree a diff, commit and pull request view. macOS, Windows and Linux. Apache 2.0, no account, telemetry off by default.
 
-[![Release](https://img.shields.io/github/v/release/daintreehq/daintree?label=release&color=0f7a4a)](https://daintree.org/changelog) [![Build](https://img.shields.io/github/actions/workflow/status/daintreehq/daintree/ci.yml?branch=main&label=build)](https://github.com/daintreehq/daintree/actions/workflows/ci.yml?query=branch%3Amain) [![License](https://img.shields.io/badge/license-Apache%202.0-0f7a4a)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/daintreehq/daintree?label=release&color=0f7a4a)](https://daintree.org/changelog) [![Build](https://img.shields.io/github/actions/workflow/status/daintreehq/daintree/nightly-publish.yml?branch=develop&label=nightly%20build)](https://github.com/daintreehq/daintree/actions/workflows/nightly-publish.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-0f7a4a)](LICENSE)
 
 [Download](#download) · [How&nbsp;it&nbsp;works](#how-it-works) · [Agent&nbsp;CLIs](#agent-clis) · [MCP&nbsp;server](#mcp-server) · [Canopy](#canopy-inbox) · [Decisions](#daintree-decisions) · [Build&nbsp;from&nbsp;source](#build-from-source) · [Docs](#documentation)
 

@@ -1,0 +1,98 @@
+name: Warm caches
+
+# A pull request's run can restore caches saved on its own branch or on
+# `develop`, never another PR's. CI doesn't run on pushes to `develop`, so
+# nothing would save there: after a lockfile change every PR would install from
+# scratch and save its own copy. This saves the entries ci.yml restores, on
+# `develop`, whenever their inputs change there, and once a day for the inputs
+# that come from outside the repository (the Node 22 patch release in the
+# install key, the runner image's fonts) and to keep the Prettier cache current.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - package.json
+      - package-lock.json
+      - packages/*/package.json
+      - .npmrc
+      - scripts/postinstall.cjs
+      - scripts/patchNodePty*.cjs
+      - electron/native/**
+      - electron/services/canopy/canopy-reader-manifest.json
+      - .github/actions/install/**
+      - .github/workflows/warm-caches.yml
+  schedule:
+    # https://crontab.guru/#17_1_*_*_*
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  ONNXRUNTIME_NODE_INSTALL: "skip"
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The same key computation as ci.yml's build job, so the entry it saves is
+      # the one the build restores.
+      - name: Fontconfig cache key
+        id: fontconfig-cache-key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fontconfig
+          source /etc/os-release
+          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache fontconfig
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/fontconfig
+          key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
+
+      - name: Warm fontconfig cache
+        run: fc-cache -fv
+
+      # Saves the installed tree on a miss.
+      - name: Install dependencies
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache Canopy reader model
+        uses: actions/cache@v5
+        with:
+          path: electron/resources/canopy-reader
+          key: canopy-reader-${{ runner.os }}-${{ hashFiles('electron/services/canopy/canopy-reader-manifest.json') }}
+
+      - name: Fetch Canopy reader model
+        run: npm run fetch:canopy-model
+
+      - name: Restore Prettier cache
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/prettier
+          key: prettier-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            prettier-${{ runner.os }}-
+
+      # Only fills the cache: an unformatted file on `develop` is the
+      # stabilization run's to fix, and failing here would skip saving it.
+      - name: Fill Prettier cache
+        run: npm run format:check -- --cache --cache-strategy content || true
