@@ -1273,11 +1273,14 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
     hosts.splice(0, 1);
     lifecycle.start();
-    await vi.waitFor(() => expect(store.bindings()).toHaveLength(0));
-    release();
-    await expect(stopping).rejects.toThrow(/Cancelled/);
-    expect(provider.stop).not.toHaveBeenCalled();
-    lifecycle.dispose();
+    try {
+      await vi.waitFor(() => expect(store.bindings()).toHaveLength(0));
+      release();
+      await expect(stopping).rejects.toThrow(/Cancelled/);
+      expect(provider.stop).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.dispose();
+    }
   });
 
   it("never sends a Stop that a shutdown cancelled while its key was read", async () => {
