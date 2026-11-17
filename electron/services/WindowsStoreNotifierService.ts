@@ -198,14 +198,12 @@ class WindowsStoreNotifierService {
 
   private shouldNotify(remoteVersion: string): boolean {
     const installed = app.getVersion();
-    const installedSemver = semver.coerce(installed);
-    const remoteSemver = semver.coerce(remoteVersion);
+    // Compare full versions: coerce() drops prerelease identifiers, which would
+    // hide nightly-to-nightly and nightly-to-stable updates.
+    const installedSemver = semver.valid(installed);
+    const remoteSemver = semver.valid(remoteVersion);
     if (!installedSemver || !remoteSemver) return false;
-    try {
-      if (!semver.gt(remoteSemver, installedSemver)) return false;
-    } catch {
-      return false;
-    }
+    if (!semver.gt(remoteSemver, installedSemver)) return false;
     const lastNotified = store.get("lastNotifiedStoreVersion");
     if (typeof lastNotified === "string" && lastNotified === remoteVersion) return false;
     return true;
