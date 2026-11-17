@@ -29,7 +29,42 @@ function withStatus(hostKeyReview: CloudHostStatus["hostKeyReview"]) {
   cloud.snapshot = {
     providers: [{ ...BOAT_PROVIDER, id: "digitalocean", name: "DigitalOcean" }],
     accounts: [],
-    hosts: [{ hostId: "droplet", providerId: "digitalocean", hostKeyReview } as CloudHostStatus],
+    hosts: [
+      {
+        hostId: "droplet",
+        providerId: "digitalocean",
+        providerUnavailable: null,
+        accountId: "ca_0123456789",
+        accountName: "Web team",
+        resourceId: "3164444",
+        machineName: "droplet",
+        ownership: "created-by-daintree",
+        createdFor: null,
+        worktreeCleanup: null,
+        provisioning: null,
+        machine: "running",
+        rawState: "active",
+        machineType: "s-2vcpu-4gb",
+        vcpu: 2,
+        memoryGB: 4,
+        hourlyDollars: 0.036,
+        lifetime: { kind: "none" },
+        autoStopAt: null,
+        lifetimeSeconds: null,
+        stoppedAt: null,
+        stop: null,
+        lastSnapshotAt: null,
+        dataExpired: false,
+        operation: null,
+        lastError: null,
+        observedAt: 0,
+        lastEndpoint: null,
+        hostKeyFingerprint: null,
+        hostKeyReview,
+        keptRunningAt: null,
+        asleep: false,
+      },
+    ],
   };
 }
 
@@ -42,10 +77,43 @@ afterEach(() => {
 });
 
 describe("CloudSetupHostKey", () => {
-  it("shows nothing while no key is waiting", () => {
+  it("shows its note instead while no key is waiting", () => {
     withStatus(null);
-    const { container } = render(<CloudSetupHostKey hostId="droplet" onTrusted={() => {}} />);
-    expect(container.textContent).toBe("");
+    const { container } = render(
+      <CloudSetupHostKey hostId="droplet" onTrusted={() => {}} note={<p>Still setting up</p>} />
+    );
+    expect(container.textContent).toBe("Still setting up");
+    expect(screen.queryByRole("button", { name: "Trust this key" })).toBeNull();
+  });
+
+  it("names the host key file of the kind the machine presented, to check it by", () => {
+    withStatus({ ...REVIEW, keyType: "ECDSA" });
+    render(
+      <CloudSetupHostKey hostId="droplet" onTrusted={() => {}} note={<p>Still setting up</p>} />
+    );
+    const shown = screen.getByTestId("cloud-host-key-review").textContent ?? "";
+    expect(shown).toContain("ssh-keygen -lf /etc/ssh/ssh_host_ecdsa_key.pub");
+    // The key, not the note, is what setup is stopped on.
+    expect(shown).not.toContain("Still setting up");
+    expect(document.body.textContent).not.toContain("Still setting up");
+  });
+
+  it("warns about a changed key and trusts the new one by its own fingerprint", async () => {
+    const changed = {
+      ...REVIEW,
+      reason: "changed" as const,
+      fingerprint: "SHA256:newnewnewnewnewnewnewnewnewnewnewnewnewnew",
+      previousFingerprint: REVIEW.fingerprint,
+      previousTrustedAt: 0,
+    };
+    withStatus(changed);
+    client.trustHostKey.mockResolvedValue(undefined);
+    const onTrusted = vi.fn();
+    render(<CloudSetupHostKey hostId="droplet" onTrusted={onTrusted} />);
+    expect(screen.getByTestId("cloud-host-key-review").textContent).toContain("identity changed");
+    fireEvent.click(screen.getByRole("button", { name: "Trust new key" }));
+    await waitFor(() => expect(onTrusted).toHaveBeenCalledTimes(1));
+    expect(client.trustHostKey).toHaveBeenCalledWith("droplet", changed.fingerprint);
   });
 
   it("trusts the key by the fingerprint it showed, then lets setup look again", async () => {

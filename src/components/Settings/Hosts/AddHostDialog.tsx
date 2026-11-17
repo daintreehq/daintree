@@ -431,9 +431,9 @@ type LocalUpdate =
 /** How long a check of this machine's updater spins before it is said to be quiet. */
 const LOCAL_UPDATE_QUIET_MS = 10_000;
 
-/** After a cloud host key is trusted, how often and how many times an unreachable machine is checked again: five minutes. */
+/** How often, and how many times, a new cloud machine that can't be reached yet is checked again: ten minutes. */
 const LOGIN_RECHECK_MS = 10_000;
-const LOGIN_RECHECKS = 30;
+const LOGIN_RECHECKS = 60;
 
 /** What "Update this machine" led to, under the verdict that offered it. */
 function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
@@ -520,6 +520,14 @@ export function AddHostDialog({
   /** The user typed a name: a target typed or picked after that no longer renames the host. */
   const [nameEdited, setNameEdited] = useState(existing !== null);
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
+  // A cloud machine just made can't be reached at first: its SSH server comes up after it reports
+  // running, and once its key is trusted it turns this device away until it has finished setting
+  // itself up. Its setup checks again for a while (null: not waiting; 0: stopped waiting).
+  const [loginRechecks, setLoginRechecks] = useState<number | null>(
+    cloudExisting && existing?.intent === "setup" ? LOGIN_RECHECKS : null
+  );
+  // A trust asks for a check as soon as none is running, and only while the dialog is open.
+  const [checkAfterTrust, setCheckAfterTrust] = useState(false);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
   // The AppImage is the Linux build the release feed publishes a checksum for.
   const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
@@ -819,6 +827,8 @@ export function AddHostDialog({
       () => remoteHostsClient.probe(connection),
       (result) => {
         if (!result.reachable) noteFailure(result.sshError ?? `Couldn't reach ${hostLabel}`);
+        // In: a later check that fails (after an install, say) is the person's, not first boot's.
+        else setLoginRechecks(null);
         setProbe(result);
         setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setApplying(null);
@@ -830,22 +840,22 @@ export function AddHostDialog({
     );
   };
 
-  // A new cloud machine can still be setting itself up when its key is trusted, and turn this
-  // device away until it's done: after a trust, an unreachable check is tried again for a while.
-  const [loginRechecks, setLoginRechecks] = useState(0);
   const recheckForLogin = useEffectEvent(() => {
-    setLoginRechecks((left) => Math.max(0, left - 1));
+    setCheckAfterTrust(false);
+    setLoginRechecks((left) => (left === null ? null : Math.max(0, left - 1)));
     check();
   });
-  const awaitingLogin = loginRechecks > 0 && probe !== null && !probe.reachable;
+  const unreachable = probe !== null && !probe.reachable;
+  const awaitingLogin = loginRechecks !== null && loginRechecks > 0 && unreachable;
+  const stoppedAwaitingLogin = loginRechecks === 0 && unreachable;
   useEffect(() => {
-    if (!isOpen || !awaitingLogin || busy) return undefined;
-    const timer = setTimeout(() => recheckForLogin(), LOGIN_RECHECK_MS);
+    if (!isOpen || busy || !(checkAfterTrust || awaitingLogin)) return undefined;
+    const timer = setTimeout(() => recheckForLogin(), checkAfterTrust ? 0 : LOGIN_RECHECK_MS);
     return () => clearTimeout(timer);
-  }, [isOpen, awaitingLogin, busy, probe, loginRechecks]);
+  }, [isOpen, busy, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
   const trustedHostKey = () => {
     setLoginRechecks(LOGIN_RECHECKS);
-    check();
+    setCheckAfterTrust(true);
   };
 
   // An existing host is checked as the dialog opens: its target is already known.
@@ -1576,16 +1586,30 @@ export function AddHostDialog({
             ) : cloudExisting ? (
               <>
                 {existingId !== null && (
-                  <CloudSetupHostKey hostId={existingId} onTrusted={trustedHostKey} />
-                )}
-                {awaitingLogin && (
-                  <p
-                    className="mt-3 text-xs text-text-secondary"
-                    data-testid="add-host-awaiting-login"
-                  >
-                    A new machine can take a few minutes to finish setting up before it lets this
-                    device sign in. Daintree checks again every 10 seconds.
-                  </p>
+                  <CloudSetupHostKey
+                    hostId={existingId}
+                    onTrusted={trustedHostKey}
+                    // Only once no key waits on the person: until then, that's what setup is stopped on.
+                    note={
+                      awaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-awaiting-login"
+                        >
+                          A new machine can take a few minutes to start answering and finish setting
+                          up. Daintree checks again every 10 seconds.
+                        </p>
+                      ) : stoppedAwaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-stopped-awaiting-login"
+                        >
+                          Daintree stopped checking by itself. Check again once the machine has
+                          finished setting up.
+                        </p>
+                      ) : null
+                    }
+                  />
                 )}
               </>
             ) : (
@@ -1664,7 +1688,9 @@ export function AddHostDialog({
     announce =
       verdict === "newer" && localUpdate?.phase === "failed"
         ? `Couldn't check for an update to this machine. ${localUpdate.message}`
-        : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
+        : awaitingLogin
+          ? `Waiting for ${hostLabel} to finish setting up`
+          : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
     if (!probe) {
       // The first check is running, or it couldn't run at all (said below).
       primary = checking ? undefined : checkAgain;

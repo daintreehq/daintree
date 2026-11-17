@@ -640,6 +640,50 @@ describe("DigitalOceanProvider", () => {
     expect((raced.calls[3]!.body as { ssh_keys: number[] }).ssh_keys).toEqual([10]);
   });
 
+  it("narrows the regions to those of the most common size when no size is in all of them", async () => {
+    const size = (slug: string, regions: string[]) => ({
+      slug,
+      memory: 4096,
+      vcpus: 2,
+      price_hourly: 0.03571,
+      regions,
+      available: true,
+    });
+    const catalogWith = async (sizes: object[]) => {
+      const { provider, credentials } = providerWith([
+        jsonResponse(200, ACCOUNT),
+        jsonResponse(200, {
+          regions: ["nyc3", "ams3", "sgp1"].map((slug) => ({ slug, name: slug, available: true })),
+          links: {},
+        }),
+        jsonResponse(200, { sizes, links: {} }),
+        jsonResponse(200, {
+          images: [
+            {
+              id: 1,
+              name: "24.04 (LTS) x64",
+              distribution: "Ubuntu",
+              slug: "ubuntu-24-04-x64",
+              regions: ["nyc3", "ams3", "sgp1"],
+            },
+          ],
+          links: {},
+        }),
+      ]);
+      const catalog = await provider.catalog(credentials);
+      return {
+        regions: catalog.provisioning!.location!.choices.map((choice) => choice.id).sort(),
+        sizes: catalog.machineTypes.map((type) => type.id),
+      };
+    };
+    // Each region has a size the others lack: offer the regions the widest size covers.
+    expect(
+      await catalogWith([size("a", ["nyc3", "ams3"]), size("b", ["sgp1"]), size("c", ["nyc3"])])
+    ).toEqual({ regions: ["ams3", "nyc3"], sizes: ["a"] });
+    // Nothing usable at all: nothing offered, not every size against no region.
+    expect(await catalogWith([])).toEqual({ regions: [], sizes: [] });
+  });
+
   it.each([
     ["region", { location: null, image: "ubuntu-24-04-x64", network: null }, PUBLIC_KEY],
     ["image", { location: "nyc3", image: null, network: null }, PUBLIC_KEY],
@@ -735,6 +779,27 @@ describe("DigitalOceanProvider", () => {
     }
   );
 
+  it("counts only the tag's own key as a second binding", async () => {
+    const { provider, credentials } = providerWith([
+      jsonResponse(200, {
+        droplets: [
+          {
+            ...DROPLET,
+            // Another key that starts the same way, and the same tag twice: still one binding.
+            tags: [
+              ...DROPLET.tags,
+              "daintree-binding-old:cb_zzzzzzzz",
+              "daintree-binding:cb_abcdefgh",
+            ],
+          },
+        ],
+        links: {},
+      }),
+    ]);
+    const found = await provider.list(credentials, { label: "daintree-binding=cb_abcdefgh" });
+    expect(found.map((resource) => resource.resourceId)).toEqual(["3164444"]);
+  });
+
   it("asks which action holds a locked Droplet, and only then", async () => {
     const free = providerWith([jsonResponse(200, { droplet: DROPLET })]);
     await free.provider.inspect(free.credentials, "3164444");
@@ -767,7 +832,8 @@ describe("DigitalOceanProvider", () => {
     ]);
     const resource = await provider.stop(credentials, "3164444");
     expect(calls[0]!.body).toEqual({ type: "shutdown" });
-    expect(calls.map((c) => c.url.pathname)).toContain("/v2/actions/44");
+    // Read through the Droplet, which `droplet:read` covers; `/v2/actions` needs a scope of its own.
+    expect(calls.map((c) => c.url.pathname)).toContain("/v2/droplets/3164444/actions/44");
     expect(resource).toMatchObject({ machine: "stopped" });
   });
 
@@ -787,10 +853,10 @@ describe("DigitalOceanProvider", () => {
     const reads: number[] = [];
     harness.fetch.mockImplementation(async (url: URL | string) => {
       const path = new URL(String(url)).pathname;
-      if (path.endsWith("/actions")) {
+      if (path === "/v2/droplets/3164444/actions") {
         return jsonResponse(201, { action: { id: 44, status: "in-progress", type: "shutdown" } });
       }
-      if (path === "/v2/actions/44") {
+      if (path === "/v2/droplets/3164444/actions/44") {
         reads.push(clock);
         return jsonResponse(200, { action: { id: 44, status: "in-progress", type: "shutdown" } });
       }
@@ -808,8 +874,8 @@ describe("DigitalOceanProvider", () => {
       "3164444"
     );
     expect(new Set(reads.map((at, i) => at - (reads[i - 1] ?? 0)))).toEqual(new Set([3000]));
-    expect(clock).toBeLessThanOrEqual(10 * 60_000 + 3000);
-    expect(clock).toBeGreaterThanOrEqual(10 * 60_000);
+    expect(clock).toBeLessThanOrEqual(3 * 60_000 + 3000);
+    expect(clock).toBeGreaterThanOrEqual(3 * 60_000);
     expect(resource).toMatchObject({ machine: "stopping", stop: { id: "44", status: "pending" } });
   });
 
@@ -920,13 +986,15 @@ describe("Droplet first-boot script", () => {
         `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC0 mentions ${KEY_BLOB}`,
         // The same blob under another type isn't either.
         `ssh-rsa ${KEY_BLOB}`,
+        // Nor this key named in another key's comment.
+        `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC0 ssh-ed25519 ${KEY_BLOB}`,
       ];
       const ran = spawnSync("awk", ["-v", `t=${key.type}`, "-v", `b=${key.blob}`, program!], {
         input: `${lines.join("\n")}\n`,
         encoding: "utf8",
       });
       expect(ran.status).toBe(0);
-      expect(ran.stdout.trim().split("\n")).toEqual([lines[0], lines[3], lines[4]]);
+      expect(ran.stdout.trim().split("\n")).toEqual([lines[0], lines[3], lines[4], lines[5]]);
     }
   );
 

@@ -45,11 +45,11 @@ const MIN_MEMORY_MIB = 2048;
 const PREFERRED_IMAGE = "ubuntu-24-04-x64";
 const PREFERRED_REGION = "nyc3";
 /**
- * How long `stop()` follows the shutdown it asked for: past DigitalOcean's own
- * give-up, so an errored shutdown is reported rather than waited out, and
- * inside the lifecycle's stop deadline.
+ * How long `stop()` follows the shutdown it asked for: enough for a graceful
+ * shutdown to finish or be given up on, so an errored one is reported rather
+ * than waited out, while the lifecycle's own stop deadline still governs.
  */
-const SHUTDOWN_FOLLOW_MS = 10 * 60_000;
+const SHUTDOWN_FOLLOW_MS = 3 * 60_000;
 const SHUTDOWN_POLL_MS = 3_000;
 
 /**
@@ -318,17 +318,32 @@ export class DigitalOceanProvider implements CloudProvider {
     );
     const sizeRegions = new Set(usableSizes.flatMap((size) => size.regions));
     // A region is offered when it takes new Droplets and has a size and an image to make one with.
-    const offeredRegions = regions
+    let candidateRegions = regions
       .filter(
         (region) =>
           region.available && sizeRegions.has(region.slug) && imageRegions.has(region.slug)
       )
       .sort((a, b) => a.name.localeCompare(b.name));
-    const regionIds = new Set(offeredRegions.map((region) => region.slug));
     // A size can't say which regions have it, so only one every offered region has is offered:
-    // any region and size the person picks together then make a Droplet.
+    // any region and size the person picks together then make a Droplet. When no size is in
+    // all of them, the regions narrow to those of the size most of them have.
+    const inEvery = (size: DigitalOceanSize, among: typeof candidateRegions) =>
+      among.length > 0 && among.every((region) => size.regions.includes(region.slug));
+    if (!usableSizes.some((size) => inEvery(size, candidateRegions))) {
+      const widest = usableSizes
+        .map((size) => ({
+          size,
+          covered: candidateRegions.filter((region) => size.regions.includes(region.slug)).length,
+        }))
+        .sort((a, b) => b.covered - a.covered)[0];
+      candidateRegions = widest
+        ? candidateRegions.filter((region) => widest.size.regions.includes(region.slug))
+        : [];
+    }
+    const offeredRegions = candidateRegions;
+    const regionIds = new Set(offeredRegions.map((region) => region.slug));
     const offeredSizes = usableSizes
-      .filter((size) => offeredRegions.every((region) => size.regions.includes(region.slug)))
+      .filter((size) => inEvery(size, offeredRegions))
       .sort(
         (a, b) =>
           (a.price_hourly ?? Number.POSITIVE_INFINITY) -
@@ -525,7 +540,7 @@ export class DigitalOceanProvider implements CloudProvider {
     const deadline = this.now() + SHUTDOWN_FOLLOW_MS;
     while (action.status === "in-progress" && this.now() < deadline) {
       await this.sleep(SHUTDOWN_POLL_MS, ctx.signal);
-      action = await client.getAction(ctx, action.id);
+      action = await client.getDropletAction(ctx, resourceId, action.id);
     }
     if (action.status === "errored") {
       throw new DigitalOceanApiError(

@@ -311,7 +311,8 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
     expect(await linkStatus(page)).not.toBe("connected");
     await setup.getByRole("button", { name: "Trust this key" }).click();
     // Trusted, but first boot isn't done: the Droplet turns the key away, and setup keeps looking.
-    await expect(setup.getByTestId("add-host-awaiting-login")).toBeVisible({ timeout: 30_000 });
+    await expect(setup).toContainText("Permission denied", { timeout: 30_000 });
+    await expect(setup.getByTestId("add-host-awaiting-login")).toBeVisible();
     expect(await linkStatus(page)).not.toBe("connected");
     run.api.releaseFirstBoot();
     await expect(setup).toContainText(/Host mode\s*Listening/, { timeout: 60_000 });

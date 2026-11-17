@@ -140,14 +140,20 @@ export async function startFakeDigitalOcean(params: {
     async stop() {
       for (const timer of timers) clearTimeout(timer);
       fake.releaseFirstBoot();
-      await Promise.allSettled([...inFlight]);
+      await Promise.all([...inFlight]);
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (failures.length > 0) throw failures[0];
     },
   };
 
+  /** Work a test's teardown waits for; a failure is kept and thrown from stop(), never left unhandled. */
+  const failures: unknown[] = [];
   const track = (work: Promise<void>) => {
-    inFlight.add(work);
-    void work.finally(() => inFlight.delete(work));
+    const settled = work.catch((error: unknown) => {
+      failures.push(error);
+    });
+    inFlight.add(settled);
+    void settled.then(() => inFlight.delete(settled));
   };
 
   const later = (fn: () => void | Promise<void>) => {
@@ -256,7 +262,7 @@ export async function startFakeDigitalOcean(params: {
       }
       const page = (key: string, items: unknown[]) =>
         send(200, { [key]: items, links: {}, meta: { total: items.length } });
-      const dropletMatch = /^\/droplets\/(\d+)(\/actions)?$/.exec(route);
+      const dropletMatch = /^\/droplets\/(\d+)(\/actions)?(?:\/(\d+))?$/.exec(route);
       const droplet = dropletMatch ? droplets.get(Number(dropletMatch[1])) : undefined;
 
       if (method === "GET" && route === "/account") {
@@ -351,14 +357,15 @@ export async function startFakeDigitalOcean(params: {
           droplet: view(created),
           links: { actions: [{ id: nextId++, rel: "create" }] },
         });
-      } else if (method === "GET" && /^\/actions\/\d+$/.test(route)) {
-        const action = actions.get(Number(route.slice("/actions/".length)));
-        if (action) send(200, { action });
-        else fail(404, "not_found", "The resource you were accessing could not be found.");
       } else if (!droplet) {
         fail(404, "not_found", "The resource you were accessing could not be found.");
       } else if (method === "GET" && !dropletMatch![2]) {
         send(200, { droplet: view(droplet) });
+      } else if (method === "GET" && dropletMatch![3]) {
+        // Only through its Droplet: the top-level /v2/actions needs a scope Daintree doesn't ask for.
+        const action = actions.get(Number(dropletMatch![3]));
+        if (action?.resource_id === droplet.id) send(200, { action });
+        else fail(404, "not_found", "The resource you were accessing could not be found.");
       } else if (method === "GET" && dropletMatch![2]) {
         const list = [...actions.values()]
           .filter((action) => action.resource_id === droplet.id)

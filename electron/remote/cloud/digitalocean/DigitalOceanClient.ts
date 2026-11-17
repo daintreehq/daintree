@@ -341,13 +341,22 @@ export class DigitalOceanClient {
     return result.action;
   }
 
-  async getAction(ctx: DigitalOceanRequestContext, actionId: number): Promise<DigitalOceanAction> {
+  /** One action on a Droplet, read through the Droplet: a token needs only `droplet:read` for it. */
+  async getDropletAction(
+    ctx: DigitalOceanRequestContext,
+    dropletId: string,
+    actionId: number
+  ): Promise<DigitalOceanAction> {
     if (!Number.isSafeInteger(actionId) || actionId <= 0) {
       throw new DigitalOceanApiError("invalid-request", "Not an action id", null, null, null);
     }
     const result = await this.call(
       ctx,
-      { method: "GET", path: `/actions/${actionId}`, retry: true },
+      {
+        method: "GET",
+        path: `/droplets/${requireDropletId(dropletId)}/actions/${actionId}`,
+        retry: true,
+      },
       digitalOceanActionEnvelopeSchema
     );
     return result.action;

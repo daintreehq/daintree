@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
@@ -31,8 +31,9 @@ export function HostKeyReviewDetails({
         <span>
           {providerName} can&apos;t vouch for this machine&apos;s host key, so Daintree asks you
           once. To check it, compare it with what{" "}
-          <code>ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub</code> prints in {providerName}&apos;s
-          console for the machine. Once trusted, Daintree refuses any other key.
+          <code>ssh-keygen -lf /etc/ssh/ssh_host_{review.keyType.toLowerCase()}_key.pub</code>{" "}
+          prints in {providerName}&apos;s console for the machine. Once trusted, Daintree refuses
+          any other key.
         </span>
         {presented}
       </div>
@@ -60,15 +61,17 @@ export function HostKeyReviewDetails({
 
 /**
  * The key a cloud host's machine presented, offered right where its setup
- * stopped for it. Nothing when there's no key waiting.
+ * stopped for it; `note` instead when there's no key waiting.
  */
 export function CloudSetupHostKey({
   hostId,
   onTrusted,
+  note = null,
 }: {
   hostId: HostId;
   /** The key is trusted: setup can look again. */
   onTrusted: () => void;
+  note?: ReactNode;
 }) {
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
@@ -76,7 +79,7 @@ export function CloudSetupHostKey({
   const [trusting, setTrusting] = useState(false);
   const [error, setError] = useState<{ fingerprint: string; message: string } | null>(null);
   const review = status?.hostKeyReview ?? null;
-  if (!review) return null;
+  if (!review) return note;
 
   // Names the fingerprint shown, so a key that changed again since is refused.
   const trust = () => {

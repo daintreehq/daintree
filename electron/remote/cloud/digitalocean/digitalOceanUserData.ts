@@ -99,11 +99,12 @@ export function dropletUserData(key: ParsedPublicKey): string {
     `U=${user}`,
     `KEY_TYPE='${key.type}'`,
     `BLOB='${key.blob}'`,
-    // Replaced whole, keeping the file's owner and mode; only a line naming this key's type and blob goes.
+    // Replaced whole, keeping the file's owner and mode. Only a line whose key is this one goes: its
+    // first two fields, or the two after a leading options field.
     "R=/root/.ssh/authorized_keys",
     'if [ -f "$R" ]; then',
     "  T=$(mktemp /root/.ssh/.authorized_keys.XXXXXX)",
-    '  awk -v t="$KEY_TYPE" -v b="$BLOB" \'{ for (i = 1; i < NF; i++) if ($i == t && $(i + 1) == b) next; print }\' "$R" > "$T"',
+    '  awk -v t="$KEY_TYPE" -v b="$BLOB" \'($1 == t && $2 == b) || ($2 == t && $3 == b) { next } { print }\' "$R" > "$T"',
     '  chown --reference="$R" "$T"',
     '  chmod --reference="$R" "$T"',
     '  mv -f "$T" "$R"',
