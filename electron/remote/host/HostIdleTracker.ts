@@ -136,7 +136,7 @@ export class HostIdleTracker {
 
   private async readOnce(): Promise<void> {
     const noted = this.workNoted;
-    let reading: HostWorkReading | null = null;
+    let reading: HostWorkReading | null;
     try {
       reading = await Promise.race([this.deps.read(), this.readDeadline()]);
     } catch {
