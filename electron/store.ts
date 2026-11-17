@@ -113,6 +113,7 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
+    osc52ClipboardEnabled?: boolean;
     // Appearance fields written by the terminal-config handlers. Declared so
     // the device/host split in shared/config/settingOwnership.ts covers them.
     fontSize?: TerminalConfig["fontSize"];
@@ -1027,6 +1028,7 @@ const storeOptions = {
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
+      osc52ClipboardEnabled: false,
     },
     // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
     // that restores a session at all does it without being asked, and the cost

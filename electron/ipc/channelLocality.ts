@@ -1268,6 +1268,7 @@ export const CHANNEL_LOCALITY = {
   "terminal-config:set-hybrid-input-enabled": "shell",
   "terminal-config:set-memory-leak-auto-restart": "host",
   "terminal-config:set-memory-leak-detection": "host",
+  "terminal-config:set-osc52-clipboard-enabled": "shell",
   "terminal-config:set-performance-mode": "shell",
   "terminal-config:set-recent-scheme-ids": "shell",
   "terminal-config:set-resource-monitoring": "host",

@@ -80,6 +80,8 @@ export const SETTING_CATALOG = {
           memoryLeakAutoRestartThresholdMb: host,
           screenReaderMode: device,
           cachedProjectViews: device,
+          // This machine's clipboard: a host can never turn it on for it.
+          osc52ClipboardEnabled: device,
           fontSize: device,
           fontFamily: device,
           colorSchemeId: device,

@@ -57,6 +57,7 @@ export function readTerminalConfig(): TerminalConfig {
     ...config,
     scrollbackLines: normalizeScrollbackLines(config.scrollbackLines),
     performanceMode: config.performanceMode === true,
+    osc52ClipboardEnabled: config.osc52ClipboardEnabled === true,
     customSchemes: readCustomSchemes(config.customSchemes).schemes,
     cachedProjectViews: effectiveCachedProjectViews(config.cachedProjectViews),
   } as TerminalConfig;

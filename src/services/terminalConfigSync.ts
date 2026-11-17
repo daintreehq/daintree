@@ -13,6 +13,7 @@ import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
+import { useOsc52ClipboardStore } from "@/store/osc52ClipboardStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -78,6 +79,12 @@ const FIELDS: { readonly [K in Field]-?: FieldSync<unknown> } = {
     resolve: ({ cachedProjectViews }) => cachedProjectViews ?? 1,
     read: () => useCachedProjectViewsStore.getState().cachedProjectViews,
     write: (count) => useCachedProjectViewsStore.getState().setCachedProjectViews(count),
+  }),
+  // Anything but a saved `true` is off.
+  osc52ClipboardEnabled: field({
+    resolve: ({ osc52ClipboardEnabled }) => osc52ClipboardEnabled === true,
+    read: () => useOsc52ClipboardStore.getState().enabled,
+    write: (enabled) => useOsc52ClipboardStore.getState().setEnabled(enabled),
   }),
   fontSize: field({
     resolve: ({ fontSize }) =>
