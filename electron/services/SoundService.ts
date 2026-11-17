@@ -173,11 +173,11 @@ class SoundService {
     if (BrowserWindow.getAllWindows().length > 0) {
       const payload: { soundFile: string; detune?: number } = { soundFile };
       if (detune !== undefined) payload.detune = detune;
-      sendToOneVisibleRenderer(CHANNELS.SOUND_TRIGGER, payload);
-      return;
+      if (sendToOneVisibleRenderer(CHANNELS.SOUND_TRIGGER, payload)) return;
     }
 
-    // Fallback to OS process spawning when no renderer is available
+    // Fallback to OS process spawning when no renderer took the trigger (no window,
+    // or a window mid-teardown/crash with no eligible renderer)
     // (OS playback doesn't support detune — cadence variation still helps)
     const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
@@ -204,14 +204,15 @@ class SoundService {
     // and falls through gracefully on a miss, so no need to stat here.
     // One renderer for the same reason as playBypassed (#15682, #12177).
     if (BrowserWindow.getAllWindows().length > 0) {
-      sendToOneVisibleRenderer(CHANNELS.SOUND_TRIGGER, {
+      const delivered = sendToOneVisibleRenderer(CHANNELS.SOUND_TRIGGER, {
         soundFile,
         volume: effectiveVolume,
       });
-      return;
+      if (delivered) return;
     }
 
-    // Fallback to OS process spawning when no renderer is available
+    // Fallback to OS process spawning when no renderer took the trigger (no window,
+    // or a window mid-teardown/crash with no eligible renderer)
     const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
 

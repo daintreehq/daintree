@@ -111,6 +111,8 @@ describe("SoundService", () => {
     appMock.app.isPackaged = false;
     appMock.app.getAppPath.mockReturnValue("/repo");
     mockGetAllWindows.mockReturnValue([]);
+    mockSendToOneVisibleRenderer.mockReset();
+    mockSendToOneVisibleRenderer.mockReturnValue(true);
     Object.defineProperty(process, "resourcesPath", {
       value: "/app/resources",
       writable: true,
@@ -138,6 +140,37 @@ describe("SoundService", () => {
     // A visible-only broadcast still reaches every window's shown view (#15682).
     expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it("falls back to native playback when a window has no eligible renderer", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    mockSendToOneVisibleRenderer.mockReturnValue(false);
+
+    soundService.play("error");
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
+    expect(mockPlaySound).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to native playback for previews and pulses when delivery fails", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    mockSendToOneVisibleRenderer.mockReturnValue(false);
+
+    soundService.preview("error");
+    soundService.playPulse("pulse.wav");
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(2);
+    expect(mockPlaySound).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not play natively when a renderer received the trigger", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    mockSendToOneVisibleRenderer.mockReturnValue(true);
+
+    soundService.play("error");
+    soundService.preview("chime");
+
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
 
