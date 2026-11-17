@@ -187,6 +187,14 @@ function buildBroadcastAnnouncement(
     }
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
+  if (result.successCount === 0) {
+    if (result.failureCount > 0) {
+      return `Broadcast not confirmed — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
+    }
+    return result.skippedCount > 0
+      ? `Broadcast not sent — ${pluralize(result.skippedCount, "terminal", "terminals")} skipped`
+      : "Broadcast not sent — no terminal took it";
+  }
   if (result.failureCount > 0) {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
   }
@@ -254,7 +262,7 @@ function applyFleetBroadcastOutcome(
         useFleetFailureStore.getState().dismissId(t.terminalId);
       }
     }
-  } else if (!result.cancelled) {
+  } else if (!result.cancelled && result.successCount > 0) {
     // A successful broadcast clears any stale failure dot on the targets it
     // reached — the partial-failure state from a prior attempt is now
     // resolved. A pane locked mid-broadcast was skipped, so its dot stays.
@@ -280,8 +288,9 @@ function applyFleetBroadcastOutcome(
   // existing context-injected sound — semantically a fleet broadcast
   // IS injecting the same context into N agents. SoundService handles
   // dampening/throttling and respects the user's UI-feedback toggle.
-  // Skip the chirp on cancel: the announcement is the feedback channel.
-  if (!result.cancelled) {
+  // Skip the chirp on cancel, and when nothing was delivered (every target
+  // skipped or rejected): the announcement is the feedback channel.
+  if (!result.cancelled && result.successCount > 0) {
     window.electron?.notification?.playUiEvent("context-injected").catch(() => {});
   }
 }

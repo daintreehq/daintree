@@ -189,6 +189,8 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe(
         "Broadcast cancelled — 5 sent, 7 terminals skipped"
       );
+      // The announcement is a cancelled run's feedback channel.
+      expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
     } finally {
       useFleetBroadcastProgressStore.setState({ advance: origAdvance });
     }
@@ -277,7 +279,7 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
     tryFleetBroadcastFromEditor("perm", "hello", vi.fn());
     await flush();
     expect(useAnnouncerStore.getState().polite?.msg).toBe(
-      "Broadcast sent to 0 — 1 retryable, 1 unreachable"
+      "Broadcast not confirmed — 1 retryable, 1 unreachable"
     );
   });
 
@@ -337,6 +339,29 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
     await flush();
     await flush();
     expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
+  it("plays the delivery sound only when a target took the draft", async () => {
+    arm(["a", "b", "c"]);
+    submitMock.mockImplementation(async (id) => {
+      if (id !== "a") throw new Error("ENOSPC: disk full");
+    });
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(window.electron.notification.playUiEvent).toHaveBeenCalledWith("context-injected");
+  });
+
+  it("plays no sound and does not flash when every target rejected", async () => {
+    submitMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+    arm(["a", "b"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast not confirmed — 2 failed");
   });
 
   it("returns false so the caller does its own submit when every armed pane is ineligible", async () => {
@@ -950,6 +975,29 @@ describe("a send in progress when its fleet changes (#15560)", () => {
     );
     expect(submitMock).not.toHaveBeenCalled();
     expect(onSent).not.toHaveBeenCalled();
+  });
+
+  it("plays no sound and does not flash when every target stopped taking sends before dispatch", async () => {
+    const diffs = armHoldingDiffs(["a", "b"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    expect(tryFleetBroadcastFromEditor("a", "Review @diff", vi.fn())).toBe(true);
+    await vi.waitFor(() => expect(diffs.requested()).toBe(2));
+
+    usePanelStore.setState((state) => ({
+      panelsById: Object.fromEntries(
+        ["a", "b"].map((id) => [id, { ...state.panelsById[id]!, hasPty: false }])
+      ),
+    }));
+    diffs.release();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast not sent — 2 terminals skipped"
+      )
+    );
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
   });
 
   it("stops the batches still to go when the fleet's panes are trashed, as Cancel does", async () => {
