@@ -279,15 +279,47 @@ describe("focus-driven work benchmark", () => {
       counts.waitingPanelIds = ["t-b", "t-c"];
       rerender();
       act(() => {
-        vi.advanceTimersByTime(101);
+        vi.advanceTimersByTime(299);
       });
       expect(updateBadgeMock).not.toHaveBeenCalled();
 
       act(() => {
-        vi.advanceTimersByTime(200);
+        vi.advanceTimersByTime(1);
       });
       expect(updateBadgeMock).toHaveBeenCalledTimes(1);
       expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-b", "t-c"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends nothing when the panes come back to what main last heard", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-a"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+
+      counts.waitingPanelIds = ["t-b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      counts.waitingPanelIds = ["t-a"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+      expect(updateFaviconMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

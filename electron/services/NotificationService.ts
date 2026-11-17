@@ -381,11 +381,13 @@ class NotificationService {
     // A swap at the same count (before panes were reported, one never reached
     // main) never postpones a pass already armed, which tallies the latest
     // state when it runs. With no question waiting it moves no number at all,
-    // so it schedules nothing. Any other report goes through as it did.
+    // so it schedules nothing, unless a view gone without its teardown being
+    // reported is still counted: any report used to bring the pass that drops it.
     if (
       previous !== undefined &&
       isSwap(previous, state) &&
-      (this.questionPanes.size === 0 || this.debounceTimer !== null)
+      (this.questionPanes.size === 0 || this.debounceTimer !== null) &&
+      ![...this.statesByOwner.keys()].some((ownerId) => this.isDeadOwner(ownerId))
     ) {
       return;
     }
@@ -462,11 +464,13 @@ class NotificationService {
     if (!this.registry) return;
 
     for (const ownerId of [...this.statesByOwner.keys()]) {
-      const ctx = this.registry.getByWebContentsId(ownerId);
-      if (!ctx || ctx.browserWindow.isDestroyed()) {
-        this.statesByOwner.delete(ownerId);
-      }
+      if (this.isDeadOwner(ownerId)) this.statesByOwner.delete(ownerId);
     }
+  }
+
+  private isDeadOwner(ownerId: NotificationOwnerId): boolean {
+    const ctx = this.registry?.getByWebContentsId(ownerId);
+    return !ctx || ctx.browserWindow.isDestroyed();
   }
 
   /**

@@ -1523,6 +1523,24 @@ describe("NotificationService", () => {
         expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
       });
 
+      it("still drops a view gone without its teardown reported when a swap arrives", async () => {
+        const win = windowWithViews(11, 12);
+        notificationService.initialize(createRegistryMock([win]) as never);
+        await questionsLoaded();
+        notificationService.updateNotifications(11, waitingIn("terminal-a"));
+        notificationService.updateNotifications(12, waitingIn("terminal-x"));
+        vi.advanceTimersByTime(301);
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+
+        // View 12 was evicted and its "destroyed" never arrived.
+        win.ownerIds = [11];
+        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        vi.advanceTimersByTime(301);
+
+        expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+      });
+
       it("still counts a swap once a question waits, which it may now matter to", async () => {
         const win = windowWithViews(11);
         notificationService.initialize(createRegistryMock([win]) as never);
@@ -1540,22 +1558,42 @@ describe("NotificationService", () => {
       });
     });
 
-    it("never lets a swap postpone another view's pending change while a question waits", async () => {
-      const win1 = windowWithViews(11);
-      const win2 = windowWithViews(21);
-      notificationService.initialize(createRegistryMock([win1, win2]) as never);
-      await questionsLoaded();
-      setDecisionQuestions([question("project-elsewhere", "terminal-q")]);
-      notificationService.updateNotifications(11, waitingIn("terminal-a"));
-      vi.advanceTimersByTime(301);
+    describe("a swap while a question waits", () => {
+      async function setup() {
+        const win1 = windowWithViews(11);
+        const win2 = windowWithViews(21);
+        const win3 = windowWithViews(31);
+        notificationService.initialize(createRegistryMock([win1, win2, win3]) as never);
+        await questionsLoaded();
+        setDecisionQuestions([question("project-11", "terminal-b")]);
+        notificationService.updateNotifications(11, waitingIn("terminal-a"));
+        vi.advanceTimersByTime(301);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
 
-      notificationService.updateNotifications(21, waitingIn("terminal-x", "terminal-y"));
-      vi.advanceTimersByTime(200);
-      notificationService.updateNotifications(11, waitingIn("terminal-b"));
-      vi.advanceTimersByTime(101);
+        notificationService.updateNotifications(21, waitingIn("terminal-x", "terminal-y"));
+        vi.advanceTimersByTime(200);
+        // The agent moves into the pane whose question already counts.
+        notificationService.updateNotifications(11, waitingIn("terminal-b"));
+        return { win1, win2, win3 };
+      }
 
-      expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
-      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(4);
+      it("lands with another view's pending change, at its deadline", async () => {
+        const { win1, win2 } = await setup();
+        vi.advanceTimersByTime(101);
+
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+      });
+
+      it("lands at once when a window's focus runs the pass early", async () => {
+        const { win1, win2, win3 } = await setup();
+        win3.trigger("focus");
+
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(3);
+      });
     });
 
     describe("lifecycle", () => {

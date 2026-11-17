@@ -19,10 +19,10 @@ export function useWindowNotifications(): void {
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // Last badge state handed to Main and drawn in the favicon. Focus used to
+  // Last panes handed to Main and counted in the favicon. Focus used to
   // re-send both unconditionally; with no waiting agents that is an IPC and a
   // favicon href rewrite per focus for no change.
-  const sentBadgeCountRef = useRef<number | null>(null);
+  const sentPanesRef = useRef<readonly string[] | null>(null);
   const faviconBadgedRef = useRef(false);
   const [blurTime, setBlurTime] = useState<number | null>(null);
 
@@ -51,8 +51,8 @@ export function useWindowNotifications(): void {
         clearFaviconBadge();
       }
 
-      if (sentBadgeCountRef.current !== 0 && window.electron?.notification?.updateBadge) {
-        sentBadgeCountRef.current = 0;
+      if (sentPanesRef.current?.length !== 0 && window.electron?.notification?.updateBadge) {
+        sentPanesRef.current = NO_PANES;
         window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
     };
@@ -101,10 +101,13 @@ export function useWindowNotifications(): void {
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         const panes = prevWaitingRef.current;
+        // Panes that came back to what Main last heard are no news to it, as a
+        // count that settled where it started never was.
+        if (sentPanesRef.current !== null && samePanes(sentPanesRef.current, panes)) return;
         const waitingCount = panes.length;
 
         if (window.electron?.notification?.updateBadge) {
-          sentBadgeCountRef.current = waitingCount;
+          sentPanesRef.current = panes;
           window.electron.notification.updateBadge({ waitingPanelIds: [...panes] });
         }
 
