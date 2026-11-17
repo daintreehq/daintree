@@ -438,13 +438,11 @@ describe("ProjectRelocationCoordinator — reattaching a background project (#17
 
   it("decides routing and status before the first await, not from what is left later", async () => {
     const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [PROJECT_ID] });
-    // The project's last PTY exits while the destination check is in flight.
-    mockProjectStore.getProjectByPath.mockImplementation(async () => {
-      deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
-      return null;
-    });
 
-    await reattach(deps);
+    const pending = reattach(deps);
+    // The project's last PTY exits as soon as the relocation first yields.
+    deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
+    await pending;
 
     expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
     expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
@@ -455,18 +453,16 @@ describe("ProjectRelocationCoordinator — reattaching a background project (#17
   it("previews from the entry snapshot when a holding goes away mid-preview", async () => {
     const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [PROJECT_ID] });
     deps.ptyClient.getProjectStats.mockResolvedValue({ terminalCount: 2 });
-    mockProjectStore.getProjectByPath.mockImplementation(async () => {
-      deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
-      return null;
-    });
     const coordinator = new ProjectRelocationCoordinator();
     configure(coordinator, deps);
 
-    const preview = await coordinator.previewRelocate({
+    const pending = coordinator.previewRelocate({
       projectId: PROJECT_ID,
       mode: "reattach",
       newPath: NEW_ROOT,
     });
+    deps.ptyClient.getLiveWorkspaceIds.mockReturnValue(new Set());
+    const preview = await pending;
 
     expect(preview.runningTerminalCount).toBe(2);
   });
