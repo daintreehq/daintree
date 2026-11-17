@@ -600,7 +600,6 @@ describe("installPortForwardClient", () => {
       channel: "dev-preview:stop-dev-server-by-worktree",
       args: [{ worktreeId: "wt-1" }],
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(service.list()).toHaveLength(1);
 
     // Its only view now is the new one: the preview goes with it.

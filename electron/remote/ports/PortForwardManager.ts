@@ -1089,6 +1089,10 @@ export class PortForwardManager {
     generation: number
   ): Promise<RemoteUpstreamResolution | null> {
     let resolution: PreviewResolution | null = null;
+    // Forgotten meanwhile, the host's answer is the machine it named before,
+    // whatever has happened to the cache since.
+    const forgets = this.forgets.get(hostId) ?? 0;
+    const forgotten = () => (this.forgets.get(hostId) ?? 0) !== forgets;
     const session = this.deps.sessionFor(hostId);
     if (session) {
       try {
@@ -1103,6 +1107,7 @@ export class PortForwardManager {
         resolution = null;
       }
     }
+    if (forgotten()) return null;
     const current = () => this.previewGenerations.get(subdomain) === generation;
     if (!current()) {
       // A newer lookup, or the preview's release, overtook this one: its answer is the one that counts.
@@ -1116,6 +1121,8 @@ export class PortForwardManager {
         { hostId, remotePort: resolution.port, origin: "dev-preview", label: "Dev preview" },
         owner
       );
+      // forgetHost closes the forward itself; nothing here may point at it.
+      if (forgotten()) return null;
       if (current()) {
         this.notePreviewForward(subdomain, key);
       } else {

@@ -3260,6 +3260,7 @@ describe("RemoteHostsClient", () => {
           retiring: retarget!.isHostRetiring("studio-01"),
           other: retarget!.isHostRetiring("studio-02"),
         });
+      registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
       retarget = retargetClient(vi.fn(async () => void note("cleanup"))).retarget;
       // The port forwards' prune runs on this change: the host must still read as retiring then.
       const off = registry.onChange(() => note("rebind"));

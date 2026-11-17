@@ -426,6 +426,26 @@ describe("dev preview through a forward", () => {
     expect(m.hasForwardsFor(HOST)).toBe(false);
   });
 
+  it("lets a forgotten host's lookup land nowhere even once the preview cache was cleared (#17207)", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const devServerPort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    const m = manager({ now: () => 1_000 });
+    let answer = () => {};
+    previewHold = new Promise((resolve) => (answer = resolve));
+    previewResolution = { kind: "ok", port: devServerPort, isHttps: false };
+
+    const lookup = m.resolvePreview("dp-proj-panel");
+    // A session coming back clears every host's cached answers, this lookup's entry with them.
+    await m.reestablish(HOST);
+    await m.forgetHost(HOST);
+    answer();
+
+    await expect(lookup).resolves.toBeNull();
+    expect(m.list()).toEqual([]);
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+  });
+
   it("keeps another host's lookup of a forgotten host's preview origin (#17207)", async () => {
     const OTHER = "studio-02";
     const upstream = http.createServer((_req, res) => res.end("ok"));
@@ -757,6 +777,7 @@ describe("ssh -O forward on the ControlMaster", () => {
     const remotePort = await listen(probe);
     await new Promise((resolve) => probe.close(resolve));
     const forward = await m.forward({ hostId: HOST, remotePort });
+    const ipv6 = m.boundEndpointsFor(HOST).some((endpoint) => endpoint.address === "::1");
 
     const stopping = m.stop(forward.forwardId);
     await waitFor(() => cancel.refuse !== null, 3_000);
@@ -766,6 +787,15 @@ describe("ssh -O forward on the ControlMaster", () => {
     await expect(stopping).resolves.toBeUndefined();
     expect(m.list()).toEqual([]);
     expect(m.hasForwardsFor(HOST)).toBe(false);
+    // The IPv6 side this machine held for it is let go too.
+    if (ipv6) {
+      const free = net.createServer();
+      await new Promise<void>((resolve, reject) => {
+        free.once("error", reject);
+        free.listen(forward.localPort, "::1", () => resolve());
+      });
+      await new Promise((resolve) => free.close(resolve));
+    }
   });
 
   it("holds the IPv6 side of an ssh forward itself and relays it to the IPv4 side ssh holds", async () => {
