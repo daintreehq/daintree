@@ -301,7 +301,10 @@ async function restartForMemory(
   ]);
   clearTimeout(timer);
   if (result === null) {
-    return { kind: "failed", reason: "The terminal backend hasn't confirmed a replacement process." };
+    return {
+      kind: "failed",
+      reason: "The terminal backend hasn't confirmed a replacement process.",
+    };
   }
   if (!result.success) {
     return { kind: "failed", reason: result.error?.message ?? "Failed to start terminal process" };
