@@ -559,10 +559,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     const newPath = result.filePaths[0];
-    // Route through the relocation coordinator: it forks internally — an OPEN
-    // project (visible in any window) runs the phase-3 quiesce/rebind pipeline
-    // so the live view/host/PTYs are repointed rather than stranded; a closed
-    // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
+    // Route through the relocation coordinator: it forks internally — a project
+    // holding live runtimes (visible in any window, or kept warm in the
+    // background) runs the phase-3 quiesce/rebind pipeline so its views, host
+    // and PTYs are repointed rather than stranded; a reattach of a project
+    // holding nothing delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
     // every cached view by immutable id, so the new path reaches windows other
     // than the one that ran the locate flow (#11282).
     const { projectRelocationCoordinator } =

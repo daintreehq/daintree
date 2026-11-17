@@ -109,34 +109,59 @@ interface FakeView {
   webContents: { isDestroyed: () => boolean; send: ReturnType<typeof vi.fn> };
 }
 
-function makePvm(activeProjectId: string | null) {
+/**
+ * A window's view manager. `cachedIds` are the workspaces it holds a view for —
+ * by default just the one it shows, so `makePvm(null)` holds nothing and
+ * `makePvm("other", [PROJECT_ID, "other"])` keeps this project warm in the
+ * background behind another one.
+ */
+function makePvm(
+  activeProjectId: string | null,
+  cachedIds: string[] = activeProjectId ? [activeProjectId] : []
+) {
   const view: FakeView = { webContents: { isDestroyed: () => false, send: vi.fn() } };
   return {
     getActiveProjectId: () => activeProjectId,
     getOutgoingBridgeProjectId: () => null,
     rebindProjectPath: vi.fn(async () => view.webContents),
-    views: new Map([[PROJECT_ID, { view }]]),
+    views: new Map(cachedIds.map((id) => [id, { view }])),
     _view: view,
   };
 }
 
-function makeDeps(pvm: ReturnType<typeof makePvm> | null) {
+function makeDeps(
+  pvm: ReturnType<typeof makePvm> | null,
+  opts: { liveTerminalIds?: string[]; hostPaths?: string[] } = {}
+) {
   const ctx = { windowId: 1, services: { projectViewManager: pvm } };
   const windowRegistry = {
     all: () => (pvm ? [ctx] : []),
     getByWindowId: (id: number) => (pvm && id === 1 ? ctx : undefined),
   };
+  // Killing a project's PTYs drops it from the tracked set, as the client does.
+  const liveTerminalIds = new Set<string>(opts.liveTerminalIds ?? []);
   const ptyClient = {
-    gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+    gracefulKillByProject: vi.fn(async (projectId: string, _opts?: unknown) => {
+      liveTerminalIds.delete(projectId);
+      return [{ id: "t1", agentSessionId: "sess-1" }];
+    }),
+    getLiveWorkspaceIds: vi.fn(() => new Set(liveTerminalIds)),
     onProjectSwitch: vi.fn(),
     getProjectStats: vi.fn<
       () => Promise<{ terminalCount: number; terminalTypes?: Record<string, number> }>
     >(async () => ({ terminalCount: 0 })),
   };
+  // Hosts keyed by root, like the pool: evicted from the old root, spawned at
+  // whichever root a reopen loads.
+  const hosts = new Set<string>(opts.hostPaths ?? []);
   const worktreeService = {
-    evictProjectForRelocation: vi.fn(),
-    loadProject: vi.fn(async () => {}),
-    getHostForProject: vi.fn(() => ({}) as unknown),
+    evictProjectForRelocation: vi.fn((root: string) => {
+      hosts.delete(root);
+    }),
+    loadProject: vi.fn(async (root: string, _windowId: number) => {
+      hosts.add(root);
+    }),
+    getHostForProject: vi.fn((root: string) => (hosts.has(root) ? {} : undefined)),
     attachDirectPort: vi.fn(),
   };
   const worktreePortBroker = { brokerPort: vi.fn(() => true) };
@@ -290,6 +315,153 @@ describe("ProjectRelocationCoordinator — guard fork", () => {
 
     expect(deps.ptyClient.gracefulKillByProject).toHaveBeenCalled();
     expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProjectRelocationCoordinator — reattaching a background project (#17185)", () => {
+  // Another project is on-screen; this one went missing while kept warm behind it.
+  const OTHER_ID = "other-project";
+
+  beforeEach(() => {
+    fsState.existing.add(NEW_ROOT);
+    mockProjectStore.getCurrentProjectId.mockReturnValue(OTHER_ID);
+    mockProjectStore.getProjectById.mockReturnValue(makeProject({ status: "missing" }));
+  });
+
+  async function reattach(deps: ReturnType<typeof makeDeps>) {
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+    return coordinator.relocate({ projectId: PROJECT_ID, mode: "reattach", newPath: NEW_ROOT });
+  }
+
+  function expectPipelineWithoutReopen(deps: ReturnType<typeof makeDeps>) {
+    expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+    expect(deps.ptyClient.gracefulKillByProject).toHaveBeenCalledWith(PROJECT_ID, {
+      preserveSession: true,
+    });
+    expect(deps.worktreeService.evictProjectForRelocation).toHaveBeenCalledWith(OLD_ROOT);
+    expect(mockProjectStore.beginRelocationRewrite).toHaveBeenCalledWith(
+      PROJECT_ID,
+      OLD_ROOT,
+      NEW_ROOT
+    );
+    // Still runtime-holding, so it lands as a background project, not "missing"
+    // (the status checkMissingProjects left on it) and not "closed".
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith({
+      projectId: PROJECT_ID,
+      expectedOldPath: OLD_ROOT,
+      newPath: NEW_ROOT,
+      status: "background",
+    });
+    expect(mockBroadcast).toHaveBeenCalledWith(
+      CHANNELS.PROJECT_UPDATED,
+      makeProject({ path: NEW_ROOT })
+    );
+    // No window shows it: nothing reopens the host or repoints a window's PTY
+    // context. The next switch to it loads the host at the row's new path.
+    expect(deps.worktreeService.loadProject).not.toHaveBeenCalled();
+    expect(deps.ptyClient.onProjectSwitch).not.toHaveBeenCalled();
+  }
+
+  it("runs the pipeline for a cached background view and rebinds it to the new root", async () => {
+    const pvm = makePvm(OTHER_ID, [OTHER_ID, PROJECT_ID]);
+    const deps = makeDeps(pvm);
+
+    await reattach(deps);
+
+    expectPipelineWithoutReopen(deps);
+    expect(pvm.rebindProjectPath).toHaveBeenCalledWith(PROJECT_ID, NEW_ROOT);
+  });
+
+  it("runs the pipeline when only live PTYs remain (view already evicted)", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [PROJECT_ID] });
+
+    await reattach(deps);
+
+    expectPipelineWithoutReopen(deps);
+    expect(mockWriteHibernatedMarker).toHaveBeenCalledWith("t1");
+  });
+
+  it("runs the pipeline when only a paused workspace host remains at the old root", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID), { hostPaths: [OLD_ROOT] });
+
+    await reattach(deps);
+
+    expectPipelineWithoutReopen(deps);
+    expect(deps.worktreeService.getHostForProject(OLD_ROOT)).toBeUndefined();
+  });
+
+  it("refuses while the background project's Assistant is running", async () => {
+    mockAssistant.getAssistantBackends.mockReturnValue([
+      { terminalId: "t9", webContentsId: 2, slot: 0 },
+    ]);
+    const deps = makeDeps(makePvm(OTHER_ID, [OTHER_ID, PROJECT_ID]));
+
+    await expect(reattach(deps)).rejects.toMatchObject({ reason: "assistant-active" });
+    expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+  });
+
+  it("gives a missing project shown in a second window its open status back", async () => {
+    const deps = makeDeps(makePvm(PROJECT_ID));
+
+    await reattach(deps);
+
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active" })
+    );
+    expect(deps.worktreeService.loadProject).toHaveBeenCalledWith(NEW_ROOT, 1);
+  });
+
+  it("treats an ownership source that throws as held, never as closed", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID));
+    deps.ptyClient.getLiveWorkspaceIds.mockImplementation(() => {
+      throw new Error("pty client torn down");
+    });
+
+    await reattach(deps);
+
+    expect(mockProjectStore.relocateProject).not.toHaveBeenCalled();
+    expect(mockProjectStore.finalizeRelocatedPath).toHaveBeenCalled();
+  });
+
+  it("still takes the closed-only path when nothing of the project is held", async () => {
+    const deps = makeDeps(makePvm(OTHER_ID), { liveTerminalIds: [OTHER_ID] });
+
+    await reattach(deps);
+
+    expect(mockProjectStore.relocateProject).toHaveBeenCalledWith(PROJECT_ID, NEW_ROOT);
+    expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
+  });
+
+  it("previews the background project's running terminals and Assistant blocker", async () => {
+    mockAssistant.getAssistantBackends.mockReturnValue([
+      { terminalId: "t9", webContentsId: 2, slot: 0 },
+    ]);
+    const deps = makeDeps(makePvm(OTHER_ID, [OTHER_ID, PROJECT_ID]), {
+      liveTerminalIds: [PROJECT_ID],
+    });
+    deps.ptyClient.getProjectStats.mockResolvedValue({
+      terminalCount: 3,
+      terminalTypes: { terminal: 1, claude: 2 },
+    });
+    const coordinator = new ProjectRelocationCoordinator();
+    configure(coordinator, deps);
+
+    const preview = await coordinator.previewRelocate({
+      projectId: PROJECT_ID,
+      mode: "reattach",
+      newPath: NEW_ROOT,
+    });
+
+    expect(deps.ptyClient.getProjectStats).toHaveBeenCalledWith(PROJECT_ID);
+    expect(preview.runningTerminalCount).toBe(3);
+    expect(preview.agentContinuity.map((a) => a.agentId)).toEqual(["claude"]);
+    expect(preview.blockers.map((b) => b.reason)).toContain("assistant-active");
+    // Preview stays read-only.
+    expect(deps.ptyClient.gracefulKillByProject).not.toHaveBeenCalled();
+    expect(deps.worktreeService.evictProjectForRelocation).not.toHaveBeenCalled();
   });
 });
 

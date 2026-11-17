@@ -1749,8 +1749,9 @@ export class ProjectStore {
     // after tearing down its runtimes), never this closed-project reattach path
     // — repointing a live view/host/PTY from here would strand them on the old
     // path (#11282). This single-window pointer only catches the last-focused
-    // window; the authoritative open-anywhere fork lives at the IPC boundary
-    // (`collectActiveProjectIds`), which routes open projects to the coordinator.
+    // window; the authoritative fork lives in the coordinator, which routes any
+    // project holding live runtimes (shown anywhere, or kept warm in the
+    // background) to its pipeline.
     if (projectId === this.getCurrentProjectId()) {
       throw new Error("Cannot relocate the currently active project");
     }
