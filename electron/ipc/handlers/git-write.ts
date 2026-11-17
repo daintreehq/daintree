@@ -1562,6 +1562,32 @@ async function diffWorkingTreeAgainstHead(git: DiffGit, cwd: string): Promise<st
   }
 }
 
+/**
+ * Whether git itself reports HEAD as `branch` with no commit yet (#17588).
+ *
+ * A HEAD that fails to read is no proof of that, so this asks for git's own
+ * statement: porcelain v2 names the branch and says `(initial)` for its commit
+ * in one answer. Any failure, or a different branch, is a no.
+ */
+async function isReportedUnbornBranch(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  branch: string
+): Promise<boolean> {
+  try {
+    const out = await git.raw([
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "--untracked-files=no",
+      "--ignore-submodules=all",
+    ]);
+    const headers = out.split("\n").filter((line) => line.startsWith("# branch."));
+    return headers.includes("# branch.oid (initial)") && headers.includes(`# branch.head ${branch}`);
+  } catch {
+    return false;
+  }
+}
+
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -2294,6 +2320,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
 
     const hasRemote = remoteNames.length > 0;
+    // Only where HEAD could not be read: every branch with a commit skips it.
+    const isUnbornBranch =
+      !headOid && currentBranch !== null && (await isReportedUnbornBranch(git, currentBranch));
 
     // Best-effort: this is a general status read, so an unresolvable
     // destination degrades to `null` here rather than failing the whole status.
@@ -2374,6 +2403,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       hasRemote,
       pushDestination,
       pullSource,
+      ...(isUnbornBranch ? { isUnbornBranch: true as const } : {}),
       repoState,
       rebaseStep,
       rebaseTotalSteps,

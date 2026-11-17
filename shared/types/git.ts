@@ -517,6 +517,13 @@ export interface StagingStatus {
    * named the push destination would describe the wrong repository.
    */
   pullSource: GitPushDestination | null;
+  /**
+   * Git reports `currentBranch` as having no commit yet (#17588). Present only
+   * on git's own word: a HEAD that merely failed to read leaves it absent. Such
+   * a branch has no push destination git can name until its first commit, so
+   * `pushDestination` is `null` here for want of a commit, not of configuration.
+   */
+  isUnbornBranch?: true;
   /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
   repoState: RepoState;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */

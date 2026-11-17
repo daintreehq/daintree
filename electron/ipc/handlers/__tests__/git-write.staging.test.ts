@@ -680,6 +680,48 @@ describe("git-write staging handlers (real git)", () => {
     expect(spawnedSince(mark)).toEqual([]);
   });
 
+  // #17588: git names no push destination before a branch's first commit, so
+  // the status has to say why the destination is missing.
+  it("reports an unborn branch with a remote as unborn, until its first commit", async () => {
+    git(repo, "remote", "add", "upstream", path.join(tmp, "origin.git"));
+    fs.writeFileSync(path.join(repo, "first.txt"), "first\n");
+    git(repo, "add", "first.txt");
+
+    const unborn = await stagingStatus();
+
+    expect(unborn.currentBranch).toBe("main");
+    expect(unborn.isDetachedHead).toBe(false);
+    expect(unborn.hasRemote).toBe(true);
+    expect(unborn.pushDestination).toBeNull();
+    expect(unborn.isUnbornBranch).toBe(true);
+
+    git(repo, "commit", "-q", "-m", "first");
+    const mark = spawned.length;
+    const born = await stagingStatus();
+
+    expect(born.isUnbornBranch).toBeUndefined();
+    expect(born.pushDestination).toEqual({ remote: "upstream", branch: "main" });
+    // A branch with a commit never pays for the probe.
+    const probes = spawnedSince(mark).filter((args) => args.includes("--porcelain=v2"));
+    expect(probes).toEqual([]);
+  });
+
+  it("reports an orphan branch as unborn, and a detached HEAD never", async () => {
+    commitFiles({ "a.txt": "a\n" });
+    git(repo, "checkout", "-q", "--orphan", "fresh");
+    fs.writeFileSync(path.join(repo, "b.txt"), "b\n");
+    git(repo, "add", "b.txt");
+
+    const orphan = await stagingStatus();
+    expect(orphan.currentBranch).toBe("fresh");
+    expect(orphan.isUnbornBranch).toBe(true);
+
+    git(repo, "checkout", "-q", "--detach", "main");
+    const detached = await stagingStatus();
+    expect(detached.isDetachedHead).toBe(true);
+    expect(detached.isUnbornBranch).toBeUndefined();
+  });
+
   it("reads churn by exact path, with no root probe and no config read", async () => {
     commitFiles({ "é space.txt": "a\nb\n", "sub/ünïcode.txt": "x\n" });
     git(repo, "remote", "add", "origin", path.join(tmp, "origin.git"));
