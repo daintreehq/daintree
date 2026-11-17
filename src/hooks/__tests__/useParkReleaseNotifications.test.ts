@@ -91,6 +91,7 @@ describe("useParkReleaseNotifications", () => {
   afterEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).electron;
+    delete window.__DAINTREE_HOST_ID__;
   });
 
   it("subscribes exactly once across mount → unmount → remount", async () => {
@@ -275,11 +276,23 @@ describe("useParkReleaseNotifications", () => {
     renderHook(() => unnamed.useParkReleaseNotifications());
     await act(async () => captured!(release(NOW)));
     await act(async () => captured!(release(NOW + 1)));
+    await act(async () => captured!({ ...release(NOW), id: "t2" }));
 
-    expect(notifyCalls).toHaveLength(3);
+    vi.resetModules();
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    const remote = await load();
+    renderHook(() => remote.useParkReleaseNotifications());
+    await act(async () => captured!(release(NOW)));
+
+    expect(notifyCalls).toHaveLength(5);
+    // The two views really differed: one named the run, one couldn't.
+    expect(notifyArg(0).message).toContain("Fix the auth redirect");
+    expect(notifyArg(1).message).toContain("A parked agent");
     expect(notifyArg(0).historyId).toBeDefined();
     expect(notifyArg(1).historyId).toBe(notifyArg(0).historyId);
     expect(notifyArg(2).historyId).not.toBe(notifyArg(0).historyId);
+    expect(notifyArg(3).historyId).not.toBe(notifyArg(0).historyId);
+    expect(notifyArg(4).historyId).not.toBe(notifyArg(0).historyId);
   });
 
   it("does not subscribe when Electron is unavailable", async () => {

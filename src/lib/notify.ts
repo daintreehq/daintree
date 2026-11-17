@@ -805,9 +805,14 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
   }
 
   // A held-back replacement keeps its own inbox row (the caller writes it),
-  // so it isn't counted again in a summary row. So does an event every view
-  // hears: the others file its own row, and a summary here would be a second.
-  if (payload.replaceKey !== undefined || payload.historyId !== undefined) return true;
+  // so it isn't counted again in a summary row.
+  if (payload.replaceKey !== undefined) return true;
+  // So does an event every view hears, since the others file its own row and a
+  // summary here would be a second; the held-back toast is still announced.
+  if (payload.historyId !== undefined) {
+    announceOverflow(key, now);
+    return true;
+  }
 
   bucket.overflowCount += 1;
   const historyStore = useNotificationHistoryStore.getState();
@@ -861,13 +866,16 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     });
   }
 
+  announceOverflow(key, now);
+  return true;
+}
+
+function announceOverflow(key: string, now: number): void {
   const lastAnnounce = _overflowAnnouncementTimestamps.get(key);
   if (lastAnnounce === undefined || now - lastAnnounce >= OVERFLOW_ANNOUNCEMENT_COOLDOWN_MS) {
     useAnnouncerStore.getState().announce("Events suppressed — check notification inbox", "polite");
     _overflowAnnouncementTimestamps.set(key, now);
   }
-
-  return true;
 }
 
 let _quietUntil = 0;

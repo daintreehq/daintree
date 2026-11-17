@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { NotificationHistoryEntry } from "../slices/notificationHistorySlice";
 
 /**
@@ -77,6 +77,10 @@ function readBlob(backing: Map<string, string>): PersistedBlob {
   return blob;
 }
 
+function entryById(backing: Map<string, string>, id: string): NotificationHistoryEntry | undefined {
+  return readBlob(backing).state.entries.find((e) => e.id === id);
+}
+
 type Listener = () => void;
 const revealListeners = new Set<Listener>();
 const warmActivatedListeners = new Set<Listener>();
@@ -121,13 +125,20 @@ async function openView() {
   return module;
 }
 
-/** Loads a fresh view with its own `notify()` over its own store. */
+/** Loads a fresh view with its own `notify()`, inbox, toaster and announcer. */
 async function openNotifyingView() {
   vi.resetModules();
   const history = await import("../slices/notificationHistorySlice");
   const { notify } = await import("../../lib/notify");
+  const { useNotificationStore } = await import("../notificationStore");
+  const { useAnnouncerStore } = await import("../accessibilityAnnouncerStore");
   vi.advanceTimersByTime(FLUSH_MS);
-  return { store: history.useNotificationHistoryStore, notify };
+  return {
+    store: history.useNotificationHistoryStore,
+    toasts: useNotificationStore,
+    announcer: useAnnouncerStore,
+    notify,
+  };
 }
 
 function flush(): void {
@@ -135,7 +146,7 @@ function flush(): void {
 }
 
 describe("notificationHistoryStore cross-view sync (#17191)", () => {
-  let addEventListenerSpy: ReturnType<typeof vi.spyOn>;
+  let addEventListenerSpy: MockInstance<typeof window.addEventListener>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -148,7 +159,7 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
     // jsdom window; a stale view from an earlier test must not answer this
     // file's later events.
     for (const [type, listener] of addEventListenerSpy.mock.calls) {
-      window.removeEventListener(type as string, listener as EventListener);
+      window.removeEventListener(type, listener);
     }
     revealListeners.clear();
     warmActivatedListeners.clear();
@@ -225,17 +236,55 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       const viewB = (await openView()).useNotificationHistoryStore;
 
       viewA.getState().markSummarized(["summed"]);
+      viewB.getState().markIdsRead(["summed"]);
+      const siblingId = viewB.getState().addEntry({ type: "info", message: "from B" });
+      flush();
+      announceSiblingWrite();
+
+      const summed = viewA.getState().entries.find((e) => e.id === "summed");
+      expect(viewA.getState().entries.some((e) => e.id === siblingId)).toBe(true);
+      expect(summed).toMatchObject({ seenAsToast: true, summarized: true });
+    });
+
+    it("keeps an old row this view just marked read, so its Undo still finds it", async () => {
+      const backing = installLocalStorage(
+        seed([makeEntry({ id: "old", timestamp: NOW - 8 * DAY })])
+      );
+      const viewA = (await openView()).useNotificationHistoryStore;
+      const viewB = (await openView()).useNotificationHistoryStore;
+
+      viewA.getState().markIdsRead(["old"]);
+      viewB.getState().addEntry({ type: "info", message: "from B" });
+      flush();
+      announceSiblingWrite();
+      viewA.getState().markUnseenAsToast("old", { silent: true });
+      flush();
+
+      expect(entryById(backing, "old")?.seenAsToast).toBe(false);
+    });
+
+    it("takes up a sibling's copy of a row whose held archive hydration would drop", async () => {
+      // Archived while the clock ran ahead; back on time, a sibling's write
+      // carries the row active, and this view must show it as everyone does.
+      installLocalStorage(seed([makeEntry({ id: "row" })]));
+      const viewA = (await openView()).useNotificationHistoryStore;
+      vi.setSystemTime(NOW + 10 * 60_000);
+      viewA.getState().archiveEntry("row");
+      flush();
+      vi.setSystemTime(NOW);
+      const viewB = (await openView()).useNotificationHistoryStore;
       viewB.getState().addEntry({ type: "info", message: "from B" });
       flush();
       announceSiblingWrite();
 
-      expect(viewA.getState().entries.find((e) => e.id === "summed")?.summarized).toBe(true);
+      expect(viewA.getState().entries.find((e) => e.id === "row")?.archivedAt).toBeNull();
     });
 
     it("ignores a write to another key", async () => {
-      installLocalStorage(seed([makeEntry({ id: "kept" })]));
+      const backing = installLocalStorage(seed([makeEntry({ id: "kept" })]));
       const viewA = (await openView()).useNotificationHistoryStore;
       const before = viewA.getState().entries;
+      backing.set(STORAGE_KEY, seed([makeEntry({ id: "not-yet-announced" })])[STORAGE_KEY]!);
 
       window.dispatchEvent(new StorageEvent("storage", { key: "some-other-key" }));
 
@@ -295,10 +344,12 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       installLocalStorage(seed([makeEntry({ id: "kept" })]));
       const viewA = (await openView()).useNotificationHistoryStore;
       const before = viewA.getState().entries;
+      const rehydrate = vi.spyOn(viewA.persist, "rehydrate");
 
       warmActivate();
       reveal();
 
+      expect(rehydrate).toHaveBeenCalledTimes(2);
       expect(viewA.getState().entries).toBe(before);
     });
   });
@@ -313,9 +364,10 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       viewB.getState().addEntry({ id: "host-event-1", type: "info", message: "Project slept" });
       flush();
 
-      const ids = readBlob(backing).state.entries.map((e) => e.id);
-      expect(ids.filter((id) => id === "host-event-1")).toHaveLength(1);
-      expect(ids).toContain("existing");
+      expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual([
+        "host-event-1",
+        "existing",
+      ]);
     });
 
     it("changes nothing when this view already holds the id", async () => {
@@ -368,15 +420,44 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
           title: "Projects slept",
           message: "Put to sleep to free memory.",
           priority: "low",
-          historyId: "idle-background-closed:idle:1",
+          historyId: "idle-background-closed:1:p1",
+          context: { eventKind: "host" },
         });
       }
       flush();
 
-      const rows = readBlob(backing).state.entries.filter(
-        (e) => e.id === "idle-background-closed:idle:1"
-      );
-      expect(rows).toHaveLength(1);
+      expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual([
+        "idle-background-closed:1:p1",
+      ]);
+    });
+
+    it("toasts once, in the focused view, on the row a hidden view filed first", async () => {
+      const backing = installLocalStorage(seed([]));
+      const hidden = await openNotifyingView();
+      const focused = await openNotifyingView();
+      const event = {
+        type: "info" as const,
+        title: "Park released",
+        message: "Fix the auth redirect — its gate came free",
+        historyId: "park-released:run-1:1",
+        context: { eventKind: "agent" as const },
+      };
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+
+      expect(hidden.notify(event)).toBe("");
+      announceSiblingWrite();
+      hasFocus.mockReturnValue(true);
+      const toastId = focused.notify(event);
+      flush();
+
+      expect(toastId).not.toBe("");
+      expect(focused.toasts.getState().notifications.map((n) => n.historyEntryId)).toEqual([
+        "park-released:run-1:1",
+      ]);
+      expect(hidden.toasts.getState().notifications).toEqual([]);
+      expect(readBlob(backing).state.entries).toMatchObject([
+        { id: "park-released:run-1:1", seenAsToast: true },
+      ]);
     });
 
     it("files no second row in a view that already took up a sibling's", async () => {
@@ -389,6 +470,7 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
         message: "A parked agent — its gate came free",
         priority: "low" as const,
         historyId: "park-released:run-1:1",
+        context: { eventKind: "agent" as const },
       };
 
       early.notify(event);
@@ -436,42 +518,43 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       expect(readBlob(backing).state.entries.some((e) => e.id === "host-event-1")).toBe(false);
     });
   });
-});
 
-describe("notify() for an event every view hears, rate-limited (#17191)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreLocalStorage();
-    vi.resetModules();
-    vi.restoreAllMocks();
-  });
+  describe("a host event its source's rate limit holds back", () => {
+    it("keeps the event's own unread row, announces it, and adds no summary row", async () => {
+      installLocalStorage(seed([]));
+      const view = await openNotifyingView();
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
 
-  it("keeps the event's own row and adds no summary row beside it", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    installLocalStorage(seed([]));
-    const view = await openNotifyingView();
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      for (const n of [1, 2, 3]) {
+        view.notify({
+          type: "info",
+          message: `burst ${n}`,
+          rateLimitKey: "park",
+          context: { eventKind: "agent" },
+        });
+      }
+      const returned = view.notify({
+        type: "info",
+        title: "Park released",
+        message: "A parked agent — its gate came free",
+        rateLimitKey: "park",
+        historyId: "park-released:run-1:1",
+        context: { eventKind: "agent" },
+      });
 
-    for (const n of [1, 2, 3]) {
-      view.notify({ type: "info", message: `burst ${n}`, rateLimitKey: "park" });
-    }
-    const returned = view.notify({
-      type: "info",
-      title: "Park released",
-      message: "A parked agent — its gate came free",
-      rateLimitKey: "park",
-      historyId: "park-released:run-1:1",
+      const active = view.store.getState().entries.filter((e) => !e.archivedAt);
+      expect(returned).toBe("");
+      expect(view.toasts.getState().notifications).toHaveLength(3);
+      expect(active.find((e) => e.id === "park-released:run-1:1")?.seenAsToast).toBe(false);
+      expect(active.map((e) => e.message).sort()).toEqual([
+        "A parked agent — its gate came free",
+        "burst 1",
+        "burst 2",
+        "burst 3",
+      ]);
+      expect(view.announcer.getState().polite?.msg).toBe(
+        "Events suppressed — check notification inbox"
+      );
     });
-
-    const active = view.store.getState().entries.filter((e) => !e.archivedAt);
-    expect(returned).toBe("");
-    expect(active.map((e) => e.id)).toContain("park-released:run-1:1");
-    expect(active.map((e) => e.message).sort()).toEqual([
-      "A parked agent — its gate came free",
-      "burst 1",
-      "burst 2",
-      "burst 3",
-    ]);
   });
 });

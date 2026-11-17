@@ -92,6 +92,13 @@ describe("useIdleBackgroundCloseNotifications", () => {
     expect(historyIdOf({ ...sweep, projects: [...sweep.projects] })).toBe(first);
     expect(historyIdOf({ ...sweep, timestamp: 2_000 })).not.toBe(first);
     expect(historyIdOf({ ...sweep, projects: [sweep.projects[0]!] })).not.toBe(first);
+    // A remote host's views share this inbox; its sweep is its own row.
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      expect(historyIdOf(sweep)).not.toBe(first);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+    }
   });
 
   it("subscribes once however often it mounts", () => {

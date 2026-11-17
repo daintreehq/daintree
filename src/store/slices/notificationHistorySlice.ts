@@ -159,13 +159,15 @@ function isPastRetention(entry: NotificationHistoryEntry, now: number): boolean 
  * Drop expired entries (read older than 7d, archived older than 30d), then
  * enforce the 200-entry safety ceiling. Age pruning runs before the cap so
  * unread entries survive a burst storm even when they're older than the
- * read-retention cutoff. Returns a new array; never mutates the input.
+ * read-retention cutoff. Ids in `keep` are spared the age pruning. Returns a
+ * new array; never mutates the input.
  */
 export function pruneNotificationEntries(
   entries: NotificationHistoryEntry[],
-  now: number
+  now: number,
+  keep?: ReadonlySet<string>
 ): NotificationHistoryEntry[] {
-  const filtered = entries.filter((e) => !isPastRetention(e, now));
+  const filtered = entries.filter((e) => keep?.has(e.id) === true || !isPastRetention(e, now));
   if (filtered.length <= MAX_ENTRIES) return filtered;
   return filtered.slice(0, MAX_ENTRIES);
 }
@@ -442,8 +444,7 @@ function mergeNotificationHistoryPersistedWrite({
  */
 function keepHeldEntries(
   hydrated: NotificationHistoryEntry[],
-  held: NotificationHistoryEntry[],
-  now: number
+  held: NotificationHistoryEntry[]
 ): NotificationHistoryEntry[] {
   if (held.length === 0) return hydrated;
   const byId = new Map(held.map((e) => [e.id, e]));
@@ -452,13 +453,36 @@ function keepHeldEntries(
     const mine = byId.get(entry.id);
     let kept = entry;
     if (mine !== undefined) {
-      if (JSON.stringify(sanitizePersistedEntry(mine, now)) === JSON.stringify(entry)) kept = mine;
+      if (JSON.stringify(storedForm(mine)) === JSON.stringify(entry)) kept = mine;
       else if (mine.summarized) kept = { ...entry, summarized: true };
     }
     if (kept !== held[index]) unchanged = false;
     return kept;
   });
   return unchanged ? held : entries;
+}
+
+/**
+ * A held entry as hydration would build it, field for field and in the same
+ * order, without the coercions hydration applies: a held value hydration would
+ * have dropped or reset then reads as different from what storage gave back.
+ */
+function storedForm(entry: NotificationHistoryEntry): NotificationHistoryEntry {
+  return {
+    id: entry.id,
+    type: entry.type,
+    title: entry.title,
+    message: entry.message,
+    timestamp: entry.timestamp,
+    correlationId: entry.correlationId,
+    seenAsToast: entry.seenAsToast,
+    summarized: false,
+    countable: entry.countable,
+    archivedAt: entry.archivedAt,
+    supersedeKey: entry.supersedeKey,
+    context: entry.context,
+    actions: entry.actions,
+  };
 }
 
 function sameRecord(a: Record<string, number>, b: Record<string, number>): boolean {
@@ -949,9 +973,16 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         const sanitized = rawEntries
           .map((raw) => sanitizePersistedEntry(raw, now))
           .filter((e): e is NotificationHistoryEntry => e !== null);
-        const pruned = pruneNotificationEntries(sanitized, now);
+        // A rehydrate mid-session spares the rows this view holds from age
+        // retention, as its writes do: an old row just marked read still has
+        // an Undo to answer, and the store's own prune retires it later.
+        const pruned = pruneNotificationEntries(
+          sanitized,
+          now,
+          new Set(current.entries.map((e) => e.id))
+        );
         const snoozedThreads = sanitizeSnoozedThreads(p?.snoozedThreads, now);
-        const entries = keepHeldEntries(pruned, current.entries, now);
+        const entries = keepHeldEntries(pruned, current.entries);
         return {
           ...current,
           entries,
