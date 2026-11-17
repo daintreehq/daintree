@@ -179,19 +179,23 @@ function isCalendarKey(key: string): key is CalendarKey {
 
 type TipSource = "hover" | "focus" | "touch";
 
-// The card sits over the days above the one it names, which are the ones a
-// finger reaches for next: a tap that lands on the card would close the readout
-// instead of moving it. While a tap owns the readout the card lets touches
-// through. The hit is taken by Popper's wrapper, not the card, hence the
-// parent selector.
-const TOUCH_CARD_CLASS = "[[data-radix-popper-content-wrapper]:has(&)]:pointer-events-none";
-
 // A click is a PointerEvent in Chromium, and its pointerType names the input
 // that produced it: "touch" for a tap, "mouse" or "pen" for those, empty for
 // the click a keyboard activation synthesises.
 function isTouchClick(event: MouseEvent): boolean {
   const native = event.nativeEvent;
   return "pointerType" in native && native.pointerType === "touch";
+}
+
+// The card is portaled over the days above the one it names, which are the ones
+// a finger reaches for next, so a tap meant for one of them lands on the card.
+// The day beneath the finger is the one asked for.
+function cellDateUnder(grid: HTMLElement, x: number, y: number): string | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (grid.contains(el))
+      return el.closest("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+  }
+  return null;
 }
 
 /**
@@ -224,6 +228,13 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (activeCellKey && !positions.has(activeCellKey)) {
       setActiveCellKey(null);
     }
+    // A tap's readout has no pointer or focus to end it, so one whose day left
+    // the range would otherwise sit there empty.
+    setTip((prev) =>
+      prev.open && prev.date !== null && !positions.has(prev.date)
+        ? { ...prev, open: false, source: null }
+        : prev
+    );
   }, [positions, activeCellKey]);
 
   const focusCell = useCallback((date: string) => {
@@ -267,20 +278,24 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
   // `source` is who owns the readout: the pointer leaving only closes what the
   // pointer opened, and a blur only what focus opened, so one input ending
   // never wipes out the other's. A tap's readout answers to neither: the
-  // pointerleave a lifted finger fires and the blur of a cell that lost focus
-  // leave it up, and it closes on a second tap, a tap elsewhere, a scroll or
-  // Escape.
+  // pointerleave a lifted finger fires leaves it up, and it closes on a second
+  // tap, a tap elsewhere, focus moving to a control outside the grid, a scroll
+  // or Escape.
   const showTip = (date: string, source: TipSource) => {
     setTip((prev) =>
-      prev.date === date && prev.open && prev.source === source
+      prev.date === date &&
+      prev.open &&
+      // Focus coming back to the day a tap has open (the window regaining it)
+      // is that tap's readout, not a new owner of it.
+      (prev.source === source || (source === "focus" && prev.source === "touch"))
         ? prev
         : { date, open: true, source }
     );
   };
 
-  const hideTip = (source?: TipSource) => {
+  const hideTip = (...sources: TipSource[]) => {
     setTip((prev) =>
-      prev.open && (source === undefined || prev.source === source)
+      prev.open && (sources.length === 0 || (prev.source !== null && sources.includes(prev.source)))
         ? { ...prev, open: false, source: null }
         : prev
     );
@@ -320,15 +335,21 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (event.pointerType !== "touch") hideTip();
   };
 
-  // A tap on a day is the touch screen's request for its readout, which hover
-  // and focus can't give it. Every other activation (a mouse click, a keyboard
-  // Enter or Space) hands the screen to the cell and closes it, as before.
+  // A touch screen has no hover, and the focus a tap causes is a side effect,
+  // so the click is where a tap states its request for a day's readout. Every
+  // other activation (a mouse click, a keyboard Enter or Space) hands the
+  // screen to the cell and closes it, as before.
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!isTouchClick(event)) {
       hideTip();
       return;
     }
-    const date = cellDateOf(event.currentTarget, event.target);
+    const grid = event.currentTarget;
+    const { target } = event;
+    const date =
+      target instanceof Node && !grid.contains(target)
+        ? cellDateUnder(grid, event.clientX, event.clientY)
+        : cellDateOf(grid, target);
     if (date) toggleTouchTip(date);
     else hideTip();
   };
@@ -339,7 +360,16 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (date) showTip(date, "focus");
   };
 
-  const handleBlur = () => hideTip("focus");
+  // Focus leaving the grid for another control ends a tap's readout along with
+  // a focus one: with auto-dismiss off nothing else would, and the card would
+  // sit over whatever the keyboard user moved on to. Focus going nowhere (the
+  // window losing it, a tap on bare space) leaves a tap's readout to the taps
+  // and presses that dismiss it.
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && !event.currentTarget.contains(next)) hideTip("focus", "touch");
+    else hideTip("focus");
+  };
 
   const handleTipOpenChange = (next: boolean) => {
     if (!next) hideTip();
@@ -464,7 +494,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
           </TooltipTrigger>
           <TooltipContent
             side="top"
-            className={cn("text-xs", tip.source === "touch" && TOUCH_CARD_CLASS)}
+            className="text-xs"
             onPointerDownOutside={handleCardPointerDownOutside}
           >
             {tipCell && (

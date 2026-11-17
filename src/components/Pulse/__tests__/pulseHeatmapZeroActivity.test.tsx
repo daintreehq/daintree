@@ -386,6 +386,8 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
   // tick, so it is not the one a mouse press suppresses. The settle after lets
   // Radix register its outside-press listeners, which it attaches on a timer.
   async function tap(el: HTMLElement) {
+    // Touch fires pointerover on the way in; the component ignores it.
+    fireEvent.pointerOver(el, { pointerType: "touch" });
     fireEvent.pointerDown(el, { pointerType: "touch" });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);
@@ -394,7 +396,6 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     if (document.activeElement !== el) {
       act(() => {
         el.focus();
-        fireEvent.focus(el);
       });
     }
     fireEvent.pointerUp(el, { pointerType: "touch" });
@@ -426,6 +427,7 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     renderHeatmap(cells);
     await settle();
     await tap(cellByDate("2026-09-21"));
+    expect(shown()).toContain("Sep 21");
     expect(shown()).toContain("2 commits");
     const anchor = document.querySelector<HTMLElement>(
       '[data-testid="pulse-heatmap-tooltip-anchor"]'
@@ -433,7 +435,9 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     const before = anchor.style.top;
 
     await tap(cellByDate("2026-09-22"));
+    expect(shown()).toContain("Sep 22");
     expect(shown()).toContain("5 commits");
+    expect(shown()).not.toContain("Sep 21");
     expect(shown()).not.toContain("2 commits");
     expect(anchor.style.top).not.toBe(before);
   });
@@ -456,18 +460,59 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     expect(shown()).not.toContain("2 commits");
   });
 
-  it("lets a tap through the card to a day it covers while a tap owns the readout", async () => {
+  // jsdom has no layout, so say what the finger landed on, top to bottom.
+  async function tapCard(card: Element, hit: Element[]) {
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: () => hit,
+    });
+    try {
+      fireEvent.pointerDown(card, { pointerType: "touch" });
+      click(card, "touch");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    } finally {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+    }
+  }
+
+  const cardOf = (text: string) => screen.getByText(text).closest<HTMLElement>("[data-side]")!;
+
+  it("reads a tap on the card as a tap on the day beneath it", async () => {
     renderHeatmap(cells);
     await settle();
-    const cardOf = (text: string) =>
-      screen.getByText(text).closest<HTMLElement>("[data-side]")!.className;
-
     await tap(cellByDate("2026-09-22"));
-    expect(cardOf("5 commits")).toContain("pointer-events-none");
+    expect(shown()).toContain("5 commits");
 
-    // A readout the pointer owns is hover's, and keeps the card hoverable.
-    fireEvent.pointerOver(cellByDate("2026-09-21"), { pointerType: "mouse" });
-    expect(cardOf("2 commits")).not.toContain("pointer-events-none");
+    await tapCard(cardOf("5 commits"), [cardOf("5 commits"), cellByDate("2026-09-21"), gridEl()]);
+    expect(shown()).toContain("2 commits");
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("reads it the same when keyboard focus, not a tap, owns the readout", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const focused = cellByDate("2026-09-22");
+    act(() => {
+      focused.focus();
+      fireEvent.focus(focused);
+    });
+    expect(shown()).toContain("5 commits");
+
+    await tapCard(cardOf("5 commits"), [cardOf("5 commits"), cellByDate("2026-09-21"), gridEl()]);
+    expect(shown()).toContain("2 commits");
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("closes when a tap on the card covers no day", async () => {
+    renderHeatmap(cells);
+    await settle();
+    await tap(cellByDate("2026-09-22"));
+    expect(shown()).toContain("5 commits");
+
+    await tapCard(cardOf("5 commits"), [cardOf("5 commits"), document.body]);
+    expect(shown()).not.toContain("5 commits");
   });
 
   it("keeps the open day up while a finger presses another, until the click decides", async () => {
@@ -478,6 +523,7 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
 
     // The press alone must not close the readout only for the click to put the
     // new day back a moment later.
+    fireEvent.pointerOver(cellByDate("2026-09-22"), { pointerType: "touch" });
     fireEvent.pointerDown(cellByDate("2026-09-22"), { pointerType: "touch" });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
@@ -503,14 +549,17 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     expect(shown()).not.toContain("5 commits");
   });
 
-  it("closes when the tap lands on the grid between cells", async () => {
+  it("closes when the tap lands on a space in the grid that is not a day", async () => {
     renderHeatmap(cells);
     await settle();
     await tap(cellByDate("2026-09-22"));
     expect(shown()).toContain("5 commits");
 
-    fireEvent.pointerDown(gridEl(), { pointerType: "touch" });
-    click(gridEl(), "touch");
+    // Friday to Sunday of this week are out of range: space held, no cell.
+    const gap = gridEl().querySelector<HTMLElement>("span.shrink-0[aria-hidden]")!;
+    expect(gap.hasAttribute("data-cell-date")).toBe(false);
+    fireEvent.pointerDown(gap, { pointerType: "touch" });
+    click(gap, "touch");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
@@ -576,6 +625,11 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     expect(shown()).toContain("5 commits");
 
     fireEvent.pointerDown(cell, { pointerType: "pen" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).not.toContain("5 commits");
+
     click(cell, "pen");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
@@ -635,5 +689,86 @@ describe("PulseHeatmap — a tap is a request for a day's readout", () => {
     fireEvent.pointerOver(cellByDate("2026-09-22"), { pointerType: "mouse" });
     expect(shown()).toContain("5 commits");
     expect(shown()).not.toContain("2 commits");
+  });
+
+  it("keeps a tapped day through focus going nowhere, as when the window loses it", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cell = cellByDate("2026-09-22");
+    await tap(cell);
+
+    fireEvent.blur(cell);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).toContain("5 commits");
+  });
+
+  it("closes a tapped day when focus moves to a control outside the grid", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cell = cellByDate("2026-09-22");
+    await tap(cell);
+    expect(shown()).toContain("5 commits");
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    fireEvent.blur(cell, { relatedTarget: outside });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    outside.remove();
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("closes on one tap after the window hands focus back to the tapped day", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cell = cellByDate("2026-09-22");
+    await tap(cell);
+
+    fireEvent.blur(cell);
+    act(() => {
+      fireEvent.focus(cell);
+    });
+    await tap(cell);
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("lets a tap take over a day a mouse hover has open, and the mouse leaving keeps it", async () => {
+    renderHeatmap(cells);
+    await settle();
+    const cell = cellByDate("2026-09-22");
+    fireEvent.pointerOver(cell, { pointerType: "mouse" });
+    expect(shown()).toContain("5 commits");
+
+    await tap(cell);
+    expect(shown()).toContain("5 commits");
+    fireEvent.pointerLeave(gridEl(), { pointerType: "mouse" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(shown()).toContain("5 commits");
+
+    await tap(cell);
+    expect(shown()).not.toContain("5 commits");
+  });
+
+  it("closes when the tapped day leaves the range", async () => {
+    const { rerender } = renderHeatmap(cells);
+    await settle();
+    await tap(cellByDate("2026-09-22"));
+    expect(document.querySelector("[data-side]")).not.toBeNull();
+
+    rerender(
+      <TooltipProvider>
+        <PulseHeatmap cells={cells.filter((c) => c.date !== "2026-09-22")} rangeDays={60} />
+      </TooltipProvider>
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // The card, not just its text: an open card with no day to name sits empty.
+    expect(document.querySelector("[data-side]")).toBeNull();
   });
 });
