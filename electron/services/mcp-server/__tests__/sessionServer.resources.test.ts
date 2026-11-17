@@ -10,8 +10,14 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
-import { fakeSessionStore, fakeDeps, makeMockTransport } from "./helpers/sessionServerFixture.js";
-import { RESOURCE_TEXT_MAX_BYTES } from "../shared.js";
+import {
+  fakeSessionStore,
+  fakeDeps,
+  makeMockTransport,
+  callHandler,
+} from "./helpers/sessionServerFixture.js";
+import { RESOURCE_TEXT_MAX_BYTES, SESSION_BINDING_GONE } from "../shared.js";
+import { SessionBindingError } from "../rendererBridge.js";
 
 describe("Resource error envelope (integration through sessionServer)", () => {
   async function readResource(server: ReturnType<typeof createSessionServer>, uri: string) {
@@ -359,5 +365,132 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       });
       expect(Buffer.byteLength(oneMoreCommit, "utf8")).toBeGreaterThan(RESOURCE_TEXT_MAX_BYTES);
     });
+  });
+});
+
+describe("resources/list reads its independent categories together (#17492)", () => {
+  type Envelope = { result: { ok: true; result: unknown } };
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  // A macrotask turn drains every microtask the handler queued before its
+  // first real wait, so "not dispatched yet" means it is waiting, not late.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function listingServer(dispatchAction: ReturnType<typeof vi.fn>) {
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
+    const server = createSessionServer("s_list_concurrent", deps);
+    await server.connect(makeMockTransport());
+    return server;
+  }
+
+  it("starts terminal.list while worktree.list is still pending, keeping the listing order", async () => {
+    const worktrees = deferred<Envelope>();
+    const terminals = deferred<Envelope>();
+    const dispatchAction = vi.fn((actionId: string) => {
+      if (actionId === "worktree.list") return worktrees.promise;
+      if (actionId === "terminal.list") return terminals.promise;
+      return Promise.resolve({ result: { ok: true, result: null } });
+    });
+    const server = await listingServer(dispatchAction);
+
+    const listing = callHandler(server, "resources/list", {}) as Promise<{
+      resources: Array<{ uri: string }>;
+    }>;
+    await settle();
+
+    expect(dispatchAction.mock.calls.map(([id]) => id)).toEqual(["worktree.list", "terminal.list"]);
+
+    // Settled in the reverse of listing order, so an order that followed
+    // arrival would put the terminal entries first.
+    terminals.resolve({
+      result: { ok: true, result: [{ id: "t-1", title: "Shell", agentId: "claude" }] },
+    });
+    await settle();
+    worktrees.resolve({ result: { ok: true, result: [{ id: "wt-1", branch: "main" }] } });
+
+    const uris = (await listing).resources.map((r) => r.uri);
+    const pulse = "daintree://worktree/wt-1/pulse";
+    expect(uris.slice(uris.indexOf(pulse))).toEqual([
+      pulse,
+      "daintree://terminal/t-1/scrollback",
+      "daintree://agent/claude/state",
+    ]);
+  });
+
+  it("keeps each read's own failure handling: a failed worktree read drops only its entries", async () => {
+    const worktrees = deferred<Envelope>();
+    const dispatchAction = vi.fn((actionId: string) => {
+      if (actionId === "worktree.list") return worktrees.promise;
+      if (actionId === "terminal.list") {
+        return Promise.resolve({ result: { ok: true, result: [{ id: "t-1", title: "Shell" }] } });
+      }
+      return Promise.resolve({ result: { ok: true, result: null } });
+    });
+    const server = await listingServer(dispatchAction);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const listing = callHandler(server, "resources/list", {}) as Promise<{
+        resources: Array<{ uri: string }>;
+      }>;
+      await settle();
+      worktrees.reject(new Error("renderer hiccup"));
+
+      const uris = (await listing).resources.map((r) => r.uri);
+      expect(uris.some((uri) => uri.startsWith("daintree://worktree/"))).toBe(false);
+      expect(uris).toContain("daintree://terminal/t-1/scrollback");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("refuses for a dead pin on worktree.list without waiting on a slow terminal.list", async () => {
+    const terminals = deferred<Envelope>();
+    const dispatchAction = vi.fn((actionId: string) => {
+      if (actionId === "worktree.list") return Promise.reject(new SessionBindingError(1234));
+      if (actionId === "terminal.list") return terminals.promise;
+      return Promise.resolve({ result: { ok: true, result: null } });
+    });
+    const server = await listingServer(dispatchAction);
+
+    await expect(callHandler(server, "resources/list", {})).rejects.toMatchObject({
+      data: { code: SESSION_BINDING_GONE },
+    });
+
+    // The read still out when the request gave up may fail later; that must
+    // not surface as an unhandled rejection.
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.list", {});
+    terminals.reject(new SessionBindingError(1234));
+    await settle();
+  });
+
+  it("surfaces the worktree read's refusal when both reads refuse, whichever settles first", async () => {
+    const worktrees = deferred<Envelope>();
+    const dispatchAction = vi.fn((actionId: string) => {
+      if (actionId === "worktree.list") return worktrees.promise;
+      if (actionId === "terminal.list") return Promise.reject(new SessionBindingError(2));
+      return Promise.resolve({ result: { ok: true, result: null } });
+    });
+    const server = await listingServer(dispatchAction);
+
+    const listing = callHandler(server, "resources/list", {});
+    const outcome = listing.then(
+      () => null,
+      (err: unknown) => err
+    );
+    await settle();
+    worktrees.reject(new SessionBindingError(1));
+
+    const err = (await outcome) as { message?: string; data?: { code?: string } } | null;
+    expect(err?.data?.code).toBe(SESSION_BINDING_GONE);
+    // McpError prefixes its own code; the dead pin's id is what tells them apart.
+    expect(err?.message).toContain(new SessionBindingError(1).message);
   });
 });
