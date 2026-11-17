@@ -150,7 +150,10 @@ describe("PerfContent", () => {
       await flush();
 
       const text = container.querySelector("time")!.textContent!;
-      expect(text).toMatch(/^Generated /);
+      const month = new Intl.DateTimeFormat(undefined, { month: "short" }).format(
+        new Date("2026-04-01T12:00:00.000Z")
+      );
+      expect(text).toContain(month);
       expect(text).not.toContain("ago");
       expect(text).not.toMatch(/\d+[/.-]\d+/);
     });
