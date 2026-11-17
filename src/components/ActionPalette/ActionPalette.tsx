@@ -90,7 +90,7 @@ function looksLikePath(query: string): boolean {
 // (#11690) — see `hasSeenActionPalettePrefixHint`. The empty-query browse rail
 // covers what actions exist; this covers the input grammar that hands search to
 // another palette, which nothing else states.
-function PrefixDiscoverabilityRow() {
+function PrefixDiscoverabilityRow({ promptHistoryHosted }: { promptHistoryHosted: boolean }) {
   return (
     <div
       // Spacing does the separating, not interpuncts. The row wraps at the
@@ -100,12 +100,14 @@ function PrefixDiscoverabilityRow() {
       aria-label="Prefix shortcuts"
     >
       <span>Type</span>
-      {Object.entries(PREFIX_MAP).map(([prefix, route]) => (
-        <span key={prefix} className="inline-flex items-baseline">
-          <kbd className={KBD_CLASS}>{prefix}</kbd>
-          <span className="ml-1.5">{route.label.toLowerCase()}</span>
-        </span>
-      ))}
+      {Object.entries(PREFIX_MAP).map(([prefix, route]) =>
+        route.paletteId === "prompt-history" && !promptHistoryHosted ? null : (
+          <span key={prefix} className="inline-flex items-baseline">
+            <kbd className={KBD_CLASS}>{prefix}</kbd>
+            <span className="ml-1.5">{route.label.toLowerCase()}</span>
+          </span>
+        )
+      )}
     </div>
   );
 }
@@ -172,6 +174,7 @@ export function ActionPalette({
   const actionPaletteShortcut = useEffectiveCombo("action.palette.open");
   const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
   const hasSeenPrefixHint = usePreferencesStore((state) => state.hasSeenActionPalettePrefixHint);
+  const promptHistoryHosted = usePaletteStore((state) => state.promptHistoryHosts > 0);
   const markPrefixHintSeen = usePreferencesStore((state) => state.markActionPalettePrefixHintSeen);
   // Stable id wraps the rendered footer hint and gets pointed at by every
   // option's aria-describedby — mirrors QuickSwitcher.tsx so screen readers
@@ -413,10 +416,30 @@ export function ActionPalette({
 
       const route = PREFIX_MAP[e.key];
       if (!route) return;
+      // Prompt history draws inside an agent composer that holds it, so a view
+      // can have none to hand off to. The slot would then name a palette
+      // nothing draws: this one would close into nothing, and the id would
+      // latch until a composer mounted and opened it unasked. Read at the key,
+      // not from the render, so a host that just went is never handed off to.
+      // Left unprevented, `:` is typed like any other character.
+      if (
+        route.paletteId === "prompt-history" &&
+        usePaletteStore.getState().promptHistoryHosts === 0
+      ) {
+        return;
+      }
 
       e.preventDefault();
       if (route.paletteId === null) {
         if (route.mode) setActiveMode(route.mode);
+        return;
+      }
+      // The switcher's controller, not the store slot: the toolbar dropdown
+      // shares it and leaves it in dropdown mode, where the slot alone opens
+      // nothing. Its `open()` also freezes the browse order and preselects the
+      // row an opening starts on.
+      if (route.paletteId === "project-switcher") {
+        onSearchProjects("");
         return;
       }
       // Atomic hand-off — `openPalette` replaces `activePaletteId` directly, so
@@ -439,6 +462,7 @@ export function ActionPalette({
       unpinAction,
       hideAction,
       canHideIndex,
+      onSearchProjects,
     ]
   );
 
@@ -553,7 +577,9 @@ export function ActionPalette({
       return (
         <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
           {body}
-          {showPrefixHints && <PrefixDiscoverabilityRow />}
+          {showPrefixHints && (
+            <PrefixDiscoverabilityRow promptHistoryHosted={promptHistoryHosted} />
+          )}
         </div>
       );
     },
@@ -564,6 +590,7 @@ export function ActionPalette({
       offersProjectSearch,
       footerHintId,
       showPrefixHints,
+      promptHistoryHosted,
       activeItem,
       activeIsPinned,
       canHideIndex,

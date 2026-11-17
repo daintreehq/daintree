@@ -3,7 +3,7 @@ import { usePaletteStore } from "../paletteStore";
 
 describe("paletteStore", () => {
   beforeEach(() => {
-    usePaletteStore.setState({ activePaletteId: null });
+    usePaletteStore.setState({ activePaletteId: null, promptHistoryHosts: 0 });
   });
 
   it("openPalette replaces a previously open palette (mutual exclusion)", () => {
@@ -22,5 +22,23 @@ describe("paletteStore", () => {
     usePaletteStore.getState().openPalette("action");
     usePaletteStore.getState().closePalette("panel");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
+  });
+
+  it("counts prompt-history hosts without opening, closing or requesting a palette", () => {
+    usePaletteStore.getState().openPalette("action");
+    const { openRequestId } = usePaletteStore.getState();
+
+    const first = usePaletteStore.getState().registerPromptHistoryHost();
+    const second = usePaletteStore.getState().registerPromptHistoryHost();
+    expect(usePaletteStore.getState().promptHistoryHosts).toBe(2);
+
+    first();
+    first();
+    expect(usePaletteStore.getState().promptHistoryHosts).toBe(1);
+
+    second();
+    expect(usePaletteStore.getState().promptHistoryHosts).toBe(0);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    expect(usePaletteStore.getState().openRequestId).toBe(openRequestId);
   });
 });

@@ -196,7 +196,7 @@ function fireRegionKey(key: string) {
 describe("ActionPalette", () => {
   beforeEach(() => {
     lastSearchablePaletteProps.current = null;
-    usePaletteStore.setState({ activePaletteId: "action" });
+    usePaletteStore.setState({ activePaletteId: "action", promptHistoryHosts: 0 });
     // Real store, not a mock: the prefix hint's whole behaviour is that a
     // render writes state a later render reads, so a non-reactive fixture would
     // only ever prove the selector was called.
@@ -204,7 +204,7 @@ describe("ActionPalette", () => {
   });
 
   afterEach(() => {
-    usePaletteStore.setState({ activePaletteId: null });
+    usePaletteStore.setState({ activePaletteId: null, promptHistoryHosts: 0 });
     usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
   });
 
@@ -333,16 +333,53 @@ describe("ActionPalette", () => {
     expect(usePaletteStore.getState().activePaletteId).toBe("panel");
   });
 
-  it("routes ':' to the prompt-history palette", () => {
+  it("routes ':' to the prompt-history palette while a composer hosts it", () => {
+    usePaletteStore.getState().registerPromptHistoryHost();
     render(<ActionPalette {...baseProps} />);
-    fireKey(":");
+    expect(fireKey(":")).toBe(true);
     expect(usePaletteStore.getState().activePaletteId).toBe("prompt-history");
   });
 
-  it("routes '/' to the project-switcher palette", () => {
+  it("types ':' like any other character when no composer hosts prompt history", () => {
     render(<ActionPalette {...baseProps} />);
-    fireKey("/");
-    expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+    const requestsBefore = usePaletteStore.getState().openRequestId;
+
+    expect(fireKey(":")).toBe(false);
+
+    // Nothing named a palette that nothing draws: this one is still the open
+    // one, and no request is left for a composer that mounts later to answer.
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    expect(usePaletteStore.getState().openRequestId).toBe(requestsBefore);
+  });
+
+  it("stops routing ':' once the last prompt-history host is gone", () => {
+    const first = usePaletteStore.getState().registerPromptHistoryHost();
+    const second = usePaletteStore.getState().registerPromptHistoryHost();
+    render(<ActionPalette {...baseProps} />);
+
+    first();
+    // A disposer that runs twice must not take the other host's count with it.
+    first();
+    expect(usePaletteStore.getState().promptHistoryHosts).toBe(1);
+
+    second();
+    expect(fireKey(":")).toBe(false);
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+  });
+
+  it("hands '/' to the switcher's controller with no text, not straight to the store slot", () => {
+    const onSearchProjects = vi.fn();
+    render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
+    const requestsBefore = usePaletteStore.getState().openRequestId;
+
+    expect(fireKey("/")).toBe(true);
+
+    expect(onSearchProjects).toHaveBeenCalledTimes(1);
+    expect(onSearchProjects).toHaveBeenCalledWith("");
+    // The slot is the controller's to take: writing it here opened nothing
+    // while the toolbar dropdown had left the controller in dropdown mode.
+    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    expect(usePaletteStore.getState().openRequestId).toBe(requestsBefore);
   });
 
   it("keeps the projects hint's promise: Enter hands a path-shaped query to the project switcher", () => {
@@ -363,14 +400,6 @@ describe("ActionPalette", () => {
     // Tab reaches the results region, and Enter there keeps the same promise.
     expect(fireRegionKey("Enter")).toBe(true);
     expect(onSearchProjects).toHaveBeenCalledTimes(2);
-  });
-
-  it("routes '/' from an empty field without handing the switcher any text", () => {
-    const onSearchProjects = vi.fn();
-    render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
-    expect(fireKey("/")).toBe(true);
-    expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
-    expect(onSearchProjects).not.toHaveBeenCalled();
   });
 
   describe("leaves Enter alone on a path-shaped query when projects aren't offered", () => {
@@ -529,7 +558,8 @@ describe("ActionPalette", () => {
   });
 
   it("rejects prefix routing when modifier keys are held", () => {
-    render(<ActionPalette {...baseProps} />);
+    const onSearchProjects = vi.fn();
+    render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
 
     expect(fireKey(">", { metaKey: true })).toBe(false);
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
@@ -538,13 +568,14 @@ describe("ActionPalette", () => {
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
 
     expect(fireKey("/", { altKey: true })).toBe(false);
-    expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    expect(onSearchProjects).not.toHaveBeenCalled();
 
     expect(screen.queryByText("Commands")).toBeNull();
   });
 
   it("does not re-route when a second prefix is typed inside an active mode", () => {
-    render(<ActionPalette {...baseProps} />);
+    const onSearchProjects = vi.fn();
+    render(<ActionPalette {...baseProps} onSearchProjects={onSearchProjects} />);
     fireKey(">");
     expect(screen.getByText("Commands")).toBeTruthy();
 
@@ -552,6 +583,7 @@ describe("ActionPalette", () => {
     expect(fireKey("#")).toBe(false);
     expect(fireKey("/")).toBe(false);
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
+    expect(onSearchProjects).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -575,6 +607,7 @@ describe("ActionPalette", () => {
     const seen = () => usePreferencesStore.getState().hasSeenActionPalettePrefixHint;
 
     it("renders the prefix table in the default empty-query footer", () => {
+      usePaletteStore.getState().registerPromptHistoryHost();
       render(<ActionPalette {...baseProps} />);
       // One chip per prefix — labels are lowercased for mid-sentence rendering.
       expect(screen.getByText("commands")).toBeTruthy();
@@ -582,6 +615,18 @@ describe("ActionPalette", () => {
       expect(screen.getByText("panels")).toBeTruthy();
       expect(screen.getByText("prompt history")).toBeTruthy();
       expect(screen.getByText("projects")).toBeTruthy();
+    });
+
+    it("leaves prompt history out of the table while no composer hosts it", () => {
+      render(<ActionPalette {...baseProps} />);
+      expect(screen.getByText("projects")).toBeTruthy();
+      expect(screen.queryByText("prompt history")).toBeNull();
+
+      // A composer mounting while the palette is open brings the entry back.
+      act(() => {
+        usePaletteStore.getState().registerPromptHistoryHost();
+      });
+      expect(screen.getByText("prompt history")).toBeTruthy();
     });
 
     it("hides the prefix table once a query is typed", () => {

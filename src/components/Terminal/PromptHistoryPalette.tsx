@@ -25,6 +25,7 @@ import {
 } from "@/utils/promptHistoryPreview";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { GLOBAL_ASSISTANT_HISTORY_ID } from "@/store/commandHistoryStore";
 import { isMac } from "@/lib/platform";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -293,6 +294,10 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       onOpenRef.current = null;
     };
   }, [onOpenRef, open]);
+
+  // Mounted, open or not: the Action Palette's `:` hands off only while some
+  // composer draws this palette to answer it.
+  useEffect(() => usePaletteStore.getState().registerPromptHistoryHost(), []);
 
   const projects = useProjectStore((s) => s.projects);
   const projectNames = useMemo(

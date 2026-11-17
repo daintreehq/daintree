@@ -96,8 +96,8 @@ export function useProjectSwitcherPalette({
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   // A palette taking the store slot closes this one without `close()`, so the
-  // query is dropped here as well: a later opening that skips `open()` — the
-  // action palette's `/` route — would otherwise come back on the old text.
+  // query is dropped here as well: an opening that reaches only the store slot
+  // would otherwise come back on the old text.
   const [wasOpen, setWasOpen] = useState(isOpen);
   // The query an opening handed over. It ranks on the opening's own commit:
   // the deferral is for keystrokes, and lagging here would show browse rows
