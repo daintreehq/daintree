@@ -590,8 +590,9 @@ export class FileSearchService {
    */
   invalidateUnder(root: string): void {
     const resolvedRoot = path.resolve(root);
-    // The root itself always, so this keeps `invalidate`'s contract for an
-    // exact-match key even where an overlap check would disagree about it.
+    // The root itself always, so the exact key never depends on
+    // `scopesOverlap`. Dropping a key nothing holds retains nothing, so a root
+    // that was never searched costs nothing here.
     const targets = new Set<string>([resolvedRoot]);
 
     // `Cache.forEach` skips expired entries without deleting them, so sweep
@@ -622,8 +623,9 @@ export class FileSearchService {
   }
 
   /**
-   * How many cwd keys the module holds across every structure it keeps, for
-   * tests that check invalidation leaves nothing behind once loads settle.
+   * How many cwd keys the index cache and the in-flight loads hold between
+   * them, for tests that check invalidation leaves nothing behind once loads
+   * settle.
    */
   getRetainedKeyCount(): number {
     return FILE_LIST_CACHE.size() + FILE_LIST_IN_FLIGHT.size;

@@ -792,8 +792,10 @@ describe("FileSearchService", () => {
       first.release("stale.ts\0");
       await stale;
       // Checked here, not only at the end: the newer load would paper over a
-      // stale commit by overwriting it when it lands.
+      // stale commit by overwriting it when it lands. The one retained key is
+      // the newer load's own slot, which the stale one must not have taken.
       expect(service.getCacheStats().size).toBe(0);
+      expect(service.getRetainedKeyCount()).toBe(1);
       second.release("fresh.ts\0");
       await expect(fresh).resolves.toEqual(["fresh.ts"]);
 
@@ -804,8 +806,8 @@ describe("FileSearchService", () => {
     });
 
     it("fences a load still settling when dispose runs", async () => {
-      // Disposal that only forgot the in-flight entry would let the load's
-      // completion reseed the cache — and rearm the sweep — after teardown.
+      // A load that completes after teardown must not reseed the cache — and
+      // rearm the sweep — for a service that has been disposed.
       const dir = makeTempDir();
       tempDirs.push(dir);
       gitClientMock.checkIsRepo.mockResolvedValue(true);
