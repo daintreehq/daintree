@@ -507,13 +507,23 @@ describe("bookmark mutator handlers", () => {
 
   // #17483 — an unreadable journal must reach the resume UI as a failed read so
   // it shows its error state and Retry, not the "nothing closed" empty state.
-  it("session list rejects when the journal exists but can't be read", async () => {
+  it("session list returns the journal's rows, and rejects when it exists but can't be read", async () => {
     register();
     const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
+    const rows = [{ sessionId: "s1" }];
+    m.listAgentSessionsOrThrow.mockReturnValueOnce(rows as never);
+
+    await expect(list({}, {})).resolves.toBe(rows);
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
+      undefined,
+      "/tmp/test",
+      30,
+      undefined
+    );
+
     m.listAgentSessionsOrThrow.mockImplementationOnce(() => {
       throw new Error("The session history couldn't be read.");
     });
-
     await expect(list({}, {})).rejects.toThrow("couldn't be read");
   });
 });

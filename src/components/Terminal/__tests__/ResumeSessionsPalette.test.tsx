@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ResumeSessionItem } from "@/services/resumeSessionItems";
@@ -27,6 +27,13 @@ const paletteState = {
   loadFailed: false,
   reload: vi.fn(),
 };
+
+// Tests assign fields on the shared hook state; each one starts from this
+// snapshot so no test inherits the one before it, whatever the order.
+const initialPaletteState = { ...paletteState };
+beforeEach(() => {
+  Object.assign(paletteState, initialPaletteState);
+});
 
 vi.mock("@/hooks/useResumeSessionsPalette", () => ({
   useResumeSessionsPalette: () => paletteState,
@@ -485,15 +492,6 @@ describe("ResumeSessionsPalette Escape", () => {
 describe("ResumeSessionsPalette load states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    paletteState.results = [];
-    paletteState.visibleResults = [];
-    paletteState.removedResults = [];
-    paletteState.totalResults = 0;
-    paletteState.isLoading = false;
-  });
-
-  afterEach(() => {
-    paletteState.loadFailed = false;
   });
 
   it("shows the error and a Retry that re-reads when the history couldn't be read", () => {

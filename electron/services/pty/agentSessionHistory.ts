@@ -247,8 +247,8 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
 }
 
 // In-memory copy of the parsed journal, keyed by resolved file path. The resume
-// palette calls listAgentSessions() -> readSessionHistorySync() on every open,
-// and that runs on Main's event loop. Main is the journal's only writer and
+// palette calls listAgentSessionsOrThrow() -> readSessionHistoryResultSync() on
+// every open, and that runs on Main's event loop. Main is the journal's only writer and
 // every writer replaces the entry with the array it just persisted, so once the
 // file has been read the entry IS the journal: a read never touches the disk
 // again, not even to stat it. A hand edit made while the app runs is therefore
@@ -378,8 +378,8 @@ function unreadableJournalError(error: unknown): Error {
 // NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
 // shared-instance reuse is the whole point — a copy on every read would defeat
 // the cache). Callers MUST treat the result as read-only; never sort/push/splice
-// it in place. The production caller, listAgentSessions(), is safe: evictRecords()
-// only reads the input and returns freshly-built arrays.
+// it in place. The list callers (listAgentSessions, listAgentSessionsOrThrow) are
+// safe: evictRecords() only reads the input and returns freshly-built arrays.
 function readSessionHistoryResultSync(userData?: string): SessionHistoryReadResult {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return { status: "ok", records: [] };
@@ -428,9 +428,9 @@ async function readSessionHistoryResult(userData?: string): Promise<SessionHisto
 
 // Tolerant read-only consumers (listAgentSessions, listBookmarks) collapse an
 // unreadable journal to `[]` — a transient failure degrades their result for
-// one read without touching disk. The resume surfaces read through
-// listAgentSessionsOrThrow instead, so an unreadable journal reaches them as a
-// failure rather than as "nothing closed". The `unreadable` outcome is never
+// one read without touching disk. The `agent-session:list` IPC reads through
+// listAgentSessionsOrThrow instead, so its callers (the resume palette among
+// them) get a failure rather than "nothing closed". The `unreadable` outcome is never
 // cached, so the next read re-attempts the file. The read-modify-write paths use
 // readSessionHistoryResult directly and ABORT on `unreadable`.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
