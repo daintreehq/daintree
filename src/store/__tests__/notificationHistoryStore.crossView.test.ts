@@ -459,7 +459,8 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(written.snoozedThreads).toEqual({});
   });
 
-  it("keeps a sibling's snooze when the thread has a row this view never held", async () => {
+  it("keeps a snooze this view dropped by pruning when a sibling's row of the thread survives", async () => {
+    const until = NOW + HOUR;
     const rows = Array.from({ length: 200 }, (_, i) =>
       makeEntry({
         id: `old-${i}`,
@@ -467,19 +468,68 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
         correlationId: i === 199 ? "thread" : undefined,
       })
     );
-    const backing = installLocalStorage(seed(rows));
+    const backing = installLocalStorage(seed(rows, { thread: until }));
 
     const viewA = await openView();
     const viewB = await openView();
 
-    viewB.getState().addEntry({ type: "error", message: "newer", correlationId: "thread" });
-    viewB.getState().snoozeThread("thread", NOW + HOUR);
+    const siblingId = viewB
+      .getState()
+      .addEntry({ type: "error", message: "newer", correlationId: "thread" });
     flush();
+
+    const ownId = viewA.getState().addEntry({ type: "info", message: "from A" });
+    expect(viewA.getState().snoozedThreads).toEqual({});
+    flush();
+
+    const written = readBlob(backing).state;
+    const ids = written.entries.map((e) => e.id);
+    expect(ids).toEqual(expect.arrayContaining([ownId, siblingId]));
+    expect(ids).not.toContain("old-199");
+    expect(written.snoozedThreads).toEqual({ thread: until });
+  });
+
+  it("keeps a sibling's later snooze when this view still holds a row of the thread the sibling dismissed", async () => {
+    const until = NOW + HOUR;
+    const backing = installLocalStorage(seed([makeEntry({ id: "held", correlationId: "thread" })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().dismissEntry("held");
+    flush();
+    viewB.getState().snoozeThread("thread", until);
+    flush();
+    expect(readBlob(backing).state.snoozedThreads).toEqual({ thread: until });
 
     viewA.getState().addEntry({ type: "info", message: "from A" });
     flush();
 
-    expect(readBlob(backing).state.snoozedThreads).toEqual({ thread: NOW + HOUR });
+    expect(entryById(backing, "held")).toBeUndefined();
+    expect(readBlob(backing).state.snoozedThreads).toEqual({ thread: until });
+  });
+
+  it("drops the snooze of a thread the merged cap alone emptied", async () => {
+    const until = NOW + HOUR;
+    const rows = Array.from({ length: 198 }, (_, i) =>
+      makeEntry({ id: `old-${i}`, timestamp: NOW - DAY - i * 1000 })
+    );
+    rows.push(makeEntry({ id: "oldest", timestamp: NOW - 2 * DAY, correlationId: "thread" }));
+    const backing = installLocalStorage(seed(rows, { thread: until }));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().addEntry({ type: "error", message: "from B" });
+    flush();
+    viewA.getState().addEntry({ type: "error", message: "from A" });
+    expect(viewA.getState().snoozedThreads).toEqual({ thread: until });
+    flush();
+
+    const written = readBlob(backing).state;
+    expect(written.entries).toHaveLength(200);
+    expect(written.entries.some((e) => e.id === "oldest")).toBe(false);
+    expect(written.snoozedThreads).toEqual({});
   });
 
   it("holds the 200-entry cap, keeping both views' new entries", async () => {
@@ -602,8 +652,16 @@ describe("notificationHistoryStore hydration of snoozed threads", () => {
       correlationId: "gone",
     });
     const live = makeEntry({ id: "live", correlationId: "kept" });
+    const staleSibling = makeEntry({
+      id: "stale-sibling",
+      seenAsToast: true,
+      timestamp: NOW - 9 * DAY,
+      correlationId: "kept",
+    });
     const until = NOW + HOUR;
-    installLocalStorage(seed([live, stale], { gone: until, kept: until, early: until }));
+    installLocalStorage(
+      seed([live, stale, staleSibling], { gone: until, kept: until, early: until })
+    );
 
     const view = await openView();
 

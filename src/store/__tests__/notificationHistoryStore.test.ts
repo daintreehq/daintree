@@ -1372,20 +1372,37 @@ describe("notificationHistorySlice", () => {
         expect(getState().snoozedThreads).toEqual({ early: until });
       });
 
-      it("importEntries recomputes the unread count against the surviving snoozes", () => {
+      it("importEntries drops only the evicted thread's snooze and counts against the rest", () => {
         const base = now - 100_000;
         useNotificationHistoryStore.setState({
           entries: [
-            ...fillers(199, base),
-            makeEntry({ id: "old", timestamp: base, correlationId: "t" }),
+            ...fillers(198, base + 10),
+            makeEntry({ id: "survivor", timestamp: base + 5, correlationId: "s" }),
+            makeEntry({ id: "evicted", timestamp: base, correlationId: "t" }),
           ],
-          snoozedThreads: { t: until },
-          unreadCount: 199,
+          snoozedThreads: { s: until, t: until },
         });
 
-        getState().importEntries(fillers(2, now - 1000).map((e) => ({ ...e, id: `in-${e.id}` })));
+        getState().importEntries([makeEntry({ id: "incoming", timestamp: now - 1000 })]);
 
-        expect(getState().unreadCount).toBe(200);
+        expect(getState().snoozedThreads).toEqual({ s: until });
+        expect(getState().unreadCount).toBe(199);
+      });
+
+      it("importEntries leaves an early snooze alone when only an archived row is retired", () => {
+        useNotificationHistoryStore.setState({ snoozedThreads: { early: until } });
+        getState().importEntries([
+          makeEntry({
+            id: "retired",
+            correlationId: "early",
+            seenAsToast: true,
+            archivedAt: now - ARCHIVED_RETENTION_MS - 1,
+            timestamp: now - ARCHIVED_RETENTION_MS - 2,
+          }),
+        ]);
+
+        expect(getState().entries).toEqual([]);
+        expect(getState().snoozedThreads).toEqual({ early: until });
       });
 
       it("addEntry drops the snooze when the 200-entry cap evicts the thread's last entry", () => {
@@ -1404,6 +1421,25 @@ describe("notificationHistorySlice", () => {
         expect(getState().snoozedThreads).toEqual({});
       });
 
+      it("addEntry keeps the snooze when another row of the evicted thread survives", () => {
+        const base = now - 100_000;
+        useNotificationHistoryStore.setState({
+          entries: [
+            ...fillers(198, base + 10),
+            makeEntry({ id: "kept", timestamp: base + 5, correlationId: "t" }),
+            makeEntry({ id: "old", timestamp: base, correlationId: "t" }),
+          ],
+          snoozedThreads: { t: until },
+        });
+
+        getState().addEntry({ type: "info", message: "unrelated" });
+
+        const ids = getState().entries.map((e) => e.id);
+        expect(ids).toContain("kept");
+        expect(ids).not.toContain("old");
+        expect(getState().snoozedThreads).toEqual({ t: until });
+      });
+
       it("addEntry keeps the snooze when the new entry continues the evicted thread", () => {
         const base = now - 100_000;
         useNotificationHistoryStore.setState({
@@ -1414,8 +1450,12 @@ describe("notificationHistorySlice", () => {
           snoozedThreads: { t: until },
         });
 
-        getState().addEntry({ type: "info", message: "new", correlationId: "t" });
+        const id = getState().addEntry({ type: "info", message: "new", correlationId: "t" });
 
+        const ids = getState().entries.map((e) => e.id);
+        expect(ids).toHaveLength(200);
+        expect(ids).toContain(id);
+        expect(ids).not.toContain("old");
         expect(getState().snoozedThreads).toEqual({ t: until });
       });
 
@@ -1437,6 +1477,24 @@ describe("notificationHistorySlice", () => {
 
         expect(getState().entries.map((e) => e.id)).toEqual(["fresh"]);
         expect(getState().snoozedThreads).toEqual({ other: until });
+      });
+
+      it("pruneExpiredEntries drops every snooze whose thread retention emptied", () => {
+        const stale = (id: string, correlationId: string) =>
+          makeEntry({
+            id,
+            correlationId,
+            seenAsToast: true,
+            timestamp: now - READ_RETENTION_MS - 1,
+          });
+        useNotificationHistoryStore.setState({
+          entries: [makeEntry({ id: "fresh", timestamp: now }), stale("a1", "a"), stale("b1", "b")],
+          snoozedThreads: { a: until, b: until },
+        });
+
+        getState().pruneExpiredEntries(now);
+
+        expect(getState().snoozedThreads).toEqual({});
       });
 
       it("pruneExpiredEntries drops the snooze when only archived entries of the thread remain", () => {

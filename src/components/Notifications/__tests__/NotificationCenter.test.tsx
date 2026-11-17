@@ -1352,6 +1352,15 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     render(<NotificationCenter open onClose={vi.fn()} />);
     expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
 
+    // Archived rows live in Archived, so one behind a snooze doesn't earn the tab.
+    act(() => {
+      setEntries([
+        makeEntry({ message: "Plain" }),
+        makeEntry({ message: "Done", correlationId: "orphan", archivedAt: Date.now() }),
+      ]);
+    });
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+
     act(() => {
       setEntries([
         makeEntry({ message: "Plain" }),
@@ -1359,6 +1368,28 @@ describe("NotificationCenter — Needs attention pinned section", () => {
       ]);
     });
     expect(screen.getByRole("radio", { name: "Snoozed" })).toBeTruthy();
+  });
+
+  it("leaves a Snoozed tab whose row is gone even when the snooze key outlives it", () => {
+    setEntries([
+      makeEntry({ message: "Plain" }),
+      makeEntry({ message: "Held back", correlationId: "thread", seenAsToast: false }),
+    ]);
+    useNotificationHistoryStore.setState({
+      snoozedThreads: { thread: Date.now() + 10 * 60_000 },
+    });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
+    });
+
+    act(() => {
+      setEntries([makeEntry({ message: "Plain" })]);
+    });
+
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("leaves the Snoozed tab for All when pruning removes the snoozed thread's last row", () => {

@@ -136,28 +136,31 @@ function clearSnoozeIfThreadGone(
 }
 
 /**
- * Drops the snooze of every thread a prune took entries from and left with no
- * active one. The Snoozed tab is built from the snooze keys but lists only
- * surviving rows, so a key outliving its thread is an empty tab. Only threads
- * the prune touched are swept: a snooze with nothing pruned behind it, or a
- * thread that still has an active entry, is left as it is.
+ * Drops the snooze of every thread a prune took an active row from and left
+ * with none. The Snoozed tab is built from the snooze keys but lists only
+ * surviving active rows, so a key outliving its thread is an empty tab. Only
+ * threads the prune touched are swept: a removed archived row never stood
+ * behind a snooze, and a snooze with nothing pruned behind it (one set before
+ * the thread's first row) is left as it is.
  */
 function clearSnoozesOfPrunedThreads(
   snoozedThreads: Record<string, number>,
-  before: NotificationHistoryEntry[],
+  before: Iterable<NotificationHistoryEntry>,
   after: NotificationHistoryEntry[]
 ): Record<string, number> {
-  if (before.length === after.length) return snoozedThreads;
   if (Object.keys(snoozedThreads).length === 0) return snoozedThreads;
   const kept = new Set(after.map((e) => e.id));
-  const active = new Set<string>();
-  for (const e of after) {
-    if (e.correlationId && e.archivedAt === null) active.add(e.correlationId);
-  }
-  let next = snoozedThreads;
+  let pruned: Set<string> | undefined;
   for (const e of before) {
     const id = e.correlationId;
-    if (!id || kept.has(e.id) || active.has(id) || next[id] === undefined) continue;
+    if (!id || e.archivedAt !== null || snoozedThreads[id] === undefined || kept.has(e.id))
+      continue;
+    (pruned ??= new Set()).add(id);
+  }
+  if (pruned === undefined) return snoozedThreads;
+  let next = snoozedThreads;
+  for (const id of pruned) {
+    if (after.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
     if (next === snoozedThreads) next = { ...snoozedThreads };
     delete next[id];
   }
@@ -455,15 +458,29 @@ function mergeNotificationHistoryPersistedWrite({
           .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
           .slice(0, MAX_ENTRIES)
       : merged;
+  // A writer that no longer holds an active row of a thread dropped its snooze
+  // by pruning or dismissing, not by unsnoozing: a row a sibling added there
+  // since still needs the snooze the sibling's disk copy carries.
+  const writerThreads = new Set<string>();
+  for (const e of inc.entries.values()) {
+    if (e.correlationId && e.archivedAt === null) writerThreads.add(e.correlationId);
+  }
+  let snoozedThreads = mergeRecordByWriterDelta(
+    base.snoozedThreads,
+    inc.snoozedThreads,
+    disk.snoozedThreads
+  );
+  for (const [id, until] of Object.entries(disk.snoozedThreads)) {
+    if (snoozedThreads[id] !== undefined || writerThreads.has(id)) continue;
+    if (!capped.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
+    snoozedThreads = { ...snoozedThreads, [id]: until };
+  }
   const state: PersistedNotificationHistoryShape = {
     entries: capped,
-    // Against every row any of the three held, not only what the cap dropped:
-    // a sibling's snooze outlives a thread this writer pruned the last of.
-    snoozedThreads: clearSnoozesOfPrunedThreads(
-      mergeRecordByWriterDelta(base.snoozedThreads, inc.snoozedThreads, disk.snoozedThreads),
-      [...new Map([...base.entries, ...disk.entries, ...inc.entries]).values()],
-      capped
-    ),
+    // Swept against the rows this write takes off disk: a thread that ends up
+    // with none keeps no snooze, and a stale baseline row that disk already
+    // lost says nothing about it.
+    snoozedThreads: clearSnoozesOfPrunedThreads(snoozedThreads, disk.entries.values(), capped),
   };
   return { version: incoming.version, state };
 }
