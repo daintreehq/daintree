@@ -179,7 +179,15 @@ describe("RecipeManager — open triggers and clipped summaries (#17280)", () =>
     cleanup();
     truncation.isTruncated = true;
     renderManager();
-    expect(summaryTips().length).toBeGreaterThan(0);
+    const tips = summaryTips().map((e) => e.textContent);
+    expect(tips).toHaveLength(rows().length);
+    for (const row of rows()) {
+      const shown = Array.from(row.querySelectorAll("span.truncate"))
+        .map((e) => e.textContent ?? "")
+        .find((t) => /^\d+ terminals?/.test(t));
+      expect(shown).toBeTruthy();
+      expect(tips).toContain(shown);
+    }
   });
 });
 
