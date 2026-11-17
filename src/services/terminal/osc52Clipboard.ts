@@ -32,10 +32,7 @@ export function handleOsc52(managed: ManagedTerminal, data: string): void {
   // stops being honoured at once. Agent output is the untrusted source.
   if (managed.runtimeAgentId) return;
   // A restore replays output nobody just asked for.
-  if (
-    managed.isSerializedRestoreInProgress ||
-    managed.scrollbackRestoreState === "in-progress"
-  ) {
+  if (managed.isSerializedRestoreInProgress || managed.scrollbackRestoreState === "in-progress") {
     return;
   }
 

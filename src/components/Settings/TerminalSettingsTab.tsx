@@ -125,12 +125,7 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
 
 type SaveGroup =
-  | "resources"
-  | "project-views"
-  | "grid-layout"
-  | "scrollback"
-  | "accessibility"
-  | "clipboard";
+  "resources" | "project-views" | "grid-layout" | "scrollback" | "accessibility" | "clipboard";
 
 interface SaveFailure {
   group: SaveGroup;

@@ -79,9 +79,7 @@ describe("judgeOsc52Write", () => {
     expect(
       judgeOsc52Write({ focused: true, lastGestureAt: now - OSC52_GESTURE_WINDOW_MS - 1, now })
     ).toBe("no-recent-input");
-    expect(judgeOsc52Write({ focused: true, lastGestureAt: now + 1, now })).toBe(
-      "no-recent-input"
-    );
+    expect(judgeOsc52Write({ focused: true, lastGestureAt: now + 1, now })).toBe("no-recent-input");
   });
 
   it("blocks an unfocused pane even right after a gesture", () => {
