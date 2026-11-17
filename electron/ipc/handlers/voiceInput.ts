@@ -98,7 +98,11 @@ import {
   readHostPaneStart,
   type HostPane,
 } from "../../services/voice/hostPaneContext.js";
-import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
+import {
+  collectHeardAsRules,
+  createHeardAsRewriter,
+  sessionHeardAsRules,
+} from "../../../shared/utils/voiceHeardAs.js";
 import { stripHesitations } from "../../../shared/utils/voiceHesitations.js";
 import {
   carrySpansThroughEdits,
@@ -1154,9 +1158,8 @@ function correctionSettingsFor(
     knownNames: names,
     ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
     ...(worktree ? { worktree } : {}),
-    // Global rules only, matching the live rewriter. Project heard-as forms
-    // belong in both places, through sessionDictionary.
-    heardAs: collectHeardAsRules(settings.dictionary),
+    // The live rewriter's rules: the project's over the user's own.
+    heardAs: sessionHeardAsRules(settings.dictionary, vocabulary),
     customInstructions: settings.correctionCustomInstructions,
     language: normalizeVoiceLanguage(settings.language),
     ...(transcriber ? { transcriber } : {}),
@@ -1676,8 +1679,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
-    // Like the keyterms, the rules are the dictionary as it was at the start.
-    const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
+    // Like the keyterms, the rules are the dictionary as it was at the start:
+    // the user's own until the project's vocabulary is read, then both.
+    let rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -1707,6 +1711,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ? null
             : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
         );
+    // Read before the keyterms, which wait on it, so a provider that waits on
+    // those transcribes nothing before the project's rules are in place.
+    void vocabulary.then(
+      (entries) => {
+        if (entries.length > 0) {
+          rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
+        }
+      },
+      () => {}
+    );
     const projectDictionary = vocabulary.then(dictionaryTerms);
     // The names and the worktree come from one read, bounded here by the
     // keyterms' own budget so the keyterms and cleanup get the same answer. A

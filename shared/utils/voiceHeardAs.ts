@@ -1,5 +1,5 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
-import { heardAsKey, heardAsRule } from "./voiceDictionary.js";
+import { heardAsKey, heardAsRule, sessionDictionary } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
 import type { VoiceTextEdit } from "./voiceUncertainWords.js";
 
@@ -60,6 +60,18 @@ export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): H
     }
   }
   return rules.slice(-MAX_HEARD_AS_RULES);
+}
+
+/**
+ * The rules one dictation runs: the target project's vocabulary over the
+ * user's own dictionary, so a project term that dropped a heard form also
+ * drops the global entry's.
+ */
+export function sessionHeardAsRules(
+  global: readonly VoiceDictionaryEntry[],
+  project: readonly VoiceDictionaryEntry[]
+): HeardAsRule[] {
+  return collectHeardAsRules(sessionDictionary(global, project));
 }
 
 interface CompiledRule extends HeardAsRule {
