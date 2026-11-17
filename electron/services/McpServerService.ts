@@ -1182,6 +1182,9 @@ export class McpServerService {
         this.httpLifecycle.setApiKey(previousKey);
         throw err;
       }
+      // Only once the key can no longer roll back: a closed stream stays closed.
+      this.httpLifecycle.revokeApiKeySessions(previousKey);
+      this.emitRuntimeStateChange();
       return newKey;
     })();
     this.rotateInFlight = promise;

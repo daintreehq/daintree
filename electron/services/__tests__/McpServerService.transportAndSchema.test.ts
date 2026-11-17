@@ -913,10 +913,9 @@ describe("McpServerService", () => {
   });
 
   it("requires a fresh session after api-key rotation rather than adopting the old one", async () => {
-    // Rotation leaves live transports allocated. The old key is refused
-    // outright; the new key is a different credential, so it cannot pick up a
-    // session the old key opened — the client re-initializes, as MCP clients
-    // do on a 404.
+    // Rotation closes the old key's sessions and refuses the key outright; the
+    // new key is a different credential, so it cannot pick up a session the
+    // old key opened — the client re-initializes, as MCP clients do on a 404.
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -956,6 +955,86 @@ describe("McpServerService", () => {
     expect((await after.client.listTools()).tools.map((tool) => tool.name)).toContain(
       "actions.list"
     );
+  });
+
+  it("closes an initialize admitted under the old key that registers after rotation (#17213)", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+    const port = service.currentPort!;
+    const oldKey = service.getStatus().apiKey;
+
+    // Headers first, body held back: the handshake is admitted and its rows
+    // written, but the SDK cannot initialize (and file) the session until the
+    // body arrives, by which time the key has rotated.
+    let resolveResponse!: (value: { status: number; sessionId: string | undefined }) => void;
+    let rejectResponse!: (err: unknown) => void;
+    const response = new Promise<{ status: number; sessionId: string | undefined }>(
+      (resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+      }
+    );
+    // Observed early so a failure before the await below can't go unhandled.
+    response.catch(() => {});
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${oldKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+      },
+      (res) => {
+        const header = res.headers["mcp-session-id"];
+        res.resume();
+        res.on("end", () =>
+          resolveResponse({
+            status: res.statusCode ?? 0,
+            sessionId: Array.isArray(header) ? header[0] : header,
+          })
+        );
+      }
+    );
+    req.on("error", rejectResponse);
+    try {
+      req.flushHeaders();
+      await vi.waitFor(() => {
+        expect(service._sessionTierMap.size).toBe(1);
+      });
+      expect(service._httpSessions.size).toBe(0);
+
+      await service.rotateApiKey();
+      req.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "late-initialize", version: "1.0.0" },
+          },
+        })
+      );
+      // The SDK did initialize it: this is the late-registration path, not a
+      // refused handshake that never filed anything.
+      const answered = await response;
+      expect(answered.status).toBe(200);
+      expect(answered.sessionId).toBeTruthy();
+    } finally {
+      req.destroy();
+    }
+
+    await vi.waitFor(() => {
+      expect(service._httpSessions.size).toBe(0);
+    });
+    expect(service._sessionTierMap.size).toBe(0);
+    expect(service.listActiveClients()).toHaveLength(0);
+    expect(service.listActiveBearers()).toHaveLength(0);
   });
 
   it("returns 405 with an Allow header for unsupported methods on /mcp", async () => {
