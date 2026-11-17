@@ -345,6 +345,7 @@ beforeEach(() => {
     if (channel === "fleet:get-snapshot") return remoteFleet;
     if (channel === "canopy:run-branch") return "remote-branch";
     if (channel === "canopy:trash") return 7;
+    if (channel === "canopy:search-screens") return [];
     return null;
   });
   useProjectStore.setState({
@@ -1101,7 +1102,10 @@ describe("All hosts", () => {
     expect(cardOf("local", "shared-run")).toBeNull();
     expect(cardOf("studio", "shared-run")).toBeNull();
     expect(screen.getByTestId("canopy-search-incomplete").textContent).toContain("studio-01");
-    expect(document.body.textContent).not.toContain("No agent matches");
+    const said = [...document.querySelectorAll("p")].map((p) => p.textContent);
+    expect(said).not.toContain("No agent matches");
+    expect(said).toContain("No agent matches so far");
+    expect(document.body.textContent).toContain("Nothing matches “segfault” so far");
   });
 
   it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {

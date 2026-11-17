@@ -103,6 +103,7 @@ import { CANOPY_SURFACE, type CanopyFrame } from "../canopyFrame";
 import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
@@ -519,6 +520,82 @@ describe("CanopyView search", () => {
     expect(targets.some((target) => Object.hasOwn(target, "orTerms"))).toBe(false);
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
     expect(selectedRun(container)).toBe("asking");
+  });
+
+  it("says a terminal search that failed, keeps what the words name, and asks it again on Retry (#17594)", async () => {
+    const snapshot = {
+      ...canopySnapshot,
+      cards: [{ ...stuckCard("waiting"), headline: "Review of dfat-xth8" }],
+    };
+    useCanopyStore.setState({ snapshot });
+    const canopy = installElectron(snapshot);
+    canopy.searchScreens.mockRejectedValueOnce(new Error("Too many requests"));
+    canopy.searchScreens.mockImplementation(async (targets) =>
+      targets.filter((target) => target.runId === "asking").map((target) => target.runId)
+    );
+    const said: string[] = [];
+    const unsubscribe = useAnnouncerStore.subscribe((state, before) => {
+      if (state.polite && state.polite !== before.polite) said.push(state.polite.msg);
+    });
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+
+    await search("dfat-xth8");
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(1);
+    const asked = canopy.searchScreens.mock.calls[0]![0];
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-waiting"]);
+    const gap = () =>
+      document.querySelector<HTMLElement>("[data-testid=canopy-search-incomplete]") ?? null;
+    expect(gap()?.textContent).toContain("Couldn't search terminals");
+    expect(searchInput().getAttribute("aria-describedby")).toBe("canopy-search-gap");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 50));
+    });
+    expect(said).toContain("1 match so far. Couldn't search terminals");
+    // Tab from the search reaches the Retry rather than skipping to the row.
+    expect(selectedRun(container)).toBe("waiting");
+    expect(fireEvent.keyDown(searchInput(), { key: "Tab" })).toBe(true);
+
+    const retry = [...gap()!.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(2);
+    expect(canopy.searchScreens.mock.calls[1]![0]).toEqual(asked);
+    expect(searchInput().value).toBe("dfat-xth8");
+    expect(document.activeElement).toBe(searchInput());
+    expect(gap()).toBeNull();
+    expect(
+      cards(container)
+        .map((card) => card.id)
+        .sort()
+    ).toEqual(["canopy-card-asking", "canopy-card-waiting"]);
+    expect(searchInput().getAttribute("aria-describedby")).toBeNull();
+    // With every terminal searched, Tab goes on to the selected row again.
+    expect(fireEvent.keyDown(searchInput(), { key: "Tab" })).toBe(false);
+    unsubscribe();
+  });
+
+  it("keeps a terminal's matches when a later read of the same search fails, and says so", async () => {
+    const canopy = installElectron();
+    canopy.searchScreens.mockImplementationOnce(async () => ["asking"]);
+    canopy.searchScreens.mockRejectedValue(new Error("Too many requests"));
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    await search("segfault");
+    await screenSearchSettled();
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
+    expect(document.querySelector("[data-testid=canopy-search-incomplete]")).toBeNull();
+
+    act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(2);
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
+    expect(
+      document.querySelector("[data-testid=canopy-search-incomplete]")?.textContent
+    ).toContain("Couldn't search terminals");
   });
 
   it("selects the top terminal match, wherever the selection was before", async () => {

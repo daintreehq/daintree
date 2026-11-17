@@ -64,6 +64,7 @@ export function useCanopyInboxFilters({
   searchKey,
   screenAsk,
   onScreen,
+  screenGap,
   listHidden,
 }: {
   isOpen: boolean;
@@ -91,6 +92,8 @@ export function useCanopyInboxFilters({
   searchKey: string;
   screenAsk: string | null;
   onScreen: ReadonlySet<string> | null;
+  /** What the search says of the hosts whose terminals it couldn't search, or null when every one answered. */
+  screenGap: string | null;
   listHidden: () => void;
 }) {
   // Workers, Daintree Assistants or both. A role the filter hides keeps its
@@ -335,16 +338,23 @@ export function useCanopyInboxFilters({
   // A search's outcome is said once, when it settles: the runs are in, the
   // terminals have answered and the typing has stopped. Never per keystroke,
   // and never again for a match a terminal adds later.
+  // A host that couldn't search has still answered: what the rest found is
+  // said as far as it goes, with the gap. Losing or regaining a host's
+  // terminals is said again for the same query.
   const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
+  const found =
+    visible.length > 0
+      ? pluralize(visible.length, "match", "matches")
+      : onlyReadMatch
+        ? "No unread matches"
+        : "No matches";
   const outcome =
     !searching || !searchSettled
       ? null
-      : visible.length > 0
-        ? pluralize(visible.length, "match", "matches")
-        : onlyReadMatch
-          ? "No unread matches"
-          : "No matches";
-  const announceKey = `${searchKey}|${unreadOnly}`;
+      : screenGap === null
+        ? found
+        : `${found} so far. ${screenGap}`;
+  const announceKey = `${searchKey}|${unreadOnly}|${screenGap ?? ""}`;
   const announcedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!searching) {

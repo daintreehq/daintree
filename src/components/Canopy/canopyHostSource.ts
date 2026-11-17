@@ -6,7 +6,12 @@ import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
-import type { CanopyRunTarget, CanopySnapshot, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
+import type {
+  CanopyRunTarget,
+  CanopyScreenSearchTarget,
+  CanopySnapshot,
+  CanopyTrashOutcome,
+} from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcInvokeMap } from "@shared/types/ipc/maps";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
@@ -95,6 +100,28 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     removeTrashed: on("canopy:remove-trashed"),
     emptyTrash: on("canopy:empty-trash"),
   };
+}
+
+/** What one host said to a screen search: the runs it found, or that it couldn't search. */
+export type CanopyScreenSearchOutcome =
+  { hostId: HostId; runIds: string[] } | { hostId: HostId; failed: true };
+
+/**
+ * A screen search with each host's answer kept apart, so a host that couldn't
+ * search is told from one that found nothing. It never rejects: a host's
+ * failure is one of its outcomes.
+ */
+export type CanopyScreenSearch = (
+  targets: CanopyScreenSearchTarget[]
+) => Promise<CanopyScreenSearchOutcome[]>;
+
+/** The one host a panel shows, searched as a single outcome. */
+export function singleHostScreenSearch(api: CanopyApi, hostId: HostId): CanopyScreenSearch {
+  return (targets) =>
+    api.searchScreens(targets).then(
+      (runIds): CanopyScreenSearchOutcome[] => [{ hostId, runIds }],
+      (): CanopyScreenSearchOutcome[] => [{ hostId, failed: true }]
+    );
 }
 
 /**
