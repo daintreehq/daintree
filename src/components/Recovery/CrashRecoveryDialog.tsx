@@ -7,7 +7,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { InlineError } from "@/components/ui/field";
-import { AlertTriangle, ChevronRight, Copy, Download, ExternalLink, FileText } from "lucide-react";
+import { AlertTriangle, ChevronRight, Download, ExternalLink, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -104,7 +104,6 @@ export function CrashRecoveryDialog({
   const [submitting, setSubmitting] = useState(false);
   const [showFreshConfirm, setShowFreshConfirm] = useState(false);
   const { copy: copyReport } = useCopyWithFeedback();
-  const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
   const reportTextRef = useRef<HTMLTextAreaElement>(null);
 
   const recentActions = useMemo(() => crash.entry.recentActions ?? [], [crash.entry.recentActions]);
@@ -472,15 +471,13 @@ export function CrashRecoveryDialog({
                   </Button>
 
                   {crash.entry.errorStack && (
-                    <Button
+                    <CopyButton
+                      label="Copy stack"
                       size="sm"
                       variant="ghost"
-                      onClick={() => copyStack(crash.entry.errorStack!)}
+                      text={crash.entry.errorStack}
                       data-testid="copy-stack-button"
-                    >
-                      <Copy aria-hidden="true" />
-                      {stackCopied ? "Copied" : "Copy stack"}
-                    </Button>
+                    />
                   )}
 
                   <Button

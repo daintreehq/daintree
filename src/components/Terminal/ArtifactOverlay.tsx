@@ -2,11 +2,9 @@ import { useState, useCallback, useEffect, useId, useRef, type ReactNode } from 
 import { DiffStat } from "@/components/ui/DiffStat";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
-  Check,
   ChevronRight,
   CircleX,
   CircleCheck,
-  Copy,
   Download,
   File,
   FileCode,
@@ -17,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { FLOATING_CARD_CLASS } from "@/components/ui/floatingSurface";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { SurfaceHeader, SurfaceHeaderCloseButton } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -47,7 +46,6 @@ type RowFeedback =
   | { kind: "copy-failed" };
 
 const TRANSIENT_FEEDBACK_MS = 4000;
-const COPIED_FLASH_MS = 2000;
 
 export type PatchLineKind = "file" | "hunk" | "add" | "del" | "context" | "meta";
 
@@ -390,14 +388,11 @@ function ArtifactItem({
 }: ArtifactItemProps) {
   const bodyId = useId();
   const rowRef = useRef<HTMLLIElement>(null);
-  const [copied, setCopied] = useState(false);
   const [feedback, setFeedbackState] = useState<RowFeedback | null>(null);
-  const copiedTimerRef = useRef<number | null>(null);
   const feedbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
-      if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
       if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
     };
   }, []);
@@ -423,18 +418,14 @@ function ArtifactItem({
   // its siblings disable, so a keyboard user is never dropped out of the tray.
   const [pending, setPending] = useState<"copy" | "save" | null>(null);
 
-  const handleCopy = useCallback(async () => {
+  // The write goes through `onCopy`, which owns the clipboard call, the
+  // in-progress lock and the error log; a refusal rejects so the button
+  // reports it.
+  const writeCopy = useCallback(async () => {
     setPending("copy");
     const success = await onCopy(artifact).finally(() => setPending(null));
-    if (success) {
-      setFeedback(null);
-      setCopied(true);
-      if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
-      copiedTimerRef.current = window.setTimeout(() => setCopied(false), COPIED_FLASH_MS);
-    } else {
-      setFeedback({ kind: "copy-failed" });
-    }
-  }, [artifact, onCopy, setFeedback]);
+    if (!success) throw new Error("The clipboard rejected the write.");
+  }, [artifact, onCopy]);
 
   const handleSave = useCallback(async () => {
     setPending("save");
@@ -539,16 +530,17 @@ function ArtifactItem({
                 </TooltipContent>
               </Tooltip>
             )}
-            <Button
+            <CopyButton
+              label="Copy"
               variant="subtle"
               size="sm"
-              onClick={() => void handleCopy()}
+              text={artifact.content}
+              write={writeCopy}
+              onCopied={() => setFeedback(null)}
+              onCopyError={() => setFeedback({ kind: "copy-failed" })}
               disabled={isProcessing || pending === "save"}
               loading={pending === "copy"}
-            >
-              {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-              {copied ? "Copied" : "Copy"}
-            </Button>
+            />
             <Button
               variant="subtle"
               size="sm"
@@ -565,7 +557,6 @@ function ArtifactItem({
           </div>
 
           <div role="status" aria-live="polite">
-            {copied && <span className="sr-only">Copied to clipboard</span>}
             {applyResult?.kind === "applied" && (
               <OutcomeLine tone="success" icon={CircleCheck}>
                 Applied to {pluralize(applyResult.files.length, "file", "files")}

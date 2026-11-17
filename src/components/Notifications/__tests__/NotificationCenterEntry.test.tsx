@@ -9,6 +9,7 @@ import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -817,6 +818,44 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(writeText).toHaveBeenCalledWith("corr-copy-1");
+  });
+
+  it("confirms the correlation ID copy with one polite announcement", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-2" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Copy correlation ID"));
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Correlation ID copied");
+  });
+
+  it("reports a refused correlation ID copy as an error toast with Retry", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    notifyMock.mockClear();
+
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-3" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Copy correlation ID"));
+    });
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Couldn't copy correlation ID",
+        action: expect.objectContaining({ label: "Retry" }),
+      })
+    );
   });
 
   it("opens the prefilled GitHub URL when Report on GitHub is selected", async () => {

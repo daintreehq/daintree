@@ -767,6 +767,7 @@ describe("CrashRecoveryDialog", () => {
     await waitFor(() => {
       expect(screen.getByTestId("copy-stack-button").textContent).toContain("Copied");
     });
+    expect(screen.getByTestId("copy-stack-button").getAttribute("aria-label")).toBe("Copy stack");
     // Report button still shows its default label
     expect(screen.getByTestId("report-button").textContent).toContain("Report this crash");
   });

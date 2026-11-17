@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Check, Copy, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { logsClient } from "@/clients/logsClient";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -81,9 +82,6 @@ export function ErrorFallback({
   const { copied: idCopied, copy: copyId } = useCopyWithFeedback({
     announcement: "Error ID copied",
   });
-  const { copied: detailsCopied, copy: copyDetails } = useCopyWithFeedback({
-    announcement: "Error details copied",
-  });
 
   const announcedRef = useRef(false);
 
@@ -125,9 +123,7 @@ export function ErrorFallback({
     description = "Your terminals and agents are still running. Try again to reload this area.";
   }
 
-  const handleCopyDetails = () => {
-    void copyDetails(buildDetailsText(error, errorInfo, incidentId, name));
-  };
+  const getDetailsText = () => buildDetailsText(error, errorInfo, incidentId, name);
 
   return (
     <div
@@ -229,15 +225,14 @@ export function ErrorFallback({
             </Button>
           )}
           {isComponent && (
-            <Button
-              type="button"
+            <CopyButton
+              label="Copy details"
               variant="ghost"
               size="sm"
-              onClick={handleCopyDetails}
+              text={getDetailsText}
+              announcement="Error details copied"
               data-testid="error-fallback-copy-details"
-            >
-              {detailsCopied ? "Copied" : "Copy details"}
-            </Button>
+            />
           )}
         </div>
 
@@ -307,15 +302,14 @@ export function ErrorFallback({
                 <span className="text-xs text-text-secondary">
                   {import.meta.env.DEV ? "Stack trace" : "Stack trace, with personal paths removed"}
                 </span>
-                <Button
-                  type="button"
+                <CopyButton
+                  label="Copy details"
                   variant="ghost"
                   size="sm"
-                  onClick={handleCopyDetails}
+                  text={getDetailsText}
+                  announcement="Error details copied"
                   data-testid="error-fallback-copy-details"
-                >
-                  {detailsCopied ? "Copied" : "Copy details"}
-                </Button>
+                />
               </div>
               {/* Production stacks are scrubbed before display so crash reporters
                   never expose user paths or secrets; dev keeps the raw stack. */}

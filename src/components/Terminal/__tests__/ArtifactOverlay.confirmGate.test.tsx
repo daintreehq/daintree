@@ -263,6 +263,41 @@ describe("ArtifactOverlay keeps keyboard focus through its own actions", () => {
   });
 });
 
+describe("ArtifactOverlay Copy confirmation", () => {
+  it("keeps its name and width, and leaves the single announcement to the hook", async () => {
+    copyToClipboard.mockResolvedValue(true);
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(copy.textContent).toContain("Copied");
+    expect(copy.getAttribute("aria-label")).toBe("Copy");
+    const sizers = Array.from(copy.querySelectorAll("[data-label]")).map((el) =>
+      el.getAttribute("data-label")
+    );
+    expect(sizers).toEqual(expect.arrayContaining(["Copy", "Copied"]));
+    expect(within(rowFor("patch-a.diff")).queryByText("Copied to clipboard")).toBeNull();
+  });
+
+  it("states a refused copy once, in the row", async () => {
+    copyToClipboard.mockResolvedValue(false);
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(within(rowFor("patch-a.diff")).getByText(/Couldn't copy to the clipboard/)).toBeTruthy();
+    expect(copy.textContent).not.toContain("Copied");
+  });
+});
+
 const PATCH = [
   "diff --git a/src/foo.ts b/src/foo.ts",
   "--- a/src/foo.ts",
