@@ -217,6 +217,7 @@ import type {
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
+  VoiceSessionVocabulary,
   VoiceStopRequest,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme, AppThemeConfig } from "../shared/types/appTheme.js";
@@ -3304,6 +3305,8 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_LEVEL, callback),
       onPauseRequested: (callback: (payload: VoicePauseRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, callback),
+      onSessionVocabulary: (callback: (payload: VoiceSessionVocabulary) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, callback),
       checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
       requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
       openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),

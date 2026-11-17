@@ -1382,6 +1382,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:reveal-requested": "shell",
   "voice-input:rewrite": "shell",
   "voice-input:session-ended": "shell",
+  "voice-input:session-vocabulary": "shell",
   "voice-input:set-paused-live": "shell",
   "voice-input:set-settings": "shell",
   "voice-input:start": "shell",

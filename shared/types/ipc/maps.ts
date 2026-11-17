@@ -40,6 +40,7 @@ import type {
   VoiceCorrectionPace,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceSessionVocabulary,
 } from "./api.js";
 
 import type { TerminalActivityPayload } from "./terminal.js";
@@ -2231,6 +2232,8 @@ export interface IpcEventMap {
   "voice-input:live-level": VoiceLiveLevel;
   // To the owner: another view's control panel paused or resumed it.
   "voice-input:pause-requested": VoicePauseRequest;
+  // To the owner: the project vocabulary its session runs with.
+  "voice-input:session-vocabulary": VoiceSessionVocabulary;
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;

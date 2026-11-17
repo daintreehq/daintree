@@ -19,6 +19,7 @@ import type {
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceSessionVocabulary,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
 import {
@@ -1712,12 +1713,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
         );
     // Read before the keyterms, which wait on it, so a provider that waits on
-    // those transcribes nothing before the project's rules are in place.
+    // those transcribes nothing before the project's rules are in place. The
+    // owner gets the vocabulary too: its reruns over the whole dictation, which
+    // put right a completion that landed first, take the same rules.
     void vocabulary.then(
       (entries) => {
-        if (entries.length > 0) {
-          rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
-        }
+        if (entries.length === 0) return;
+        rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
+        if (session.sender.isDestroyed()) return;
+        const update: VoiceSessionVocabulary = { sessionId: session.id, vocabulary: entries };
+        session.sender.send(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, update);
       },
       () => {}
     );

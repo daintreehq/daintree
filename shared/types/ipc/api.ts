@@ -2432,6 +2432,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onLiveLevel(callback: (payload: VoiceLiveLevel) => void): () => void;
     /** To the owner, when another view's control panel paused or resumed it. */
     onPauseRequested(callback: (payload: VoicePauseRequest) => void): () => void;
+    /**
+     * To the owner, once main has read the project vocabulary a session runs
+     * with, so its heard-as reruns use the project's rules too.
+     */
+    onSessionVocabulary(callback: (payload: VoiceSessionVocabulary) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed
@@ -3318,6 +3323,15 @@ export interface VoiceDictionaryEntry {
   source: VoiceDictionarySource;
   /** Epoch ms when the entry was added. Entries migrated from the old word list share one time. */
   addedAt: number;
+}
+
+/**
+ * The project vocabulary one dictation runs with, as main read it at the start.
+ * Sent to the owner only when the project has terms.
+ */
+export interface VoiceSessionVocabulary {
+  sessionId: string;
+  vocabulary: VoiceDictionaryEntry[];
 }
 
 /** The dictionary and its suggestion queue as main holds them after an operation. */
