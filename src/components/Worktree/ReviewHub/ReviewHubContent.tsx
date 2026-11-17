@@ -28,6 +28,7 @@ import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { findWorktreeByPath } from "@/lib/diffFreshness";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -333,6 +334,43 @@ export function ReviewHubContent({
   useEffect(() => {
     if (hasCommitDraft) setCommitSeed(null);
   }, [hasCommitDraft]);
+  const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
+  const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
+    null
+  );
+  const mainBranch = useWorktreeStore(
+    (state) =>
+      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
+  );
+  // The comparison reads the two branch tips, never the working tree, so only
+  // a commit moving either one makes it stale.
+  const baseBranchHeads = useWorktreeStore((state) => {
+    let baseHead: string | undefined;
+    for (const wt of state.worktrees.values()) {
+      if (wt.isMainWorktree) {
+        baseHead = wt.worktreeChanges?.headOid;
+        break;
+      }
+    }
+    const head = findWorktreeByPath(state.worktrees, worktreePath)?.worktreeChanges?.headOid;
+    return `${baseHead ?? ""}..${head ?? ""}`;
+  });
+  const {
+    baseBranchFiles,
+    baseBranchLoading,
+    baseBranchRefreshing,
+    baseBranchError,
+    fetchBaseBranch,
+    invalidate: invalidateBaseBranch,
+    notifyHeadMoved: notifyBaseBranchHeadMoved,
+  } = useReviewHubBaseBranch({
+    worktreePath,
+    mainBranch,
+    currentBranch: status?.currentBranch,
+    heads: baseBranchHeads,
+    active: isOpen && diffMode === "base-branch",
+    setSelectedBaseBranchFile,
+  });
   const {
     pushError,
     showPushBanner,
@@ -361,6 +399,7 @@ export function ReviewHubContent({
     setActionError,
     debouncedBgRefreshRef,
     onCommitted: dropCommittedMessage,
+    onHeadMoved: notifyBaseBranchHeadMoved,
   });
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
@@ -377,27 +416,6 @@ export function ReviewHubContent({
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
   );
   const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
-  const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
-  const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
-    null
-  );
-  const mainBranch = useWorktreeStore(
-    (state) =>
-      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
-  );
-  const {
-    baseBranchFiles,
-    baseBranchLoading,
-    baseBranchError,
-    fetchBaseBranch,
-    invalidate: invalidateBaseBranch,
-    reset: resetBaseBranch,
-  } = useReviewHubBaseBranch({
-    worktreePath,
-    mainBranch,
-    currentBranch: status?.currentBranch,
-    setSelectedBaseBranchFile,
-  });
   // Diff panels opened by this hub. The selection state above stays the record
   // of "a diff is open" (the hub clears it on commit, worktree switch, and
   // conflict-mode entry), but the panel itself owns stepping between files once
@@ -646,11 +664,11 @@ export function ReviewHubContent({
     resetForPathRef.current = worktreePath;
     // Bumps the comparison's request generation, so the old worktree's answer
     // can't land as this one's, and drops its cached files.
-    resetBaseBranch();
+    invalidateBaseBranch();
     selectionAnchorRef.current = null;
     setFocusedIndex(-1);
     writeCursorKey(null);
-  }, [worktreePath, resetBaseBranch, selectionAnchorRef, setFocusedIndex, writeCursorKey]);
+  }, [worktreePath, invalidateBaseBranch, selectionAnchorRef, setFocusedIndex, writeCursorKey]);
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -1166,10 +1184,10 @@ export function ReviewHubContent({
       // Abandons every in-flight read by bumping its request generation, and
       // clears the loading flags those reads' `finally` blocks no longer will:
       // left true they strand `useDohertyGate` (skeleton flashes on reopen) and
-      // deadlock base-branch (handleDiffModeChange refuses to refetch while
+      // deadlock base-branch (its Refresh refuses to ask again while
       // baseBranchLoading is true).
       resetStatus();
-      resetBaseBranch();
+      invalidateBaseBranch();
       resetPush();
       setActionError(null);
       setSelectedFile(null);
@@ -1202,7 +1220,7 @@ export function ReviewHubContent({
     beginStatusOpen,
     clearPushError,
     resetStatus,
-    resetBaseBranch,
+    invalidateBaseBranch,
     resetPush,
     setFocusedIndex,
     setSelectedPaths,
@@ -1591,15 +1609,9 @@ export function ReviewHubContent({
     [renderFileRowMenuItems, worktreePath, openFileDiff]
   );
 
-  const handleDiffModeChange = useCallback(
-    (mode: DiffMode) => {
-      setDiffMode(mode);
-      if (mode === "base-branch" && baseBranchFiles === null && !baseBranchLoading) {
-        void fetchBaseBranch();
-      }
-    },
-    [baseBranchFiles, baseBranchLoading, fetchBaseBranch]
-  );
+  // Entering base-branch mode needs no fetch here: the comparison hook asks
+  // whenever it is on screen without a current answer.
+  const handleDiffModeChange = useCallback((mode: DiffMode) => setDiffMode(mode), []);
 
   useReviewHubKeyboard({
     isOpen,
@@ -1657,7 +1669,10 @@ export function ReviewHubContent({
       : diffMode === "since-review"
         ? sinceReviewView.kind === "comparing"
         : loading;
-  const refreshSpinning = diffMode === "working-tree" && isBackgroundRefreshing;
+  const refreshSpinning =
+    diffMode === "base-branch"
+      ? baseBranchRefreshing
+      : diffMode === "working-tree" && isBackgroundRefreshing;
   const repoState = status?.repoState ?? "CLEAN";
   const isOperationState =
     repoState === "MERGING" ||

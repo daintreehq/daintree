@@ -15,6 +15,7 @@ vi.mock("@/hooks/useHostConnection", () => ({
 vi.mock("@/clients/operationsClient", () => ({ mintRemoteOperationId: () => undefined }));
 
 import { useReviewHubCommitAndPush } from "../useReviewHubCommitAndPush";
+import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 
 const PATH = "/repo";
 const DESTINATION = { remote: "origin", branch: "feature/x" };
@@ -28,6 +29,8 @@ const OPTED_OUT = { branch: "feature/x", destination: DESTINATION, reviewedHeadO
 
 const commit = vi.fn();
 const push = vi.fn();
+const pullRebase = vi.fn();
+const headMoved = vi.fn();
 
 function networkDown() {
   return Object.assign(new Error("Could not resolve host: github.com"), {
@@ -39,8 +42,10 @@ function networkDown() {
 beforeEach(() => {
   commit.mockReset().mockResolvedValue(COMMITTED);
   push.mockReset().mockResolvedValue(undefined);
+  pullRebase.mockReset().mockResolvedValue(undefined);
+  headMoved.mockReset();
   Object.defineProperty(window, "electron", {
-    value: { git: { commit, push, onPushProgress: vi.fn(() => vi.fn()) } },
+    value: { git: { commit, push, pullRebase, onPushProgress: vi.fn(() => vi.fn()) } },
     writable: true,
     configurable: true,
   });
@@ -54,6 +59,7 @@ function renderPushHook() {
       setActionError: () => {},
       debouncedBgRefreshRef: { current: null },
       onCommitted: () => {},
+      onHeadMoved: headMoved,
     })
   );
 }
@@ -107,5 +113,59 @@ describe("useReviewHubCommitAndPush — Retry stays pinned (#16790)", () => {
     expect(commit).toHaveBeenCalledTimes(2);
     expect(push).toHaveBeenCalledTimes(1);
     expect(result.current.pushError?.reason).toBe("push-review-stale");
+  });
+});
+
+describe("useReviewHubCommitAndPush — tip moves (#17196)", () => {
+  const REVIEW = { branch: "feature/x", headOid: "f".repeat(40) };
+
+  function approvePullRebase() {
+    useGitPullRebaseConfirmStore.setState({
+      requestConfirmation: vi.fn().mockResolvedValue({ confirmed: true, review: REVIEW }),
+    });
+  }
+
+  it("reports the tip moved as soon as a commit lands, before the push", async () => {
+    const order: string[] = [];
+    headMoved.mockImplementation((path: string) => order.push(`moved ${path}`));
+    push.mockImplementation(async () => {
+      order.push("push");
+    });
+    const { result } = renderPushHook();
+
+    await act(async () => {
+      await result.current.handleCommit("first");
+    });
+    await act(async () => {
+      await result.current.handleCommitAndPush("second", OPTED_OUT);
+    });
+    expect(order).toEqual([`moved ${PATH}`, `moved ${PATH}`, "push"]);
+  });
+
+  it("says nothing when the commit fails", async () => {
+    commit.mockRejectedValue(new Error("nothing to commit"));
+    const { result } = renderPushHook();
+
+    await act(async () => {
+      await result.current.handleCommit("msg").catch(() => {});
+    });
+    expect(headMoved).not.toHaveBeenCalled();
+  });
+
+  it("reports the tip moved after a pull with rebase, even one that failed part way", async () => {
+    approvePullRebase();
+    const { result } = renderPushHook();
+
+    await act(async () => {
+      await result.current.confirmPullRebase();
+    });
+    expect(pullRebase).toHaveBeenCalledWith(PATH, REVIEW);
+    expect(headMoved).toHaveBeenCalledTimes(1);
+
+    pullRebase.mockRejectedValueOnce(new Error("CONFLICT (content): Merge conflict in a.ts"));
+    await act(async () => {
+      await result.current.confirmPullRebase();
+    });
+    expect(headMoved).toHaveBeenCalledTimes(2);
   });
 });
