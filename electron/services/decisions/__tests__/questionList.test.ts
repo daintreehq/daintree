@@ -592,6 +592,18 @@ describe("follow-up and stall events (#17235)", () => {
         )
       ).replyRequest
     ).toBe("ask-2");
+    // The latest by the ledger's order, however the thread is stored.
+    expect(
+      project(
+        answered(
+          messages(
+            request("ask-2", 8),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-1", 6)
+          )
+        )
+      ).replyRequest
+    ).toBe("ask-2");
     // Replied to, or superseded by a follow-up asking nothing: none.
     expect(
       project(answered(messages(request("ask-1", 6), { message_id: "reply-1", event_seq: 7 })))

@@ -87,7 +87,6 @@ import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
 import type { DecisionQuestionListItem } from "../../../shared/types/decisionsQuestion.js";
-import { deliveryReasonText } from "../../../shared/utils/decisionsDeliveryReasons.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -4916,7 +4915,7 @@ describe("Decisions questions (#17232)", () => {
 
       const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
       expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
-      expect(body).toBe(deliveryReasonText("pane_gone"));
+      expect(body).toBe("The terminal that asked was closed.");
       options.onClick();
       expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(stalled.reference);
       expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
@@ -4929,7 +4928,7 @@ describe("Decisions questions (#17232)", () => {
           agentKind: "not-an-agent",
           projectLabel: null,
           standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
-          stall: { answerRevision: null, followUpIds: ["m-1", "m-2"], reason: "inject_ambiguous" },
+          stall: { answerRevision: null, followUpIds: ["m-1", "m-2"], reason: "inject_rejected" },
         }),
         "stall-key"
       );
@@ -4944,13 +4943,32 @@ describe("Decisions questions (#17232)", () => {
       const [[uncertainTitle, uncertainBody], [title, body]] =
         notificationServiceMock.showNativeNotification.mock.calls;
       expect(uncertainTitle).toBe("Follow-ups may or may not have been delivered");
-      expect(uncertainBody).toBe(deliveryReasonText("inject_ambiguous", "follow-ups"));
+      expect(uncertainBody).toBe("The terminal refused the follow-ups.");
       expect(title).toBe(`Answer and follow-up to ${agentName()} in Daintree need attention`);
       expect(body).toBe("Daintree won't type them in on its own.");
     });
 
+    it("plays this computer's waiting sound for each, with sound on", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "k-1"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "k-2"
+      );
+      expect(soundServiceMock.playFile.mock.calls).toEqual([
+        [DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile],
+        [DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile],
+      ]);
+    });
+
     it("is silenced by turning notifications off, as a question's own is", () => {
-      mockStore({ enabled: false } as never);
+      mockStore({ enabled: false, soundEnabled: true } as never);
       agentNotificationService.notifyDecisionReply(
         question("term-1", Date.now(), { replyRequest: "ask-1" }),
         "Hi?",

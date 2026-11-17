@@ -59,8 +59,12 @@ function decisionQuestionSource(question: DecisionQuestionListItem): {
   agent: string | undefined;
   project: string | undefined;
 } {
+  const registry = getEffectiveRegistry();
   return {
-    agent: getEffectiveRegistry()[question.agentKind]?.name?.trim() || undefined,
+    // The kind is the store's, so `constructor` must not reach Object's.
+    agent: Object.hasOwn(registry, question.agentKind)
+      ? registry[question.agentKind]?.name?.trim() || undefined
+      : undefined,
     project:
       question.projectLabel ??
       projectStore.getProjectById(question.reference.projectId)?.name?.trim(),

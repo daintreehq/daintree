@@ -23,5 +23,9 @@ describe("decisionsDeliveryReasons", () => {
       answer!.replace("the answer", "the follow-up")
     );
     expect(deliveryReasonText("inject_rejected", "answer and follow-ups")).toBe(answer);
+    expect(deliveryReasonText("resume_exited", "follow-ups")).toBe(
+      "The resumed agent exited before the follow-ups were typed in."
+    );
+    expect(deliveryReasonText("pane_gone")).toBe("The terminal that asked was closed.");
   });
 });

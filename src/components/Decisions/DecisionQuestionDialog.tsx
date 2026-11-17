@@ -441,20 +441,32 @@ export function DecisionQuestionDialog() {
   const rereadShown = useCallback(() => readAgain(target), [readAgain, target]);
 
   // A follow-up's notification opens its question at that follow-up (#17235),
-  // once the question is read; once per opening, so a read again stays put.
+  // once per opening, so a read again stays put. A read already on screen as
+  // it opens can predate the follow-up: without it there, the thread is shown
+  // once a read made for this opening lands.
   const bodyRef = useRef<HTMLDivElement>(null);
-  const shownAt = useRef<DecisionsQuestionViewRequest | null>(null);
-  const loaded = readQuestion !== null;
+  const threadScroll = useRef<{
+    request: DecisionsQuestionViewRequest;
+    stale: TaggedRead | null;
+    done: boolean;
+  } | null>(null);
+  const shownRead = tagged !== null && tagged.key === key ? tagged : null;
   useEffect(() => {
-    if (!isOpen || !loaded || request?.threadMessageId === undefined) return;
-    if (shownAt.current === request) return;
-    shownAt.current = request;
+    if (!isOpen || request?.threadMessageId === undefined) return;
+    let pending = threadScroll.current;
+    if (pending?.request !== request) {
+      pending = { request, stale: shownRead, done: false };
+      threadScroll.current = pending;
+    }
+    if (pending.done || shownRead?.read.result !== "read") return;
     const body = bodyRef.current;
-    const entry =
-      body?.querySelector(`[data-message-id="${CSS.escape(request.threadMessageId)}"]`) ??
-      body?.querySelector('[data-testid="decision-question-thread"]');
-    entry?.scrollIntoView({ block: "nearest" });
-  }, [isOpen, loaded, request]);
+    const entry = body?.querySelector(`[data-message-id="${CSS.escape(request.threadMessageId)}"]`);
+    if (entry == null && shownRead === pending.stale) return;
+    pending.done = true;
+    (entry ?? body?.querySelector('[data-testid="decision-question-thread"]'))?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [isOpen, request, shownRead]);
 
   const hasPrevious = index > 0;
   const hasNext = index < count - 1;

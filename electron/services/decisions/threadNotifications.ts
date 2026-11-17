@@ -80,6 +80,12 @@ function stallBanner(reference: DecisionQuestionReference): string {
  */
 export class ThreadNotifier implements QuestionNotifications {
   private claimed: Set<string> | null = null;
+  /**
+   * The delivery each claim made this lifetime belongs to, while its event
+   * holds: a stall that ends and comes back under the same key while the
+   * first delivery still reads is the second's to show, never both.
+   */
+  private owners = new Map<string, ThreadEvent>();
   private readonly record: NotificationClaims;
   private shown = new Set<string>();
   private stopped = false;
@@ -149,7 +155,9 @@ export class ThreadNotifier implements QuestionNotifications {
         banners.add(reply);
         if (!claimed.has(reply)) {
           claimed.add(reply);
-          fresh.push({ kind: "reply", banner: reply, claims: [reply], question });
+          const event: ThreadEvent = { kind: "reply", banner: reply, claims: [reply], question };
+          this.owners.set(reply, event);
+          fresh.push(event);
         }
       }
       const held = stallKeys(question);
@@ -163,12 +171,19 @@ export class ThreadNotifier implements QuestionNotifications {
         claimed.add(key);
         claims.push(key);
       }
-      if (claims.length > 0) fresh.push({ kind: "stall", banner, claims, question });
+      if (claims.length > 0) {
+        const event: ThreadEvent = { kind: "stall", banner, claims, question };
+        for (const key of claims) this.owners.set(key, event);
+        fresh.push(event);
+      }
     }
     // A reply request never waits again once answered or superseded, and a
     // stall that ended and comes back is a new attempt that stopped.
     for (const key of claimed) {
       if (!active.has(key)) claimed.delete(key);
+    }
+    for (const key of this.owners.keys()) {
+      if (!active.has(key)) this.owners.delete(key);
     }
     for (const banner of this.shown) {
       if (!banners.has(banner)) {
@@ -180,8 +195,15 @@ export class ThreadNotifier implements QuestionNotifications {
     for (const event of fresh) void this.deliver(event);
   }
 
+  /** The claims of `event` no later delivery has taken over. */
+  private ownedBy(event: ThreadEvent): string[] {
+    return event.claims.filter((key) => this.owners.get(key) === event);
+  }
+
   /** The event's question now, while it still holds what the event claimed. */
   private stillHolds(event: ThreadEvent): DecisionQuestionListItem | null {
+    const owned = this.ownedBy(event);
+    if (owned.length === 0) return null;
     const { hostId, questionId } = event.question.reference;
     const current = this.o.questions
       .get()
@@ -192,7 +214,7 @@ export class ThreadNotifier implements QuestionNotifications {
     if (current === undefined) return null;
     if (event.kind === "reply") return replyKey(current) === event.banner ? current : null;
     const held = new Set(stallKeys(current));
-    return event.claims.some((key) => held.has(key)) ? current : null;
+    return owned.some((key) => held.has(key)) ? current : null;
   }
 
   private async deliver(event: ThreadEvent): Promise<void> {
@@ -201,9 +223,13 @@ export class ThreadNotifier implements QuestionNotifications {
     if (!saved) {
       // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
       const claimed = this.claimed;
-      if (claimed !== null && event.claims.some((key) => claimed.delete(key))) {
-        this.record.save(claimed);
+      const owned = this.ownedBy(event);
+      if (claimed === null || owned.length === 0) return;
+      for (const key of owned) {
+        claimed.delete(key);
+        this.owners.delete(key);
       }
+      this.record.save(claimed);
       return;
     }
     const { reference } = event.question;
@@ -221,6 +247,9 @@ export class ThreadNotifier implements QuestionNotifications {
     // Replied to from the phone, handled or delivered while it was being read: nothing to say.
     const current = this.stillHolds(event);
     if (current === null) return;
+    for (const key of event.claims) {
+      if (this.owners.get(key) === event) this.owners.delete(key);
+    }
     if (!this.o.notificationsOn(current.reference.projectId)) return;
     this.shown.add(event.banner);
     if (event.kind === "reply") this.o.showReply(current, line, event.banner);

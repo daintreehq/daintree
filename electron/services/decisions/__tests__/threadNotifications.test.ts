@@ -90,6 +90,7 @@ function questionList(initial: DecisionQuestionListItem[] = []) {
       list = { revision: list.revision + 1, questions };
       for (const listener of [...listeners]) listener(list);
     },
+    listening: () => listeners.size,
   };
 }
 
@@ -151,48 +152,58 @@ describe("ThreadNotifier", () => {
     list.publish([replying("q-1", "ask-2"), question("q-2")]);
     await settle(made);
     expect(showReply).toHaveBeenCalledTimes(2);
+    expect(showReply.mock.calls[1]![0].replyRequest).toBe("ask-2");
     expect(showReply.mock.calls[1]![2]).not.toBe(key);
     expect(showStall).not.toHaveBeenCalled();
   });
 
-  it("never shows a follow-up already replied to before it would show", async () => {
+  /** An opening-line read that waits until released, and says when it began. */
+  function heldRead() {
+    let release!: () => void;
+    let began!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const reading = new Promise<void>((resolve) => (began = resolve));
+    const readOpeningLine = vi.fn(async () => {
+      began();
+      await released;
+      return "line";
+    });
+    return { readOpeningLine, reading, release };
+  }
+
+  it("never shows a follow-up replied to from the phone while its line was read", async () => {
     const store = recorded();
     const list = questionList();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => (release = resolve));
+    const read = heldRead();
     const { notifier: made, showReply } = notifier(store, list, {
-      readOpeningLine: async () => {
-        await held;
-        return "line";
-      },
+      readOpeningLine: read.readOpeningLine,
     });
     await made.start();
 
     list.publish([replying("q-1", "ask-1")]);
-    await made.settled();
-    // Answered from the phone while the line was being read.
+    await read.reading;
     list.publish([question("q-1")]);
-    release();
+    read.release();
     await settle(made);
     expect(showReply).not.toHaveBeenCalled();
+  });
 
-    // Nor when a newer request superseded it meanwhile: only that one shows.
-    let releaseNext!: () => void;
-    const next = new Promise<void>((resolve) => (releaseNext = resolve));
-    const secondList = questionList();
-    const second = notifier(recorded(), secondList, {
-      readOpeningLine: async () => {
-        await next;
-        return "line";
-      },
+  it("shows only the newer request when one superseded another while its line was read", async () => {
+    const store = recorded();
+    const list = questionList();
+    const read = heldRead();
+    const { notifier: made, showReply } = notifier(store, list, {
+      readOpeningLine: read.readOpeningLine,
     });
-    await second.notifier.start();
-    secondList.publish([replying("q-1", "ask-1")]);
-    await second.notifier.settled();
-    secondList.publish([replying("q-1", "ask-2")]);
-    releaseNext();
-    await settle(second.notifier);
-    expect(second.showReply.mock.calls.map(([shown]) => shown.replyRequest)).toEqual(["ask-2"]);
+    await made.start();
+
+    list.publish([replying("q-1", "ask-1")]);
+    await read.reading;
+    list.publish([replying("q-1", "ask-2")]);
+    await vi.waitFor(() => expect(read.readOpeningLine).toHaveBeenCalledTimes(2));
+    read.release();
+    await settle(made);
+    expect(showReply.mock.calls.map(([shown]) => shown.replyRequest)).toEqual(["ask-2"]);
   });
 
   it("shows nothing again on restart or reconnect", async () => {
@@ -309,6 +320,37 @@ describe("ThreadNotifier", () => {
     ]);
     await settle(made);
     expect(showReply).toHaveBeenCalledTimes(1);
+
+    // The same message id on another question is another request.
+    list.publish([
+      question("q-1", { replyRequest: "ask-1" }, { terminalId: "term-2", standing: REPLY }),
+      replying("q-2", "ask-1"),
+    ]);
+    await settle(made);
+    expect(showReply.mock.calls.map(([shown]) => shown.reference.questionId)).toEqual([
+      "q-1",
+      "q-2",
+    ]);
+  });
+
+  it("shows only the latest attempt when a stall ends and comes back while the first is read", async () => {
+    const store = recorded();
+    const list = questionList();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const prepare = vi.fn(() => released);
+    const { notifier: made, showStall } = notifier(store, list, { prepare });
+    await made.start();
+
+    list.publish([stalled("q-1")]);
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+    list.publish([question("q-1", {}, { standing: { kind: "to-type" } })]);
+    list.publish([stalled("q-1", { reason: "resume_failed" })]);
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    release();
+    await settle(made);
+    expect(showStall).toHaveBeenCalledTimes(1);
+    expect(showStall.mock.calls[0]![0].stall?.reason).toBe("resume_failed");
   });
 
   it("closes a reply's banner once it is replied to, and a stall's once nothing on it is held", async () => {
@@ -350,6 +392,14 @@ describe("ThreadNotifier", () => {
     await settle(made);
     expect(showReply).not.toHaveBeenCalled();
     expect(showStall).not.toHaveBeenCalled();
+    expect(JSON.parse(store.meta.get(NOTIFIED_THREAD_EVENTS_META_KEY)!)).toHaveLength(2);
+
+    made.stop();
+    const restarted = notifier(store, list);
+    await restarted.notifier.start();
+    await settle(restarted.notifier);
+    expect(restarted.showReply).not.toHaveBeenCalled();
+    expect(restarted.showStall).not.toHaveBeenCalled();
   });
 
   it("stays silent for its lifetime when the record can't be read", async () => {
@@ -382,14 +432,40 @@ describe("ThreadNotifier", () => {
     warn.mockRestore();
   });
 
-  it("shows nothing once stopped", async () => {
+  it("takes back every claim of a stall it couldn't save, so what is still held shows later", async () => {
+    const store = recorded();
+    store.setMeta.mockRejectedValueOnce(new Error("disk full"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const list = questionList();
+    const { notifier: made, showStall } = notifier(store, list);
+    await made.start();
+    list.publish([stalled("q-1", { followUpIds: ["held-1"] })]);
+    await settle(made);
+    expect(showStall).not.toHaveBeenCalled();
+    expect(JSON.parse(store.meta.get(NOTIFIED_THREAD_EVENTS_META_KEY)!)).toEqual([]);
+
+    // The answer is dealt with before the next change; its follow-up still isn't.
+    list.publish([stalled("q-1", { answerRevision: null, followUpIds: ["held-1"] })]);
+    await settle(made);
+    expect(showStall).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("shows nothing once stopped, even what it was readying, and stops following the list", async () => {
     const store = recorded();
     const list = questionList();
-    const { notifier: made, showReply } = notifier(store, list);
+    const read = heldRead();
+    const { notifier: made, showReply } = notifier(store, list, {
+      readOpeningLine: read.readOpeningLine,
+    });
     await made.start();
+    expect(list.listening()).toBe(1);
     list.publish([replying("q-1", "ask-1")]);
+    await read.reading;
     made.stop();
+    read.release();
     await settle(made);
     expect(showReply).not.toHaveBeenCalled();
+    expect(list.listening()).toBe(0);
   });
 });

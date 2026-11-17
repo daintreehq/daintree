@@ -647,38 +647,85 @@ describe("DecisionQuestionDialog", () => {
   });
 
   describe("opened by reference (#17229)", () => {
-    it("opens a follow-up's question at that follow-up, once per opening (#17235)", async () => {
-      const scrolled: Element[] = [];
-      const scrollIntoView = vi.fn(function (this: Element) {
-        scrolled.push(this);
+    describe("at a follow-up (#17235)", () => {
+      const asks = (messageId: string) => ({
+        type: "message" as const,
+        messageId,
+        from: "agent" as const,
+        text: `Asking ${messageId}`,
+        images: [],
+        expectsReply: true,
+        sentAt: "2026-11-02T10:07:00.000Z",
+        deliveryStatus: null,
+        unreadable: false,
       });
-      Reflect.set(Element.prototype, "scrollIntoView", scrollIntoView);
-      try {
+      const withThread = (...extra: ReturnType<typeof asks>[]) =>
+        content("qa", 7, { thread: [...QUESTIONS.qa!.thread, ...extra] });
+      const openAt = (messageId: string) =>
         act(() =>
           useDecisionsQuestionViewStore
             .getState()
-            .openReference([OTHER_PROJECT], OTHER_PROJECT, "m1")
+            .openReference([OTHER_PROJECT], OTHER_PROJECT, messageId)
         );
-        await screen.findByTestId("decision-question-content");
+      let scrolled: Element[];
+      let scrollSpy: { mockRestore: () => void };
+
+      beforeEach(() => {
+        scrolled = [];
+        // The setup's stub stays for every other test: spied on, never replaced.
+        scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
+          this: Element
+        ) {
+          scrolled.push(this);
+        });
+      });
+
+      afterEach(() => scrollSpy.mockRestore());
+
+      it("scrolls to that follow-up once, and a read again keeps the person's place", async () => {
+        getQuestionContentByReference.mockImplementation(async () => ({
+          result: "read",
+          question: withThread(asks("m2")),
+        }));
+        openAt("m2");
         await waitFor(() => expect(scrolled).toHaveLength(1));
-        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m1");
+        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m2");
 
-        // A read again keeps the place the person scrolled to.
+        getQuestionContentByReference.mockImplementation(async () => ({
+          result: "read",
+          question: withThread(asks("m2"), asks("m3")),
+        }));
         pushList(2, { qa: "to-type", qz: "waiting" });
-        await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
+        await screen.findByText("Asking m3");
         expect(scrolled).toHaveLength(1);
+      });
 
-        // A follow-up the thread doesn't show yet: its thread, then.
-        act(() =>
-          useDecisionsQuestionViewStore
-            .getState()
-            .openReference([OTHER_PROJECT], OTHER_PROJECT, "not-yet-read")
+      it("waits for a read made for this opening when the one on screen predates the follow-up", async () => {
+        openReference([OTHER_PROJECT]);
+        await screen.findByText("Merged");
+        expect(scrolled).toHaveLength(0);
+
+        let land!: () => void;
+        getQuestionContentByReference.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              land = () => resolve({ result: "read", question: withThread(asks("m2")) });
+            })
         );
-        await waitFor(() => expect(scrolled).toHaveLength(2));
-        expect(scrolled[1]!.getAttribute("data-testid")).toBe("decision-question-thread");
-      } finally {
-        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
-      }
+        openAt("m2");
+        await waitFor(() => expect(land).toBeTypeOf("function"));
+        expect(scrolled).toHaveLength(0);
+
+        await act(async () => land());
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m2");
+      });
+
+      it("shows the thread when a read for this opening doesn't have the follow-up yet", async () => {
+        openAt("not-yet-read");
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-testid")).toBe("decision-question-thread");
+      });
     });
 
     it("reads a question from another project's window by its reference, never through a pane", async () => {
