@@ -1582,7 +1582,9 @@ async function isReportedUnbornBranch(
       "--ignore-submodules=all",
     ]);
     const headers = out.split("\n").filter((line) => line.startsWith("# branch."));
-    return headers.includes("# branch.oid (initial)") && headers.includes(`# branch.head ${branch}`);
+    return (
+      headers.includes("# branch.oid (initial)") && headers.includes(`# branch.head ${branch}`)
+    );
   } catch {
     return false;
   }

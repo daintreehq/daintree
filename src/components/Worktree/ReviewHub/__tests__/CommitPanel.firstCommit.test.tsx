@@ -114,9 +114,7 @@ describe("CommitPanel — first commit on a branch with a remote (#17588)", () =
 
   it("holds the composer busy until the commit and its push review finish", async () => {
     let finish!: () => void;
-    const onCommitThenReviewPush = vi.fn(
-      () => new Promise<void>((resolve) => (finish = resolve))
-    );
+    const onCommitThenReviewPush = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
     const { clickPrimary } = renderUnborn({ onCommitThenReviewPush });
 
     await clickPrimary();
