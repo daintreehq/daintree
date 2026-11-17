@@ -2887,6 +2887,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../mergedWorktreeCleanup.js").MergedWorktreeRemovalReceipt[];
   };
+  "notification-sounds:get-custom-dir": {
+    args: [];
+    result: string;
+  };
+  "notification-sounds:import": {
+    args: [payload: import("./notificationSounds.js").ImportNotificationSoundPayload];
+    result: import("./notificationSounds.js").CustomNotificationSound;
+  };
+  "notification-sounds:list": {
+    args: [];
+    result: import("./notificationSounds.js").CustomNotificationSoundEntry[];
+  };
   "onboarding:checklist-dismiss": {
     args: [];
     result: void;

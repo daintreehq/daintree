@@ -36,6 +36,7 @@ import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
 import { registerConfigBundleHandlers } from "./handlers/configBundle.js";
 import { registerNotificationHandlers } from "./handlers/notifications.js";
+import { registerNotificationSoundsHandlers } from "./handlers/notificationSounds.js";
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerFileMutationHandlers } from "./handlers/fileMutation.js";
@@ -239,6 +240,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWorktreeConfigHandlers(deps));
     register(() => registerConfigBundleHandlers(deps));
     register(() => registerNotificationHandlers(deps));
+    register(() => registerNotificationSoundsHandlers());
     register(() => registerCodexHandlers());
     register(() => registerClaudeHandlers());
     register(() => registerTerminalSessionFileHandlers());

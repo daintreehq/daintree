@@ -137,6 +137,8 @@ export const SETTING_CATALOG = {
       // host still detects the events; a Shell's own choices decide which of them
       // alert it (#14701), and a host's windows use the host's.
       notificationSettings: device,
+      // Imported sound files stay in this device's app data, so their list does too.
+      customNotificationSounds: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
       // A path on the machine the agents run on, so it is that machine's.

@@ -1209,6 +1209,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["merged-worktree-cleanup:take-receipts"]["args"]
     ): Promise<IpcInvokeMap["merged-worktree-cleanup:take-receipts"]["result"]>;
   };
+  notificationSounds: {
+    getCustomDir(
+      ...args: IpcInvokeMap["notification-sounds:get-custom-dir"]["args"]
+    ): Promise<IpcInvokeMap["notification-sounds:get-custom-dir"]["result"]>;
+    importSound(
+      ...args: IpcInvokeMap["notification-sounds:import"]["args"]
+    ): Promise<IpcInvokeMap["notification-sounds:import"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["notification-sounds:list"]["args"]
+    ): Promise<IpcInvokeMap["notification-sounds:list"]["result"]>;
+  };
   onboarding: {
     complete(
       ...args: IpcInvokeMap["onboarding:complete"]["args"]

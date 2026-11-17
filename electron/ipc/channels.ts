@@ -566,6 +566,9 @@ export const CHANNELS = {
 
   SOUND_TRIGGER: "sound:trigger",
   SOUND_GET_DIR: "sound:get-dir",
+  NOTIFICATION_SOUNDS_LIST: "notification-sounds:list",
+  NOTIFICATION_SOUNDS_IMPORT: "notification-sounds:import",
+  NOTIFICATION_SOUNDS_GET_CUSTOM_DIR: "notification-sounds:get-custom-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",

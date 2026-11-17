@@ -29,6 +29,9 @@ import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { normalizeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
 import { sanitizeProjectLinks } from "../../shared/utils/projectLinks.js";
+// A custom id is kept by its shape alone: the codec is pure, and a reference to an
+// import whose file is briefly missing shouldn't be dropped from the project.
+import { isSelectableNotificationSound } from "../../shared/types/ipc/notificationSounds.js";
 
 export const PROJECT_SETTINGS_SCHEMA_VERSION = 1;
 
@@ -41,15 +44,6 @@ export const PROJECT_SETTINGS_SCHEMA_VERSION = 1;
 export type ProjectSettingsDecodeResult =
   | { ok: true; settings: ProjectSettings }
   | { ok: false; reason: "future-version"; onDiskVersion: number };
-
-const ALLOWED_NOTIFICATION_SOUNDS = [
-  "chime.wav",
-  "ping.wav",
-  "complete.wav",
-  "waiting.wav",
-  "error.wav",
-  "pulse.wav",
-];
 
 const VALID_PREDICATE_SCOPES = new Set(["current", "all"]);
 const VALID_PREDICATE_STATES = new Set(["all", "working", "waiting", "finished"]);
@@ -98,25 +92,25 @@ function decodeNotificationOverrides(raw: unknown): Partial<NotificationSettings
 
   if (
     typeof obj.completedSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.completedSoundFile)
+    isSelectableNotificationSound(obj.completedSoundFile)
   ) {
     result.completedSoundFile = obj.completedSoundFile;
   } else if (
     typeof obj.soundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.soundFile)
+    isSelectableNotificationSound(obj.soundFile)
   ) {
     // Legacy alias from a previous settings shape.
     result.completedSoundFile = obj.soundFile;
   }
   if (
     typeof obj.waitingSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.waitingSoundFile)
+    isSelectableNotificationSound(obj.waitingSoundFile)
   ) {
     result.waitingSoundFile = obj.waitingSoundFile;
   }
   if (
     typeof obj.escalationSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.escalationSoundFile)
+    isSelectableNotificationSound(obj.escalationSoundFile)
   ) {
     result.escalationSoundFile = obj.escalationSoundFile;
   }
@@ -137,7 +131,7 @@ function decodeNotificationOverrides(raw: unknown): Partial<NotificationSettings
   }
   if (
     typeof obj.workingPulseSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.workingPulseSoundFile)
+    isSelectableNotificationSound(obj.workingPulseSoundFile)
   ) {
     result.workingPulseSoundFile = obj.workingPulseSoundFile;
   }

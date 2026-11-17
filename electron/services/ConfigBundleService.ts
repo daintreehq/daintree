@@ -187,6 +187,7 @@ const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   workingPulseEnabled: "Working pulse",
   workingPulseSoundFile: "Working pulse sound",
   uiFeedbackSoundEnabled: "Interface sounds",
+  soundVolume: "Notification volume",
   flashEnabled: "All-clear flash",
   quietHoursEnabled: "Quiet hours",
   quietHoursStartMin: "Quiet hours start",
@@ -206,6 +207,7 @@ function displayNotificationValue(key: string, value: unknown): string | undefin
       const seconds = Math.round(value / 1000);
       return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
     }
+    if (key === "soundVolume") return `${Math.round(value * 100)}%`;
   }
   return displayScalar(value);
 }
