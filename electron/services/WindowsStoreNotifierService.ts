@@ -117,14 +117,16 @@ class WindowsStoreNotifierService {
   private retryCount = 0;
   private initialized = false;
   private handlersRegistered = false;
-  private lastDetected: DetectedStoreUpdate | null = null;
+  // Tagged with its feed so a view opened after a channel switch, before the
+  // next poll, isn't handed the previous channel's offer.
+  private lastDetected: { update: DetectedStoreUpdate; feedUrl: string } | null = null;
   private activeFeedUrl: string | null = null;
   // Holds the ETag from a 200 response until the renderer confirms the user
   // has seen the notification (via DISMISS). If the app crashes before that
   // confirmation, we WANT the next launch to re-fetch the full body — storing
   // the ETag eagerly would let a future 304 silently suppress the version
   // forever (no broadcast, no lastNotifiedStoreVersion write).
-  private pendingEtag: { version: string; etag: string } | null = null;
+  private pendingEtag: { version: string; etag: string; feedUrl: string } | null = null;
   // At most one manifest request runs at a time; triggers that land while it
   // is pending share it, so an older response can't overwrite a newer one.
   private inflightCheck: InflightCheck | null = null;
@@ -188,7 +190,9 @@ class WindowsStoreNotifierService {
 
   private setActiveFeedUrl(feedUrl: string): void {
     // Channel switched between polls — drop the prior ETag so we don't send
-    // a stable-feed validator to the nightly feed (or vice versa).
+    // a stable-feed validator to the nightly feed (or vice versa), and the
+    // offer that feed produced, which the new one may not carry. Retries the
+    // old feed's failures earned don't count against the new one.
     if (this.activeFeedUrl && this.activeFeedUrl !== feedUrl) {
       try {
         store.delete("storeNotifierEtag");
@@ -198,6 +202,8 @@ class WindowsStoreNotifierService {
       // An undismissed notification from the old feed would otherwise commit
       // its validator back on DISMISS.
       this.pendingEtag = null;
+      this.lastDetected = null;
+      this.retryCount = 0;
     }
     this.activeFeedUrl = feedUrl;
   }
@@ -306,11 +312,16 @@ class WindowsStoreNotifierService {
       // canceller owns the timers and cached state now.
       if (signal.aborted) return;
       this.resetRetryState();
+      // The channel moved while the request was in flight and nothing has
+      // triggered a check since: its answer belongs to a feed the user has left.
+      if (feedUrl !== this.configuredFeedUrl()) return;
       if (manifest === null) return;
       // Don't persist the ETag yet — see `pendingEtag` field comment. We pair
       // the version + ETag in memory so the DISMISS handler can commit them
       // together after the user has actually been shown the notification.
-      this.pendingEtag = manifest.etag ? { version: manifest.version, etag: manifest.etag } : null;
+      this.pendingEtag = manifest.etag
+        ? { version: manifest.version, etag: manifest.etag, feedUrl }
+        : null;
       const remoteVersion = manifest.version;
       if (!this.shouldNotify(remoteVersion)) return;
       // Re-check the toggle after the fetch resolves — a user who flipped the
@@ -324,7 +335,7 @@ class WindowsStoreNotifierService {
         version: remoteVersion,
         storeUrl: buildStoreUrl(),
       };
-      this.lastDetected = detected;
+      this.lastDetected = { update: detected, feedUrl };
       broadcastToRenderer(CHANNELS.STORE_UPDATE_AVAILABLE, detected);
     } catch (err) {
       if (signal.aborted) return;
@@ -347,7 +358,9 @@ class WindowsStoreNotifierService {
   }
 
   getLastDetectedUpdate(): DetectedStoreUpdate | null {
-    return this.lastDetected;
+    const cached = this.lastDetected;
+    if (!cached || cached.feedUrl !== this.configuredFeedUrl()) return null;
+    return cached.update;
   }
 
   initialize(): void {
@@ -381,7 +394,7 @@ class WindowsStoreNotifierService {
       });
 
       ipcMain.handle(CHANNELS.STORE_UPDATE_GET_LATEST, () => {
-        return this.lastDetected;
+        return this.getLastDetectedUpdate();
       });
 
       ipcMain.handle(CHANNELS.STORE_UPDATE_DISMISS, (event, version: unknown) => {
@@ -397,14 +410,19 @@ class WindowsStoreNotifierService {
         // mid-flight crash had wiped this in-memory state, we'd have re-
         // fetched the full body on next launch instead of being suppressed
         // forever by a stored ETag for an un-dismissed version.
-        if (this.pendingEtag && this.pendingEtag.version === trimmed) {
+        const pending = this.pendingEtag;
+        if (pending && pending.version === trimmed) {
+          this.pendingEtag = null;
           try {
-            store.set("storeNotifierEtag", this.pendingEtag.etag);
+            // A validator from a feed the user has since left must never be
+            // sent to the one they switched to.
+            if (pending.feedUrl === this.configuredFeedUrl()) {
+              store.set("storeNotifierEtag", pending.etag);
+            }
           } catch {
             // Best-effort — a write failure means we re-fetch the body next
             // tick. Version compare still works via lastNotifiedStoreVersion.
           }
-          this.pendingEtag = null;
         }
       });
 
