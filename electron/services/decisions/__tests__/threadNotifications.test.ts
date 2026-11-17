@@ -335,7 +335,11 @@ describe("ThreadNotifier", () => {
     const store = recorded();
     const list = questionList();
     let on = false;
-    const { notifier: made, showReply, showStall } = notifier(store, list, {
+    const {
+      notifier: made,
+      showReply,
+      showStall,
+    } = notifier(store, list, {
       notificationsOn: () => on,
     });
     await made.start();

@@ -4918,9 +4918,7 @@ describe("Decisions questions (#17232)", () => {
       expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
       expect(body).toBe(deliveryReasonText("pane_gone"));
       options.onClick();
-      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(
-        stalled.reference
-      );
+      expect(notificationServiceMock.openDecisionAttention).toHaveBeenCalledWith(stalled.reference);
       expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
     });
 
@@ -4980,9 +4978,10 @@ describe("Decisions questions (#17232)", () => {
         }),
         "stall-key"
       );
-      const [replyBanner, stallBanner] = notificationServiceMock.showNativeNotification.mock.calls.map(
-        (call) => call[2].replaceKey as string
-      );
+      const [replyBanner, stallBanner] =
+        notificationServiceMock.showNativeNotification.mock.calls.map(
+          (call) => call[2].replaceKey as string
+        );
       expect(replyBanner).not.toBe(stallBanner);
 
       agentNotificationService.closeDecisionQuestion("stall-key");

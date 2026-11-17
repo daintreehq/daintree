@@ -584,7 +584,11 @@ describe("follow-up and stall events (#17235)", () => {
     expect(
       project(
         answered(
-          messages(request("ask-1", 6), { message_id: "reply-1", event_seq: 7 }, request("ask-2", 8))
+          messages(
+            request("ask-1", 6),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-2", 8)
+          )
         )
       ).replyRequest
     ).toBe("ask-2");
