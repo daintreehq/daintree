@@ -118,6 +118,22 @@ describe("ImageLinksAddon", () => {
       expect(links).toHaveLength(1);
       expect(links![0]!.range).toEqual(range(3, 2, 12, 2));
     });
+
+    it("reads a cell the cursor skipped over as a space", async () => {
+      const { addon } = await setup("[image\x1b[C#1]", [1]);
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.text).toBe("[image #1]");
+      expect(links![0]!.range).toEqual(range(1, 1, 10, 1));
+    });
+
+    it("keeps the text of a zero-width cell that isn't half of a wide character", async () => {
+      // An SGR reset ends the join, so xterm gives the accent a cell of its own.
+      const { terminal, addon } = await setup("[ima\x1b[0m\u0301ge #1]", [1]);
+      const accent = terminal.buffer.active.getLine(0)!.getCell(4)!;
+      expect([accent.getChars(), accent.getWidth()]).toEqual(["\u0301", 0]);
+      expect(await provide(addon, 1)).toBeUndefined();
+    });
   });
 
   describe("soft wraps", () => {
@@ -197,11 +213,20 @@ describe("ImageLinksAddon", () => {
       expect(links![0]!.text).toBe("[image #3]");
       expect(getLine.mock.calls.length).toBeLessThan(100);
     });
+
+    it("finds a reference at the start of a long wrapped run without reading the whole run", async () => {
+      const { terminal, addon } = await setup("[image #3] " + "x".repeat(5000), [3], 10);
+      const getLine = vi.spyOn(terminal.buffer.active, "getLine");
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.text).toBe("[image #3]");
+      expect(getLine.mock.calls.length).toBeLessThan(100);
+    });
   });
 
   describe("hard line breaks", () => {
     it("keeps a reference broken by a newline as two fragments", async () => {
-      const { terminal, addon } = await setup("see [image\r\n#1] ok", [1], 80);
+      const { terminal, addon } = await setup("see [image\r\n#1] ok", [1], 11);
       expect(terminal.buffer.active.getLine(1)!.isWrapped).toBe(false);
       expect(await provide(addon, 1)).toBeUndefined();
       expect(await provide(addon, 2)).toBeUndefined();
@@ -252,6 +277,69 @@ describe("ImageLinksAddon", () => {
       expect(links).toHaveLength(1);
       expect(links![0]!.range).toEqual(range(1, 1, 10, 1));
     });
+
+    it("links a bare match a space separates from the clipped start", async () => {
+      const terminal = await render(10, "abcdefghijx image #1\r\ny\r\nz", {
+        rows: 2,
+        scrollback: 1,
+      });
+      expect(terminal.buffer.active.getLine(0)!.isWrapped).toBe(true);
+      const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.text).toBe("image #1");
+      expect(links![0]!.range).toEqual(range(3, 1, 10, 1));
+    });
+
+    it("never reads past the last row into the scrollback's first", async () => {
+      // Row 0 is the wrapped tail of an evicted line; a full ring buffer hands
+      // it back for the index one past the end.
+      const terminal = await render(8, "abcdefgh2\r\nx\r\nimage #1", { rows: 2, scrollback: 1 });
+      expect(terminal.buffer.active.length).toBe(3);
+      expect(terminal.buffer.active.getLine(0)!.isWrapped).toBe(true);
+      const addon = new ImageLinksAddon(terminal, () => [1, 12], vi.fn());
+      const links = await provide(addon, 3);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.text).toBe("image #1");
+      expect(links![0]!.range).toEqual(range(1, 3, 8, 3));
+    });
+
+    it("follows a wrap written after a narrowing past the rows' spare cells", async () => {
+      const terminal = await render(9, "\x1b[?1049h");
+      terminal.resize(8, 10);
+      await write(terminal, "[image #1]");
+      expect(terminal.buffer.active.getLine(0)!.length).toBeGreaterThan(terminal.cols);
+      const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
+      for (const y of [1, 2]) {
+        const links = await provide(addon, y);
+        expect(links).toHaveLength(1);
+        expect(links![0]!.range).toEqual(range(1, 1, 2, 2));
+      }
+    });
+
+    it("leaves a bracketed reference inert when a narrowed pane hides its end", async () => {
+      const terminal = await render(10, "\x1b[?1049h[image #1]");
+      terminal.resize(8, 10);
+      const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
+      expect(await provide(addon, 1)).toBeUndefined();
+    });
+
+    it("doesn't join the visible parts of a row across the text a narrowing hid", async () => {
+      const terminal = await render(9, "\x1b[?1049hxx[imageX #1]");
+      terminal.resize(8, 10);
+      expect(terminal.buffer.active.getLine(1)!.isWrapped).toBe(true);
+      const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
+      for (const y of [1, 2]) expect(await provide(addon, y)).toBeUndefined();
+    });
+
+    it("still links a bracketed reference that ends where a narrowing hid the rest", async () => {
+      const terminal = await render(11, "\x1b[?1049h[image #1]X");
+      terminal.resize(10, 10);
+      const addon = new ImageLinksAddon(terminal, () => [1], vi.fn());
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      expect(links![0]!.range).toEqual(range(1, 1, 10, 1));
+    });
   });
 
   describe("inert cases", () => {
@@ -260,8 +348,15 @@ describe("ImageLinksAddon", () => {
       expect(await provide(addon, 1)).toBeUndefined();
     });
 
-    it("returns undefined when no figures exist", async () => {
-      const { addon } = await setup("See [image #1]", []);
+    it("returns undefined without reading the buffer when no figures exist", async () => {
+      const { terminal, addon } = await setup("See [image #1]", []);
+      const getLine = vi.spyOn(terminal.buffer.active, "getLine");
+      expect(await provide(addon, 1)).toBeUndefined();
+      expect(getLine).not.toHaveBeenCalled();
+    });
+
+    it("does not match an unterminated bracketed reference", async () => {
+      const { addon } = await setup("see [image #1 here", [1]);
       expect(await provide(addon, 1)).toBeUndefined();
     });
 
@@ -298,6 +393,16 @@ describe("ImageLinksAddon", () => {
   });
 
   describe("activation", () => {
+    it("ignores a click once output rewrote part of a wrapped reference", async () => {
+      const { terminal, addon, onActivate } = await setup("[image #1]", [1, 2], 8);
+      const links = await provide(addon, 1);
+      expect(links).toHaveLength(1);
+      await write(terminal, "\x1b[2;1H2]");
+      links![0]!.activate(mouseEvent(), links![0]!.text);
+      expect(onActivate).not.toHaveBeenCalled();
+      expect((await provide(addon, 1))?.map((link) => link.text)).toEqual(["[image #2]"]);
+    });
+
     it("activates with openLightbox=false on a plain click", async () => {
       const { addon, onActivate } = await setup("[image #2]", [2]);
       const links = await provide(addon, 1);
