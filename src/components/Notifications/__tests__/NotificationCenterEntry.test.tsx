@@ -942,6 +942,40 @@ describe("NotificationCenterEntry snooze keybinding", () => {
   });
 });
 
+describe("NotificationCenterEntry silence item gating (#17195)", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "offers Silence for the %s kind",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.getByText(/^Silence /)).toBeTruthy();
+    }
+  );
+
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "leaves Silence out for the routing-only %s kind but keeps Mute",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.queryByText(/^Silence /)).toBeNull();
+      expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    }
+  );
+});
+
 describe("NotificationCenterEntry silence refresh", () => {
   it("re-reads the project's silences once a row-menu silence or mute lands", async () => {
     const load = vi

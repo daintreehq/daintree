@@ -51,7 +51,7 @@ vi.mock("@/lib/notify", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/notify")>();
   return {
     ...actual,
-    isNotificationEventKind: vi.fn(
+    isSilenceableEventKind: vi.fn(
       (v: string | undefined) =>
         v === "completed" || v === "waiting" || v === "workingPulse" || v === "uiFeedback"
     ),
