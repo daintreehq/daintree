@@ -590,9 +590,7 @@ describe("popover close-time focus policy", () => {
 
     const button = document.createElement("button");
     document.body.appendChild(button);
-    act(() =>
-      content.onClickCapture({ target: button, detail: 1 } as unknown as React.MouseEvent)
-    );
+    act(() => content.onClickCapture({ target: button, detail: 1 } as unknown as React.MouseEvent));
     const event = closeEvent();
     act(() => content.onCloseAutoFocus(event));
 
