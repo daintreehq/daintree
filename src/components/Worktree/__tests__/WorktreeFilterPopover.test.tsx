@@ -191,7 +191,7 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     openPopover();
     const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
     expect(trigger.textContent).toContain("2");
-    expect(trigger.className).toMatch(/(?:^|\s)bg-overlay-soft(?:\s|$)/);
+    expect(trigger.className).toContain("text-text-primary");
   });
 });
 
@@ -644,4 +644,41 @@ describe("WorktreeFilterPopover 'Has an agent' facet", () => {
     expect(sessions.getAttribute("aria-expanded")).toBe("false");
     expect(sessions.textContent).toBe("Terminals");
   });
+});
+
+describe("WorktreeFilterPopover trigger surface states", () => {
+  beforeEach(() => {
+    useWorktreeFilterStore.getState().clearAll();
+  });
+  afterEach(cleanup);
+
+  for (const appearance of ["field", "ghost"] as const) {
+    describe(appearance, () => {
+      const trigger = () => screen.getByRole("button", { name: /Filter and sort worktrees/ });
+
+      it("rests without a pressed fill and steps up on hover and open", () => {
+        render(<WorktreeFilterPopover appearance={appearance} />);
+        const cls = trigger().className;
+        expect(cls).toContain("text-text-secondary");
+        expect(cls).not.toMatch(/bg-tint|(^|\s)bg-overlay-(soft|hover)(\s|$)/);
+        expect(cls).toContain("hover:bg-overlay-hover");
+        expect(cls).toContain("aria-expanded:bg-overlay-hover");
+      });
+
+      it("keeps hover and drops the latched fill when filters are active", () => {
+        useWorktreeFilterStore.getState().setQuery("foo");
+        render(<WorktreeFilterPopover appearance={appearance} />);
+        const el = trigger();
+        expect(el.textContent).toContain("1");
+        expect(el.className).toContain("text-text-primary");
+        expect(el.className).not.toMatch(/bg-tint|(^|\s)bg-overlay-(soft|hover)(\s|$)/);
+        expect(el.className).toContain("hover:bg-overlay-hover");
+      });
+
+      it("exposes the open state through aria-expanded", () => {
+        render(<WorktreeFilterPopover appearance={appearance} open onOpenChange={() => {}} />);
+        expect(trigger().getAttribute("aria-expanded")).toBe("true");
+      });
+    });
+  }
 });

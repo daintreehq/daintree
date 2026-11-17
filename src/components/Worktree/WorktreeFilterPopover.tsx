@@ -155,16 +155,12 @@ export function WorktreeFilterPopover({
                   filterCount > 0 ? "min-w-7 px-1.5" : "w-7 px-0"
                 )
               : "h-6 min-w-6 px-1.5",
-            // Active state is a neutral fill + count, never a saturated colour or a
-            // floating notification dot. A dot reads as "something new"; what matters
-            // here is "how many filters", so we surface the number instead.
-            showBadge
-              ? isField
-                ? "bg-overlay-soft text-text-primary"
-                : "bg-tint/[0.08] text-text-primary"
-              : isField
-                ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-                : "text-text-secondary hover:bg-tint/[0.06] hover:text-text-primary"
+            // A disclosure, not a toggle: active filters show as the count and
+            // primary ink, never a latched fill. Hover and open both lift one
+            // step up the neutral overlay ladder, whatever the count.
+            "hover:bg-overlay-hover hover:text-text-primary aria-expanded:bg-overlay-hover aria-expanded:text-text-primary",
+            showBadge ? "text-text-primary" : "text-text-secondary",
+            isField && "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))]"
           )}
           // The count is rendered as text inside the button, and `aria-label`
           // overrides contents when the accessible name is computed — so the
