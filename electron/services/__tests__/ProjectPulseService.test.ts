@@ -1407,15 +1407,19 @@ describe("ProjectPulseService", () => {
     const at = ([y, m, d, h, min]: Moment) => new Date(y, m, d, h, min, 0, 0);
     const midnightOf = ([y, m, d]: Moment) => new Date(y, m, d, 0, 0, 0, 0);
 
-    let machineZone: string;
+    let originalTz: string | undefined;
+    let resolvedZone: string | undefined;
 
     beforeEach(() => {
-      // Deleting TZ does not reset the zone on every platform, so restore the resolved name.
-      machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      originalTz = process.env.TZ;
+      resolvedZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     });
 
     afterEach(() => {
-      process.env.TZ = machineZone;
+      // Deleting an unset TZ does not reset the zone on every platform, so fall back to the resolved name.
+      const restore = originalTz ?? resolvedZone;
+      if (restore === undefined) delete process.env.TZ;
+      else process.env.TZ = restore;
     });
 
     async function pulseFor(first: Moment, commits: Moment[], today: Moment) {
@@ -1449,8 +1453,9 @@ describe("ProjectPulseService", () => {
       });
     }
 
-    // The endpoint times straddle the UTC date line: the first commit lands on the next UTC
-    // date and today on an earlier one, so counting UTC dates instead of local ones comes up short.
+    // In every case an endpoint sits on a different UTC date than its local date (the New York
+    // first commits land a UTC day late, Sydney's today a UTC day early), so counting UTC dates
+    // instead of local ones comes up short.
     const cases: Array<{
       name: string;
       zone: string;
