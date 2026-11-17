@@ -435,7 +435,7 @@ const HOSTS: Record<string, Host> = {
       useGitWorktreeOperationConfirmStore
         .getState()
         .requestConfirmation({ kind: "merge-base", cwd: "/repo", baseBranch: "main" }),
-    declined: { confirmed: false, pinned: null },
+    declined: { confirmed: false, pinned: null, operation: null },
   },
   GitForcePushConfirmDialog: {
     chunk: "LazyGitForcePushConfirmDialog",
