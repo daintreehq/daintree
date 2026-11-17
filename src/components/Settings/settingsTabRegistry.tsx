@@ -2327,7 +2327,6 @@ export const SETTINGS_REGISTRY = [
           "idle",
           "phone",
           "push",
-          "notification",
           "hold",
           "delay",
           "desktop",
