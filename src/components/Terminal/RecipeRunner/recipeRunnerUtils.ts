@@ -98,7 +98,7 @@ export function rankSearchResults(
     const fresh = recipeById.get(r.item.id) ?? r.item;
     return computeFrecency(fresh.usageHistory ?? [], now);
   });
-  const maxFrecency = Math.max(...frecencyScores, 1);
+  const maxFrecency = frecencyScores.reduce((m, s) => Math.max(m, s), 1);
 
   return results
     .map((result, i) => {
