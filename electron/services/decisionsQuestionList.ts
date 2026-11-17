@@ -9,6 +9,8 @@ import type {
  * (notifications, the Dock badge) can read it and hear it change without
  * importing Decisions: Decisions loads only while it is on, and installs its
  * list here for that lifetime. An empty list is exactly Decisions off.
+ * Anything startup loads imports it on demand: Decisions adds no module to
+ * startup (`scripts/decisions-lazy-boundary.test.ts`).
  */
 let list: DecisionQuestionList = { revision: 0, questions: [] };
 let key = "[]";

@@ -353,7 +353,7 @@ const getQuestionImage = decisionsNamespace.ops.getQuestionImage.handler as unkn
   payload: GetDecisionQuestionImagePayload
 ) => Promise<DecisionQuestionImagePartResult>;
 const listQuestions = decisionsNamespace.ops.listQuestions
-  .handler as unknown as () => DecisionQuestionList;
+  .handler as unknown as () => Promise<DecisionQuestionList>;
 const getQuestionContentByReference = decisionsNamespace.ops.getQuestionContentByReference
   .handler as unknown as (
   payload: GetDecisionQuestionByReferencePayload
@@ -674,7 +674,7 @@ describe("decisions IPC", () => {
     it("lists what Decisions last installed, loading none of it, whatever the switch says", async () => {
       const { setDecisionQuestions } = await import("../../../services/decisionsQuestionList.js");
       saved.value = { enabled: false };
-      expect(listQuestions().questions).toEqual([]);
+      expect((await listQuestions()).questions).toEqual([]);
 
       const changed = setDecisionQuestions([
         {
@@ -692,7 +692,7 @@ describe("decisions IPC", () => {
         },
       ]);
       saved.value = { enabled: true };
-      expect(listQuestions()).toBe(changed);
+      await expect(listQuestions()).resolves.toBe(changed);
       setDecisionQuestions([]);
 
       expect(decisionsEntry.evaluated).toBe(0);
