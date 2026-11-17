@@ -510,6 +510,9 @@ describe("machineTimeZone", () => {
     expect(machineTimeZone()).toBe("Europe/London");
     report("Not/A_Zone");
     expect(machineTimeZone()).toBe("UTC");
+    constructed.mockClear();
+    expect(machineTimeZone()).toBe("UTC");
+    expect(constructed).toHaveBeenCalledTimes(1);
     report(undefined);
     expect(machineTimeZone()).toBe("UTC");
     report("Asia/Tokyo");

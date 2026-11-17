@@ -54,6 +54,33 @@ function freshInstant(epochMs: number, timeZone: string, now: number): string {
   }).format(epochMs);
 }
 
+function stubMachineZone(timeZone: string) {
+  let reported = timeZone;
+  const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+  vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
+    this: Intl.DateTimeFormat
+  ) {
+    return { ...real.call(this), timeZone: reported };
+  });
+  return (next: string) => {
+    reported = next;
+  };
+}
+
+// A module with empty caches, so the count starts from nothing built.
+async function columnConstructions(runs: readonly number[], timeZone: string) {
+  vi.resetModules();
+  const cold = await import("../runTime");
+  const spy = vi.spyOn(Intl, "DateTimeFormat");
+  cold.formatRunColumn(runs, timeZone, NOW);
+  const first = spy.mock.calls.length;
+  spy.mockClear();
+  cold.formatRunColumn(runs, timeZone, NOW);
+  const again = spy.mock.calls.length;
+  spy.mockRestore();
+  return { first, again };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -65,6 +92,9 @@ describe("formatRunColumn", () => {
     expect(tokyo[1]?.day).toContain("2027");
     const newYork = formatRunColumn([NOW, LATER], "America/New_York", NOW).rows;
     expect(newYork.map((row) => row.day).join(" ")).not.toMatch(/202[67]/);
+    expect(formatRunColumn([LATER], "Asia/Tokyo", NOW).rows).toEqual([
+      freshParts(LATER, "Asia/Tokyo", NOW),
+    ]);
   });
 
   it("names the zone only when it isn't this machine's", () => {
@@ -77,6 +107,20 @@ describe("formatRunColumn", () => {
     expect(formatRunColumn([NOW], machineTimeZone(), NOW).rows).toEqual(local.rows);
   });
 
+  it("names the zone once the machine has moved out of it", () => {
+    const move = stubMachineZone("Asia/Tokyo");
+    const runs = [NOW, LATER];
+    const home = formatRunColumn(runs, "Asia/Tokyo", NOW);
+    expect(home.foreign).toBe(false);
+    expect(home.rows).toEqual(runs.map((run) => freshParts(run, "Asia/Tokyo", NOW)));
+
+    move("America/New_York");
+    const away = formatRunColumn(runs, "Asia/Tokyo", NOW);
+    expect(away.foreign).toBe(true);
+    expect(away.rows).toEqual(runs.map((run) => freshParts(run, "Asia/Tokyo", NOW)));
+    expect(away.rows[0]?.time).not.toBe(home.rows[0]?.time);
+  });
+
   it("labels every row as freshly built formatters would, across zones and years", () => {
     const runs = Array.from({ length: 12 }, (_, index) => NOW + index * 3 * HOUR);
     const zones = [...ZONES, machineTimeZone(), ...ZONES];
@@ -87,18 +131,17 @@ describe("formatRunColumn", () => {
     }
   });
 
-  it("builds no more formatters for a long column than for a short one", () => {
-    const zone = otherZone("Asia/Tokyo", "America/New_York");
+  it("builds each distinct formatter once, however long the column", async () => {
+    // Every column here crosses New Year in Tokyo, so each needs the same formatters.
     const runs = Array.from({ length: 30 }, (_, index) => NOW + index * 4 * HOUR);
-    const expected = formatRunColumn(runs, zone, NOW).rows;
-
-    const spy = vi.spyOn(Intl, "DateTimeFormat");
-    formatRunColumn(runs.slice(0, 3), zone, NOW);
-    const short = spy.mock.calls.length;
-    spy.mockClear();
-    const { rows } = formatRunColumn(runs, zone, NOW);
-    expect(spy.mock.calls.length).toBeLessThanOrEqual(short);
-    expect(rows).toEqual(expected);
+    const long = await columnConstructions(runs, "Asia/Tokyo");
+    const short = await columnConstructions(runs.slice(0, 3), "Asia/Tokyo");
+    expect(long.first).toBe(short.first);
+    // Reading and checking the machine's zone, then the column's year, time, and
+    // day with and without the year.
+    expect(long.first).toBeLessThanOrEqual(6);
+    // Only the machine's zone is read again.
+    expect(long.again).toBeLessThanOrEqual(1);
   });
 });
 
@@ -113,7 +156,7 @@ describe("formatRunInstant", () => {
 });
 
 describe("localDayNumber", () => {
-  it("counts days in the zone asked for, whichever zone was asked first", () => {
+  it("keeps each zone's day count apart", () => {
     expect(localDayNumber(LATER, "Asia/Tokyo") - localDayNumber(NOW, "Asia/Tokyo")).toBe(1);
     expect(
       localDayNumber(LATER, "America/New_York") - localDayNumber(NOW, "America/New_York")

@@ -68,24 +68,33 @@ export function formatRunColumn(
   now: number
 ): { foreign: boolean; rows: RunParts[] } {
   const foreign = timeZone !== machineTimeZone();
-  const thisYear = yearIn(now, timeZone);
+  // Held for the whole column, so the shared cache clearing partway through it
+  // never rebuilds one.
+  const year = dateTimeFormat("en-US", { timeZone, year: "numeric" });
   const time = dateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
     timeZone,
     ...(foreign ? { timeZoneName: "short" } : {}),
   });
-  const rows = runs.map((run) => ({
-    at: run,
-    day: dateTimeFormat(undefined, {
+  const dayFormat = (withYear: boolean) =>
+    dateTimeFormat(undefined, {
       weekday: "short",
       month: "short",
       day: "numeric",
       timeZone,
-      ...(yearIn(run, timeZone) !== thisYear ? { year: "numeric" } : {}),
-    }).format(run),
-    time: time.format(run),
-  }));
+      ...(withYear ? { year: "numeric" } : {}),
+    });
+  const thisYear = year.format(now);
+  let sameYearDay: Intl.DateTimeFormat | undefined;
+  let otherYearDay: Intl.DateTimeFormat | undefined;
+  const rows = runs.map((run) => {
+    const day =
+      year.format(run) === thisYear
+        ? (sameYearDay ??= dayFormat(false))
+        : (otherYearDay ??= dayFormat(true));
+    return { at: run, day: day.format(run), time: time.format(run) };
+  });
   return { foreign, rows };
 }
 
