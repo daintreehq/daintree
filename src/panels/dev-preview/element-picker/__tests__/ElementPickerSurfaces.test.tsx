@@ -612,37 +612,61 @@ describe("preview binding", () => {
   });
 
   describe("in a browser panel", () => {
-    beforeEach(() => {
-      usePanelStore.setState({
+    const REFUSED = {
+      status: "unavailable",
+      reason: "other-worktree",
+      serverWorktreeId: "/repo/wt-b",
+    } as const;
+
+    function asBrowser(): void {
+      usePanelStore.setState((state) => ({
         panelsById: {
+          ...state.panelsById,
           "preview-1": {
             id: "preview-1",
-            kind: "browser",
             location: "grid",
+            worktreeId: "wt-1",
+            ...state.panelsById["preview-1"],
+            kind: "browser",
             browserUrl: "http://localhost:5173/",
           },
         } as never,
-      });
-    });
+      }));
+    }
 
-    it("tells main which local port the page is served from, and no server directory", async () => {
+    beforeEach(asBrowser);
+
+    it("opens its source naming no port and no server directory: main reads the page itself", async () => {
       await mountBound();
       await waitFor(() =>
         expect(host.calls("openWorkspace").at(-1)).toEqual({
           panelId: "preview-1",
           worktreeId: "wt-1",
           previewOrigin: "http://localhost:5173",
-          listenerPort: 5173,
         })
       );
     });
 
-    it("won't trace a page another worktree's terminal serves, and names that worktree", async () => {
-      host.openWith = () => ({
-        status: "unavailable",
-        reason: "other-worktree",
-        serverWorktreeId: "/repo/wt-b",
+    it("keeps an opened workspace across documents, and says so once main finds the server moved", async () => {
+      await mountBound();
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+      // A reload re-proves the selection in the workspace it was proven in.
+      await act(async () => host.documentReady(1));
+      expect(host.calls("openWorkspace")).toHaveLength(1);
+
+      // Another worktree's server took the port: main closes the workspace at
+      // the next resolve, and the reopen says where the page is served from.
+      host.openWith = () => REFUSED;
+      host.picker.resolve.mockImplementationOnce(async () => {
+        throw workspaceClosedError();
       });
+      await act(async () => host.select(1));
+      await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+      await screen.findAllByText(/served from another worktree/);
+    });
+
+    it("won't trace a page another worktree serves: the click still selects, nothing resolves", async () => {
+      host.openWith = () => REFUSED;
       await mountBound();
       await screen.findAllByText(/served from another worktree/);
       expect(screen.getByText("/repo/wt-b")).toBeTruthy();
@@ -651,25 +675,49 @@ describe("preview binding", () => {
         reason: "served-elsewhere",
         message: "/repo/wt-b",
       });
+      await act(async () => host.select(0));
+      await screen.findByRole("textbox", { name: "Request for the agent" });
+      expect(host.calls("resolve")).toEqual([]);
     });
 
-    it("says only that another project serves it when the terminal is that project's", async () => {
-      host.openWith = () => ({ status: "unavailable", reason: "other-worktree" });
+    it("traces again once the next document is served from this worktree", async () => {
+      let elsewhere = true;
+      host.openWith = () =>
+        elsewhere
+          ? REFUSED
+          : {
+              status: "ready",
+              workspaceId: "ws-1",
+              appPath: ".",
+              appPaths: ["."],
+              scanComplete: true,
+            };
       await mountBound();
-      await screen.findByText(/a terminal of another project/);
+      await screen.findAllByText(/served from another worktree/);
+      elsewhere = false;
+      await act(async () => host.documentReady(1));
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
     });
 
-    it("asks about no port in a window attached to another machine", async () => {
-      const global = window as unknown as { __DAINTREE_HOST_ID__?: { id: string } };
-      global.__DAINTREE_HOST_ID__ = { id: "build-box" };
-      try {
-        await mountBound();
-        await waitFor(() => expect(host.calls("openWorkspace").length).toBeGreaterThan(0));
-        expect(host.calls("openWorkspace").at(-1)).not.toHaveProperty("listenerPort");
-      } finally {
-        delete global.__DAINTREE_HOST_ID__;
-      }
+    it("tells the agent which worktree serves the page it was sent", async () => {
+      withAgent("term-browser");
+      asBrowser();
+      const sent = await recordSends();
+      host.openWith = () => REFUSED;
+      await mountBound();
+      await screen.findAllByText(/served from another worktree/);
+      await act(async () => host.select(0));
+      const prompt = await sendRequest(sent);
+      expect(prompt).toContain("- Served from: /repo/wt-b");
     });
+  });
+
+  it("keeps a dev preview's workspace across documents: its server is its own", async () => {
+    await mountBound();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(1));
+    await act(async () => host.documentReady(1));
+    await act(async () => {});
+    expect(host.calls("openWorkspace")).toHaveLength(1);
   });
 
   it("traces and offers the agent on an app the compiler was never tested against", async () => {

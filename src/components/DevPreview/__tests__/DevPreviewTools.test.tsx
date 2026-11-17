@@ -372,10 +372,12 @@ describe("a host that offers some of the tools, on some pages", () => {
       "true"
     );
     expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Picker drawer" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
     expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Picker drawer" })).toBeNull();
   });
 });
 

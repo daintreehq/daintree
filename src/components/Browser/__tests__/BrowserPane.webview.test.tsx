@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
@@ -406,6 +406,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       }));
       return {
         ...baseProps,
+        worktreeId: "wt-1",
         initialUrl: url,
         initialHistory: { past: [], present: url, future: [] },
       };
@@ -417,20 +418,37 @@ describe("BrowserPane webview lifecycle regression", () => {
       useRealPanelStore.setState({ panelIds: [], panelsById: {} } as never);
     });
 
-    it("registers its webview as a browser, which is what lets main bind the picker", () => {
-      render(<BrowserPane {...baseProps} />);
-      expect(useWebviewDialogSpy).toHaveBeenCalled();
-      for (const call of useWebviewDialogSpy.mock.calls) expect(call[3]).toBe("browser");
+    it("registers its attached webview as a browser, which is what lets main bind the picker", () => {
+      const { container } = render(<BrowserPane {...showing("http://localhost:5173/")} />);
+      const webview = getWebviewElement(container);
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      expect(useWebviewDialogSpy).toHaveBeenLastCalledWith(baseProps.id, webview, true, "browser");
     });
 
-    it("offers the picker on a page at a local address", () => {
+    it("offers the picker on a page at a local address, in a worktree's panel", () => {
       render(<BrowserPane {...showing("http://app.test:3000/")} />);
       expect(pickerToggle()?.getAttribute("aria-pressed")).toBe("false");
     });
 
-    it("offers no picker on a site elsewhere", () => {
+    it("offers no picker on a site elsewhere, or in a panel of no worktree", () => {
       render(<BrowserPane {...showing("https://example.com/")} />);
       expect(pickerToggle()).toBeNull();
+      cleanup();
+      render(<BrowserPane {...showing("http://localhost:5173/")} worktreeId={undefined} />);
+      expect(pickerToggle()).toBeNull();
+    });
+
+    it("follows the page the panel is on, not the one it opened at", () => {
+      const { container } = render(<BrowserPane {...showing("https://example.com/")} />);
+      expect(pickerToggle()).toBeNull();
+      const webview = getWebviewElement(container);
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        emitWebviewEvent(webview, "did-navigate", { url: "https://localhost:5173/" });
+      });
+      expect(pickerToggle()).not.toBeNull();
     });
 
     it("keeps a picker that is on switchable off when the page leaves for a site elsewhere", () => {
@@ -443,7 +461,12 @@ describe("BrowserPane webview lifecycle regression", () => {
         activeByPanel: { [baseProps.id]: ELEMENT_PICKER_TOOL_ID },
       });
       render(<BrowserPane {...showing("https://example.com/")} />);
-      expect(pickerToggle()?.getAttribute("aria-pressed")).toBe("true");
+      const toggle = pickerToggle();
+      expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+      act(() => {
+        toggle?.click();
+      });
+      expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
     });
   });
 

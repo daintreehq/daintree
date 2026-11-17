@@ -450,12 +450,17 @@ export function AgentComposer({
                   controller.pagePicture(about.selectionId),
                   controller.projectFor(about),
                 ]);
+          const workspace = controller.getSnapshot().workspace;
           return buildAgentTaskPrompt(
             promptInputFor({
               instruction,
               selection: about,
               scope: now.scope,
               worktreePath,
+              servedFrom:
+                workspace.status === "failed" && workspace.reason === "served-elsewhere"
+                  ? workspace.message
+                  : null,
               project,
               picture,
             })

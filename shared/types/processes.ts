@@ -90,18 +90,6 @@ export interface HostClosedTerminalProcess {
   closedAt: number;
 }
 
-/**
- * The live terminal whose process tree holds a process, as the census last saw
- * it: the nearest ancestor that is a terminal's root. An observation about
- * process ancestry, not a claim about where the process's files are.
- */
-export interface HostPidOwner {
-  pid: number;
-  terminalId: string;
-  projectId: string | null;
-  worktreeId: string | null;
-}
-
 /** One shard's answer to `get-process-inventory`. */
 export interface HostProcessInventory {
   terminals: HostProcessInventoryTerminal[];

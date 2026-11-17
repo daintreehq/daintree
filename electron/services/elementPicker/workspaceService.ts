@@ -17,7 +17,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
-import { findListenerOwner, type ListenerOwnerDeps } from "./listenerOwner.js";
+import { findServerWorktree, localServerPort, type ServerWorktreeDeps } from "./serverWorktree.js";
 import type { ElementPickerHost } from "./ElementPickerHost.js";
 import { ElementPickerHostError } from "./errors.js";
 import { getElementPickerHost } from "./index.js";
@@ -84,9 +84,17 @@ export interface ElementPickerWorkspaceServiceDeps {
   ): Promise<ReadonlyArray<{ id: string; path: string }> | null>;
   getHost?: () => Promise<WorkspaceHost>;
   discoverApps?: (worktreeRoot: string, signal: AbortSignal) => Promise<AppDiscovery>;
-  /** Who listens on a browser page's port; absent, a `listenerPort` is not checked. */
-  findListenerPids?: ListenerOwnerDeps["findListenerPids"];
-  findPidOwners?: ListenerOwnerDeps["findPidOwners"];
+  /** Who listens on a browser page's port, and where each runs; absent, nothing is checked. */
+  findListeners?: ServerWorktreeDeps["findListeners"];
+}
+
+/** What main itself knows about the page a workspace is opened for. */
+export interface WorkspaceOpenServing {
+  /**
+   * A browser panel's committed URL, read by main from the sender's own guest.
+   * A dev preview's server is its own, and its `serverCwd` already places it.
+   */
+  pageUrl?: string;
 }
 
 interface LeaseRecord extends ElementPickerLease {
@@ -250,14 +258,15 @@ export class ElementPickerWorkspaceService {
 
   async open(
     owner: ElementPickerWorkspaceOwner,
-    request: ElementPickerWorkspaceOpenRequest
+    request: ElementPickerWorkspaceOpenRequest,
+    serving: WorkspaceOpenServing = {}
   ): Promise<ElementPickerWorkspaceOpenResult> {
     this.assertLive(owner);
     const worktreePath = await this.worktreePathOf(owner.projectId, request.worktreeId);
     const worktreeRoot = worktreePath === null ? null : await canonicalDirectory(worktreePath);
     if (worktreeRoot === null) return { status: "unavailable", reason: "unknown-worktree" };
 
-    const server = await this.serverOutsideWorktree(owner, request);
+    const server = await this.serverOutsideWorktree(owner, request.worktreeId, serving.pageUrl);
     if (server !== null) return server;
 
     let explicitApp: string | null = null;
@@ -301,30 +310,40 @@ export class ElementPickerWorkspaceService {
   }
 
   /**
-   * A browser page whose server a terminal of another worktree is running:
-   * resolving it against this worktree would trace the page to a checkout that
-   * isn't the one serving it, and hand the agent the wrong files. Only a
-   * positive sighting refuses; a listener nobody can place opens as asked.
+   * A browser page whose server runs from another of the project's worktrees:
+   * resolving it against this one would trace the page to a checkout that
+   * isn't serving it, and hand the agent the wrong files. Only a positive
+   * sighting refuses; a server nobody can place opens as asked.
    */
   private async serverOutsideWorktree(
     owner: ElementPickerWorkspaceOwner,
-    request: ElementPickerWorkspaceOpenRequest
-  ): Promise<ElementPickerWorkspaceOpenResult | null> {
-    const { findListenerPids, findPidOwners } = this.deps;
-    if (request.listenerPort === undefined || !findListenerPids || !findPidOwners) return null;
-    const verdict = await findListenerOwner(request.listenerPort, {
-      findListenerPids,
-      findPidOwners,
+    worktreeId: string,
+    pageUrl: string | null | undefined
+  ): Promise<Extract<ElementPickerWorkspaceOpenResult, { reason: "other-worktree" }> | null> {
+    const findListeners = this.deps.findListeners;
+    const listenerPort = pageUrl ? localServerPort(pageUrl) : null;
+    if (listenerPort === null || !findListeners) return null;
+    const listed = await this.worktreesOf(owner.projectId);
+    if (listed === null) return null;
+    const roots = await Promise.all(
+      listed.map(async (worktree) => ({
+        id: worktree.id,
+        root: await canonicalDirectory(worktree.path),
+      }))
+    );
+    const worktrees = roots.filter(
+      (worktree): worktree is { id: string; root: string } => worktree.root !== null
+    );
+    const verdict = await findServerWorktree(listenerPort, worktrees, {
+      findListeners,
+      canonical: canonicalDirectory,
     });
     this.assertLive(owner);
-    if (verdict.status !== "terminal") return null;
-    if (verdict.projectId === owner.projectId && verdict.worktreeId === request.worktreeId) {
-      return null;
-    }
+    if (verdict.status !== "worktree" || verdict.worktreeId === worktreeId) return null;
     return {
       status: "unavailable",
       reason: "other-worktree",
-      ...(verdict.projectId === owner.projectId ? { serverWorktreeId: verdict.worktreeId } : {}),
+      serverWorktreeId: verdict.worktreeId,
     };
   }
 
@@ -342,9 +361,20 @@ export class ElementPickerWorkspaceService {
 
   async resolve(
     owner: ElementPickerWorkspaceOwner,
-    request: { workspaceId: string }
+    request: { workspaceId: string },
+    serving: { pageUrlOf?: (panelId: string) => string | null } = {}
   ): Promise<ResolveResponse> {
     const lease = this.require(owner, request.workspaceId);
+    // A browser page's server can change hands between documents without the
+    // workspace knowing: another worktree takes the port and a reload shows
+    // its page. Checked per selection, not per document, so a reload's
+    // re-proof keeps the workspace it was proven in. The view reopens a
+    // closed workspace, and the open says where the page is served from.
+    const pageUrl = serving.pageUrlOf?.(lease.panelId);
+    if ((await this.serverOutsideWorktree(owner, lease.worktreeId, pageUrl)) !== null) {
+      this.release(lease);
+      throw workspaceClosedError();
+    }
     return this.withHost(lease, (host) => host.resolve(request, { projectId: owner.projectId }));
   }
 
@@ -399,16 +429,21 @@ export class ElementPickerWorkspaceService {
   }
 
   private async worktreePathOf(projectId: string, worktreeId: string): Promise<string | null> {
+    const worktrees = await this.worktreesOf(projectId);
+    return worktrees?.find((worktree) => worktree.id === worktreeId)?.path ?? null;
+  }
+
+  private async worktreesOf(
+    projectId: string
+  ): Promise<ReadonlyArray<{ id: string; path: string }> | null> {
     const project = this.deps.getProject(projectId);
     if (!project || project.status === "closed") return null;
-    let worktrees: ReadonlyArray<{ id: string; path: string }> | null;
     try {
-      worktrees = await this.deps.listWorktrees(project.path, projectId);
+      return await this.deps.listWorktrees(project.path, projectId);
     } catch (error) {
       logWarn(`${P} Could not list the project's worktrees`, { projectId, error: String(error) });
       return null;
     }
-    return worktrees?.find((worktree) => worktree.id === worktreeId)?.path ?? null;
   }
 
   /** One search per worktree at a time, shared by every open that asks for it meanwhile. */

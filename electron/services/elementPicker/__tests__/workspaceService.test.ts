@@ -364,69 +364,101 @@ describe("ElementPickerWorkspaceService.open", () => {
 });
 
 describe("ElementPickerWorkspaceService.open for a browser page", () => {
-  function listening(owner: { projectId: string | null; worktreeId: string | null } | null) {
-    const findListenerPids = vi.fn(async (_port: number) => [4242]);
-    const findPidOwners = vi.fn(async (pids: number[]) =>
-      owner === null ? [] : pids.map((pid) => ({ pid, terminalId: "t-1", ...owner }))
+  const PAGE = "http://localhost:5173/";
+
+  /** A server on the page's port running from `relative` under the test root. */
+  function servedFrom(relative: string | null) {
+    return vi.fn(async (_port: number) =>
+      relative === null ? [] : [{ pid: 4242, cwd: path.join(root, relative) }]
     );
-    return { findListenerPids, findPidOwners };
   }
 
-  it("refuses the source when a terminal of another worktree serves the page", async () => {
-    const lookups = listening({ projectId: PROJECT, worktreeId: "wt-single" });
-    const { svc, host } = service(lookups);
+  it("refuses the source when the server runs from another of the project's worktrees", async () => {
+    const findListeners = servedFrom("single/src");
+    const { svc, host } = service({ findListeners });
     const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
-    await expect(svc.open(owner, openRequest({ listenerPort: 5173 }))).resolves.toEqual({
+    await expect(svc.open(owner, openRequest(), { pageUrl: PAGE })).resolves.toEqual({
       status: "unavailable",
       reason: "other-worktree",
       serverWorktreeId: "wt-single",
     });
-    expect(lookups.findListenerPids).toHaveBeenCalledWith(5173);
+    expect(findListeners).toHaveBeenCalledWith(5173);
     expect(host.registerWorkspace).not.toHaveBeenCalled();
   });
 
-  it("names no worktree when the terminal is another project's", async () => {
-    const { svc, host } = service(listening({ projectId: OTHER_PROJECT, worktreeId: "/x/wt" }));
+  it("opens as asked when the server runs from this worktree, or nobody can place it", async () => {
     const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
-    await expect(svc.open(owner, openRequest({ listenerPort: 5173 }))).resolves.toEqual({
-      status: "unavailable",
-      reason: "other-worktree",
-    });
-    expect(host.registerWorkspace).not.toHaveBeenCalled();
-  });
-
-  it("opens as asked when this worktree's terminal serves it, or nobody can place the server", async () => {
-    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
-    for (const lookups of [
-      listening({ projectId: PROJECT, worktreeId: "wt-single" }),
-      listening(null),
-    ]) {
-      const { svc, host } = service(lookups);
-      const opened = await svc.open(
-        owner,
-        openRequest({ worktreeId: "wt-single", listenerPort: 5173 })
-      );
-      expect(opened.status).toBe("ready");
+    for (const where of ["single", null, "outside/app"]) {
+      const { svc, host } = service({ findListeners: servedFrom(where) });
+      const opened = await svc.open(owner, openRequest({ worktreeId: "wt-single" }), {
+        pageUrl: PAGE,
+      });
+      expect(opened.status, String(where)).toBe("ready");
       expect(host.registerWorkspace).toHaveBeenCalledTimes(1);
     }
   });
 
-  it("looks nothing up for a page with no port to check", async () => {
-    const lookups = listening({ projectId: PROJECT, worktreeId: "wt-multi" });
-    const { svc } = service(lookups);
+  it("looks nothing up for a dev preview, or a page that names no local server", async () => {
+    const findListeners = servedFrom("single");
+    const { svc } = service({ findListeners });
     const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
-    await svc.open(owner, openRequest({ worktreeId: "wt-single" }));
-    expect(lookups.findListenerPids).not.toHaveBeenCalled();
+    await svc.open(owner, openRequest({ worktreeId: "wt-multi", appPath: "apps/site" }));
+    for (const pageUrl of ["http://my-mac.local:5173/", "https://example.com/"]) {
+      await svc.open(owner, openRequest({ worktreeId: "wt-multi", appPath: "apps/site" }), {
+        pageUrl,
+      });
+    }
+    expect(findListeners).not.toHaveBeenCalled();
+  });
+
+  it("closes a workspace at resolve once another worktree serves its page", async () => {
+    let from = "single";
+    const findListeners = vi.fn(async (_port: number) => [
+      { pid: 4242, cwd: path.join(root, from) },
+    ]);
+    const { svc, host } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const opened = await svc.open(owner, openRequest({ worktreeId: "wt-single" }), {
+      pageUrl: PAGE,
+    });
+    if (opened.status !== "ready") throw new Error("expected a workspace");
+    const request = { workspaceId: opened.workspaceId, requestId: "r1" } as never;
+    const serving = { pageUrlOf: (panelId: string) => (panelId === "panel-1" ? PAGE : null) };
+
+    await svc.resolve(owner, request, serving);
+    expect(host.resolve).toHaveBeenCalledTimes(1);
+
+    // The worktree's server stopped and another took the port.
+    from = "multi/apps/site";
+    await expect(svc.resolve(owner, request, serving)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: ELEMENT_PICKER_WORKSPACE_CLOSED,
+    });
+    expect(host.resolve).toHaveBeenCalledTimes(1);
+    expect(host.releaseWorkspace).toHaveBeenCalledWith(opened.workspaceId);
+  });
+
+  it("checks nothing at resolve for a page main can't read", async () => {
+    const findListeners = servedFrom("multi");
+    const { svc, host } = service({ findListeners });
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    const opened = await svc.open(owner, openRequest({ worktreeId: "wt-single" }));
+    if (opened.status !== "ready") throw new Error("expected a workspace");
+    const request = { workspaceId: opened.workspaceId, requestId: "r1" } as never;
+    await svc.resolve(owner, request, { pageUrlOf: () => null });
+    await svc.resolve(owner, request);
+    expect(findListeners).not.toHaveBeenCalled();
+    expect(host.resolve).toHaveBeenCalledTimes(2);
   });
 
   it("refuses an unknown worktree before looking at any listener", async () => {
-    const lookups = listening({ projectId: PROJECT, worktreeId: "wt-multi" });
-    const { svc } = service(lookups);
+    const findListeners = servedFrom("single");
+    const { svc } = service({ findListeners });
     const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
     await expect(
-      svc.open(owner, openRequest({ worktreeId: "wt-elsewhere", listenerPort: 5173 }))
+      svc.open(owner, openRequest({ worktreeId: "wt-elsewhere" }), { pageUrl: PAGE })
     ).resolves.toEqual({ status: "unavailable", reason: "unknown-worktree" });
-    expect(lookups.findListenerPids).not.toHaveBeenCalled();
+    expect(findListeners).not.toHaveBeenCalled();
   });
 });
 

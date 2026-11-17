@@ -1080,8 +1080,9 @@ export function BrowserPane({
   );
   useDevPreviewToolEscape(id, paneRef, findInPage.isOpen ? findInPage.close : null);
 
-  // The Element Picker, offered only on a page at a local address: the same
-  // rule main installs it by, so the button never offers what the bind refuses.
+  // The Element Picker, offered only on a page at a local address (the same
+  // rule main installs it by, so the button never offers what the bind
+  // refuses) and in a panel of a worktree, whose checkout it traces into.
   const toolHost = {
     panelId: id,
     projectId,
@@ -1089,7 +1090,7 @@ export function BrowserPane({
     url: currentUrl,
     isWebviewReady: isWebviewReady && !isEvicted,
     tools: BROWSER_PANEL_TOOLS,
-    pageQualifies: isPickablePageUrl(currentUrl),
+    pageQualifies: worktreeId !== undefined && isPickablePageUrl(currentUrl),
   };
 
   const handleOpenExternal = useCallback(() => {

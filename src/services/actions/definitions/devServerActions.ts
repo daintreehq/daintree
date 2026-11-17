@@ -102,7 +102,7 @@ export function registerDevServerActions(
     id: "devPreview.toggleElementPicker",
     title: "Toggle element picker",
     description:
-      "Switch the Element Picker on or off in the focused browser panel showing a local page, else in a dev preview of the active worktree (the focused one, else the first open one), opening one when it has none. The picker lets the user select an element on the page and send it to an agent. Returns the panel it acted on and whether the picker is now on.",
+      "Switch the Element Picker on or off in the named or focused browser panel (switching on needs a page at a local address), else in a dev preview of the active worktree (the focused one, else the first open one), opening one when there is none. It lets the user select an element on the page and send it to an agent. Returns the panel it acted on and whether the picker is now on.",
     paletteDescription:
       "Turn the Element Picker on or off in the focused browser or the active worktree's dev preview",
     category: "devServer",

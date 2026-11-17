@@ -1201,22 +1201,12 @@ function SiteSourceFailure({
         </InspectorNotice>
       );
     case "served-elsewhere":
-      // What was seen, not concluded: a terminal of that worktree holds the
-      // port. Opening the page from a browser there traces it to its own files.
+      // What was seen, not concluded: the process listening on the page's port
+      // runs from that worktree. A browser opened there traces to its files.
       return (
         <InspectorNotice tone="warning" role="status" title={copy.title} density="compact">
-          {workspace.message ? (
-            <>
-              Open it from a browser in that worktree to trace elements to source. Its server runs
-              in a terminal of
-              <Diagnostic text={workspace.message} />
-            </>
-          ) : (
-            <>
-              Its server runs in a terminal of another project. Open it from a browser there to
-              trace elements to source.
-            </>
-          )}
+          Open it from a browser in that worktree to trace elements to source. Its server runs from
+          <Diagnostic text={workspace.message} />
         </InspectorNotice>
       );
   }

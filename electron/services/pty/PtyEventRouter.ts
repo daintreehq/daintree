@@ -400,10 +400,6 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.inventory);
       return true;
 
-    case "pid-owners":
-      broker.resolve(event.requestId, event.owners);
-      return true;
-
     case "closed-terminal-processes-killed":
       broker.resolve(event.requestId, event.result);
       return true;

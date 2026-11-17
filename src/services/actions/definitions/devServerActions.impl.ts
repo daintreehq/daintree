@@ -10,6 +10,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
 import { isPickablePageUrl } from "@shared/elementPicker/originPolicy";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import type {
   DevPreviewToolContext,
@@ -109,6 +110,11 @@ async function toggleBrowserTool(
         `${tool.label} works only on a page at a local address, and this browser panel isn't showing one`
       );
     }
+    // A worktree-less browser (a global one in the dock) has no checkout to
+    // trace into and no agents of its own to hand a selection to.
+    if (context.worktreeId === null) {
+      throw new Error(`${tool.label} needs a browser panel that belongs to a worktree`);
+    }
     await refuseUnlessToolApplies(tool, panelId, ctx);
     seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
   }
@@ -170,11 +176,20 @@ export async function toggleDevPreviewTool(
         : "That panel is not an open dev preview"
     );
   }
+  // The dock's own rule for a focused browser: a global one in the dock is
+  // visible in every worktree, so it is the one in front of the user.
+  const focusedBrowser = focusedId ? panels.panelsById[focusedId] : undefined;
   if (
     requestedPanelId === undefined &&
     focusedId &&
+    focusedBrowser &&
     isLiveBrowser(focusedId) &&
-    inActiveWorktree(focusedId)
+    (ctx.activeWorktreeId === undefined ||
+      panelMatchesWorktreeScope(
+        focusedBrowser.worktreeId,
+        ctx.activeWorktreeId,
+        focusedBrowser.location === "dock" ? "dock" : "grid"
+      ))
   ) {
     return toggleBrowserTool(tool, focusedId, ctx, source);
   }

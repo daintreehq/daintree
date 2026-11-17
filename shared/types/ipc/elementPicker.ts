@@ -142,13 +142,6 @@ export interface ElementPickerWorkspaceOpenRequest {
    * loopback HTTP(S) origin; anything else opens a workspace that fetches none.
    */
   previewOrigin?: string;
-  /**
-   * The port a browser panel's page is served from on this machine. Main looks
-   * up which terminal's process tree listens on it, and refuses the workspace
-   * when that terminal belongs to another worktree: the panel records where it
-   * was opened, not where the page's server runs. It authorises nothing.
-   */
-  listenerPort?: number;
 }
 
 export type ElementPickerWorkspaceOpenResult =
@@ -167,11 +160,12 @@ export type ElementPickerWorkspaceOpenResult =
   /** The worktree is not one of the sender's project's, or the chosen app is not inside it. */
   | { status: "unavailable"; reason: "unknown-worktree" | "invalid-app" }
   /**
-   * The page's server runs in a terminal of another worktree. `serverWorktreeId`
-   * names it when it is one of the sender's project's own, and is left out
-   * when the terminal belongs to another project.
+   * A browser panel's page whose server runs from another of the project's
+   * worktrees, by the working directory of the process listening on its port.
+   * Main reads the port from the panel's own guest; nothing in the request
+   * names it.
    */
-  | { status: "unavailable"; reason: "other-worktree"; serverWorktreeId?: string };
+  | { status: "unavailable"; reason: "other-worktree"; serverWorktreeId: string };
 
 export interface ElementPickerWorkspaceRequest {
   workspaceId: string;

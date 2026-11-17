@@ -17,11 +17,13 @@
  * not evaluate the picker's code until a view first asks for it.
  */
 
+import { webContents } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
-import { getPtyClient, getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
+import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge } from "../../services/SitePreviewBridge.js";
@@ -88,7 +90,6 @@ const workspaceOpenSchema = z
     serverCwd: z.string().min(1).max(4096).optional(),
     appPath: z.string().min(1).max(1024).optional(),
     previewOrigin: z.string().min(1).max(2048).optional(),
-    listenerPort: z.number().int().min(1).max(65535).optional(),
   })
   .strict();
 
@@ -164,6 +165,25 @@ function addressedSink(
   };
 }
 
+/**
+ * The page a browser panel is showing, read from the sender's own guest: a
+ * webview registered as `browser` under that panel id, embedded by the view
+ * asking, at its committed URL. Null for a dev preview, whose server is its
+ * own, and for anything the sender doesn't embed, so a request can never ask
+ * about a port its own page isn't served from.
+ */
+function browserPageUrl(ctx: IpcContext, panelId: string): string | null {
+  const dialogs = getWebviewDialogService();
+  const guestId = dialogs.getWebContentsId(panelId);
+  if (guestId === undefined || dialogs.getPanelKind(guestId) !== "browser") return null;
+  const guest = webContents.fromId(guestId);
+  if (!guest || guest.isDestroyed()) return null;
+  const embedder = guest.hostWebContents;
+  if (!embedder || embedder.isDestroyed() || embedder.id !== ctx.webContentsId) return null;
+  const url = guest.getURL();
+  return url.length > 0 ? url : null;
+}
+
 let workspaces: Promise<ElementPickerWorkspaceService> | null = null;
 
 function workspaceService(): Promise<ElementPickerWorkspaceService> {
@@ -179,11 +199,10 @@ function workspaceService(): Promise<ElementPickerWorkspaceService> {
         },
         // Behind a dynamic import like the service itself: the scan runs only
         // for a browser panel's page, and only once the picker opens its source.
-        findListenerPids: (port) =>
-          import("../../remote/ports/listenerScan.js").then(({ findPortListenerPids }) =>
-            findPortListenerPids(port)
+        findListeners: (port) =>
+          import("../../remote/ports/listenerScan.js").then(({ findPortListeners }) =>
+            findPortListeners(port)
           ),
-        findPidOwners: async (pids) => (await getPtyClient()?.findPidOwners(pids)) ?? [],
       }),
     (error: unknown) => {
       // Not cached: a failed load must not disable the picker for the session.
@@ -231,7 +250,8 @@ export const elementPickerNamespace = defineIpcNamespace({
       workspaceOpenSchema,
       async (ctx, payload): Promise<ElementPickerWorkspaceOpenResult> => {
         const owner = ownerOf(ctx);
-        return (await workspaceService()).open(owner, payload);
+        const pageUrl = browserPageUrl(ctx, payload.panelId);
+        return (await workspaceService()).open(owner, payload, pageUrl === null ? {} : { pageUrl });
       },
       { withContext: true }
     ),
@@ -251,7 +271,9 @@ export const elementPickerNamespace = defineIpcNamespace({
       resolveSchema,
       async (ctx, payload): Promise<ElementPickerResolveResponse> => {
         const owner = ownerOf(ctx);
-        return (await workspaceService()).resolve(owner, payload);
+        return (await workspaceService()).resolve(owner, payload, {
+          pageUrlOf: (panelId) => browserPageUrl(ctx, panelId),
+        });
       },
       { withContext: true }
     ),
