@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, act, fireEvent, cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type {
   RendererCpuProfileStartResult,
   RendererCpuProfileStopResult,
@@ -18,6 +18,7 @@ vi.mock("@/clients", async (importOriginal) => ({
 }));
 
 import { RendererCpuProfileSection } from "../TroubleshootingTab";
+import { useRendererCpuProfileStore } from "@/store/rendererCpuProfileStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -28,6 +29,11 @@ function deferred<T>() {
 }
 
 const getButton = () => screen.getByRole<HTMLButtonElement>("button");
+
+beforeEach(() => {
+  // The recording outlives the row by design, so one test's would leak into the next.
+  useRendererCpuProfileStore.setState(useRendererCpuProfileStore.getInitialState(), true);
+});
 
 describe("RendererCpuProfileSection — starting", () => {
   beforeEach(() => {
@@ -139,5 +145,112 @@ describe("RendererCpuProfileSection — starting", () => {
     });
 
     expect(screen.getByText(copy)).toBeTruthy();
+  });
+});
+
+describe("RendererCpuProfileSection — leaving Settings during a recording", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  async function startRecording() {
+    startMock.mockResolvedValueOnce({ status: "started", expiresAt: Date.now() + 15_000 });
+    const view = render(<RendererCpuProfileSection />);
+    await act(async () => {
+      fireEvent.click(getButton());
+    });
+    expect(getButton().textContent).toContain("Stop recording");
+    return view;
+  }
+
+  it("collects the capture Main made while Settings was closed, without recording again", async () => {
+    stopMock.mockResolvedValueOnce({ status: "saved" });
+    (await startRecording()).unmount();
+
+    // Using the app to reproduce the lag, well past the deadline.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(stopMock).not.toHaveBeenCalled();
+
+    render(<RendererCpuProfileSection />);
+    expect(getButton().textContent).toContain("Save profile");
+    expect(screen.getByText(/Recording finished and ready to save/)).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(stopMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(getButton());
+    });
+
+    expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(startMock).toHaveBeenCalledTimes(1);
+    expect(getButton().textContent).toContain("Record profile");
+  });
+
+  it("resumes the countdown when reopened before the deadline and saves once at zero", async () => {
+    stopMock.mockResolvedValue({ status: "saved" });
+    (await startRecording()).unmount();
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    render(<RendererCpuProfileSection />);
+    expect(getButton().textContent).toContain("Stop recording");
+    expect(screen.getByText(/auto-stops in 10s/)).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(11_000);
+    });
+
+    expect(stopMock).toHaveBeenCalledTimes(1);
+    expect(getButton().textContent).toContain("Record profile");
+  });
+
+  it("keeps a start that resolves after Settings closed", async () => {
+    const start = deferred<RendererCpuProfileStartResult>();
+    startMock.mockReturnValueOnce(start.promise);
+    const first = render(<RendererCpuProfileSection />);
+    fireEvent.click(getButton());
+    first.unmount();
+
+    await act(async () => {
+      start.resolve({ status: "started", expiresAt: Date.now() + 15_000 });
+      await start.promise;
+    });
+
+    render(<RendererCpuProfileSection />);
+    expect(getButton().textContent).toContain("Stop recording");
+    expect(screen.getByText(/auto-stops in 15s/)).toBeTruthy();
+  });
+
+  it("keeps a save that is still in flight busy across a reopen and shows its failure", async () => {
+    const stop = deferred<RendererCpuProfileStopResult>();
+    stopMock.mockReturnValueOnce(stop.promise);
+    const first = await startRecording();
+    fireEvent.click(getButton());
+    first.unmount();
+
+    render(<RendererCpuProfileSection />);
+    expect(getButton().textContent).toContain("Save profile");
+    expect(getButton().getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(getButton());
+    expect(stopMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      stop.resolve({ status: "failed", reason: "devtools-detached" });
+      await stop.promise;
+    });
+
+    expect(screen.getByText(/DevTools attached to this window/)).toBeTruthy();
+    expect(getButton().textContent).toContain("Record profile");
   });
 });
