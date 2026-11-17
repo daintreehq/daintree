@@ -1058,21 +1058,34 @@ describe("git:get-staging-status — push and pull destinations", () => {
     expect(forEachRefCalls(git)).toHaveLength(0);
   });
 
-  it("keeps staging without churn on an unborn branch", async () => {
+  it("reads staged churn on an unborn branch and keeps untracked entries without counts", async () => {
     const git = makeGit({
+      status: vi.fn(async () => ({
+        files: [
+          { path: "a.ts", index: "A", working_dir: "M" },
+          { path: "b.ts", index: "?", working_dir: "?" },
+        ],
+        conflicted: [],
+        current: "topic",
+        detached: false,
+      })),
       revparse: vi.fn(async (args: string[]) => {
         if (args[0] === "--git-dir") return ".git\n";
         throw new Error("fatal: ambiguous argument 'HEAD'");
       }),
+      diff: vi.fn(async (args: string[]) =>
+        args.includes("--cached") ? "1\t0\ta.ts\0" : "0\t2\ta.ts\0"
+      ),
     });
     createHardenedGitMock.mockResolvedValue(git);
 
     const status = await getStagingStatus();
 
-    expect(status.staged).toEqual([
-      { path: "a.ts", status: "modified", insertions: null, deletions: null },
+    expect(status.staged).toEqual([{ path: "a.ts", status: "added", insertions: 1, deletions: 0 }]);
+    expect(status.unstaged).toEqual([
+      { path: "a.ts", status: "modified", insertions: 0, deletions: 2 },
+      { path: "b.ts", status: "untracked", insertions: null, deletions: null },
     ]);
-    expect(git.diff).not.toHaveBeenCalled();
     expect(status.repoState).toBe("CLEAN");
   });
 });
