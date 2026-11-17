@@ -41,6 +41,8 @@ import {
 } from "@/components/Git/repoOperationCopy";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+import { ConflictAgentHandoff } from "./ConflictAgentHandoff";
+import type { ConflictAgentFile, ConflictAgentRebase } from "./conflictAgentText";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -661,6 +663,31 @@ export function ConflictPanel({
         ? "Continue to replay the remaining commits"
         : `Continue to finish the ${operationNoun}`;
 
+  // What the hand-off sends is what the rows show: the same live list, kind
+  // wording and scan answers.
+  const agentFiles = useMemo<ConflictAgentFile[]>(
+    () =>
+      liveConflicts.map((file) => {
+        const entry = scanResults.get(file.path);
+        return {
+          path: file.path,
+          kind: conflictKindLabel(file.label, isRebase),
+          hunkCount: entry?.hunkCount ?? null,
+          firstMarkerLine: entry?.firstMarkerLine ?? null,
+        };
+      }),
+    [liveConflicts, scanResults, isRebase]
+  );
+  const agentRebase = useMemo<ConflictAgentRebase | null>(() => {
+    if (!isRebase) return null;
+    const current = status.rebaseSequence?.entries.find((e) => e.state === "current");
+    return {
+      step: status.rebaseStep,
+      totalSteps: status.rebaseTotalSteps,
+      commit: current ? { sha: current.sha, subject: current.subject } : null,
+    };
+  }, [isRebase, status.rebaseSequence, status.rebaseStep, status.rebaseTotalSteps]);
+
   return (
     <div data-testid={isWorklist ? "conflict-worklist" : "conflict-panel"}>
       {/* Region 1: Operation chrome. Warning-tinted only while something still
@@ -733,11 +760,23 @@ export function ConflictPanel({
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
         <div className={REVIEW_HUB_STICKY_BAND}>
-          <div className={REVIEW_HUB_SECTION_BAND}>
-            <span className={SECTION_LABEL_CLASS}>
+          {/* Wraps so the hand-off's no-agent hint can take a line of its own
+              under the heading; `flex-1` keeps the button on the right. */}
+          <div className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap")}>
+            <span className={cn(SECTION_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
               Conflicted
               <span className={REVIEW_HUB_COUNT_CHIP}>{conflictCount}</span>
             </span>
+            {conflictCount > 0 && (
+              <ConflictAgentHandoff
+                key={worktreePath}
+                worktreePath={worktreePath}
+                operation={operationKey}
+                sides={sideSource}
+                rebase={agentRebase}
+                files={agentFiles}
+              />
+            )}
           </div>
         </div>
         {conflictCount > 0 ? (
