@@ -1214,6 +1214,79 @@ describe("Deferred activation — activatePlugin", () => {
     }
   }, 10_000);
 
+  it("a crash loop during the first activation caches nothing, so a retry forks afresh (#17211)", async () => {
+    const base = { hosts: devWorkerMock.instances.length, bridges: devWorkerMock.bridges.length };
+    const pluginDir = path.join(tmpDir, "loop-on-boot");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.loop-on-boot", version: "1.0.0", main: "main.mjs" })
+    );
+    // The first activate() parks on a gate the test fails once the supervisor
+    // has given up — the order the real bridge sees: verdict, then rejection.
+    // Every later activate() finds no gate and succeeds.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      `export function activate() {
+        const gate = globalThis.__loopOnBootGate;
+        globalThis.__loopOnBootGate = undefined;
+        return gate;
+      }`
+    );
+    const globals = globalThis as unknown as { __loopOnBootGate?: Promise<void> };
+    let failBoot!: (err: Error) => void;
+    globals.__loopOnBootGate = new Promise<void>((_resolve, reject) => {
+      failBoot = reject;
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+      const first = service.activatePlugin("acme.loop-on-boot");
+      // activate() taking the gate is what attaches a handler to it; rejecting
+      // any earlier would be an unhandled rejection.
+      await vi.waitFor(
+        () => {
+          expect(devWorkerMock.bridges[base.bridges]?.waitForActivation).toHaveBeenCalled();
+          expect(globals.__loopOnBootGate).toBeUndefined();
+        },
+        { timeout: 5_000 }
+      );
+      const host = devWorkerMock.instances[base.hosts];
+      const calls = host.on.mock.calls as unknown[][];
+      const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
+        ((code: number) => void) | undefined;
+      expect(onCrashLoop).toBeTypeOf("function");
+
+      onCrashLoop?.(139);
+      expect(host.dispose).toHaveBeenCalledTimes(1);
+      failBoot(new Error("worker gone"));
+      await first;
+
+      // The retired generation's late outcome neither restores the latch nor
+      // replaces the cause the panels show.
+      const internals = service as unknown as {
+        activatedPlugins: Set<string>;
+        activationPromises: Map<string, Promise<void>>;
+      };
+      expect(internals.activatedPlugins.has("acme.loop-on-boot")).toBe(false);
+      expect(internals.activationPromises.has("acme.loop-on-boot")).toBe(false);
+      const failed = service
+        .listPluginRuntimeStatuses()
+        .find((s) => s.pluginId === "acme.loop-on-boot")?.worker;
+      expect(failed).toMatchObject({ state: "failed", reason: "crash-loop" });
+
+      await service.activatePlugin("acme.loop-on-boot");
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+      expect(internals.activatedPlugins.has("acme.loop-on-boot")).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+      delete globals.__loopOnBootGate;
+    }
+  });
+
   it("a timed-out activation can be retried and succeed (#12275)", async () => {
     const pluginDir = path.join(tmpDir, "hanging-activate");
     await fs.mkdir(pluginDir);

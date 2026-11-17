@@ -1101,6 +1101,140 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       vi.useRealTimers();
     }
   });
+
+  describe("a worker the supervisor gave up on (#17211)", () => {
+    /**
+     * Registers an imperative action, one of the registrations that otherwise
+     * keep a worker ineligible for idle disposal forever, and a panel handler
+     * that answers with the activation it was registered by. The module is
+     * imported once, so the counter survives across workers.
+     */
+    async function writeLoopingPlugin(dirName: string, name: string): Promise<void> {
+      const dir = path.join(tmpDir, dirName);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name, version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(dir, "main.mjs"),
+        `let activations = 0;
+        export function activate(host) {
+          const generation = ++activations;
+          host.registerHandler("probe", () => generation);
+          host.registerAction(
+            { id: "run", title: "Run", description: "", category: "Test", kind: "command", danger: "safe" },
+            () => "ran"
+          );
+        }
+`
+      );
+    }
+
+    /** The supervisor's verdict, delivered through the service's own health listener. */
+    function tripCrashLoop(hostIndex: number): void {
+      const calls = devWorkerMock.instances[hostIndex].on.mock.calls as unknown[][];
+      const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
+        ((code: number) => void) | undefined;
+      expect(onCrashLoop).toBeTypeOf("function");
+      onCrashLoop?.(139);
+    }
+
+    function workerStatus(service: PluginService, pluginId: string) {
+      return service.listPluginRuntimeStatuses().find((s) => s.pluginId === pluginId)?.worker;
+    }
+
+    it("releases the dead worker and its registrations, keeping the failure on screen", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("looper", "acme.looper");
+      const service = startService();
+      await service.initialize();
+      await service.activatePlugin("acme.looper");
+      const flushed = vi.fn();
+      const eventCleanups = (
+        service as unknown as { pluginEventCleanups: Map<string, Array<() => void>> }
+      ).pluginEventCleanups;
+      eventCleanups.set("acme.looper", [flushed]);
+      expect(service.listPluginActions().map((a) => a.id)).toContain("acme.looper.run");
+
+      tripCrashLoop(base.hosts);
+
+      expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+      expect(devWorkerMock.bridges[base.bridges].dispose).toHaveBeenCalledTimes(1);
+      expect(flushed).toHaveBeenCalledTimes(1);
+      expect(eventCleanups.has("acme.looper")).toBe(false);
+      expect(service.listPluginActions().map((a) => a.id)).not.toContain("acme.looper.run");
+      const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.looper");
+      expect(snapshot).toMatchObject({ alive: false });
+      // The teardown's own "stopped" must not replace the cause the banner shows.
+      expect(workerStatus(service, "acme.looper")).toMatchObject({
+        state: "failed",
+        reason: "crash-loop",
+      });
+    });
+
+    it("forks a fresh worker for the next lazy invocation instead of short-circuiting", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("revived", "acme.revived");
+      const service = startService();
+      await service.initialize();
+      const ctx = { projectId: null, worktreeId: null, webContentsId: 0, pluginId: "acme.revived" };
+      // A panel's invoke, which activates the plugin on its own like a palette
+      // command or an MCP call does.
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(1);
+      tripCrashLoop(base.hosts);
+      const failedGeneration = workerStatus(service, "acme.revived")?.generation;
+
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(2);
+
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+      expect(service.listPluginActions().map((a) => a.id)).toContain("acme.revived.run");
+      const worker = workerStatus(service, "acme.revived");
+      expect(worker?.state).toBe("ready");
+      // Panels bound to the failed backend see a generation they are not on.
+      expect(worker?.generation).toBeGreaterThan(failedGeneration as number);
+    });
+
+    it("stops the idle sweep with the last worker it took down", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+      try {
+        const base = baseline();
+        await writeLoopingPlugin("swept-loop", "acme.swept-loop");
+        const service = startService();
+        await service.initialize();
+        const idleTimers = vi.getTimerCount();
+        await service.activatePlugin("acme.swept-loop");
+        expect(vi.getTimerCount()).toBe(idleTimers + 1);
+
+        tripCrashLoop(base.hosts);
+
+        expect(vi.getTimerCount()).toBe(idleTimers);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a dev worker standing for the artifact watcher's edit-and-save recovery", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("dev-loop", "acme.dev-loop");
+      const service = startService();
+      await service.initialize();
+      (service as unknown as { plugins: Map<string, { devMode?: boolean }> }).plugins.get(
+        "acme.dev-loop"
+      )!.devMode = true;
+      await service.activatePlugin("acme.dev-loop");
+
+      tripCrashLoop(base.hosts);
+
+      expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+      expect(workerStatus(service, "acme.dev-loop")).toMatchObject({
+        state: "failed",
+        reason: "crash-loop",
+      });
+      await service.activatePlugin("acme.dev-loop");
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+    });
+  });
 });
 
 describe("Manifest event routes (#13816)", () => {
