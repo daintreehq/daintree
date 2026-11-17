@@ -42,7 +42,13 @@ import type { CoreGuest, CoreGuestReselectRequest } from "./elementPicker/coreGu
 import type { ElementPickerReselectRequest } from "../../shared/types/ipc/elementPicker.js";
 import type { ElementPickerPushPayload, ElementPickerSink } from "./elementPicker/types.js";
 
-const DEV_PREVIEW_PANEL_KIND = "dev-preview";
+/**
+ * The panel kinds whose guest the picker may bind: a dev preview, and a browser
+ * panel showing a page the agent's own server is serving. Both register their
+ * webview with its kind, and both guests are the same preload-less sandboxed
+ * `<webview>`; the origin policy, not the kind, decides which documents count.
+ */
+const PICKABLE_PANEL_KINDS: ReadonlySet<string> = new Set(["dev-preview", "browser"]);
 
 /** Why the bridge refused a guest envelope: the picker's own verdicts, plus the two it decides itself. */
 type GuestEnvelopeRejection = ElementPickerRejection | "foreign-context" | "rate-limited";
@@ -322,7 +328,7 @@ export class SitePreviewBridge {
   }
 
   /**
-   * The guest a bind may attach to: a live dev preview, in the project the
+   * The guest a bind may attach to: a live dev preview or browser panel, in the project the
    * caller named. The caller states a project; the host proves it. Without
    * this a renderer could name a panel id belonging to another project's view
    * and receive its guest traffic.
@@ -335,14 +341,15 @@ export class SitePreviewBridge {
     if (webContentsId === undefined) {
       throw new AppError({
         code: "NOT_FOUND",
-        message: "No dev preview is available on that panel",
+        message: "No page is available on that panel",
         context: { panelId },
       });
     }
-    if (this.deps.getPanelKind(webContentsId) !== DEV_PREVIEW_PANEL_KIND) {
+    const kind = this.deps.getPanelKind(webContentsId);
+    if (kind === undefined || !PICKABLE_PANEL_KINDS.has(kind)) {
       throw new AppError({
         code: "UNSUPPORTED",
-        message: "That panel is not a dev preview",
+        message: "That panel is not a dev preview or browser",
         context: { panelId },
       });
     }
@@ -350,14 +357,14 @@ export class SitePreviewBridge {
     if (!wc) {
       throw new AppError({
         code: "NOT_FOUND",
-        message: "The dev preview guest is no longer available",
+        message: "The panel's page is no longer available",
         context: { panelId, webContentsId },
       });
     }
     if (this.deps.resolveGuestProject(wc) !== projectId) {
       throw new AppError({
         code: "PERMISSION",
-        message: "That dev preview belongs to a different project",
+        message: "That panel belongs to a different project",
         context: { panelId, projectId },
       });
     }
