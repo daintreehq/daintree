@@ -233,17 +233,22 @@ describe("SearchProvidersSection", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
 
-  it("drops a failed choice's Retry as soon as the row is switched again", async () => {
+  it("keeps Retry through the same choice and drops it for a different one", async () => {
     getSearchProviders.mockResolvedValue([provider()]);
     setSearchProviderShown
       .mockRejectedValueOnce(new Error("store locked"))
-      .mockReturnValueOnce(new Promise(() => {}));
+      .mockReturnValue(new Promise(() => {}));
     render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
     const toggle = await screen.findByTestId("search-provider-switch-acme.tools.issues");
 
     fireEvent.click(toggle);
-    await screen.findByRole("button", { name: "Retry" });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    fireEvent.click(retry);
+    expect(setSearchProviderShown).toHaveBeenLastCalledWith("acme.tools.issues", false);
+    expect(retry.isConnected).toBe(true);
+
     fireEvent.click(toggle);
+    expect(setSearchProviderShown).toHaveBeenLastCalledWith("acme.tools.issues", true);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 

@@ -144,8 +144,9 @@ export function SearchProvidersSection({
     const latestWrite = latestWriteRef.current;
     latestWrite.set(key, request);
     setPending((prev) => new Map(prev).set(key, { shown, request }));
-    // A new choice supersedes the failed one; its own failure brings Retry back.
-    setSaveError((prev) => (prev?.key === key ? null : prev));
+    // A different choice supersedes the failed one, so its Retry goes; asking
+    // again for the same one (Retry itself) keeps the button and its focus.
+    setSaveError((prev) => (prev?.key === key && prev.shown !== shown ? null : prev));
     bridge
       .setSearchProviderShown(key, shown)
       .then((list) => {
