@@ -1,15 +1,9 @@
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
-import {
-  Field,
-  FieldDescription,
-  FieldLabel,
-  InlineError,
-  useFieldControl,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -26,24 +20,14 @@ import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHos
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
   CLOUD_LIFETIME_CHOICES,
-  DEFAULT_CLOUD_LIFETIME_HOURS,
-  cloudLifetimeIsChosen,
   cloudMachineLabel,
-  type CloudCatalog,
   type CloudProviderInfo,
-  type CloudProvisioningDimension,
-  type CloudProvisioningSelection,
   type CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
-import {
-  NO_PROVISIONING,
-  choicesFor,
-  selectionProblem,
-  shownDimensions,
-  startingSelection,
-} from "./cloudProvisioningChoices";
+import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudProvisioningSelect";
+import { useCloudMachineForm } from "./useCloudMachineForm";
 import {
   canStartMachine,
   formatHourly,
@@ -73,22 +57,9 @@ function errorText(err: unknown, fallback: string): string {
     : clientErrorText(err, fallback);
 }
 
-const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
+export const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
   hours === null ? "never" : String(hours)
 );
-
-/**
- * Select values for a provisioning control: a provider's ids are opaque, so
- * each is prefixed and the provider's own call can't collide with one.
- */
-const PROVIDER_DECIDES = "provider";
-const choiceValue = (id: string) => `id:${id}`;
-
-/** A Select trigger its Field's label and description name, as an Input is. */
-function FieldSelectTrigger(props: ComponentProps<typeof SelectTrigger>) {
-  const { controlProps } = useFieldControl(props);
-  return <SelectTrigger {...props} {...controlProps} />;
-}
 
 /**
  * Add a cloud host: create a new machine in a connected account, or add one
@@ -119,19 +90,9 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     : (usable[0] ?? null);
   const [mode, setMode] = useState<Mode>("create");
   const [name, setName] = useState("");
-  const [machineType, setMachineType] = useState<string | null>(null);
-  const [lifetime, setLifetime] = useState(String(DEFAULT_CLOUD_LIFETIME_HOURS));
-  /** What the person picked in this dialog, for the account they picked it for. */
-  const [picked, setPicked] = useState<{
-    accountId: string;
-    selection: CloudProvisioningSelection;
-  } | null>(null);
-  const [catalog, setCatalog] = useState<CloudCatalog | null>(null);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
   // Bumped by Retry: reads again without touching what's been filled in.
-  const [catalogTry, setCatalogTry] = useState(0);
   const [resourcesTry, setResourcesTry] = useState(0);
   const [resourceId, setResourceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -143,34 +104,19 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
 
   const status = cloudStatusFor(snapshot, added?.hostId);
   const accountKey = account?.id ?? null;
-
-  useEffect(() => {
-    if (!accountKey || added) return;
-    let current = true;
-    setCatalog(null);
-    setCatalogError(null);
-    cloudHostsClient.getCatalog(accountKey).then(
-      (next) => {
-        if (!current) return;
-        setCatalog(next);
-        const preferred =
-          next.machineTypes.find((type) => type.id === "default" && type.available) ??
-          next.machineTypes.find((type) => type.available) ??
-          null;
-        setMachineType((chosen) =>
-          chosen && next.machineTypes.some((type) => type.id === chosen && type.available)
-            ? chosen
-            : (preferred?.id ?? null)
-        );
-      },
-      (err: unknown) => {
-        if (current) setCatalogError(errorText(err, "Couldn't read the machine sizes"));
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [accountKey, added, catalogTry]);
+  const form = useCloudMachineForm(account, provider, added === null);
+  const {
+    catalog,
+    currentCatalog,
+    catalogError,
+    machineType,
+    chosenType,
+    lifetime,
+    lifetimeChosen,
+    lifetimeHours,
+    dimensions,
+    provisioningProblem,
+  } = form;
 
   useEffect(() => {
     if (!accountKey || mode !== "import" || added) return;
@@ -200,56 +146,24 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     onReady(added);
   }, [ready, added, onReady]);
 
-  const chosenType = catalog?.machineTypes.find((type) => type.id === machineType) ?? null;
-  // A catalog still on screen from the account picked before isn't this account's.
-  const currentCatalog = catalog && account && catalog.accountId === account.id ? catalog : null;
-  const dimensions = currentCatalog && provider ? shownDimensions(provider, currentCatalog) : [];
-  const provisioning =
-    currentCatalog && provider
-      ? startingSelection(provider, currentCatalog, [
-          picked?.accountId === currentCatalog.accountId ? picked.selection : null,
-          currentCatalog.lastChoice,
-        ])
-      : NO_PROVISIONING;
-  const provisioningProblem =
-    currentCatalog && provider ? selectionProblem(provider, currentCatalog, provisioning) : null;
-  const pick = (dimension: CloudProvisioningDimension, id: string | null) => {
-    if (!currentCatalog) return;
-    setPicked({
-      accountId: currentCatalog.accountId,
-      selection: { ...provisioning, [dimension]: id },
-    });
-  };
   const chosenResource = resources?.find((resource) => resource.resourceId === resourceId) ?? null;
   const trimmedName = name.trim();
-  // Only a provider that holds a machine to a deadline takes one; the rest are sent none,
-  // whatever the selector held for the last account.
-  const lifetimeChosen = provider !== null && cloudLifetimeIsChosen(provider.capabilities.lifetime);
-  const lifetimeHours = lifetimeChosen && lifetime !== "never" ? Number(lifetime) : null;
 
   const create = () => {
-    if (!account || !machineType || !currentCatalog || provisioningProblem) return;
+    const request = form.request(trimmedName);
+    if (!request) return;
     setBusy(true);
     setError(null);
-    cloudHostsClient
-      .createHost({
-        accountId: account.id,
-        name: trimmedName,
-        machineType,
-        lifetimeHours,
-        // Only for a provider that takes any, so Boat's request is what it always was.
-        ...(dimensions.length > 0 ? { provisioning } : {}),
-      })
-      .then(
-        ({ hostId }) => {
-          setBusy(false);
-          setAdded({ hostId, name: trimmedName });
-        },
-        (err: unknown) => {
-          setBusy(false);
-          setError(errorText(err, "Couldn't create the machine"));
-        }
-      );
+    cloudHostsClient.createHost(request).then(
+      ({ hostId }) => {
+        setBusy(false);
+        setAdded({ hostId, name: trimmedName });
+      },
+      (err: unknown) => {
+        setBusy(false);
+        setError(errorText(err, "Couldn't create the machine"));
+      }
+    );
   };
 
   const importMachine = () => {
@@ -456,51 +370,20 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             </Field>
             {currentCatalog &&
               dimensions.map((dimension) => {
-                const options = currentCatalog.provisioning[dimension]!;
-                const choices = choicesFor(currentCatalog, dimension, provisioning.location);
-                const optional = provider.capabilities.provisioning[dimension] === "optional";
-                const current = provisioning[dimension];
-                const chosen = choices.find((choice) => choice.id === current);
+                const description = provisioningChoiceDescription(form, dimension);
                 return (
                   <Field key={dimension}>
-                    <FieldLabel>{options.label}</FieldLabel>
-                    <Select
-                      value={
-                        current !== null ? choiceValue(current) : optional ? PROVIDER_DECIDES : ""
-                      }
-                      onValueChange={(value) =>
-                        pick(dimension, value.startsWith("id:") ? value.slice(3) : null)
-                      }
+                    <FieldLabel>{currentCatalog.provisioning[dimension]!.label}</FieldLabel>
+                    <CloudProvisioningSelect
+                      form={form}
+                      provider={provider}
+                      dimension={dimension}
                       disabled={busy}
-                    >
-                      <FieldSelectTrigger
-                        className="w-72"
-                        data-testid={`add-cloud-host-${dimension}`}
-                      >
-                        <SelectValue placeholder="Nothing to choose" />
-                      </FieldSelectTrigger>
-                      <SelectContent>
-                        {optional && (
-                          <SelectItem value={PROVIDER_DECIDES}>
-                            Chosen by {provider.name}
-                          </SelectItem>
-                        )}
-                        {choices.map((choice) => (
-                          <SelectItem
-                            key={choice.id}
-                            value={choiceValue(choice.id)}
-                            disabled={!choice.available}
-                          >
-                            {choice.available || !choice.reason
-                              ? choice.label
-                              : `${choice.label} · ${sentenceCase(choice.reason)}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {chosen?.description && (
-                      <FieldDescription>{chosen.description}</FieldDescription>
-                    )}
+                      inField
+                      className="w-72"
+                      data-testid={`add-cloud-host-${dimension}`}
+                    />
+                    {description && <FieldDescription>{description}</FieldDescription>}
                   </Field>
                 );
               })}
@@ -516,7 +399,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               <Callout
                 severity="error"
                 action={
-                  <Button variant="outline" size="sm" onClick={() => setCatalogTry((n) => n + 1)}>
+                  <Button variant="outline" size="sm" onClick={form.retryCatalog}>
                     Retry
                   </Button>
                 }
@@ -532,7 +415,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                     value={type.id}
                     checked={machineType === type.id}
                     disabled={!type.available || busy}
-                    onChange={() => setMachineType(type.id)}
+                    onChange={() => form.setMachineType(type.id)}
                     label={`${type.label} · ${machineSpecLabel(type.vcpu, type.memoryGB)}`}
                     description={
                       type.available
@@ -547,7 +430,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             {lifetimeChosen ? (
               <Field>
                 <FieldLabel>Stops by itself after</FieldLabel>
-                <Select value={lifetime} onValueChange={setLifetime} disabled={busy}>
+                <Select value={lifetime} onValueChange={form.setLifetime} disabled={busy}>
                   <SelectTrigger className="w-52" data-testid="add-cloud-host-lifetime">
                     <SelectValue />
                   </SelectTrigger>
