@@ -878,13 +878,18 @@ export function ProjectResourceBadge({
       inFlight.add(collector);
       const requestedAt = Date.now();
       let value: T | null = null;
+      let failed = false;
+      let failure: unknown;
       try {
         value = await request();
       } catch (error) {
-        if (what) logError(`[ProjectResourceBadge] Failed to fetch ${what}`, error);
+        failed = true;
+        failure = error;
       }
+      // Released and landed before anything else can throw.
       inFlight.delete(collector);
       land(value, requestedAt);
+      if (failed && what) logError(`[ProjectResourceBadge] Failed to fetch ${what}`, failure);
     };
 
     const fetchPopoverData = () => {

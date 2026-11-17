@@ -872,26 +872,67 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
   });
 
   it("dates a retained workload figure by its own read while newer snapshots carry none", async () => {
-    mockGetMemorySnapshot.mockResolvedValueOnce(makeMemorySnapshot()).mockResolvedValue(
-      makeMemorySnapshot({
-        available: false,
-        ageMs: null,
-        sampledAt: 0,
-        totalMemoryMb: 0,
-        processCount: 0,
-        terminalCount: 0,
-      })
-    );
+    const later = makeMemorySnapshot({
+      available: false,
+      ageMs: null,
+      sampledAt: 0,
+      totalMemoryMb: 0,
+      processCount: 0,
+      terminalCount: 0,
+    });
+    later.electron.totalWorkingSetMb = 350;
+    mockGetMemorySnapshot.mockResolvedValueOnce(makeMemorySnapshot()).mockResolvedValue(later);
 
     const container = await renderOpenBadge();
+    expect(rowValue(container, "Daintree app")).toBe("300 MB");
 
-    // Every later snapshot succeeds, but with no workload figure of its own,
-    // so the first one's 900 MB stays on show and keeps its date.
+    // Every later snapshot lands, its own app figure with it, but carries no
+    // workload figure, so the first one's 900 MB stays on show with its date.
     await advance(12_000);
+    expect(rowValue(container, "Daintree app")).toBe("350 MB");
     expect(terminalProgramsValue(container)).toBe("900 MB");
     expect(container.textContent).toContain("showing last reading");
     expect(ageLabelOf(container)).toBe("Updated 12s ago");
   });
+
+  // One figure from the snapshot at a time, with no machine figure beside it,
+  // so each of the heading's snapshot dates is the only one in play.
+  it.each([
+    {
+      figure: "app",
+      snapshot: () =>
+        makeMemorySnapshot({
+          available: false,
+          ageMs: null,
+          sampledAt: 0,
+          totalMemoryMb: 0,
+          processCount: 0,
+          terminalCount: 0,
+        }),
+    },
+    {
+      figure: "workload",
+      snapshot: () => {
+        const snapshot = makeMemorySnapshot();
+        snapshot.electron = { ...snapshot.electron, available: false, totalWorkingSetMb: 0 };
+        return snapshot;
+      },
+    },
+  ])(
+    "ages the heading by the snapshot's $figure figure alone while that read stalls",
+    async ({ snapshot }) => {
+      mockGetDiagnosticsInfo.mockResolvedValue({ uptimeSeconds: 60, eventLoopP99Ms: 10 });
+      mockGetMemorySnapshot
+        .mockResolvedValueOnce(snapshot())
+        .mockReturnValue(new Promise(() => {}));
+
+      const container = await renderOpenBadge();
+      expect(ageLabelOf(container)).toBeNull();
+
+      await advance(12_000);
+      expect(ageLabelOf(container)).toBe("Updated 12s ago");
+    }
+  );
 
   it("dates a late machine figure to its request while the snapshot keeps landing", async () => {
     const stalled = deferred<ReturnType<typeof info>>();
@@ -959,6 +1000,8 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
     expect(ageLabelOf(container)).toBeNull();
     await openDiagnostics(container);
     expect(rowValue(container, "Main process JS heap")).toBe("100 MB of 200 MB");
+    expect(rowValue(container, "Uptime")).toBe("1m");
+    expect(container.querySelector('[aria-label="Loading resource details"]')).not.toBeNull();
   });
 
   it("leaves a diagnostics row off while its first read is out, rather than calling it Unavailable", async () => {
@@ -978,6 +1021,7 @@ describe("ProjectResourceBadge — popover poll ordering (#17574)", () => {
     expect(rowValue(container, "Uptime")).toBe("1m");
     expect(rowValue(container, "Main process JS heap")).toBeUndefined();
     expect(container.textContent).not.toContain("Process list unavailable");
+    expect(container.textContent).not.toContain("Daintree processes");
 
     // Neither is asked again while it is out.
     await advance(8_000);
