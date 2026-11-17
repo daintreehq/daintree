@@ -146,6 +146,7 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
         if (disposed) return;
         if (placements) {
           for (const host of waitingFor(worktreeId, worktreeGone)) {
+            if (disposed) return;
             await options.clearPlacement?.(host.id).catch((error: unknown) => {
               logger.warn("Dropping a removed worktree's pending placement failed", { error });
             });
@@ -153,6 +154,7 @@ export function watchOwnedHostCleanup(options: OwnedHostCleanupOptions): () => v
         }
         // Read again: the list may have changed while the folder was checked.
         for (const host of targets()) {
+          if (disposed) return;
           await options.forget(host.id).catch((error: unknown) => {
             refused.add(host.id);
             logger.warn("Removing a worktree's resource host failed", { error });
