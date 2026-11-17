@@ -14,6 +14,12 @@ describe("findCaseInsensitiveLiteral", () => {
     });
   });
 
+  it("keeps UTF-16 offsets inside a character that lowercases to the same width", () => {
+    expect(findCaseInsensitiveLiteral("x𐐀y", "\uDC28")).toEqual({ start: 2, end: 3 });
+    expect(findCaseInsensitiveLiteral("İ𐐀x", "\uDC28")).toEqual({ start: 2, end: 3 });
+    expect(findCaseInsensitiveLiteral("İ𐐀x", "\uD801")).toEqual({ start: 1, end: 2 });
+  });
+
   it("returns original coordinates after a length-changing prefix (#17515)", () => {
     const line = "İSTANBUL: done";
     // `İ` lowercases to two UTF-16 units, so the lowered index of "done" is 11.
@@ -27,6 +33,8 @@ describe("findCaseInsensitiveLiteral", () => {
     expect(findCaseInsensitiveLiteral(line, "İSTANBUL")).toEqual({ start: 0, end: 8 });
     expect(slice(line, "İstanbul: DONE")).toBe(line);
     expect(slice("go to İzmir now", "İzmir")).toBe("İzmir");
+    // The query is two lowered units longer than the one-unit span it matches.
+    expect(findCaseInsensitiveLiteral("İ xi\u0307y", "İY")).toEqual({ start: 3, end: 6 });
   });
 
   it("handles several expanded characters before and inside the match", () => {
@@ -54,6 +62,8 @@ describe("findCaseInsensitiveLiteral", () => {
   it("keeps matching the way a whole-string lowercase does for final sigma", () => {
     expect(slice("ΟΔΟΣ", "οδος")).toBe("ΟΔΟΣ");
     expect(slice("İ ΟΔΟΣ", "οδος")).toBe("ΟΔΟΣ");
+    // The query is lowered as a whole too, so an uppercase final sigma still finds it.
+    expect(findCaseInsensitiveLiteral("İ οδος!", "ΟΔΟΣ")).toEqual({ start: 2, end: 6 });
   });
 
   it("reports the first occurrence", () => {
@@ -65,6 +75,7 @@ describe("findCaseInsensitiveLiteral", () => {
     expect(findCaseInsensitiveLiteral("İSTANBUL: done", "missing")).toBeNull();
     expect(findCaseInsensitiveLiteral("plain", "missing")).toBeNull();
     expect(findCaseInsensitiveLiteral("plain", "")).toBeNull();
+    expect(findCaseInsensitiveLiteral("İ", "")).toBeNull();
     expect(findCaseInsensitiveLiteral("", "x")).toBeNull();
   });
 });

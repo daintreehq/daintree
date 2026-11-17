@@ -22,12 +22,14 @@ describe("search-semantic-buffers match ranges", () => {
     const { matches } = search({ t1: ["İSTANBUL: done"] }, "done");
     expect(matches).toHaveLength(1);
     const [m] = matches;
+    expect(m).toMatchObject({ matchStart: 10, matchEnd: 14 });
     expect(m?.line.slice(m.matchStart, m.matchEnd)).toBe("done");
   });
 
   it("highlights a query that contains the length-changing character", () => {
     const { matches } = search({ t1: ["İSTANBUL: done"] }, "İstanbul");
     const [m] = matches;
+    expect(m).toMatchObject({ matchStart: 0, matchEnd: 8 });
     expect(m?.line.slice(m.matchStart, m.matchEnd)).toBe("İSTANBUL");
   });
 
@@ -48,5 +50,21 @@ describe("search-semantic-buffers match ranges", () => {
     const { matches } = search({ t1: ["old done", "İ newest done", "unrelated"] }, "done");
     expect(matches).toHaveLength(1);
     expect(matches[0]?.line).toBe("İ newest done");
+  });
+
+  it("returns one range per matching terminal, each in its own line's coordinates", () => {
+    const { matches } = search(
+      {
+        t1: ["old done", "İ newest done"],
+        t2: ["plain done now", "İİ second done"],
+        t3: ["nothing here"],
+      },
+      "done"
+    );
+    expect(matches.map((m) => [m.terminalId, m.line.slice(m.matchStart, m.matchEnd)])).toEqual([
+      ["t1", "done"],
+      ["t2", "done"],
+    ]);
+    expect(matches.map((m) => m.line)).toEqual(["İ newest done", "İİ second done"]);
   });
 });

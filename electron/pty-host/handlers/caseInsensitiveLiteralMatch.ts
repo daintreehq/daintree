@@ -11,7 +11,8 @@ export interface LiteralMatchRange {
  * offset found in `haystack.toLowerCase()` points at a different character once
  * it is applied to the original. Callers slice the original line with the
  * returned range, so it is mapped back here. A match that begins or ends inside
- * an expanded character snaps outward to the whole original character.
+ * a character whose lowercase form is longer snaps outward to the whole
+ * original character.
  *
  * Matching itself is the whole-string `toLowerCase().indexOf()` it replaced, so
  * context-sensitive casing (final sigma) and first-occurrence behave as before.
@@ -36,15 +37,24 @@ export function findCaseInsensitiveLiteral(
 
   // Lowering a single code point never depends on its neighbours except for
   // final sigma, which keeps its length, so per-code-point lengths track the
-  // whole-string offsets.
+  // whole-string offsets. Only a code point that grew is atomic; inside one that
+  // kept its length the offset is shifted by the growth seen so far.
   let loweredOffset = 0;
   let originalOffset = 0;
+  let growth = 0;
   let start = -1;
   for (const codePoint of haystack) {
-    const nextLowered = loweredOffset + codePoint.toLowerCase().length;
+    const loweredLength = codePoint.toLowerCase().length;
+    const grew = loweredLength !== codePoint.length;
+    const nextLowered = loweredOffset + loweredLength;
     const nextOriginal = originalOffset + codePoint.length;
-    if (start === -1 && nextLowered > loweredStart) start = originalOffset;
-    if (nextLowered >= loweredEnd) return { start, end: nextOriginal };
+    if (start === -1 && nextLowered > loweredStart) {
+      start = grew ? originalOffset : loweredStart - growth;
+    }
+    if (nextLowered >= loweredEnd) {
+      return { start, end: grew ? nextOriginal : loweredEnd - growth };
+    }
+    growth += loweredLength - codePoint.length;
     loweredOffset = nextLowered;
     originalOffset = nextOriginal;
   }
