@@ -1541,8 +1541,9 @@ describe("ProjectPulseService", () => {
 
   describe("heatmap past 20,000 commits in the window (#17455)", () => {
     // 2,000 commits on each of the last ten days plus one 100 days ago: 20,001
-    // in a 180-day window. Newest first, as `git log` prints them, and the stub
-    // honours --max-count so any ceiling cuts the read where git would.
+    // in a 180-day window, and one 200 days ago that --since slop can still let
+    // through. Newest first, as `git log` prints them, and the stub honours
+    // --max-count so a ceiling cuts the read where git would.
     function buildBusyRepo() {
       vi.setSystemTime(new Date(2025, 0, 15, 12, 0, 0));
       const at = (daysAgo: number, second: number) =>
@@ -1552,6 +1553,7 @@ describe("ProjectPulseService", () => {
         for (let i = 0; i < 2_000; i++) timestamps.push(at(day, 2_000 - i));
       }
       timestamps.push(at(100, 0));
+      timestamps.push(at(200, 0));
 
       const raw = vi.fn(async (args: string[]) => {
         const cmd = args[0];
@@ -1602,6 +1604,19 @@ describe("ProjectPulseService", () => {
       expect(counts[179 - 100]).toBe(1);
       expect(counts.slice(-10)).toEqual(Array(10).fill(2_000));
       expect(counts.slice(179 - 99, -10).every((count) => count === 0)).toBe(true);
+    });
+
+    it("reads the window without a commit ceiling", async () => {
+      // 20,001 commits only rule out a ceiling at 20,000; any fixed ceiling
+      // leaves a busier window undercounted the same way.
+      const raw = buildBusyRepo();
+      await loadPulse(raw);
+
+      const windowReads = raw.mock.calls
+        .map(([args]) => args)
+        .filter((args) => args[0] === "log" && args.some((a) => a.startsWith("--since=")));
+      expect(windowReads).toHaveLength(1);
+      expect(windowReads[0].some((a) => /^(--max-count\b|-n|-\d)/.test(a))).toBe(false);
     });
   });
 });

@@ -133,27 +133,35 @@ describe("Project Pulse age across unrelated histories (#17509)", () => {
 });
 
 describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
-  it("counts every commit git walks in a 180-day window", async () => {
+  it("counts every commit from the first cell's local midnight on", async () => {
     const repo = path.join(root, "busy");
     fs.mkdirSync(repo);
     git(repo, null, "init", "-q", "-b", "main");
 
-    // One commit 100 days back, then 20,000 in the hours before NOW: built with
-    // fast-import because 20,001 `git commit` runs would take minutes.
+    // The grid's first cell is 179 local days before today. One commit a minute
+    // before its local midnight, one exactly on it and one a minute after, one
+    // 100 days back, then 20,000 in the seconds before NOW: built with
+    // fast-import because 20,004 `git commit` runs would take minutes. git fills
+    // a bare --since date with its own clock's time of day, so the first-day
+    // commits only count from a midnight cutoff.
+    const firstMidnight = Math.floor(
+      new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() - 179).getTime() / 1000
+    );
     const nowSeconds = Math.floor(NOW.getTime() / 1000);
-    const oldSeconds = nowSeconds - 100 * 86_400;
-    const stamps = [oldSeconds];
-    for (let i = 20_000; i >= 1; i--) stamps.push(nowSeconds - i);
-    const stream = stamps
+    const outside = firstMidnight - 60;
+    const inWindow = [firstMidnight, firstMidnight + 60, nowSeconds - 100 * 86_400];
+    for (let i = 20_000; i >= 1; i--) inWindow.push(nowSeconds - i);
+    const stream = [outside, ...inWindow]
       .map((s) => `commit refs/heads/main\ncommitter T <t@example.com> ${s} +0000\ndata 0\n\n`)
       .join("");
     execFileSync("git", ["fast-import", "--quiet"], {
       cwd: repo,
       input: stream,
       env: { PATH: process.env.PATH ?? "", HOME: home, GIT_CONFIG_NOSYSTEM: "1" },
-      stdio: ["pipe", "ignore", "ignore"],
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: 10_000,
     });
-    expect(git(repo, null, "rev-list", "--count", "HEAD").trim()).toBe("20001");
+    expect(git(repo, null, "rev-list", "--count", "HEAD").trim()).toBe("20004");
 
     const pulse = await new ProjectPulseService().getPulse({
       worktreePath: repo,
@@ -164,10 +172,18 @@ describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
       includeRecentCommits: false,
     });
 
-    expect(pulse.commitsInRange).toBe(20_001);
-    const oldCell = pulse.heatmap.find(
-      (cell) => cell.date === localDay(new Date(oldSeconds * 1000).toISOString())
+    const expected = new Map<string, number>();
+    for (const s of inWindow) {
+      const day = localDay(new Date(s * 1000).toISOString());
+      expected.set(day, (expected.get(day) ?? 0) + 1);
+    }
+    expect(pulse.heatmap[0].date).toBe(localDay(new Date(firstMidnight * 1000).toISOString()));
+    expect(pulse.heatmap.map((cell) => [cell.date, cell.count])).toEqual(
+      pulse.heatmap.map((cell) => [cell.date, expected.get(cell.date) ?? 0])
     );
-    expect(oldCell?.count).toBe(1);
+    expect(pulse.heatmap[0].count).toBe(2);
+    expect(pulse.heatmap.reduce((sum, cell) => sum + cell.count, 0)).toBe(20_003);
+    expect(pulse.commitsInRange).toBe(20_003);
+    expect(pulse.activeDays).toBe(expected.size);
   });
 });
