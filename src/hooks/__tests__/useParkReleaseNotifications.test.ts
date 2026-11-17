@@ -7,6 +7,7 @@ interface NotifyArg {
   title?: string;
   message?: string;
   supersedeKey?: string;
+  historyId?: string;
   context?: { projectId?: string; panelId?: string };
   action?: { label?: string; actionId?: string; actionArgs?: Record<string, unknown> };
 }
@@ -252,6 +253,33 @@ describe("useParkReleaseNotifications", () => {
     // No run means no workspace to open — an action that cannot resolve its
     // target is worse than none.
     expect(payload.action).toBeUndefined();
+  });
+
+  // Every project view hears the release and files it under one id, whether
+  // its own snapshot named the run or it had to go without (#17191).
+  it("files a release under one id in every view, and a later release under another", async () => {
+    const release = (timestamp: number): ReleasePayload => ({
+      id: "t1",
+      gateRunId: "g1",
+      reason: "gate-ready",
+      timestamp,
+    });
+    const named = await load();
+    named.useFleetSnapshotStore.setState({ snapshot: snapshotOf([seedRun()]) });
+    renderHook(() => named.useParkReleaseNotifications());
+    act(() => captured!(release(NOW)));
+
+    vi.resetModules();
+    getSnapshotMock.mockRejectedValue(new Error("ipc down"));
+    const unnamed = await load();
+    renderHook(() => unnamed.useParkReleaseNotifications());
+    await act(async () => captured!(release(NOW)));
+    await act(async () => captured!(release(NOW + 1)));
+
+    expect(notifyCalls).toHaveLength(3);
+    expect(notifyArg(0).historyId).toBeDefined();
+    expect(notifyArg(1).historyId).toBe(notifyArg(0).historyId);
+    expect(notifyArg(2).historyId).not.toBe(notifyArg(0).historyId);
   });
 
   it("does not subscribe when Electron is unavailable", async () => {

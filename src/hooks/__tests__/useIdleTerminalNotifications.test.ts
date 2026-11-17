@@ -6,6 +6,7 @@ import type { IdleTerminalNotifyPayload } from "@shared/types";
 interface NotifyArg {
   priority?: string;
   supersedeKey?: string;
+  historyId?: string;
   context?: { projectId?: string };
   coalesce?: unknown;
   actions?: Array<{ actionId?: string; actionArgs?: Record<string, unknown> }>;
@@ -60,6 +61,38 @@ describe("useIdleTerminalNotifications", () => {
   afterEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).electron;
+    delete window.__DAINTREE_HOST_ID__;
+  });
+
+  // Every project view hears the broadcast and files its rows under the same
+  // ids, so their writes merge into one row per project per check (#17191).
+  it("files each project's row under one id per check, the same in every view", async () => {
+    const check = (timestamp: number): IdleTerminalNotifyPayload => ({
+      projects: [
+        { projectId: "p1", projectName: "Acme", terminalCount: 2, idleMinutes: 5 },
+        { projectId: "p2", projectName: "Beta", terminalCount: 1, idleMinutes: 5 },
+      ],
+      timestamp,
+    });
+    const heardIn = async (payload: IdleTerminalNotifyPayload): Promise<string[]> => {
+      vi.resetModules();
+      notifyCalls.length = 0;
+      const { useIdleTerminalNotifications } = await load();
+      renderHook(() => useIdleTerminalNotifications());
+      act(() => captured!(payload));
+      return notifyCalls.map((call) => call.historyId ?? "");
+    };
+
+    const viewA = await heardIn(check(1_000));
+    const viewB = await heardIn(check(1_000));
+    const nextCheck = await heardIn(check(2_000));
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    const remoteView = await heardIn(check(1_000));
+
+    expect(viewB).toEqual(viewA);
+    expect(new Set(viewA).size).toBe(2);
+    expect(nextCheck.some((id) => viewA.includes(id))).toBe(false);
+    expect(remoteView.some((id) => viewA.includes(id))).toBe(false);
   });
 
   // #10455: a PostHydrationListeners remount must not register a second IPC

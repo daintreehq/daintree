@@ -3,6 +3,7 @@ import { isElectronAvailable } from "./useElectron";
 import { idleTerminalClient } from "@/clients/idleTerminalClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 
 // One-way latch: the broadcast IPC listener is an app-lifetime, notify-only
 // singleton with no teardown. Never reset this — resetting it on unmount let a
@@ -34,6 +35,9 @@ export function useIdleTerminalNotifications(): void {
           inboxMessage: message,
           priority: "low",
           supersedeKey: `idle-terminal:${project.projectId}`,
+          // Every project view hears the broadcast; one row per project per
+          // check, whichever view files it first.
+          historyId: hostScopedKey(`idle-terminal:${project.projectId}:${payload.timestamp}`),
           // Action-backed so the affordances survive into the persisted inbox
           // row — `notify()` only keeps actions that carry an `actionId`
           // (closure-only `onClick` actions are dropped from history). The

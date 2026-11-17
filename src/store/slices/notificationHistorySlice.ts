@@ -363,8 +363,10 @@ function mergeEntryFields(
  *
  *   - added by this writer (absent from its baseline) → its entry is written,
  *     unless the disk already holds that id: an entry imported under its
- *     source's id (#15983) can be filed by two views, and the disk's copy
- *     keeps any read or archive a sibling gave it.
+ *     source's id (#15983) or a host broadcast every view hears (#17191) can be
+ *     filed by several views, and the disk's copy keeps any read or archive a
+ *     sibling gave it. A copy this writer showed as a toast is read either way:
+ *     a hidden view's unread copy landing first doesn't undo what the user saw.
  *   - held by the writer and the disk → merged field by field.
  *   - known to the writer but gone from disk → stays gone, even if the writer
  *     edited it since: a sibling dismissed, cleared or pruned it, and a stale
@@ -398,7 +400,14 @@ function mergeNotificationHistoryPersistedWrite({
     const before = base.entries.get(id);
     const current = disk.entries.get(id);
     if (before === undefined) {
-      merged.push(current !== undefined ? mergeEntryFields(entry, entry, current) : entry);
+      if (current === undefined) {
+        merged.push(entry);
+        continue;
+      }
+      const settled = mergeEntryFields(entry, entry, current);
+      merged.push(
+        entry.seenAsToast && !settled.seenAsToast ? { ...settled, seenAsToast: true } : settled
+      );
       continue;
     }
     if (current !== undefined) merged.push(mergeEntryFields(before, entry, current));
@@ -422,6 +431,39 @@ function mergeNotificationHistoryPersistedWrite({
     ),
   };
   return { version: incoming.version, state };
+}
+
+/**
+ * Hydration's entries, keeping each one this view holds unchanged as the very
+ * object it holds, and the list itself when nothing moved, so a rehydrate that
+ * brings nothing new re-renders nothing. The session-only `summarized` flag,
+ * which storage never carries back, stays with the rows this view holds, or
+ * the next re-entry summary would repeat them.
+ */
+function keepHeldEntries(
+  hydrated: NotificationHistoryEntry[],
+  held: NotificationHistoryEntry[],
+  now: number
+): NotificationHistoryEntry[] {
+  if (held.length === 0) return hydrated;
+  const byId = new Map(held.map((e) => [e.id, e]));
+  let unchanged = hydrated.length === held.length;
+  const entries = hydrated.map((entry, index) => {
+    const mine = byId.get(entry.id);
+    let kept = entry;
+    if (mine !== undefined) {
+      if (JSON.stringify(sanitizePersistedEntry(mine, now)) === JSON.stringify(entry)) kept = mine;
+      else if (mine.summarized) kept = { ...entry, summarized: true };
+    }
+    if (kept !== held[index]) unchanged = false;
+    return kept;
+  });
+  return unchanged ? held : entries;
+}
+
+function sameRecord(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => b[key] === a[key]);
 }
 
 interface NotificationHistoryState {
@@ -571,7 +613,12 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       snoozedThreads: {},
       addEntry: (entry) => {
         const { supersedes, id: requestedId, ...rest } = entry;
-        if (requestedId !== undefined && get().entries.some((e) => e.id === requestedId)) {
+        const held =
+          requestedId === undefined ? undefined : get().entries.find((e) => e.id === requestedId);
+        if (requestedId !== undefined && held !== undefined) {
+          // Filed already, here or by a sibling whose write this view took up.
+          // A copy shown here as a toast is read, as the write merge settles it.
+          if (rest.seenAsToast === true && !held.seenAsToast) get().markIdsRead([requestedId]);
           return requestedId;
         }
         const seenAsToast = rest.seenAsToast ?? false;
@@ -622,6 +669,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             unreadCount: computeUnreadCount(updated, snoozedThreads, now),
           };
         });
+        // Every view files a broadcast row, frozen ones too (their IPC runs,
+        // their timers wait for the thaw). A copy written on thaw would bring
+        // back a row the user dismissed meanwhile, so it's written now.
+        if (requestedId !== undefined) flushNotificationHistory();
         return newEntry.id;
       },
       importEntries: (incoming) => {
@@ -900,16 +951,41 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           .filter((e): e is NotificationHistoryEntry => e !== null);
         const pruned = pruneNotificationEntries(sanitized, now);
         const snoozedThreads = sanitizeSnoozedThreads(p?.snoozedThreads, now);
+        const entries = keepHeldEntries(pruned, current.entries, now);
         return {
           ...current,
-          entries: pruned,
-          snoozedThreads,
-          unreadCount: computeUnreadCount(pruned, snoozedThreads, now),
+          entries,
+          snoozedThreads: sameRecord(current.snoozedThreads, snoozedThreads)
+            ? current.snoozedThreads
+            : snoozedThreads,
+          unreadCount: computeUnreadCount(entries, snoozedThreads, now),
         };
       },
     }
   )
 );
+
+/**
+ * Takes up what sibling project views wrote to the shared inbox: their reads,
+ * archives, dismissals, snoozes and new rows. A write of this view's own still
+ * in its debounce lands first, through the same merge.
+ */
+export function syncNotificationHistoryFromStorage(): void {
+  void useNotificationHistoryStore.persist.rehydrate();
+}
+
+// A persist store hydrates once per view, so a cached view kept the badge and
+// rows it loaded until it reloaded. Views share the storage partition, so a
+// sibling's write arrives as a `storage` event; a view frozen while it landed
+// catches up when it's activated again, before its reveal and on it.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== NOTIFICATION_HISTORY_STORAGE_KEY) return;
+    syncNotificationHistoryFromStorage();
+  });
+  window.electron?.app?.onViewWarmActivated?.(() => syncNotificationHistoryFromStorage());
+  window.electron?.app?.onViewRevealed?.(() => syncNotificationHistoryFromStorage());
+}
 
 registerPersistedStore({
   storeId: "notificationHistoryStore",

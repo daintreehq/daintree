@@ -275,6 +275,21 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       expect(viewA.getState().entries.map((e) => e.id)).toContain(addedId);
     });
 
+    it("keeps the rows a sibling left alone as the objects this view holds", async () => {
+      installElectronApp();
+      installLocalStorage(seed([makeEntry({ id: "untouched" }), makeEntry({ id: "read-there" })]));
+      const viewA = (await openView()).useNotificationHistoryStore;
+      const viewB = (await openView()).useNotificationHistoryStore;
+      const untouched = viewA.getState().entries.find((e) => e.id === "untouched");
+
+      viewB.getState().markIdsRead(["read-there"]);
+      flush();
+      announceSiblingWrite();
+
+      expect(viewA.getState().entries.find((e) => e.id === "untouched")).toBe(untouched);
+      expect(viewA.getState().entries.find((e) => e.id === "read-there")?.seenAsToast).toBe(true);
+    });
+
     it("leaves the entries alone when nothing changed while away", async () => {
       installElectronApp();
       installLocalStorage(seed([makeEntry({ id: "kept" })]));
@@ -364,33 +379,99 @@ describe("notificationHistoryStore cross-view sync (#17191)", () => {
       expect(rows).toHaveLength(1);
     });
 
-    it("files nothing in a view that hears it after a sibling's row landed", async () => {
+    it("files no second row in a view that already took up a sibling's", async () => {
       const backing = installLocalStorage(seed([]));
       const early = await openNotifyingView();
       const late = await openNotifyingView();
-
-      early.notify({
-        type: "info",
+      const event = {
+        type: "info" as const,
         title: "Park released",
         message: "A parked agent — its gate came free",
-        priority: "low",
+        priority: "low" as const,
         historyId: "park-released:run-1:1",
-      });
-      flush();
-      const written = backing.get(STORAGE_KEY);
+      };
 
-      const returned = late.notify({
-        type: "info",
-        title: "Park released",
-        message: "A parked agent — its gate came free",
-        priority: "low",
-        historyId: "park-released:run-1:1",
-      });
+      early.notify(event);
+      announceSiblingWrite();
+      const before = late.store.getState().entries;
+      late.notify(event);
       flush();
 
-      expect(returned).toBe("");
-      expect(late.store.getState().entries).toEqual([]);
-      expect(backing.get(STORAGE_KEY)).toBe(written);
+      expect(late.store.getState().entries).toBe(before);
+      expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual(["park-released:run-1:1"]);
     });
+
+    it("reads a held row as seen when this view shows it as a toast", async () => {
+      installLocalStorage(seed([]));
+      const hidden = (await openView()).useNotificationHistoryStore;
+      const focused = (await openView()).useNotificationHistoryStore;
+
+      hidden.getState().addEntry({ id: "host-event-1", type: "info", message: "Park released" });
+      announceSiblingWrite();
+      expect(focused.getState().unreadCount).toBe(1);
+
+      focused.getState().addEntry({
+        id: "host-event-1",
+        type: "info",
+        message: "Park released",
+        seenAsToast: true,
+      });
+
+      expect(focused.getState().entries).toHaveLength(1);
+      expect(focused.getState().unreadCount).toBe(0);
+    });
+
+    it("doesn't bring back a row dismissed while a frozen view that filed it waited to thaw", async () => {
+      const backing = installLocalStorage(seed([]));
+      const frozen = (await openView()).useNotificationHistoryStore;
+      const active = (await openView()).useNotificationHistoryStore;
+
+      // A frozen view's IPC handlers run; its timers wait for the thaw.
+      frozen.getState().addEntry({ id: "host-event-1", type: "info", message: "Project slept" });
+      active.getState().addEntry({ id: "host-event-1", type: "info", message: "Project slept" });
+      active.getState().dismissEntry("host-event-1");
+      frozen.getState().addEntry({ type: "info", message: "pending until the thaw" });
+      flush();
+
+      expect(readBlob(backing).state.entries.some((e) => e.id === "host-event-1")).toBe(false);
+    });
+  });
+});
+
+describe("notify() for an event every view hears, rate-limited (#17191)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the event's own row and adds no summary row beside it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    installLocalStorage(seed([]));
+    const view = await openNotifyingView();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+
+    for (const n of [1, 2, 3]) {
+      view.notify({ type: "info", message: `burst ${n}`, rateLimitKey: "park" });
+    }
+    const returned = view.notify({
+      type: "info",
+      title: "Park released",
+      message: "A parked agent — its gate came free",
+      rateLimitKey: "park",
+      historyId: "park-released:run-1:1",
+    });
+
+    const active = view.store.getState().entries.filter((e) => !e.archivedAt);
+    expect(returned).toBe("");
+    expect(active.map((e) => e.id)).toContain("park-released:run-1:1");
+    expect(active.map((e) => e.message).sort()).toEqual([
+      "A parked agent — its gate came free",
+      "burst 1",
+      "burst 2",
+      "burst 3",
+    ]);
   });
 });
