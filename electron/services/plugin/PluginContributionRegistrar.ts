@@ -860,7 +860,8 @@ export class PluginContributionRegistrar {
           key: `${pluginId}.${provider.id}`,
           pluginId,
           providerId: provider.id,
-          pluginName: manifest.displayName ?? manifest.name,
+          // Never blank: Settings names the plugin that holds a keyword by it.
+          pluginName: manifest.displayName?.trim() || manifest.name,
           title: provider.title,
           keyword: provider.keyword,
           iconId: resolveIconId(provider.iconId ?? SEARCH_PROVIDER_DEFAULT_ICON_ID),
@@ -882,7 +883,7 @@ export class PluginContributionRegistrar {
           refused,
           provider.pluginId,
           "warn",
-          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is already taken by ${takenBy.pluginName}, so the quick switcher refuses it wherever both plugins are on. Choose a different keyword.`
+          `Search provider "${provider.providerId}" shares keyword "${provider.keyword}" with ${takenBy.pluginName}, whose provider comes first, so the quick switcher leaves this one out wherever ${takenBy.pluginName}'s is shown too. Choose a different keyword.`
         );
       }
     }
