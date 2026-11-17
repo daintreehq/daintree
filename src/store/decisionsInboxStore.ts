@@ -1,10 +1,12 @@
 import { create } from "zustand";
-import type { DecisionQuestionReference } from "@shared/types/decisionsQuestion";
 
 /** Where an opening of the inbox starts. */
 export interface DecisionsInboxRequest {
-  /** The question selected on opening; null selects the first one listed. */
-  reference: DecisionQuestionReference | null;
+  /**
+   * The pane whose Decisions dropdown opened it: its first question is shown
+   * first, and the close returns to its chip. Null from anywhere else.
+   */
+  terminalId: string | null;
   /** Rises with every opening, so opening again while open still lands. */
   seq: number;
 }
@@ -12,7 +14,7 @@ export interface DecisionsInboxRequest {
 interface DecisionsInboxState {
   isOpen: boolean;
   request: DecisionsInboxRequest;
-  open: (reference?: DecisionQuestionReference | null) => void;
+  open: (options?: { terminalId?: string | null }) => void;
   close: () => void;
 }
 
@@ -23,11 +25,11 @@ interface DecisionsInboxState {
  */
 export const useDecisionsInboxStore = create<DecisionsInboxState>()((set) => ({
   isOpen: false,
-  request: { reference: null, seq: 0 },
-  open: (reference = null) =>
+  request: { terminalId: null, seq: 0 },
+  open: (options) =>
     set((state) => ({
       isOpen: true,
-      request: { reference, seq: state.request.seq + 1 },
+      request: { terminalId: options?.terminalId ?? null, seq: state.request.seq + 1 },
     })),
   close: () => set({ isOpen: false }),
 }));

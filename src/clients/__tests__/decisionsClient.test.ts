@@ -381,6 +381,31 @@ describe("decisionsClient.watchQuestions (#17229)", () => {
     expect(seen).toEqual([0, 20]);
   });
 
+  it("says a failed read only while no list has arrived (#17231)", async () => {
+    const failed = vi.fn();
+    decisionsClient.watchQuestions(() => {}, failed);
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(failed).toHaveBeenCalledOnce();
+
+    const late = vi.fn();
+    decisionsClient.watchQuestions(() => {}, late);
+    pushList(list(1));
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(late).not.toHaveBeenCalled();
+
+    const stoppedFirst = vi.fn();
+    const stop = decisionsClient.watchQuestions(() => {}, stoppedFirst);
+    stop();
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stoppedFirst).not.toHaveBeenCalled();
+  });
+
   it("stops listening, and ignores a read still in flight, once stopped", async () => {
     const seen: number[] = [];
     const stop = decisionsClient.watchQuestions((l) => seen.push(l.revision));

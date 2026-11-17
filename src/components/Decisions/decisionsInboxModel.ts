@@ -1,5 +1,6 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
+import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionReference,
@@ -102,13 +103,14 @@ export function standingText(standing: DecisionQuestionStanding): string {
     case "waiting":
       return standing.reason === "open"
         ? "Waiting for an answer, here or on your phone"
-        : "Answered; the agent's follow-up expects a reply";
+        : "Answered; the agent asked for a reply";
     case "queued":
       return "Queued to send; you can answer it here";
     case "send-failed":
       return "Couldn't be sent";
     case "to-type":
-      return "Answered, waiting to be typed in";
+      // An answer or a person's follow-up: the list doesn't say which.
+      return "Waiting to be typed in";
     case "needs-attention":
       return standing.deliveryStatus === "delivery-uncertain"
         ? "May or may not have been delivered"
@@ -116,7 +118,8 @@ export function standingText(standing: DecisionQuestionStanding): string {
     case "settled":
       switch (standing.outcome) {
         case "answered":
-          return standing.handled ? "Answered, marked handled" : "Answered and typed in";
+          // A handled answer was never typed in.
+          return standing.handled ? "Answered, marked handled" : "Answered";
         case "withdrawn":
           return "Cancelled";
         case "expired":
@@ -164,4 +167,64 @@ export function emptyText(groups: readonly InboxGroup[]): string | null {
   return groups.length === 0
     ? "No questions yet. When an agent asks for your input through Decisions, it shows up here."
     : null;
+}
+
+/** The question chosen in the inbox, and where it stood in the list when chosen. */
+export interface InboxChoice {
+  key: string;
+  index: number;
+}
+
+/**
+ * The question the inbox shows: the one chosen while it is still listed, else
+ * the one that took its place, else the first of the pane that opened the
+ * inbox, else the first listed. Null for an empty list.
+ */
+export function resolveSelection(
+  ordered: readonly DecisionQuestionListItem[],
+  chosen: InboxChoice | null,
+  openerTerminalId: string | null
+): DecisionQuestionListItem | null {
+  if (ordered.length === 0) return null;
+  if (chosen !== null) {
+    const kept = ordered.find((item) => referenceKey(item.reference) === chosen.key);
+    return kept ?? ordered[Math.min(chosen.index, ordered.length - 1)]!;
+  }
+  if (openerTerminalId !== null) {
+    const own = ordered.find((item) => item.reference.terminalId === openerTerminalId);
+    if (own !== undefined) return own;
+  }
+  return ordered[0]!;
+}
+
+export interface ConnectionNotice {
+  severity: "info" | "neutral" | "warning";
+  text: string;
+}
+
+/**
+ * What the inbox says while this computer isn't connected to its relay: that
+ * none is set up yet, that the relay revoked it, or that it is connecting.
+ * Null while connected, or before main has said.
+ */
+export function connectionNotice(
+  status: Pick<DecisionsStatus, "state" | "relayOrigin"> | null
+): ConnectionNotice | null {
+  if (status === null || status.state === "connected" || status.state === "off") return null;
+  if (status.relayOrigin === undefined) {
+    return {
+      severity: "info",
+      text: "No relay is connected yet, so no agent can ask you anything. Set one up in Settings → Decisions.",
+    };
+  }
+  if (status.state === "revoked") {
+    return {
+      severity: "warning",
+      text: "The relay revoked this computer, so no new questions reach it. Settings → Decisions says what to do.",
+    };
+  }
+  return {
+    severity: "neutral",
+    text: "Not connected to the relay right now. These are the questions this computer already holds; new ones, answers and cancels wait until it reconnects.",
+  };
 }

@@ -2268,6 +2268,24 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-questions-inbox",
+        section: "Questions",
+        title: "Inbox",
+        description:
+          "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided",
+        keywords: [
+          "inbox",
+          "questions",
+          "all questions",
+          "history",
+          "answered",
+          "waiting",
+          "delivered",
+          "asked",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-terminal-snapshots",
         section: "Questions",
         title: "Show agent status and recent terminal lines on my phone",

@@ -6,6 +6,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { usePanelStore } from "@/store/panelStore";
@@ -147,6 +148,25 @@ function ReviewAnswersButton({ onReview }: { onReview: () => void }) {
   );
 }
 
+// Under the Popover root for its focus policy, as `ReviewAnswersButton` is.
+function OpenInboxButton({ onOpen }: { onOpen: () => void }) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      onClick={() => {
+        // The inbox takes focus; the popover mustn't take it back.
+        focusRestore?.expectHandoff();
+        onOpen();
+      }}
+      data-testid="terminal-decisions-inbox"
+    >
+      Open inbox
+    </Button>
+  );
+}
+
 function DecisionRow({
   item,
   line,
@@ -252,6 +272,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
+  const openInbox = useDecisionsInboxStore((s) => s.open);
   // Every pane header mounts this chip, so only one with something to say reads the drafts.
   const watchDrafts = readsPaneWait(state);
   const hasDraft = useTerminalInputStore(
@@ -427,17 +448,26 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                 ))}
               </div>
             )}
-            {/* The list reads this computer's answers; a Remote Host keeps its own panes'. */}
-            {attention && !isRemoteWindow() && (
-              <div className="flex justify-end border-t border-divider px-3 py-2">
-                {/* The answers that need a person are acted on in the list, which
-                also holds those whose pane is gone. */}
-                <ReviewAnswersButton
-                  onReview={() => {
+            {/* Both lists read this computer's questions; a Remote Host keeps its own panes'. */}
+            {!isRemoteWindow() && (
+              <div className="flex justify-end gap-2 border-t border-divider px-3 py-2">
+                {/* Every question on this computer, this pane's first (#17231). */}
+                <OpenInboxButton
+                  onOpen={() => {
                     setOpen(false);
-                    openAttention(terminalId);
+                    openInbox({ terminalId });
                   }}
                 />
+                {/* The answers that need a person are acted on in the list, which
+                also holds those whose pane is gone. */}
+                {attention && (
+                  <ReviewAnswersButton
+                    onReview={() => {
+                      setOpen(false);
+                      openAttention(terminalId);
+                    }}
+                  />
+                )}
               </div>
             )}
           </PopoverContent>

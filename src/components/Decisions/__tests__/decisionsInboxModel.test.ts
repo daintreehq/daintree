@@ -8,11 +8,13 @@ import type {
 } from "@shared/types/decisionsQuestion";
 import {
   agentName,
+  connectionNotice,
   groupOf,
   inboxGroups,
   isAttention,
   originText,
   referenceKey,
+  resolveSelection,
   sameReference,
   standingText,
   worktreeName,
@@ -192,5 +194,41 @@ describe("decisionsInboxModel", () => {
     expect(sameReference(a, { ...a })).toBe(true);
     expect(sameReference(a, { ...a, projectId: "p2" })).toBe(false);
     expect(referenceKey(a)).not.toBe(referenceKey({ ...a, terminalId: "t2" }));
+  });
+
+  it("keeps the chosen question, else the one now in its place, else the opener's, else the first", () => {
+    const ordered = [
+      item("q1", OPEN),
+      item("q2", OPEN, {
+        reference: { hostId: "h1", projectId: "p1", terminalId: "t2", questionId: "q2" },
+      }),
+      item("q3", OPEN),
+    ];
+    const keyOf = (index: number) => referenceKey(ordered[index]!.reference);
+    expect(resolveSelection([], null, null)).toBeNull();
+    expect(resolveSelection(ordered, null, null)).toBe(ordered[0]);
+    expect(resolveSelection(ordered, null, "t2")).toBe(ordered[1]);
+    expect(resolveSelection(ordered, null, "gone")).toBe(ordered[0]);
+    expect(resolveSelection(ordered, { key: keyOf(2), index: 0 }, "t2")).toBe(ordered[2]);
+    // Its row went: the one now at its place, or the last when it was past the end.
+    expect(resolveSelection(ordered, { key: "gone", index: 1 }, null)).toBe(ordered[1]);
+    expect(resolveSelection(ordered, { key: "gone", index: 9 }, null)).toBe(ordered[2]);
+  });
+
+  it("says nothing about the relay while connected or before main has said", () => {
+    expect(connectionNotice(null)).toBeNull();
+    expect(connectionNotice({ state: "connected", relayOrigin: "https://r.example" })).toBeNull();
+    expect(connectionNotice({ state: "off" })).toBeNull();
+  });
+
+  it("tells no relay set up, a revoked computer and a dropped connection apart", () => {
+    const none = connectionNotice({ state: "not-connected" });
+    const revoked = connectionNotice({ state: "revoked", relayOrigin: "https://r.example" });
+    const dropped = connectionNotice({ state: "reconnecting", relayOrigin: "https://r.example" });
+    const connecting = connectionNotice({ state: "connecting", relayOrigin: "https://r.example" });
+    expect(none).not.toBeNull();
+    expect(revoked?.severity).toBe("warning");
+    expect(dropped).toEqual(connecting);
+    expect(new Set([none?.text, revoked?.text, dropped?.text]).size).toBe(3);
   });
 });

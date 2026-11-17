@@ -16,6 +16,7 @@ import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGa
 import { ProjectDialogHost } from "./ProjectDialogHost";
 import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
 import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
+import { DecisionsInboxHost } from "@/components/Decisions/DecisionsInboxHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -982,6 +983,8 @@ export function AppLayout({
           notification's click opens them wherever it lands (#17232, #17235). */}
       {isHydrated && <DecisionQuestionHost followsOpenRequests />}
       {isHydrated && <DecisionsAttentionHost followsOpenRequests />}
+      {/* Every question on this computer, from any window, whatever project it shows (#17231). */}
+      {isHydrated && <DecisionsInboxHost />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"
