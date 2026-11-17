@@ -22,6 +22,22 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function runOf(id: string, scheduleId: string, createdAt: number): ScheduledRun {
+  return {
+    id,
+    scheduleId,
+    projectId: "p1",
+    origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+    createdAt,
+    terminalId: null,
+    terminalSpawnedAt: null,
+    settlement: { state: "open" },
+    process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+    pane: { state: "none" },
+    resume: null,
+  };
+}
+
 async function failedOnce() {
   client.listLatestRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
   const view = renderHook(() => useLastRuns("p1"));
@@ -36,12 +52,11 @@ beforeEach(() => {
 
 describe("useLastRuns — each schedule's last run (#17465)", () => {
   it("keeps the newest run per schedule when an older host sends the whole history", async () => {
-    const runs = [
-      { id: "a-new", scheduleId: "a" },
-      { id: "b", scheduleId: "b" },
-      { id: "a-old", scheduleId: "a" },
-    ] as ScheduledRun[];
-    client.listLatestRuns.mockResolvedValueOnce(runs);
+    client.listLatestRuns.mockResolvedValueOnce([
+      runOf("a-new", "a", 3_000),
+      runOf("b", "b", 2_000),
+      runOf("a-old", "a", 1_000),
+    ]);
     const { result } = renderHook(() => useLastRuns("p1"));
     await waitFor(() => expect(result.current.lastRuns.status).toBe("ready"));
 

@@ -60,6 +60,40 @@ function run(id: string, overrides: Partial<ScheduledRun> = {}): ScheduledRun {
   };
 }
 
+/** The ids of the rows whose `record` reached JS, however the statement was stepped. */
+function watchRecordReads(): string[] {
+  const ids: string[] = [];
+  const seen = (row: unknown) => {
+    if (typeof row === "object" && row !== null && "id" in row) ids.push(String(row.id));
+  };
+  const prepare = sqlite.prepare.bind(sqlite);
+  vi.spyOn(sqlite, "prepare").mockImplementation((source: string) => {
+    const statement = prepare(source);
+    if (!/\brecord\b/.test(source)) return statement;
+    const all = statement.all.bind(statement);
+    const get = statement.get.bind(statement);
+    const iterate = statement.iterate.bind(statement);
+    statement.all = (...params) => {
+      const rows = all(...params);
+      rows.forEach(seen);
+      return rows;
+    };
+    statement.get = (...params) => {
+      const row = get(...params);
+      seen(row);
+      return row;
+    };
+    statement.iterate = function* (...params) {
+      for (const row of iterate(...params)) {
+        seen(row);
+        yield row;
+      }
+    };
+    return statement;
+  });
+  return ids;
+}
+
 function scheduled(id: string, dueAt: number): ScheduledRun {
   return run(id, {
     origin: {
@@ -177,12 +211,14 @@ describe("ScheduledRunStore", () => {
     store.insert(run("older", { createdAt: T0 - 1 }));
     store.insert(run("first", { createdAt: T0 }));
     store.insert(run("second", { createdAt: T0 }));
+    store.insert(run("registered-late", { createdAt: T0 - 2 }));
     store.insert(run("other-schedule", { createdAt: T0, scheduleId: "schedule-2" }));
 
     expect(store.listBySchedule("schedule-1").map((r) => r.id)).toEqual([
       "second",
       "first",
       "older",
+      "registered-late",
     ]);
   });
 
@@ -191,6 +227,7 @@ describe("ScheduledRunStore", () => {
     store.insert(run("older", { createdAt: T0 - 1 }));
     store.insert(run("first", { createdAt: T0 }));
     store.insert(run("second", { createdAt: T0 }));
+    store.insert(run("registered-late", { createdAt: T0 - 2 }));
     store.insert(run("tied-schedule", { createdAt: T0, scheduleId: "schedule-2" }));
     store.insert(run("stale-schedule", { createdAt: T0 - 5, scheduleId: "schedule-3" }));
     store.insert(run("elsewhere", { createdAt: T0 + 1, projectId: "project-2" }));
@@ -204,7 +241,7 @@ describe("ScheduledRunStore", () => {
     expect(store.latestByProject("project-3")).toEqual([]);
   });
 
-  it("falls back past a newest row that no longer parses, and never decodes older history", () => {
+  it("falls back past a newest row that no longer parses, and never reads older history", () => {
     const warn = vi.fn();
     const store = new ScheduledRunStore(sqlite, warn);
     const insertRaw = sqlite.prepare(
@@ -215,8 +252,11 @@ describe("ScheduledRunStore", () => {
     insertRaw.run("buried", "schedule-2", T0 - 10, '{"id":"buried"}');
     store.insert(run("head", { createdAt: T0, scheduleId: "schedule-2" }));
     insertRaw.run("only-invalid", "schedule-3", T0, '{"id":"only-invalid"}');
+    store.insert(run("older-valid", { createdAt: T0 - 3 }));
 
+    const reads = watchRecordReads();
     expect(store.latestByProject("project-1").map((r) => r.id)).toEqual(["head", "fallback"]);
+    expect(reads.sort()).toEqual(["broken-head", "fallback", "head", "only-invalid"]);
     const skipped = warn.mock.calls.map(([message]) => String(message).split(" ").at(-1)).sort();
     expect(skipped).toEqual(["broken-head", "only-invalid"]);
   });
