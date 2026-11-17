@@ -1935,14 +1935,14 @@ describe("Decisions entry", () => {
       loads.closing = new Promise<void>((resolve) => (closed = resolve));
       const stopping = service.stop();
       const enabling = setDecisionsEnabled(true);
-      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
-
       let answered = false;
-      const off = setDecisionsHoldPhonePushes(false).then((status) => {
-        answered = true;
-        return status;
-      });
+      let off: ReturnType<typeof setDecisionsHoldPhonePushes> | null = null;
       try {
+        await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+        off = setDecisionsHoldPhonePushes(false).then((status) => {
+          answered = true;
+          return status;
+        });
         await vi.waitFor(() =>
           expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
         );
@@ -1951,7 +1951,7 @@ describe("Decisions entry", () => {
         closed();
       }
       const [, , status] = await Promise.all([stopping, enabling, off]);
-      expect(status.holdPhonePushes).toBe(false);
+      expect(status?.holdPhonePushes).toBe(false);
     });
 
     it("lets a turn off stand over a turn on queued before it", async () => {
