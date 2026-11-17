@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -150,22 +150,18 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     const link = path.join(wrapperDir, "daintree");
     fs.symlinkSync(script, link);
 
-    const run = (pathDirs: string[]) => {
-      try {
-        execFileSync("bash", [link, projectDir], {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            APPDIR: "",
-            PATH: [...pathDirs, process.env.PATH ?? ""].join(path.delimiter),
-          },
-        });
-        return { code: 0, stderr: "" };
-      } catch (error) {
-        const failed = error as { status: number; stderr: string };
-        return { code: failed.status, stderr: failed.stderr };
-      }
+    const run = (pathDirs: string[], invoke = link) => {
+      // An empty APPDIR still makes the script try /daintree; BASH_ENV can seed
+      // bash's command hash and change what the lookup returns.
+      const env = { ...process.env, APPDIR: path.join(root, "no-appdir") };
+      delete env.BASH_ENV;
+      env.PATH = [...pathDirs, process.env.PATH ?? ""].join(path.delimiter);
+      const { status, stderr } = spawnSync("bash", [invoke, projectDir], {
+        encoding: "utf-8",
+        env,
+        timeout: 10_000,
+      });
+      return { code: status, stderr };
     };
     // The recorder appends its own path, so a second launch would show as a second line.
     const read = () => ({
@@ -173,7 +169,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
         ? fs.readFileSync(launches, "utf-8").split("\n").filter(Boolean)
         : [],
       argv: fs.existsSync(argvFile)
-        ? fs.readFileSync(argvFile, "utf-8").split("\0").filter(Boolean)
+        ? fs.readFileSync(argvFile, "utf-8").slice(0, -1).split("\0")
         : [],
     });
     const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
@@ -190,7 +186,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
       await settle();
       return read();
     };
-    return { wrapperDir, binDir, app, run, launched, idle };
+    return { script, link, wrapperDir, binDir, app, run, launched, idle };
   }
 
   // The fallback would reach a real install through the fixed package paths or
@@ -204,7 +200,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
   ].some((candidate) => {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      return true;
+      return fs.statSync(candidate).isFile();
     } catch {
       return false;
     }
@@ -226,19 +222,31 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
 
       it("keeps looking past the wrapper for another match of the same name", async () => {
         const layout = pathFallbackLayout();
-        const binary = layout.app(layout.binDir("app-bin"), "daintree");
-        const result = layout.run([layout.wrapperDir, path.dirname(binary)]);
+        const early = layout.app(layout.binDir("early-bin"), "daintree-app");
+        const later = layout.app(layout.binDir("later-bin"), "daintree");
+        const result = layout.run([layout.wrapperDir, path.dirname(early), path.dirname(later)]);
         expect(result.code).toBe(0);
-        expect((await layout.launched()).binaries).toEqual([binary]);
+        // daintree is tried before daintree-app, wherever each sits on PATH.
+        expect((await layout.launched()).binaries).toEqual([later]);
       });
 
       it("fails with an actionable message when the wrapper is the only match", async () => {
         const layout = pathFallbackLayout();
         const result = layout.run([layout.wrapperDir]);
         expect(result.code).toBe(1);
-        expect(result.stderr).toContain("only match on PATH is this CLI wrapper");
-        expect(result.stderr).toContain("daintree-app");
+        expect(result.stderr).toContain(`CLI wrapper (${layout.link})`);
+        expect(result.stderr).toContain("put its daintree or daintree-app executable on PATH");
+        // A relaunched wrapper would complain about its --cli-path= argument.
+        expect(result.stderr).not.toContain("not a directory");
         expect((await layout.idle()).binaries).toEqual([]);
+      });
+
+      it("reports a plain miss when the wrapper is not on PATH", () => {
+        const layout = pathFallbackLayout();
+        const result = layout.run([], layout.script);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain("Daintree executable not found.");
+        expect(result.stderr).not.toContain("only match on PATH");
       });
     }
   );
