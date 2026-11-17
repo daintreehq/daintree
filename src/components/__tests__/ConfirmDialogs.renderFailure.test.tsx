@@ -161,7 +161,7 @@ afterEach(() => {
   __resetPluginCapabilityConfirmStoreForTesting();
   __resetPluginPromptStoreForTesting();
   usePanelLimitStore.getState().resolveConfirmation(false);
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
   useGitPushConfirmStore.getState().resolveConfirmation(null);
   useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
   const forcePush = useGitForcePushStore.getState().pendingConfirm;
@@ -399,7 +399,7 @@ describe("single-slot dialogs answer a request whose content throws on its first
       name: "pull and rebase",
       Dialog: GitPullRebaseConfirmDialog,
       request: () => useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo"),
-      declined: false,
+      declined: { confirmed: false, review: null },
     },
     {
       name: "push",

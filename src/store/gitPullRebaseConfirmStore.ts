@@ -81,5 +81,5 @@ export const useGitPullRebaseConfirmStore = create<GitPullRebaseConfirmState>()(
 export function declineFailedGitPullRebaseConfirmation(requestSeq: number): void {
   const state = useGitPullRebaseConfirmStore.getState();
   if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
-  state.resolveConfirmation(false);
+  state.resolveConfirmation(null);
 }

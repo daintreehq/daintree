@@ -181,7 +181,7 @@ describe.each([
     request: () => useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo"),
     seq: () => useGitPullRebaseConfirmStore.getState().requestSeq,
     decline: declineFailedGitPullRebaseConfirmation,
-    declined: false,
+    declined: { confirmed: false, review: null },
   },
   {
     name: "file mutation",

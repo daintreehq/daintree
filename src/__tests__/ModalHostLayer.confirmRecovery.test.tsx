@@ -413,7 +413,7 @@ const HOSTS: Record<string, Host> = {
   GitPullRebaseConfirmDialog: {
     chunk: "LazyGitPullRebaseConfirmDialog",
     request: () => useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo"),
-    declined: false,
+    declined: { confirmed: false, review: null },
   },
   FileMutationConfirmDialog: {
     chunk: "LazyFileMutationConfirmDialog",
@@ -493,7 +493,7 @@ afterEach(async () => {
   // way would leave these waiting for the next one.
   usePanelLimitStore.getState().resolveConfirmation(false);
   useGitPushConfirmStore.getState().resolveConfirmation(null);
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
   useFileMutationConfirmStore.getState().resolveConfirmation(null);
   useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
   const forcePush = useGitForcePushStore.getState().pendingConfirm;
