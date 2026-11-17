@@ -77,14 +77,21 @@ export class VoiceFileLinkResolver {
     }
 
     const tokens = this.extractTokens(description);
-    const topScore = this.computeScore(description, candidates[0]);
-    if (
-      topScore !== null &&
-      topScore >= NL_CONFIDENCE_THRESHOLD &&
-      tokens.length >= MIN_MATCHING_TOKENS
-    ) {
-      logDebug(`${P} High-confidence match`, { score: Number(topScore.toFixed(2)) });
-      return candidates[0];
+    if (tokens.length >= MIN_MATCHING_TOKENS) {
+      const best = this.strongestMatches(tokens, candidates);
+      if (best && best.score >= NL_CONFIDENCE_THRESHOLD) {
+        // Same-named files in different directories score alike: with nothing
+        // in the description to tell them apart, the first one the search
+        // happened to list is a guess, so the reranker gets to decline instead.
+        if (best.paths.length === 1) {
+          logDebug(`${P} High-confidence match`, { score: Number(best.score.toFixed(2)) });
+          return best.paths[0];
+        }
+        logDebug(`${P} Equally strong matches`, {
+          score: Number(best.score.toFixed(2)),
+          tied: best.paths.length,
+        });
+      }
     }
 
     return this.aiRerank(
@@ -126,14 +133,8 @@ export class VoiceFileLinkResolver {
       );
   }
 
-  private computeScore(description: string, file: string): number | null {
-    const tokens = this.extractTokens(description);
-    if (tokens.length === 0) return null;
-
-    const lastSlash = file.lastIndexOf("/");
-    const basename = file.slice(lastSlash + 1);
-    const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
-    const words = nameWithoutExt
+  private splitWords(name: string): string[] {
+    return name
       .replace(/([a-z])([A-Z])/g, "$1 $2")
       .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
       .replace(/([a-zA-Z])([0-9])/g, "$1 $2")
@@ -141,21 +142,67 @@ export class VoiceFileLinkResolver {
       .split(/[\s_\-./]+/)
       .filter(Boolean)
       .map((w) => w.toLowerCase());
+  }
 
-    let matched = 0;
+  private wordMatches(word: string, token: string): boolean {
+    return (
+      word === token ||
+      (token.length >= 3 && word.length >= 3 && (word.startsWith(token) || token.startsWith(word)))
+    );
+  }
+
+  /**
+   * How well `file` fits the spoken tokens. The file's own name has to match at
+   * least one, so a directory alone never selects a file. A token the name
+   * doesn't carry still counts when a directory does ("app user profile" names
+   * `app/UserProfile.tsx` over `lib/UserProfile.tsx`). `extraWords` is how much of
+   * the name the description left unsaid, which separates `UserProfile.tsx` from
+   * its `UserProfile.test.tsx` sibling.
+   */
+  private scorePath(
+    tokens: readonly string[],
+    file: string
+  ): { score: number; extraWords: number } | null {
+    const lastSlash = file.lastIndexOf("/");
+    const nameWords = this.splitWords(file.slice(lastSlash + 1).replace(/\.[^.]+$/, ""));
+    const dirWords =
+      lastSlash > 0 ? this.splitWords(file.slice(0, lastSlash).replace(/\//g, " ")) : [];
+
+    let nameMatched = 0;
+    let dirMatched = 0;
     for (const token of tokens) {
+      if (nameWords.some((w) => this.wordMatches(w, token))) nameMatched++;
+      else if (dirWords.some((w) => this.wordMatches(w, token))) dirMatched++;
+    }
+    if (nameMatched === 0) return null;
+
+    const sayable = nameWords.filter((w) => tokens.some((t) => this.wordMatches(w, t))).length;
+    return {
+      score: (nameMatched + dirMatched) / tokens.length,
+      extraWords: nameWords.length - sayable,
+    };
+  }
+
+  /** Every candidate that fits the tokens best, so a tie is seen rather than broken by list order. */
+  private strongestMatches(
+    tokens: readonly string[],
+    candidates: readonly string[]
+  ): { score: number; paths: string[] } | null {
+    let best: { score: number; extraWords: number; paths: Set<string> } | null = null;
+    for (const file of candidates) {
+      const fit = this.scorePath(tokens, file);
+      if (!fit) continue;
       if (
-        words.some(
-          (w) =>
-            w === token ||
-            (token.length >= 3 && w.length >= 3 && (w.startsWith(token) || token.startsWith(w)))
-        )
+        !best ||
+        fit.score > best.score ||
+        (fit.score === best.score && fit.extraWords < best.extraWords)
       ) {
-        matched++;
+        best = { ...fit, paths: new Set([file]) };
+      } else if (fit.score === best.score && fit.extraWords === best.extraWords) {
+        best.paths.add(file);
       }
     }
-
-    return matched === 0 ? null : matched / tokens.length;
+    return best && { score: best.score, paths: [...best.paths] };
   }
 
   private async aiRerank(
@@ -184,7 +231,7 @@ export class VoiceFileLinkResolver {
         body: JSON.stringify({
           model: VOICE_DICTATION_AI_MODEL,
           instructions:
-            "Given a natural language description and a list of file paths from a project, return the path that best matches the description. If no path is a good match, return null.",
+            "Given a natural language description and a list of file paths from a project, return the path that best matches the description. If no path is a good match, return null. If several paths match equally well and the description does not say which one is meant, return null rather than guessing.",
           input: `Description: ${description}\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
           prompt_cache_key: AI_RERANK_CACHE_PREFIX,
           service_tier: "auto",

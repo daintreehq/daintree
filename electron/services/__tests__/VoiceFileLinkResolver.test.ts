@@ -247,6 +247,165 @@ describe("VoiceFileLinkResolver", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  describe("same-named files in different directories", () => {
+    const TIED = ["app/UserProfile.tsx", "lib/UserProfile.tsx"];
+    const rerankReply = (matched: string | null) =>
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ output_text: JSON.stringify({ matched_file: matched }) }),
+      } as unknown as Response);
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("does not insert the first of two equally strong matches", async () => {
+      searchNaturalLanguageMock.mockResolvedValue(TIED);
+      const fetchMock = rerankReply(null);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.resolve({ ...BASE_PAYLOAD, description: "user profile" });
+
+      expect(result).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the choice to the reranker, which is told to decline a tie", async () => {
+      searchNaturalLanguageMock.mockResolvedValue(TIED);
+      const fetchMock = rerankReply("lib/UserProfile.tsx");
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.resolve({ ...BASE_PAYLOAD, description: "user profile" });
+
+      expect(result).toBe("lib/UserProfile.tsx");
+      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+        instructions: string;
+        input: string;
+      };
+      expect(body.instructions).toContain("equally well");
+      expect(body.input).toContain("app/UserProfile.tsx");
+      expect(body.input).toContain("lib/UserProfile.tsx");
+    });
+
+    it("sees the tie wherever the tied files sit in the list", async () => {
+      const fetchMock = rerankReply(null);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "user profile",
+        apiKey: "sk-test",
+        candidates: ["src/Other.tsx", "lib/UserProfile.tsx", "app/UserProfile.tsx"],
+      });
+
+      expect(result).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("takes the file a directory in the description singles out, without asking the reranker", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      await expect(
+        resolver.pick({
+          description: "app user profile",
+          apiKey: "sk-test",
+          candidates: TIED,
+        })
+      ).resolves.toBe("app/UserProfile.tsx");
+      await expect(
+        resolver.pick({
+          description: "user profile in lib",
+          apiKey: "sk-test",
+          candidates: TIED,
+        })
+      ).resolves.toBe("lib/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("takes the singled-out file even when the search listed it last", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "lib user profile",
+        apiKey: "sk-test",
+        candidates: TIED,
+      });
+
+      expect(result).toBe("lib/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("still sees a tie when the directory words fit both files alike", async () => {
+      const fetchMock = rerankReply(null);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "src user profile",
+        apiKey: "sk-test",
+        candidates: ["src/app/UserProfile.tsx", "src/lib/UserProfile.tsx"],
+      });
+
+      expect(result).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("never selects a file on its directory alone", async () => {
+      const fetchMock = rerankReply(null);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "user profile",
+        apiKey: "sk-test",
+        candidates: ["user/profile/index.ts"],
+      });
+
+      expect(result).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps preferring a component over its test and stories siblings", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "user profile",
+        apiKey: "sk-test",
+        candidates: [
+          "src/UserProfile.test.tsx",
+          "src/UserProfile.stories.tsx",
+          "src/UserProfile.tsx",
+        ],
+      });
+
+      expect(result).toBe("src/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("counts the same path listed twice as one match", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        description: "user profile",
+        apiKey: "sk-test",
+        candidates: ["app/UserProfile.tsx", "app/UserProfile.tsx"],
+      });
+
+      expect(result).toBe("app/UserProfile.tsx");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("choosing among candidates a search elsewhere found", () => {
     const { cwd: _cwd, ...request } = BASE_PAYLOAD;
 
