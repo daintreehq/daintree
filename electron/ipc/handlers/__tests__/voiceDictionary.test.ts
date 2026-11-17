@@ -180,8 +180,10 @@ describe("voiceDictionary operations", () => {
 
   describe("an imported paste", () => {
     it("adds its terms in order in one write, extending a term already there", async () => {
-      await op("add", { term: "Zustand" });
-      vi.mocked(store.set).mockClear();
+      disk.state.data.voiceInput = {
+        ...stored(),
+        dictionary: [{ term: "Zustand", heardAs: [], source: "manual", addedAt: 1 }],
+      };
 
       const added = await op("importTerms", {
         entries: [
@@ -192,7 +194,7 @@ describe("voiceDictionary operations", () => {
       });
 
       expect(added.dictionary).toEqual([
-        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: NOW },
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 },
         { term: "Daintree", heardAs: [], source: "imported", addedAt: NOW },
         { term: "Vite", heardAs: ["veet"], source: "imported", addedAt: NOW },
       ]);
@@ -223,9 +225,11 @@ describe("voiceDictionary operations", () => {
     });
 
     it("writes nothing when one term is refused, or when every term is already there", async () => {
+      vi.mocked(store.set).mockClear();
       await expect(
         op("importTerms", { entries: [{ term: "Daintree" }, { term: "   " }] })
       ).rejects.toThrow();
+      expect(store.set).not.toHaveBeenCalled();
       expect(storedTerms()).toEqual([]);
 
       await op("add", { term: "Daintree" });
@@ -240,25 +244,28 @@ describe("voiceDictionary operations", () => {
     it("holds a paste to the import, heard-as and phrase length caps", async () => {
       const terms = (count: number) => Array.from({ length: count }, (_, i) => ({ term: `t${i}` }));
       const heard = (count: number) => Array.from({ length: count }, (_, i) => `heard ${i}`);
+      // Trimmed, this fits a phrase, so only the payload bound refuses it: a paste arrives trimmed.
+      const padded = `${"x".repeat(MAX_DICTIONARY_TERM_LENGTH)} `;
       const refused = [
         { entries: [] },
         { entries: terms(MAX_DICTIONARY_IMPORT_TERMS + 1) },
         { entries: [{ term: "Daintree", heardAs: heard(MAX_DICTIONARY_HEARD_AS + 1) }] },
-        { entries: [{ term: "x".repeat(MAX_DICTIONARY_TERM_LENGTH + 1) }] },
-        { entries: [{ term: "Daintree", heardAs: ["x".repeat(MAX_DICTIONARY_TERM_LENGTH + 1)] }] },
+        { entries: [{ term: padded }] },
+        { entries: [{ term: "Daintree", heardAs: [padded] }] },
       ];
       for (const payload of refused) {
         await expect(op("importTerms", payload)).rejects.toThrow();
       }
       expect(storedTerms()).toEqual([]);
 
-      await op("importTerms", {
+      const added = await op("importTerms", {
         entries: [
           ...terms(MAX_DICTIONARY_IMPORT_TERMS - 1),
           { term: "x".repeat(MAX_DICTIONARY_TERM_LENGTH), heardAs: heard(MAX_DICTIONARY_HEARD_AS) },
         ],
       });
       expect(storedTerms()).toHaveLength(MAX_DICTIONARY_IMPORT_TERMS);
+      expect(added.dictionary.at(-1)?.heardAs).toEqual(heard(MAX_DICTIONARY_HEARD_AS));
     });
   });
   it("removes and updates single entries without touching the rest", async () => {

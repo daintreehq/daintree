@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceDictionaryPage } from "../VoiceDictionaryPage";
 import { MAX_DICTIONARY_IMPORT_TERMS } from "../voiceDictionaryImport";
 import {
+  MAX_DICTIONARY_HEARD_AS,
   acceptSuggestion,
   addDictionaryEntry,
+  importDictionaryEntries,
   removeDictionaryEntry,
   updateDictionaryEntry,
   type AddDictionaryEntryInput,
@@ -64,19 +66,7 @@ function mainLike(
       answer((s, c) => ({ ...s, dictionary: addDictionaryEntry(s.dictionary, input, 1, c) }))
     ),
     importTerms: vi.fn(async ({ entries }: { entries: AddDictionaryEntryInput[] }) =>
-      answer((s, c) => ({
-        ...s,
-        dictionary: entries.reduce(
-          (dictionary, entry) =>
-            addDictionaryEntry(
-              dictionary,
-              { ...entry, source: "imported", heardAsConflict: "skip" },
-              1,
-              c
-            ),
-          s.dictionary
-        ),
-      }))
+      answer((s, c) => ({ ...s, dictionary: importDictionaryEntries(s.dictionary, entries, 1, c) }))
     ),
     update: vi.fn(
       async ({ term: key, changes }: { term: string; changes: DictionaryEntryChanges }) =>
@@ -417,9 +407,9 @@ describe("VoiceDictionaryPage", () => {
       expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
     });
 
-    it("reports a paste's left-out phrases once when the batch is retried", async () => {
+    it("counts a retried paste whose first answer was lost against the page it was pasted on", async () => {
       const main = mainLike([zustand]);
-      // The first paste lands in main but its answer is lost, so the retry runs it again.
+      // The first paste lands in main but its answer is lost, so the retry finds it there.
       const importTerms = vi.fn(async (input: { entries: AddDictionaryEntryInput[] }) => {
         const answer = await main.importTerms(input);
         if (importTerms.mock.calls.length === 1) throw new Error("EROFS");
@@ -432,12 +422,44 @@ describe("VoiceDictionaryPage", () => {
         target: { value: "zoo stand -> Zoostand\nzoo stand -> Zoo\nVite" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+      const retryButton = await screen.findByRole("button", { name: "Retry" });
+      expect(addField().value).toBe("zoo stand -> Zoostand\nzoo stand -> Zoo\nVite");
+      fireEvent.click(retryButton);
 
       await waitFor(() => expect(container.textContent).toContain("Left out"));
+      expect(addField().value).toBe("");
       expect(importTerms).toHaveBeenCalledTimes(2);
       expect(container.textContent).toContain(
         "Added 3 terms. Left out 2 heard-as phrases: “zoo stand” already belongs to Zustand"
+      );
+    });
+
+    it("imports a single term's overflowing heard-as list instead of asking to move a phrase", async () => {
+      const main = mainLike([zustand]);
+      install(main);
+      const { container } = render(<PageWith initial={[zustand]} />);
+      const heard = [
+        "zoo stand",
+        ...Array.from({ length: MAX_DICTIONARY_HEARD_AS }, (_, i) => `zoo ${i}`),
+      ];
+
+      fireEvent.change(addField(), {
+        target: { value: heard.map((phrase) => `${phrase} -> Zoostand`).join("\n") },
+      });
+      fireEvent.keyDown(addField(), { key: "Enter" });
+
+      await waitFor(() =>
+        expect(container.textContent).toContain(
+          `Left out 1 heard-as phrase past the first ${MAX_DICTIONARY_HEARD_AS} for a term`
+        )
+      );
+      expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
+      expect(main.add).not.toHaveBeenCalled();
+      expect(main.importTerms).toHaveBeenCalledWith({
+        entries: [{ term: "Zoostand", heardAs: heard.slice(0, MAX_DICTIONARY_HEARD_AS) }],
+      });
+      expect(container.textContent).toContain(
+        "Left out 1 heard-as phrase: “zoo stand” already belongs to Zustand"
       );
     });
 

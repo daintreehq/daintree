@@ -280,10 +280,21 @@ export function addDictionaryEntry(
   now: number,
   conflicts?: HeardAsConflict[]
 ): VoiceDictionaryEntry[] {
+  return addEntry(entries, heardAsOwners(entries), input, now, conflicts);
+}
+
+/** `addDictionaryEntry`, with the owner of each heard-as phrase in `entries` already read. */
+function addEntry(
+  entries: VoiceDictionaryEntry[],
+  owners: ReadonlyMap<string, string>,
+  input: AddDictionaryEntryInput,
+  now: number,
+  conflicts?: HeardAsConflict[]
+): VoiceDictionaryEntry[] {
   const term = requirePhrase(input.term, "term");
   const requested = (input.heardAs ?? []).map((phrase) => requirePhrase(phrase, "heard-as phrase"));
   const policy = input.heardAsConflict ?? "reject";
-  const claimed = findHeardAsConflicts(heardAsOwners(entries), term, requested);
+  const claimed = findHeardAsConflicts(owners, term, requested);
   if (claimed.length > 0 && policy !== "move") {
     conflicts?.push(...claimed);
     if (policy === "reject") return entries;
@@ -308,6 +319,44 @@ export function addDictionaryEntry(
   const merged = appendHeardAs(existing.heardAs, heardAs);
   if (merged.length === existing.heardAs.length) return base;
   return base.map((entry, i) => (i === index ? { ...existing, heardAs: merged } : entry));
+}
+
+/**
+ * Import a paste's terms in order, each added as `addDictionaryEntry` would
+ * add it after the ones before it: source "imported", and a heard-as phrase
+ * another entry has left out and pushed onto `conflicts`. The phrase owners
+ * are read once for the batch, not once a term, so a large paste stays linear.
+ * Returns the same array when nothing changed.
+ */
+export function importDictionaryEntries(
+  entries: VoiceDictionaryEntry[],
+  inputs: readonly Pick<AddDictionaryEntryInput, "term" | "heardAs">[],
+  now: number,
+  conflicts?: HeardAsConflict[]
+): VoiceDictionaryEntry[] {
+  const owners = heardAsOwners(entries);
+  let current = entries;
+  for (const { term, heardAs } of inputs) {
+    const next = addEntry(
+      current,
+      owners,
+      { term, heardAs, source: "imported", heardAsConflict: "skip" },
+      now,
+      conflicts
+    );
+    if (next === current) continue;
+    current = next;
+    // Skip never stores a phrase another entry fires for, so whatever this
+    // entry gained was unowned, and it is now the first entry firing for it.
+    const key = fold(term.trim());
+    const entry = current.find((candidate) => fold(candidate.term) === key);
+    if (!entry) continue;
+    for (const phrase of entry.heardAs) {
+      const rule = heardAsRule(entry.term, phrase)?.key;
+      if (rule !== undefined && !owners.has(rule)) owners.set(rule, entry.term);
+    }
+  }
+  return current;
 }
 
 /** Remove a term matched ignoring case. Returns the same array when it isn't there. */

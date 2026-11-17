@@ -25,6 +25,7 @@ import {
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
+  importDictionaryEntries,
   mergeSuggestions,
   removeDictionaryEntry,
   updateDictionaryEntry,
@@ -178,28 +179,16 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
           dictionary: addDictionaryEntry(state.dictionary, input, Date.now(), conflicts),
         }))
     ),
-    // A paste in one write. Each term sees the ones before it, as a run of adds
-    // would, and a phrase another term has is left out and reported; a term main
-    // refuses (an empty phrase) leaves the whole paste unwritten.
+    // A paste in one write; a term main refuses (an empty phrase) leaves the
+    // whole paste unwritten.
     importTerms: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.importTerms,
       importSchema,
-      async ({ entries }): Promise<VoiceDictionaryChange> => {
-        const now = Date.now();
-        return changeReporting((state, conflicts) => ({
+      async ({ entries }): Promise<VoiceDictionaryChange> =>
+        changeReporting((state, conflicts) => ({
           ...state,
-          dictionary: entries.reduce(
-            (dictionary, entry) =>
-              addDictionaryEntry(
-                dictionary,
-                { ...entry, source: "imported", heardAsConflict: "skip" },
-                now,
-                conflicts
-              ),
-            state.dictionary
-          ),
-        }));
-      }
+          dictionary: importDictionaryEntries(state.dictionary, entries, Date.now(), conflicts),
+        }))
     ),
     remove: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.remove,

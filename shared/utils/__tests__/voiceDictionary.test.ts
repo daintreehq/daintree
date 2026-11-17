@@ -11,6 +11,7 @@ import {
   addDictionaryEntry,
   dictionaryTerms,
   dismissSuggestion,
+  importDictionaryEntries,
   mergeSuggestions,
   removeDictionaryEntry,
   sanitizeDictionary,
@@ -242,6 +243,64 @@ describe("addDictionaryEntry", () => {
     expect(
       addDictionaryEntry([], { term: "a".repeat(MAX_DICTIONARY_TERM_LENGTH) }, T1)
     ).toHaveLength(1);
+  });
+});
+
+describe("importDictionaryEntries", () => {
+  it("gives what imported adds one after another give, owners and conflicts alike", () => {
+    const stored = [
+      entry("Zustand", { heardAs: ["zoo stand"] }),
+      entry("Line\nbreak", { heardAs: ["tail wind"] }),
+      entry("Vite"),
+    ];
+    const inputs = [
+      { term: "Zoostand", heardAs: ["Zoo Stand", "tail wind", "!!"] },
+      { term: "vite", heardAs: ["veet", "tail  wind"] },
+      { term: "Tailwind", heardAs: ["tail wind", "tailwinds", "!!"] },
+      { term: "zoostand", heardAs: ["zoo-stand", "Tail Wind"] },
+      { term: " Daintree " },
+      { term: "daintree", heardAs: ["dane tree", "zoo-stand"] },
+    ];
+
+    const one: HeardAsConflict[] = [];
+    const sequential = inputs.reduce(
+      (current, input) =>
+        addDictionaryEntry(
+          current,
+          { ...input, source: "imported", heardAsConflict: "skip" },
+          T1,
+          one
+        ),
+      stored
+    );
+    const batch: HeardAsConflict[] = [];
+    const imported = importDictionaryEntries(stored, inputs, T1, batch);
+
+    expect(imported).toEqual(sequential);
+    expect(batch).toEqual(one);
+    // The fixture exercises a stored owner, owners claimed earlier in the paste,
+    // a phrase a term already fires for, and copies that can't be rules.
+    expect(batch).toEqual([
+      { phrase: "Zoo Stand", owner: "Zustand" },
+      { phrase: "tail  wind", owner: "Zoostand" },
+      { phrase: "tail wind", owner: "Zoostand" },
+      { phrase: "zoo-stand", owner: "Zoostand" },
+    ]);
+    expect(imported.map(({ term, heardAs }) => ({ term, heardAs }))).toEqual([
+      { term: "Zustand", heardAs: ["zoo stand"] },
+      { term: "Line\nbreak", heardAs: ["tail wind"] },
+      { term: "Vite", heardAs: ["veet"] },
+      { term: "Zoostand", heardAs: ["tail wind", "!!", "zoo-stand"] },
+      { term: "Tailwind", heardAs: ["tailwinds", "!!"] },
+      { term: "Daintree", heardAs: ["dane tree"] },
+    ]);
+  });
+
+  it("returns the same array when every term is already there", () => {
+    const stored = [entry("Daintree", { heardAs: ["dane tree"] })];
+    expect(
+      importDictionaryEntries(stored, [{ term: "daintree", heardAs: ["Dane Tree"] }], T1)
+    ).toBe(stored);
   });
 });
 

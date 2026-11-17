@@ -1045,20 +1045,32 @@ describe("VoiceInputSettingsTab dictionary", () => {
   });
 
   it("adds pasted lines, comma lists and heard -> Term pairs as one import", async () => {
-    const importTerms = vi
-      .fn()
-      .mockResolvedValue({ dictionary: [], suggestedDictionary: [], conflicts: [] });
+    const importTerms = vi.fn().mockResolvedValue({
+      dictionary: [
+        { ...term("Vite"), source: "imported" },
+        { ...term("Daintree"), source: "imported" },
+        { ...term("Zustand"), heardAs: ["zoo stand", "zu stand"], source: "imported" },
+      ],
+      suggestedDictionary: [],
+      conflicts: [],
+    });
     const add = vi.fn();
     install({}, {}, { add, importTerms });
     render(<VoiceInputSettingsTab />);
     await openPage();
 
-    fireEvent.change(await termField(), {
+    const input = await termField();
+    fireEvent.change(input, {
       target: { value: "Vite, Daintree\nzoo stand -> Zustand\nzu stand -> zustand" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(importTerms).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
+    );
+    expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(input.value).toBe("");
+    expect(importTerms).toHaveBeenCalledTimes(1);
     expect(importTerms).toHaveBeenCalledWith({
       entries: [
         { term: "Vite", heardAs: [] },
