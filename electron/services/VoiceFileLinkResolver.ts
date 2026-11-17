@@ -215,7 +215,9 @@ export class VoiceFileLinkResolver {
       score: (nameMatched + dirMatched) / tokens.length,
       nameMatched,
       extensionMatched: extension !== null && tokens.includes(extension) ? 1 : 0,
-      extraWords: nameWords.filter((w) => !tokens.includes(w)).length,
+      // A word the tokenizer drops (of, the, component) was never evidence either way.
+      extraWords: nameWords.filter((w) => !tokens.includes(w) && this.extractTokens(w).length > 0)
+        .length,
     };
   }
 

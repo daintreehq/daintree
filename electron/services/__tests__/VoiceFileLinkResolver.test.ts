@@ -445,6 +445,19 @@ describe("VoiceFileLinkResolver", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it('does not count a dropped word like "of" as unsaid, so the fuller name isn\'t beaten for it', async () => {
+      const fetchMock = rerankReply("src/TermsOfService.tsx");
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        pick("terms of service component", [
+          "src/services/TermsService.ts",
+          "src/TermsOfService.tsx",
+        ])
+      ).resolves.toBe("src/TermsOfService.tsx");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("takes a rerank pick whose same-named twin fits the description worse", async () => {
       vi.stubGlobal("fetch", rerankReply("lib/Profile.tsx"));
 
