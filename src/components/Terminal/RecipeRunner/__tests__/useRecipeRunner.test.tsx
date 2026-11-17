@@ -7,7 +7,14 @@ import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/pane
 
 const recipes: TerminalRecipe[] = [];
 const duplicateRecipeMock = vi.fn<(id: string) => Promise<void>>();
-const notifyMock = vi.fn();
+interface NotifyPayload {
+  type: string;
+  title: string;
+  message: string;
+  priority?: string;
+  action?: { label: string; onClick: () => void };
+}
+const notifyMock = vi.fn<(payload: NotifyPayload) => void>();
 const runRecipeWithResultsMock =
   vi.fn<
     (
@@ -31,7 +38,12 @@ const recipeStoreState = {
   updateRecipe: vi.fn(),
   deleteRecipe: vi.fn(),
   duplicateRecipe: (id: string) => duplicateRecipeMock(id),
-  getRecipeById: (id: string) => recipes.find((r) => r.id === id),
+  // Follows a shadowed row to the team recipe that overrides it, as the store does.
+  getRecipeById: (id: string) => {
+    const row = recipes.find((r) => r.id === id);
+    if (!row?.shadowedBy) return row;
+    return recipes.find((r) => r.name === row.name && r.scope === "inrepo") ?? row;
+  },
 };
 
 type RecipeStoreSelector<T> = (state: typeof recipeStoreState) => T;
@@ -90,7 +102,7 @@ vi.mock("@/config/agents", () => ({
   },
 }));
 
-vi.mock("@/lib/notify", () => ({ notify: (payload: unknown) => notifyMock(payload) }));
+vi.mock("@/lib/notify", () => ({ notify: (payload: NotifyPayload) => notifyMock(payload) }));
 
 const logErrorMock = vi.fn();
 vi.mock("@/utils/logger", () => ({
@@ -1775,8 +1787,19 @@ describe("useRecipeRunner — duplicating a recipe (#17200)", () => {
 
   it("copies the row it was asked about, not the team recipe that shadows it", () => {
     recipes.push(
-      makeRecipe({ id: "local-1", name: "Shared", projectId: "proj", shadowedBy: "Shared" }),
-      makeRecipe({ id: "inrepo-shared", name: "Shared", scope: "inrepo" })
+      makeRecipe({
+        id: "local-1",
+        name: "Shared",
+        projectId: "proj",
+        shadowedBy: "Shared",
+        terminals: [{ type: "terminal", command: "local-only", env: {} }],
+      }),
+      makeRecipe({
+        id: "inrepo-shared",
+        name: "Shared",
+        scope: "inrepo",
+        terminals: [{ type: "terminal", command: "team-only", env: {} }],
+      })
     );
     const { result } = renderRunner();
 
@@ -1830,19 +1853,16 @@ describe("useRecipeRunner — duplicating a recipe (#17200)", () => {
 
     expect(logErrorMock).toHaveBeenCalledWith("Failed to duplicate recipe", expect.any(Error));
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    const toast = notifyMock.mock.calls[0]![0] as {
-      type: string;
-      title: string;
-      message: string;
-      action: { label: string; onClick: () => void };
-    };
+    const toast = notifyMock.mock.calls[0]![0];
     expect(toast.type).toBe("error");
     expect(toast.title).toBe("Couldn't duplicate recipe");
     expect(toast.message).toContain("disk full");
-    expect(toast.action.label).toBe("Retry");
+    // Passive uiFeedback resolves to inbox-only, which would drop the Retry.
+    expect(toast.priority).toBe("high");
+    expect(toast.action?.label).toBe("Retry");
 
     act(() => {
-      toast.action.onClick();
+      toast.action?.onClick();
     });
     await flush();
 

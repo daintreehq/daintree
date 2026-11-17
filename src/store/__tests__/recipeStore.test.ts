@@ -161,6 +161,7 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 };
 
 import { RECIPE_DISPATCH_EXPIRED_REASON, useRecipeStore } from "../recipeStore";
+import { setCurrentProjectIdAccessor } from "../storeAccessors";
 import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
@@ -4539,6 +4540,16 @@ describe("recipeStore", () => {
   });
 
   describe("duplicateRecipe (#17200)", () => {
+    // The project the view shows, which the recipe store's own id has to agree with.
+    let liveProjectId: string | null = null;
+    beforeEach(() => {
+      liveProjectId = "proj-1";
+      setCurrentProjectIdAccessor(() => liveProjectId);
+    });
+    afterEach(() => {
+      setCurrentProjectIdAccessor(() => null);
+    });
+
     const seed = (opts: {
       global?: TerminalRecipe[];
       project?: TerminalRecipe[];
@@ -4592,6 +4603,27 @@ describe("recipeStore", () => {
         "Team recipe",
         "Team recipe (Copy)",
       ]);
+    });
+
+    it("recognises a team recipe by its scope when its id is opaque", async () => {
+      seed({ inRepo: [team({ id: "recipe-opaque-id" })] });
+
+      await useRecipeStore.getState().duplicateRecipe("recipe-opaque-id");
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock.mock.calls[0]![0]).toBe("proj-1");
+    });
+
+    it("refuses a team recipe's copy once the view has dropped to no project, and writes nothing", async () => {
+      seed({ inRepo: [team()] });
+      liveProjectId = null;
+
+      await expect(useRecipeStore.getState().duplicateRecipe("inrepo-team")).rejects.toThrow(
+        "Open a project"
+      );
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
     });
 
     it("copies the env values the team row's local mirror carries", async () => {

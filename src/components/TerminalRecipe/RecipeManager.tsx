@@ -225,13 +225,13 @@ export function RecipeManager({
       }
       // A row is only listed while it is in the store, so this is a list that
       // changed under the menu; there is nothing to retry.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
         type: "error",
         title: "Couldn't copy recipe",
         message: `"${recipe.name}" is no longer in the list.`,
         priority: "high",
         context: { eventKind: "uiFeedback" },
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       });
     },
     [exportRecipe]

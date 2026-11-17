@@ -4,7 +4,7 @@ import { isAgentRecipeType, isPluginRecipe, promptCarriesWhenDone } from "@share
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
-import { exitProjectHome } from "./storeAccessors";
+import { exitProjectHome, getCurrentProjectId } from "./storeAccessors";
 import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
@@ -694,10 +694,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // passing that straight through would file its copy under Global.
     let projectId = source.projectId;
     if (isInRepoRecipeId(source)) {
-      projectId = get().currentProjectId ?? undefined;
-      if (projectId === undefined) {
+      // This store keeps the id it loaded for after the view drops to no
+      // project (slept from another window), so the live project has to agree.
+      const loadedFor = get().currentProjectId;
+      if (loadedFor === null || getCurrentProjectId() !== loadedFor) {
         throw new Error("Open a project to save a copy of a team recipe");
       }
+      projectId = loadedFor;
     }
     const existingNames = new Set(get().recipes.map((r) => r.name));
     await get().createRecipe(

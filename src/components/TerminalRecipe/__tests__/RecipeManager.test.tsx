@@ -661,10 +661,8 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
     it("copies a team recipe into the open project, not into Global", async () => {
       const updateInRepo = vi
         .spyOn(projectClient, "updateInRepoRecipe")
-        .mockResolvedValue(undefined as never);
-      const addGlobal = vi
-        .spyOn(globalRecipesClient, "addRecipe")
-        .mockResolvedValue(undefined as never);
+        .mockResolvedValue(undefined);
+      const addGlobal = vi.spyOn(globalRecipesClient, "addRecipe").mockResolvedValue(undefined);
       seed({ team: [TEAM_ROW] });
       renderManager();
 
@@ -681,7 +679,7 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
     it("copies the overridden local row, not the team recipe that overrides it", async () => {
       const updateInRepo = vi
         .spyOn(projectClient, "updateInRepoRecipe")
-        .mockResolvedValue(undefined as never);
+        .mockResolvedValue(undefined);
       seed({ project: [LOCAL_ROW], team: [TEAM_ROW] });
       renderManager();
 
@@ -694,7 +692,7 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
       const updateInRepo = vi
         .spyOn(projectClient, "updateInRepoRecipe")
         .mockRejectedValueOnce(new Error("EACCES"))
-        .mockResolvedValue(undefined as never);
+        .mockResolvedValue(undefined);
       seed({ team: [TEAM_ROW] });
       renderManager();
 
@@ -702,7 +700,11 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
       const toast = notifyMock.mock.calls[0]![0];
-      expect(toast).toMatchObject({ type: "error", title: "Couldn't duplicate recipe" });
+      expect(toast).toMatchObject({
+        type: "error",
+        title: "Couldn't duplicate recipe",
+        priority: "high",
+      });
       expect(toast.message).toContain("EACCES");
       expect(toast.action.label).toBe("Retry");
 
@@ -768,7 +770,11 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
       const toast = notifyMock.mock.calls[0]![0];
-      expect(toast).toMatchObject({ type: "error", title: "Couldn't export recipe" });
+      expect(toast).toMatchObject({
+        type: "error",
+        title: "Couldn't export recipe",
+        priority: "high",
+      });
       expect(toast.message).toContain("ENOSPC");
       expect(toast.action.label).toBe("Choose another file");
 
@@ -807,7 +813,11 @@ describe("RecipeManager — copying and exporting team and overridden recipes (#
       expect(updateRecipe).toHaveBeenCalledWith("g1", { showInEmptyState: true });
       expect(notifyMock).toHaveBeenCalledTimes(1);
       const toast = notifyMock.mock.calls[0]![0];
-      expect(toast).toMatchObject({ type: "error", title: "Couldn't update recipe pin" });
+      expect(toast).toMatchObject({
+        type: "error",
+        title: "Couldn't update recipe pin",
+        priority: "high",
+      });
       expect(toast.message).toContain("EBUSY");
       expect(toast.action.label).toBe("Retry");
 
