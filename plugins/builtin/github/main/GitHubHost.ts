@@ -73,6 +73,26 @@ export function apiHostOf(url: string): string | null {
   return null;
 }
 
+/**
+ * Whether `url` is on `host`'s exact API origin: `https://api.github.com` for
+ * github.com, `https://<host>` under `/api` for an Enterprise Server. A port,
+ * another scheme or another hostname never qualifies.
+ */
+export function isApiUrlFor(url: string, host: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const normalized = host.toLowerCase();
+  if (normalized === GITHUB_COM_HOST) return parsed.origin === "https://api.github.com";
+  return (
+    parsed.origin === `https://${normalized}` &&
+    (parsed.pathname === "/api" || parsed.pathname.startsWith("/api/"))
+  );
+}
+
 /** Test-only reset of the mirrored host. */
 export function _resetEnterpriseHostForTests(): void {
   enterpriseHost = null;

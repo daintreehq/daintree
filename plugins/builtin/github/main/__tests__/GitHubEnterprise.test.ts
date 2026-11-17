@@ -7,6 +7,7 @@ const cliMock = vi.hoisted(() => ({
 vi.mock("../GitHubCliCredential.js", () => cliMock);
 
 import { GitHubAuth } from "../GitHubAuth.js";
+import { repoStatsCache } from "../GitHubCaches.js";
 import { _resetEnterpriseHostForTests, getEnterpriseHost } from "../GitHubHost.js";
 import {
   GitHubEnterpriseAccount,
@@ -33,6 +34,14 @@ function makeSettings(initial: Record<string, unknown> = {}) {
 function record(host: string, token: string): string {
   return JSON.stringify({ version: 1, host, token });
 }
+
+async function load(account: GitHubEnterpriseAccount): Promise<void> {
+  await account.loadHost();
+  await account.applySession();
+}
+
+// Valid in shape, so a refusal can't be the token format's doing.
+const CANDIDATE = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
 
 function makeAccount(initial: Record<string, unknown> = {}) {
   const { settings, values } = makeSettings(initial);
@@ -79,12 +88,28 @@ describe("GitHubEnterpriseAccount", () => {
       enterpriseToken: record(GHES, "enterprise-token"),
     });
 
-    await account.load();
+    await load(account);
 
     expect(getEnterpriseHost()).toBe(GHES);
     expect(GitHubAuth.getToken(GHES)).toBe("enterprise-token");
     expect(GitHubAuth.getToken()).toBeUndefined();
     expect(onCredentialsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the saved host and token at startup without dropping cached pages", async () => {
+    repoStatsCache.set("team/app", { issueCount: 3, prCount: 1 });
+    const { account } = makeAccount({
+      enterpriseHost: GHES,
+      enterpriseToken: record(GHES, "enterprise-token"),
+    });
+
+    await load(account);
+    expect(repoStatsCache.get("team/app")).toEqual({ issueCount: 3, prCount: 1 });
+
+    // An actual change of host is a change: what was fetched under the old
+    // routing goes.
+    await account.setHost("ghe.other.example");
+    expect(repoStatsCache.get("team/app")).toBeUndefined();
   });
 
   it("never uses a token saved for another host, and reports it as stale", async () => {
@@ -93,7 +118,7 @@ describe("GitHubEnterpriseAccount", () => {
       enterpriseToken: record("ghe.old.example", "old-token"),
     });
 
-    await account.load();
+    await load(account);
 
     expect(GitHubAuth.getToken("ghe.new.example")).toBeUndefined();
     await expect(account.status()).resolves.toEqual({
@@ -108,7 +133,7 @@ describe("GitHubEnterpriseAccount", () => {
       enterpriseHost: GHES,
       enterpriseToken: record(GHES, "enterprise-token"),
     });
-    await account.load();
+    await load(account);
 
     await expect(account.setHost("ghe.other.example")).resolves.toEqual({
       ok: true,
@@ -116,6 +141,8 @@ describe("GitHubEnterpriseAccount", () => {
     });
 
     expect(values.get("enterpriseHost")).toBe("ghe.other.example");
+    // Removed from memory, not merely hidden because the host is unserved.
+    expect(GitHubAuth.hostHoldingToken("enterprise-token")).toBeNull();
     expect(GitHubAuth.getToken(GHES)).toBeUndefined();
     expect(GitHubAuth.getToken("ghe.other.example")).toBeUndefined();
     // Back to the original host: its saved record applies again.
@@ -125,7 +152,7 @@ describe("GitHubEnterpriseAccount", () => {
 
   it("refuses a host that isn't a bare hostname, and clears it when empty", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES });
-    await account.load();
+    await load(account);
 
     const refused = await account.setHost("https://github.example.com/team");
     expect(refused.ok).toBe(false);
@@ -140,14 +167,14 @@ describe("GitHubEnterpriseAccount", () => {
 
   it("saves a token only after the configured host accepts it, bound to that host", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES });
-    await account.load();
+    await load(account);
     const validate = vi.spyOn(GitHubAuth, "validate").mockResolvedValue({
       valid: true,
       scopes: ["repo"],
       username: "mona",
     });
 
-    await expect(account.saveToken(" enterprise-token ")).resolves.toEqual({
+    await expect(account.saveToken(" enterprise-token ", GHES)).resolves.toEqual({
       valid: true,
       scopes: ["repo"],
       account: "mona",
@@ -165,35 +192,84 @@ describe("GitHubEnterpriseAccount", () => {
 
   it("stores nothing when the server rejects the token", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES });
-    await account.load();
+    await load(account);
     vi.spyOn(GitHubAuth, "validate").mockResolvedValue({
       valid: false,
       scopes: [],
       error: "Invalid or expired token",
     });
 
-    await expect(account.saveToken("bad")).resolves.toMatchObject({ valid: false });
+    await expect(account.saveToken("bad", GHES)).resolves.toMatchObject({ valid: false });
     expect(values.has("enterpriseToken")).toBe(false);
     expect(GitHubAuth.getToken(GHES)).toBeUndefined();
   });
 
   it("stores nothing when the host changed while the token was checked", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES });
-    await account.load();
+    await load(account);
     vi.spyOn(GitHubAuth, "validate").mockImplementation(async () => {
       await account.setHost("ghe.other.example");
       return { valid: true, scopes: [], username: "mona" };
     });
 
-    await expect(account.saveToken("enterprise-token")).resolves.toMatchObject({ valid: false });
+    await expect(account.saveToken("enterprise-token", GHES)).resolves.toMatchObject({
+      valid: false,
+    });
     expect(values.has("enterpriseToken")).toBe(false);
+  });
+
+  it("refuses a token meant for another host before it reaches any server", async () => {
+    const { account } = makeAccount({ enterpriseHost: GHES });
+    await load(account);
+    const validate = vi.spyOn(GitHubAuth, "validate");
+
+    // The form still shows the previous host; another window has moved on.
+    await expect(account.testToken(CANDIDATE, "ghe.old.example")).resolves.toMatchObject({
+      valid: false,
+    });
+    await expect(account.saveToken(CANDIDATE, "ghe.old.example")).resolves.toMatchObject({
+      valid: false,
+    });
+    await expect(account.clearToken("ghe.old.example")).resolves.toEqual({ cleared: false });
+
+    expect(validate).not.toHaveBeenCalled();
+  });
+
+  it("lets a clear that lands during a save's validation win", async () => {
+    const { account, values } = makeAccount({ enterpriseHost: GHES });
+    await load(account);
+    vi.spyOn(GitHubAuth, "validate").mockImplementation(async () => {
+      await account.clearToken(GHES);
+      return { valid: true, scopes: [], username: "mona" };
+    });
+
+    await expect(account.saveToken(CANDIDATE, GHES)).resolves.toMatchObject({ valid: false });
+    expect(values.has("enterpriseToken")).toBe(false);
+    expect(GitHubAuth.getToken(GHES)).toBeUndefined();
+  });
+
+  it("binds a bare token typed into the generated settings form to the configured host", async () => {
+    const { account, values } = makeAccount({ enterpriseHost: GHES, enterpriseToken: CANDIDATE });
+
+    await load(account);
+
+    expect(GitHubAuth.getToken(GHES)).toBe(CANDIDATE);
+    await vi.waitFor(() =>
+      expect(parseEnterpriseTokenRecord(values.get("enterpriseToken"))).toEqual({
+        version: 1,
+        host: GHES,
+        token: CANDIDATE,
+      })
+    );
   });
 
   it("refuses token work until a host is set", async () => {
     const { account } = makeAccount();
-    await account.load();
+    await load(account);
 
-    await expect(account.saveToken("t")).resolves.toMatchObject({ valid: false });
+    const validate = vi.spyOn(GitHubAuth, "validate");
+    await expect(account.saveToken(CANDIDATE, GHES)).resolves.toMatchObject({ valid: false });
+    expect(validate).not.toHaveBeenCalled();
     await expect(account.previewImport()).resolves.toEqual({ ok: false, reason: "no-host" });
   });
 
@@ -202,9 +278,9 @@ describe("GitHubEnterpriseAccount", () => {
       enterpriseHost: GHES,
       enterpriseToken: record(GHES, "enterprise-token"),
     });
-    await account.load();
+    await load(account);
 
-    await account.clearToken();
+    await expect(account.clearToken(GHES)).resolves.toEqual({ cleared: true });
 
     expect(values.has("enterpriseToken")).toBe(false);
     expect(GitHubAuth.getToken(GHES)).toBeUndefined();
@@ -212,7 +288,7 @@ describe("GitHubEnterpriseAccount", () => {
 
   it("imports gh's token for the configured host and refuses one previewed for another", async () => {
     const { account, values } = makeAccount({ enterpriseHost: GHES });
-    await account.load();
+    await load(account);
     cliMock.commitGhCredential.mockResolvedValue({
       credentials: { token: "gh-enterprise-token" },
       validation: { valid: true, scopes: ["repo"], account: "mona" },
@@ -242,10 +318,11 @@ describe("GitHubEnterpriseAccount", () => {
       enterpriseHost: GHES,
       enterpriseToken: record(GHES, "enterprise-token"),
     });
-    await account.load();
+    await load(account);
 
     account.dispose();
 
+    expect(GitHubAuth.hostHoldingToken("enterprise-token")).toBeNull();
     expect(getEnterpriseHost()).toBeNull();
     expect(GitHubAuth.getToken(GHES)).toBeUndefined();
   });

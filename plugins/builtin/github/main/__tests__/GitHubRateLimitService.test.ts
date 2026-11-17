@@ -478,10 +478,27 @@ describe("GitHubRateLimitService", () => {
     });
 
     it("reads a window with no limit as no budget, not an exhausted one (rate limiting off)", () => {
+      // A budget seen before the server turned limits off no longer holds.
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(1000, 5000));
+      expect(gitHubRateLimitService._getBudgetStateForTests()).not.toBeNull();
+
       gitHubRateLimitService.updateFromGraphQL(graphQLData(0, 0));
 
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
       expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
+    });
+
+    it("doesn't block on REST headers that report a zero-sized window", () => {
+      gitHubRateLimitService.update(
+        new Headers({
+          "x-ratelimit-limit": "0",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+        }),
+        200
+      );
+
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
     });
 
     it("ignores missing rateLimit object", () => {

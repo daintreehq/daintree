@@ -28,13 +28,15 @@ function makeRegistrar(
     manifest: { contributes: { forgeProviders: [contribution] } } as unknown as PluginManifest,
   } as unknown as LoadedPlugin;
   const notifyForgeProviderRegistryUpdated = vi.fn();
+  const broadcastProvenanceChanged = vi.fn();
   const registrar = new PluginContributionRegistrar({
+    broadcaster: { broadcastProvenanceChanged },
     getLoadedPlugin: (id: string) => (id === PLUGIN_ID ? plugin : undefined),
     isCurrent: (id: string, candidate: LoadedPlugin) => id === PLUGIN_ID && candidate === plugin,
     getWorkspaceClient: () => ({ notifyForgeProviderRegistryUpdated }),
     readUserSetting,
   } as unknown as PluginContributionRegistrarDeps);
-  return { registrar, notifyForgeProviderRegistryUpdated };
+  return { registrar, notifyForgeProviderRegistryUpdated, broadcastProvenanceChanged };
 }
 
 afterEach(() => {
@@ -44,14 +46,21 @@ afterEach(() => {
 describe("PluginContributionRegistrar — setting-backed forge hostnames (#17324)", () => {
   it("routes the hostname a changed setting now names and wakes workspace hosts", async () => {
     registerForgeProviders(PLUGIN_ID, [CONTRIBUTION]);
-    const { registrar, notifyForgeProviderRegistryUpdated } = makeRegistrar(
-      async () => "github.example.com"
-    );
+    const { registrar, notifyForgeProviderRegistryUpdated, broadcastProvenanceChanged } =
+      makeRegistrar(async () => "github.example.com");
 
     await registrar.refreshForgeSettingMatches(PLUGIN_ID);
 
     expect(listMatchingProviders("https://github.example.com/team/app")).toHaveLength(1);
     expect(notifyForgeProviderRegistryUpdated).toHaveBeenCalledTimes(1);
+    // The renderer re-resolves open projects on this, so a GHES project opened
+    // before its host was set shows its forge without a reload.
+    expect(broadcastProvenanceChanged).toHaveBeenCalledTimes(1);
+
+    // A refresh that changes nothing (another setting changed) tells no one.
+    await registrar.refreshForgeSettingMatches(PLUGIN_ID);
+    expect(notifyForgeProviderRegistryUpdated).toHaveBeenCalledTimes(1);
+    expect(broadcastProvenanceChanged).toHaveBeenCalledTimes(1);
   });
 
   it("lets the newest of two overlapping reads win", async () => {

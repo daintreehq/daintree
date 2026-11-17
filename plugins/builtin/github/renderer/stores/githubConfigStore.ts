@@ -91,8 +91,17 @@ export const useGitHubConfigStore = create<GitHubConfigStore>()((set, get) => ({
     }
   },
 
+  // Callers report what changed for github.com; the Enterprise Server's
+  // presence stays as last read unless they name it.
   updateConfig: (config: GitHubTokenConfig) => {
-    set({ config, error: null });
+    const previous = get().config?.hasEnterpriseToken;
+    set({
+      config:
+        config.hasEnterpriseToken === undefined && previous !== undefined
+          ? { ...config, hasEnterpriseToken: previous }
+          : config,
+      error: null,
+    });
   },
 }));
 

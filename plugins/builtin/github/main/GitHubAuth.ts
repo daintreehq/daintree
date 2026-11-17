@@ -6,6 +6,7 @@ import {
   apiHostOf,
   githubApiBase,
   githubGraphqlBase,
+  isApiUrlFor,
   isServedGitHubHost,
 } from "./GitHubHost.js";
 
@@ -713,12 +714,28 @@ function bearerTokenOf(headers: HeadersInit | undefined): string | null {
  * this never fires in a correct path; it turns a missed call site into an
  * error instead of a credential sent to the wrong server.
  */
-function assertTokenBoundToHost(requestHost: string, init: RequestInit | undefined): void {
-  const token = bearerTokenOf(init?.headers);
-  if (!token) return;
-  const holder = GitHubAuth.hostHoldingToken(token);
-  if (holder !== null && holder !== requestHost) {
-    throw new Error(`Refused to send the ${holder} GitHub token to ${requestHost}`);
+function assertTokenBoundToHost(input: RequestInfo | URL, init: RequestInit | undefined): void {
+  const tokens = [bearerTokenOf(init?.headers)];
+  // A Request carries headers of its own, which fetch sends unless `init` overrides them.
+  if (typeof input === "object" && !(input instanceof URL))
+    tokens.push(bearerTokenOf(input.headers));
+  const url = requestUrlOf(input);
+  for (const token of tokens) {
+    if (!token) continue;
+    const holder = GitHubAuth.hostHoldingToken(token);
+    // A held token goes only to its own host's exact API origin; anything
+    // else, including a lookalike path or port on another server, is refused.
+    if (holder !== null && !isApiUrlFor(url, holder)) {
+      throw new Error(`Refused to send the ${holder} GitHub token to ${safeOrigin(url)}`);
+    }
+  }
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "an unparseable URL";
   }
 }
 
@@ -731,10 +748,12 @@ export async function rateLimitAwareFetch(
   // Anything that isn't recognisably an Enterprise Server API URL is
   // github.com's, as it was before there was more than one host.
   const requestHost = apiHostOf(requestUrlOf(input)) ?? GITHUB_COM_HOST;
-  const rateLimits = rateLimitServiceForHost(requestHost);
-  assertTokenBoundToHost(requestHost, init);
+  assertTokenBoundToHost(input, init);
+  // A detached check that skips the breaker never touches it, so validating a
+  // token for a host that's never saved one allocates nothing for it.
+  const rateLimits = detached && skipPreflight ? null : rateLimitServiceForHost(requestHost);
 
-  if (!skipPreflight) {
+  if (!skipPreflight && rateLimits) {
     const block = rateLimits.shouldBlockRequest();
     if (block.blocked && block.reason && block.resumeAt) {
       throw new GitHubRateLimitError(block.reason, block.resumeAt);
@@ -762,7 +781,7 @@ export async function rateLimitAwareFetch(
     // another request may have completed and registered a block. Without
     // this re-check, queued waiters would dispatch into an active block and
     // amplify the rate-limit violation instead of stopping at the gate.
-    if (!skipPreflight) {
+    if (!skipPreflight && rateLimits) {
       const reblock = rateLimits.shouldBlockRequest();
       if (reblock.blocked && reblock.reason && reblock.resumeAt) {
         throw new GitHubRateLimitError(reblock.reason, reblock.resumeAt);
@@ -770,7 +789,7 @@ export async function rateLimitAwareFetch(
     }
 
     const response = await globalThis.fetch(input, fetchInit);
-    if (detached) return response;
+    if (detached || !rateLimits) return response;
 
     const requestId = response.headers.get("x-github-request-id") ?? undefined;
 

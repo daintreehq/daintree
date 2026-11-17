@@ -51,11 +51,12 @@ function buildCacheKey(
   queryLabel: string
 ): string {
   // The host leads: the same owner/repo on github.com and an Enterprise
-  // Server are different repositories.
+  // Server are different repositories. The host's token version follows, so a
+  // response fetched with a replaced or cleared token is never served again,
+  // even when it lands after the caches were cleared.
+  const scope = `${host.toLowerCase()}#${GitHubAuth.getTokenVersion(host)}`;
   return createHash("sha256")
-    .update(
-      `${host.toLowerCase()}\0${queryLabel}\0${stringifyVariables(variables) ?? ""}\0${query}`
-    )
+    .update(`${scope}\0${queryLabel}\0${stringifyVariables(variables) ?? ""}\0${query}`)
     .digest("hex");
 }
 
@@ -81,7 +82,7 @@ export async function dispatchQuery(
     if (data && typeof data === "object") {
       rateLimits.updateFromGraphQL(data as Record<string, unknown>, queryLabel);
     }
-    throw new Error(parseGitHubError(error), { cause: error });
+    throw new Error(parseGitHubError(error, host), { cause: error });
   }
 }
 

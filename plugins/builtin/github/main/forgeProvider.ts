@@ -260,7 +260,13 @@ const projectHealthCapability: ProjectHealthCapability = {
 };
 
 const avatarCapability: AvatarCapability = {
-  resolveAuthorAvatar: (email: string) => resolveAuthorAvatar(email),
+  // The lookup searches github.com's users by email. An Enterprise Server
+  // author's address must not leave for github.com, and a public account
+  // with that address isn't the server's user anyway.
+  resolveAuthorAvatar: (email: string, repo?: RepoRef) =>
+    repo && repo.host.toLowerCase() !== GITHUB_COM_HOST
+      ? Promise.resolve(null)
+      : resolveAuthorAvatar(email),
   getCacheGeneration: getAuthorAvatarGeneration,
 };
 

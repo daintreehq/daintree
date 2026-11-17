@@ -1,6 +1,10 @@
 import { RequestError } from "@octokit/request-error";
 import { GraphqlResponseError } from "@octokit/graphql";
-import { gitHubRateLimitService, GitHubRateLimitError } from "./GitHubRateLimitService.js";
+import {
+  gitHubRateLimitService,
+  GitHubRateLimitError,
+  rateLimitServiceForHost,
+} from "./GitHubRateLimitService.js";
 import { getLastAuthMetadata, parseSsoKind } from "./GitHubAuth.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
@@ -69,7 +73,11 @@ function isNetworkLikeMessage(message: string): boolean {
   );
 }
 
-export function parseGitHubError(error: unknown): string {
+/**
+ * `host` is the GitHub host the failed request went to: its own breaker says
+ * whether a rate limit explains the failure, never another host's.
+ */
+export function parseGitHubError(error: unknown, host: string = "github.com"): string {
   if (error instanceof GitHubRateLimitError) {
     return rateLimitMessage(error.kind, error.resumeAt);
   }
@@ -79,7 +87,7 @@ export function parseGitHubError(error: unknown): string {
   // secondary limit is already reflected here even when the throw site sees
   // only a 403/429. Consulting the service first avoids substring-matching
   // a rate-limit body into the wrong bucket.
-  const blockState = gitHubRateLimitService.shouldBlockRequest();
+  const blockState = rateLimitServiceForHost(host).shouldBlockRequest();
   if (blockState.blocked && blockState.reason && blockState.resumeAt) {
     return rateLimitMessage(blockState.reason, blockState.resumeAt);
   }

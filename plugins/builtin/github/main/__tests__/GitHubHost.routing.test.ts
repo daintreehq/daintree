@@ -144,6 +144,23 @@ describe("GitHub requests by repository host (#17324)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["another server", "https://evil.example/api/v3/user", "github-com-token"],
+    ["a lookalike port", `https://${GHES}:8443/api/v3/user`, "enterprise-token"],
+    ["a non-API path", `https://${GHES}/login`, "enterprise-token"],
+    ["github.com's web origin", "https://github.com/user", "github-com-token"],
+  ])("refuses a held token bound for %s", async (_label, url, token) => {
+    const fetchMock = stubFetch(() => ({}));
+
+    await expect(
+      rateLimitAwareFetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    ).rejects.toThrow(/Refused to send/);
+    await expect(
+      rateLimitAwareFetch(new Request(url, { headers: { Authorization: `Bearer ${token}` } }))
+    ).rejects.toThrow(/Refused to send/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reports a credential when only the Enterprise Server has a token", async () => {
     GitHubAuth.setMemoryToken(null);
 
@@ -182,9 +199,28 @@ describe("GitHub requests by repository host (#17324)", () => {
       undefined
     );
 
-    await expect(githubForgeProvider.getRepoMetadata(GHES_REPO)).rejects.toThrow();
+    await expect(githubForgeProvider.getRepoMetadata(GHES_REPO)).rejects.toThrow(/rate limit/i);
+    expect(seen.some((request) => request.url.startsWith(`https://${GHES}/`))).toBe(false);
     await expect(githubForgeProvider.getRepoMetadata(GITHUB_COM_REPO)).resolves.toMatchObject({
       defaultBranch: "main",
     });
+  });
+
+  it("keeps a github.com rate-limit block off Enterprise Server batch lookups", async () => {
+    stubFetch(() => ({ data: { repository: { pr1: null }, rateLimit: null } }));
+    gitHubRateLimitService.update(new Headers({ "retry-after": "60" }), 429, undefined, undefined);
+
+    await githubForgeProvider.batchLookups!.findPRsByNumbers!(GHES_REPO, [1]);
+
+    expect(seen.map((request) => request.url)).toEqual([`https://${GHES}/api/graphql`]);
+  });
+
+  it("never sends an Enterprise Server author's email to github.com's user search", async () => {
+    const fetchMock = stubFetch(() => ({ items: [] }));
+
+    await expect(
+      githubForgeProvider.avatars!.resolveAuthorAvatar("dev@corp.example", GHES_REPO)
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

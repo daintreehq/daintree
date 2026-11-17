@@ -209,7 +209,9 @@ export class GitHubRateLimitServiceImpl {
     const resetSeconds = parseIntOrNull(resetRaw);
     const resource = headers.get("x-ratelimit-resource") ?? GLOBAL_RESOURCE_KEY;
 
-    if (remaining === 0 && resetSeconds !== null) {
+    // `x-ratelimit-limit: 0` is a server with rate limiting turned off.
+    const limitless = parseIntOrNull(headers.get("x-ratelimit-limit")) === 0;
+    if (remaining === 0 && resetSeconds !== null && !limitless) {
       this.markBlocked(
         "primary",
         resetSeconds * 1000 + PRIMARY_RESET_BUFFER_MS,
@@ -332,8 +334,12 @@ export class GitHubRateLimitServiceImpl {
     const cost = typeof rateLimit.cost === "number" ? rateLimit.cost : null;
     const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
     // A window with no limit describes no budget: an Enterprise Server with
-    // rate limiting turned off. Its `remaining: 0` is not an exhausted quota.
-    if (limit !== null && limit <= 0) return;
+    // rate limiting turned off. Its `remaining: 0` is not an exhausted quota,
+    // and a budget read before the server turned limits off no longer holds.
+    if (limit !== null && limit <= 0) {
+      this.dropBudget();
+      return;
+    }
 
     if (queryLabel && cost !== null) {
       this._logGraphQLCost(queryLabel, cost, remaining, limit);
@@ -542,6 +548,15 @@ export class GitHubRateLimitServiceImpl {
   }
 
   /** Drop any active block and budget state (token change, fresh 2xx, manual reset). */
+  /** Forget the observed GraphQL budget (and its throttle), keeping any block. */
+  private dropBudget(): void {
+    if (this._budgetState === null) return;
+    this._budgetState = null;
+    this._lastNotifiedMultiplier = 1;
+    this.clearBudgetResetTimer();
+    this.notifyListeners();
+  }
+
   clear(): void {
     this.consecutiveSecondaryHits = 0;
     const hadBudget = this._budgetState !== null;

@@ -142,16 +142,20 @@ export function GitHubEnterpriseSection({
   };
 
   const runTokenCheck = async (save: boolean) => {
-    if (!token.trim()) return;
+    if (!token.trim() || !host) return;
     setBusy(save ? "save" : "test");
     setTokenFeedback(null);
     try {
+      // The host shown on the field travels with the token: main refuses it if
+      // another window has pointed the account at a different server since.
       const result = await invoke<EnterpriseTokenResult>(
         save ? ENTERPRISE_CHANNELS.saveToken : ENTERPRISE_CHANNELS.testToken,
-        { token: token.trim() }
+        { token: token.trim(), host }
       );
       if (!result.valid) {
         setTokenFeedback({ kind: "error", message: result.error || "Invalid token" });
+        // A refusal can mean the host moved under this form; show where it points now.
+        void refreshStatus();
         return;
       }
       if (save) {
@@ -177,7 +181,16 @@ export function GitHubEnterpriseSection({
     setConfirmingClear(false);
     setBusy("clear");
     try {
-      await invoke(ENTERPRISE_CHANNELS.clearToken);
+      const result = await invoke<{ cleared: boolean }>(ENTERPRISE_CHANNELS.clearToken, { host });
+      if (!result.cleared) {
+        setTokenFeedback({
+          kind: "error",
+          message:
+            "The Enterprise Server host changed in another window. Check it, then try again.",
+        });
+        await refreshStatus();
+        return;
+      }
       setTokenFeedback(null);
       await refreshStatus();
       afterTokenChange();

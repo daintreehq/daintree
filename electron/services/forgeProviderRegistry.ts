@@ -182,17 +182,18 @@ function withSettingMatch(
  * value (`null` clears it), after the setting it names changed. A no-op for an
  * unregistered plugin, a contribution without the ref, or a value that leaves
  * the effective matches as they were, so a spurious refresh notifies nobody.
+ * Returns whether the effective matches changed.
  */
 export function setForgeProviderSettingMatch(
   pluginId: string,
   contributionId: string,
   hostname: string | null
-): void {
+): boolean {
   const registered = PLUGIN_FORGE_PROVIDERS.get(pluginId);
-  if (!registered) return;
+  if (!registered) return false;
   const index = registered.declared.findIndex((c) => c.id === contributionId);
   const declared = registered.declared[index];
-  if (!declared?.matchesSettingRef) return;
+  if (!declared?.matchesSettingRef) return false;
   const next = withSettingMatch(declared, hostname);
   const current = registered.contributions[index];
   if (
@@ -200,13 +201,14 @@ export function setForgeProviderSettingMatch(
     current.matches.length === next.matches.length &&
     current.matches.every((pattern, i) => pattern === next.matches[i])
   ) {
-    return;
+    return false;
   }
   const contributions = [...registered.contributions];
   contributions[index] = next;
   PLUGIN_FORGE_PROVIDERS.set(pluginId, { ...registered, contributions });
   notifyRegistryChanged();
   notifyMatchersChanged();
+  return true;
 }
 
 function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribution {

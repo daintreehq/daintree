@@ -66,6 +66,14 @@ function isUnavailable(value: object): value is CredentialImportUnavailable {
   return (value as Partial<CredentialImportUnavailable>).unavailable === true;
 }
 
+// The shapes gh and GitHub hand out; anything else typed as a bare token is ignored.
+const TOKEN_SHAPE = /^[A-Za-z0-9_]{20,255}$/;
+
+const HOST_CHANGED_MESSAGE =
+  "The Enterprise Server host changed in another window. Check the host, then try again.";
+const CREDENTIAL_CHANGED_MESSAGE =
+  "The Enterprise Server host or token changed while this token was checked. Try again.";
+
 const INVALID_HOST_MESSAGE =
   "Enter the server's hostname, like github.example.com (https, no path or port). github.com doesn't need one.";
 
@@ -86,22 +94,41 @@ export class GitHubEnterpriseAccount {
   /** The host whose session this account last filled, so a host change can empty it. */
   private sessionHost: string | null = null;
   private applyGeneration = 0;
+  /**
+   * Bumped by every change to which credential is saved, or for which host.
+   * A save or import checks it after its slow validation, so an earlier one
+   * can't undo a later clear, replacement or host change.
+   */
+  private credentialRevision = 0;
+  /**
+   * True until the startup restore (host, then token) has applied: restoring
+   * what was saved changes nothing, so it keeps every cache, including the
+   * on-disk pages startup reads.
+   */
+  private restoring = true;
   private disposed = false;
 
   constructor(private readonly deps: GitHubEnterpriseDeps) {}
 
-  private async readRecord(): Promise<EnterpriseTokenRecord | null> {
+  private async readRawRecord(): Promise<unknown> {
     try {
-      return parseEnterpriseTokenRecord(await this.deps.settings.get(ENTERPRISE_TOKEN_SETTING));
+      return await this.deps.settings.get(ENTERPRISE_TOKEN_SETTING);
     } catch {
       // An unreadable secret (a locked keychain) leaves the server
       // unauthenticated rather than guessing.
-      return null;
+      return undefined;
     }
   }
 
-  /** Re-read both settings and point the session at them. */
-  async load(): Promise<void> {
+  private async readRecord(): Promise<EnterpriseTokenRecord | null> {
+    return parseEnterpriseTokenRecord(await this.readRawRecord());
+  }
+
+  /**
+   * Mirror the saved host before the provider registers. Restoring it is not a
+   * change: caches stay, including the on-disk pages startup reads.
+   */
+  async loadHost(): Promise<void> {
     let raw: unknown;
     try {
       raw = await this.deps.settings.get(ENTERPRISE_HOST_SETTING);
@@ -109,8 +136,7 @@ export class GitHubEnterpriseAccount {
       raw = undefined;
     }
     if (this.disposed) return;
-    this.onHostSetting(raw);
-    await this.applySession();
+    setEnterpriseHost(raw);
   }
 
   /** Mirror a new `enterpriseHost` value, retiring what belonged to the old host. */
@@ -119,10 +145,15 @@ export class GitHubEnterpriseAccount {
     const previous = getEnterpriseHost();
     setEnterpriseHost(raw);
     if (getEnterpriseHost() === previous) return;
-    // Repo contexts, pages and counts were parsed and fetched against the old
-    // routing; a remote that was unserved may now be served, and vice versa.
-    clearGitHubCaches();
+    this.credentialRevision++;
+    if (!this.restoring) {
+      // Repo contexts, pages and counts were parsed and fetched against the
+      // old routing; a remote that was unserved may now be served.
+      clearGitHubCaches();
+    }
     this.retireSession();
+    // A host checked with Test but never given a token still has a breaker.
+    if (previous !== null) releaseRateLimitServiceForHost(previous);
   }
 
   private retireSession(): void {
@@ -131,20 +162,33 @@ export class GitHubEnterpriseAccount {
     GitHubAuth.setMemoryToken(null, host);
     releaseRateLimitServiceForHost(host);
     this.sessionHost = null;
+    this.deps.onCredentialsChanged();
   }
 
   /** Load the saved token into the configured host's session, if it was saved for that host. */
   async applySession(): Promise<void> {
     const generation = ++this.applyGeneration;
-    const record = await this.readRecord();
+    const raw = await this.readRawRecord();
     if (this.disposed || generation !== this.applyGeneration) return;
+    const restoring = this.restoring;
+    this.restoring = false;
     this.retireSession();
     const host = getEnterpriseHost();
     if (host === null) return;
+    let record = parseEnterpriseTokenRecord(raw);
+    if (!record && typeof raw === "string" && TOKEN_SHAPE.test(raw.trim())) {
+      // A bare token typed into the generated settings form: it was entered
+      // for the host configured now, so bind it to that host before using it.
+      record = { version: 1, host, token: raw.trim() };
+      this.credentialRevision++;
+      void this.deps.settings
+        .set(ENTERPRISE_TOKEN_SETTING, JSON.stringify(record))
+        .catch(() => undefined);
+    }
     const token = record && record.host === host ? record.token : null;
     if ((GitHubAuth.getToken(host) ?? null) !== token) {
       GitHubAuth.setMemoryToken(token, host);
-      clearGitHubCaches();
+      if (!restoring) clearGitHubCaches();
       this.deps.onCredentialsChanged();
     }
     this.sessionHost = token ? host : null;
@@ -155,6 +199,11 @@ export class GitHubEnterpriseAccount {
     const host = getEnterpriseHost();
     const record = await this.readRecord();
     const hasToken = host !== null && record?.host === host;
+    // A hydration that failed (the keychain was locked at startup) gets
+    // another try whenever the account is looked at.
+    if (host !== null && record?.host === host && GitHubAuth.getToken(host) !== record.token) {
+      await this.applySession();
+    }
     const staleTokenHost = record && record.host !== host ? record.host : null;
     const account =
       hasToken && withAccount
@@ -177,17 +226,37 @@ export class GitHubEnterpriseAccount {
     return { ok: true, host };
   }
 
-  async testToken(token: string): Promise<EnterpriseTokenResult> {
+  /**
+   * The host the form showed must still be the configured one before a token
+   * goes anywhere: another window may have changed it since.
+   */
+  private hostMismatch(expectedHost: string | null): EnterpriseTokenResult | null {
     const host = getEnterpriseHost();
     if (host === null) return { valid: false, error: "Set the Enterprise Server host first." };
-    return toTokenResult(await GitHubAuth.validate(token.trim(), { host, detached: true }));
+    if (host !== expectedHost) return { valid: false, error: HOST_CHANGED_MESSAGE };
+    return null;
   }
 
-  private async persist(host: string, token: string, validation: GitHubTokenValidation) {
+  async testToken(token: string, expectedHost: string): Promise<EnterpriseTokenResult> {
+    const mismatch = this.hostMismatch(expectedHost);
+    if (mismatch) return mismatch;
+    return toTokenResult(
+      await GitHubAuth.validate(token.trim(), { host: expectedHost, detached: true })
+    );
+  }
+
+  private async persist(
+    host: string,
+    token: string,
+    validation: GitHubTokenValidation
+  ): Promise<void> {
     const record: EnterpriseTokenRecord = { version: 1, host, token };
+    this.credentialRevision++;
     await this.deps.settings.set(ENTERPRISE_TOKEN_SETTING, JSON.stringify(record));
     await this.applySession();
-    if (validation.username) {
+    // Only the token this validation describes gets its identity; a later
+    // save may already have replaced it.
+    if (validation.username && GitHubAuth.getToken(host) === token) {
       GitHubAuth.setValidatedUserInfo(
         validation.username,
         validation.avatarUrl,
@@ -198,26 +267,28 @@ export class GitHubEnterpriseAccount {
     }
   }
 
-  async saveToken(token: string): Promise<EnterpriseTokenResult> {
-    const host = getEnterpriseHost();
-    if (host === null) return { valid: false, error: "Set the Enterprise Server host first." };
+  async saveToken(token: string, expectedHost: string): Promise<EnterpriseTokenResult> {
+    const mismatch = this.hostMismatch(expectedHost);
+    if (mismatch) return mismatch;
+    const revision = this.credentialRevision;
     const trimmed = token.trim();
-    const validation = await GitHubAuth.validate(trimmed, { host, detached: true });
+    const validation = await GitHubAuth.validate(trimmed, { host: expectedHost, detached: true });
     if (!validation.valid) return toTokenResult(validation);
-    // A token is only ever stored against the host it was checked on.
-    if (getEnterpriseHost() !== host) {
-      return {
-        valid: false,
-        error: "The Enterprise Server host changed while the token was checked.",
-      };
+    // A token is only ever stored against the host it was checked on, and
+    // never over a credential change that landed while it was checked.
+    if (getEnterpriseHost() !== expectedHost || this.credentialRevision !== revision) {
+      return { valid: false, error: CREDENTIAL_CHANGED_MESSAGE };
     }
-    await this.persist(host, trimmed, validation);
+    await this.persist(expectedHost, trimmed, validation);
     return toTokenResult(validation);
   }
 
-  async clearToken(): Promise<void> {
+  async clearToken(expectedHost: string | null): Promise<{ cleared: boolean }> {
+    if (getEnterpriseHost() !== expectedHost) return { cleared: false };
+    this.credentialRevision++;
     await this.deps.settings.unset(ENTERPRISE_TOKEN_SETTING);
     await this.applySession();
+    return { cleared: true };
   }
 
   async previewImport(): Promise<EnterpriseImportPreviewResult> {
@@ -240,12 +311,15 @@ export class GitHubEnterpriseAccount {
   }): Promise<EnterpriseImportCommitResult> {
     const host = getEnterpriseHost();
     if (host === null || host !== expected.host) return { ok: false, reason: "host-changed" };
+    const revision = this.credentialRevision;
     const candidate = await commitGhCredential({ account: expected.account }, undefined, host);
     if (isUnavailable(candidate)) return { ok: false, reason: candidate.reason };
     const { credentials, validation } = candidate;
     const token = credentials.token;
     if (!token) return { ok: false, reason: "invalid-output" };
-    if (getEnterpriseHost() !== host) return { ok: false, reason: "host-changed" };
+    if (getEnterpriseHost() !== host || this.credentialRevision !== revision) {
+      return { ok: false, reason: "host-changed" };
+    }
     await this.persist(host, token, {
       valid: true,
       scopes: validation.scopes ?? [],
@@ -262,8 +336,8 @@ export class GitHubEnterpriseAccount {
   dispose(): void {
     this.disposed = true;
     this.applyGeneration++;
-    const host = this.sessionHost ?? getEnterpriseHost();
-    if (host !== null) {
+    for (const host of new Set([this.sessionHost, getEnterpriseHost()])) {
+      if (host === null) continue;
       GitHubAuth.setMemoryToken(null, host);
       releaseRateLimitServiceForHost(host);
     }
@@ -272,7 +346,11 @@ export class GitHubEnterpriseAccount {
   }
 }
 
-const TokenArgsSchema = z.object({ token: z.string().min(1).max(512) });
+const TokenArgsSchema = z.object({
+  token: z.string().min(1).max(512),
+  host: z.string().min(1).max(512),
+});
+const ClearArgsSchema = z.object({ host: z.string().max(512).nullable() });
 const HostArgsSchema = z.object({ host: z.string().max(512) });
 const CommitArgsSchema = z.object({
   account: z.string().min(1).max(256),
@@ -319,7 +397,11 @@ export async function registerGitHubEnterprise(
   await subscribe(ENTERPRISE_TOKEN_SETTING, () => {
     void account.applySession().catch(() => undefined);
   });
-  await account.load().catch(() => undefined);
+  // Only the hostname gates registration: remote parsing reads it
+  // synchronously. The token is a keychain read that can be slow, so it
+  // hydrates in the background rather than holding github.com's activation.
+  await account.loadHost();
+  void account.applySession().catch(() => undefined);
 
   await host.registerHandler(
     ENTERPRISE_CHANNELS.status,
@@ -348,20 +430,17 @@ export async function registerGitHubEnterprise(
   await host.registerHandler(
     ENTERPRISE_CHANNELS.testToken,
     { args: TokenArgsSchema, result: TokenResultSchema },
-    (_ctx, { token }) => account.testToken(token)
+    (_ctx, { token, host: expectedHost }) => account.testToken(token, expectedHost)
   );
   await host.registerHandler(
     ENTERPRISE_CHANNELS.saveToken,
     { args: TokenArgsSchema, result: TokenResultSchema },
-    (_ctx, { token }) => account.saveToken(token)
+    (_ctx, { token, host: expectedHost }) => account.saveToken(token, expectedHost)
   );
   await host.registerHandler(
     ENTERPRISE_CHANNELS.clearToken,
-    { args: EmptyArgsSchema, result: z.object({ cleared: z.literal(true) }) },
-    async () => {
-      await account.clearToken();
-      return { cleared: true as const };
-    }
+    { args: ClearArgsSchema, result: z.object({ cleared: z.boolean() }) },
+    (_ctx, { host: expectedHost }) => account.clearToken(expectedHost)
   );
   await host.registerHandler(
     ENTERPRISE_CHANNELS.previewImport,

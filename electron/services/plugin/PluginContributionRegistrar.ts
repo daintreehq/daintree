@@ -313,12 +313,16 @@ export class PluginContributionRegistrar {
     const matches = await this.readForgeSettingMatches(pluginId, plugin.manifest);
     if (this.forgeSettingMatchReads.get(pluginId) !== read) return;
     if (!this.deps.isCurrent(pluginId, plugin)) return;
+    let changed = false;
     for (const [contributionId, hostname] of matches) {
-      setForgeProviderSettingMatch(pluginId, contributionId, hostname);
+      if (setForgeProviderSettingMatch(pluginId, contributionId, hostname)) changed = true;
     }
+    if (!changed) return;
     // Same wake-up as a fresh registration: a workspace whose PR polling found
-    // no provider for its remote re-resolves against the new hostname.
+    // no provider for its remote re-resolves against the new hostname, and the
+    // renderer drops the provider resolutions it cached for open projects.
     this.deps.getWorkspaceClient()?.notifyForgeProviderRegistryUpdated();
+    this.deps.broadcaster.broadcastProvenanceChanged();
   }
 
   /**

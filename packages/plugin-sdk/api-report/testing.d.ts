@@ -1169,7 +1169,12 @@ interface ProjectHealthCapability {
  * Providers cache internally; the lookup must be cheap to call repeatedly.
  */
 interface AvatarCapability {
-    resolveAuthorAvatar(email: string): Promise<string | null>;
+    /**
+     * `repo` is the repository the author committed to. A provider that serves
+     * more than one host answers only from that repository's own host, so an
+     * author's address never goes to a server the repository isn't on.
+     */
+    resolveAuthorAvatar(email: string, repo?: RepoRef): Promise<string | null>;
     /**
      * Synchronous counter that changes whenever a credential or instance change
      * invalidates earlier lookups. When present, the host shares one in-flight

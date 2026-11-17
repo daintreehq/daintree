@@ -1481,7 +1481,7 @@ async function handleForgeResolveAuthorAvatar(payload: {
   const lookup = async (): Promise<string | null> => {
     checkRateLimit(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
     try {
-      return (await avatars.resolveAuthorAvatar(email)) ?? null;
+      return (await avatars.resolveAuthorAvatar(email, repoRef)) ?? null;
     } catch {
       return null;
     }

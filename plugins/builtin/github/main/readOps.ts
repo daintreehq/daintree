@@ -43,7 +43,7 @@ import {
   BRANCH_DEPLOYMENTS_QUERY,
   PR_DEPLOYMENTS_QUERY,
 } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
 import {
   cacheOwner,
   forgeIssueListCache,
@@ -751,7 +751,7 @@ export async function findPRsByBranchesImpl(
 
     // Skip the network entirely while rate-limited — the caller's missing-key
     // fallback handles every omitted branch. Mirrors `batchCheckLinkedPRs`.
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     const requestedAt = Date.now();
@@ -840,7 +840,7 @@ export async function findPRsByNumbersImpl(
   return dedupe(findPRsByNumbersInflight, inflightKey, fresh, async () => {
     const result = new Map<number, PR | null>();
 
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     const requestedAt = Date.now();
@@ -922,7 +922,7 @@ export async function findReferencesByNumbersImpl(
 
   for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
     // Per chunk: the response before this one may have spent the budget.
-    if (gitHubRateLimitService.shouldBlockRequest("graphql").blocked) break;
+    if (rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql").blocked) break;
     const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
     const query = buildBatchReferencesQuery(repo.owner, repo.repo, chunk);
     if (!query) continue;
@@ -976,7 +976,7 @@ export async function getCIStatusesImpl(
 
     if (missing.length === 0) return result;
 
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     for (let start = 0; start < missing.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {

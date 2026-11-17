@@ -137,7 +137,15 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const disposeEnterprise = await registerGitHubEnterprise(host, () => {
     void syncCredentialPresenceToWorkspaceHosts();
   });
-  const disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  let disposeForge: () => void;
+  try {
+    disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  } catch (error) {
+    // A failed activation returns no disposer, so the Enterprise Server
+    // session it hydrated would otherwise outlive it.
+    disposeEnterprise();
+    throw error;
+  }
   validateStoredTokenInBackground();
   void syncCredentialsToWorkspaceHosts();
   // Pass the registered forge provider so the decoration hook can author
