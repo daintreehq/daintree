@@ -311,6 +311,9 @@ describe("createAllHostsRoute", () => {
     invoke.mockReset();
     invoke.mockResolvedValue(undefined);
     Object.values(ownCalls).forEach((fn) => fn.mockClear());
+    // One-shot answers a failed test left queued must not answer the next test's calls.
+    ownCalls.trash.mockReset();
+    ownCalls.trashBatch.mockReset();
     Object.defineProperty(window, "electron", {
       value: { canopy: ownCalls },
       configurable: true,
