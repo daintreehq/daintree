@@ -16,6 +16,7 @@ import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UnsavedChangesDot } from "@/components/ui/UnsavedChangesDot";
 import { Button } from "@/components/ui/button";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -1498,15 +1499,7 @@ export function FileBrowserPane({
       isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
       onClose={handleClose}
-      headerContent={
-        dirty ? (
-          <span
-            role="img"
-            aria-label={conflict ? "Unsaved changes, file changed on disk" : "Unsaved changes"}
-            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-secondary"
-          />
-        ) : undefined
-      }
+      headerContent={dirty ? <UnsavedChangesDot conflict={conflict} /> : undefined}
       onToggleMaximize={onToggleMaximize}
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}

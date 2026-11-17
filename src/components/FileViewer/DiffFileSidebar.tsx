@@ -151,14 +151,22 @@ function DiffShelfRow({ file, ctx }: { file: IndexedDiffEntry; ctx: ShelfRowCont
         data-testid="diff-sidebar-file"
       >
         <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
-        <span
-          className={cn(
-            "truncate font-medium",
-            viewed ? "text-text-secondary" : "text-text-primary"
-          )}
+        <TruncatedTooltip
+          content={file.path}
+          side="bottom"
+          align="start"
+          contentClassName="break-words"
+          focusable={false}
         >
-          {basename(file.path)}
-        </span>
+          <span
+            className={cn(
+              "truncate font-medium",
+              viewed ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {basename(file.path)}
+          </span>
+        </TruncatedTooltip>
         <DiffStat
           insertions={file.insertions}
           deletions={file.deletions}

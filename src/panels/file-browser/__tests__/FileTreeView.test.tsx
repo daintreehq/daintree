@@ -943,6 +943,22 @@ describe("FileTreeView git status markers", () => {
     expect(describedStatus(container, "README.md")).toBeNull();
   });
 
+  it("carries no native title on the git and decoration markers", () => {
+    useFileTreeDecorationsMock.mockReturnValue({
+      "README.md": { badge: "3", tooltip: "3 lint errors" },
+    });
+    const { container } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/app.ts", status: "modified" },
+      ]),
+    });
+
+    expect(describedStatus(container, "app.ts")).toBe("Modified");
+    expect(container.textContent).toContain("3");
+    expect(container.querySelector("[title]")).toBeNull();
+  });
+
   it("phrases a folder as containing changes, not as being changed itself", () => {
     const { container } = renderTree({
       rows: NESTED_ROWS,

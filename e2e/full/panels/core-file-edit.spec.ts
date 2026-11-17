@@ -173,7 +173,7 @@ test.describe.serial("Core: Markdown file editing", () => {
     await expect(banner).toBeVisible({ timeout: T_LONG });
     await expect(dirtyMark(page)).toHaveAttribute(
       "aria-label",
-      "Unsaved changes, file changed on disk"
+      "Unsaved changes — file changed on disk"
     );
 
     // Detection keeps the draft as typed rather than merging the disk version.
