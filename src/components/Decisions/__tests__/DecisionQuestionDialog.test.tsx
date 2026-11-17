@@ -502,7 +502,7 @@ describe("DecisionQuestionDialog", () => {
         // The newer read started at 60s, so its own deadline is at 120s.
         await advance(58_000);
         expect(pending).toHaveLength(2);
-        await advance(2_000);
+        await advance(1_000);
         expect(pending).toHaveLength(3);
       });
 
@@ -514,11 +514,14 @@ describe("DecisionQuestionDialog", () => {
 
         await act(async () => failing[1]!(new Error("unreachable")));
         expect(screen.getByTestId("decision-question-unavailable")).toBeTruthy();
+        await advance(1_000);
         await land(0, "Stalled notes");
         // Older than the failure on screen, and the newer read already armed the poll.
         expect(screen.queryByTestId("decision-question-content")).toBeNull();
         expect(pending).toHaveLength(2);
-        await advance(15_000);
+        await advance(13_999);
+        expect(pending).toHaveLength(2);
+        await advance(1);
         expect(pending).toHaveLength(3);
         // Both earlier reads have landed, so a stall of this one has room beside it.
         await advance(61_000);
@@ -538,6 +541,7 @@ describe("DecisionQuestionDialog", () => {
         await act(async () => {});
         // The event bus calls the listeners it snapshotted, even one removed mid-dispatch.
         const removed = [...paneListeners];
+        expect(removed).toHaveLength(1);
         act(() => useDecisionsQuestionViewStore.getState().close());
         expect(paneListeners).toHaveLength(0);
         act(() => {
