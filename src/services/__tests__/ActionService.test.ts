@@ -2399,7 +2399,11 @@ describe("ActionService", () => {
       const schema = z.object({ confirmed: z.boolean().optional() }).optional();
       service.register(makeAction("test.escalating", { argsSchema: schema }));
 
-      await service.dispatch("test.escalating" as ActionId, { confirmed: false }, { source: "user" });
+      await service.dispatch(
+        "test.escalating" as ActionId,
+        { confirmed: false },
+        { source: "user" }
+      );
       expect(service.getLastAction()).toEqual({
         actionId: "test.escalating",
         args: { confirmed: false },
