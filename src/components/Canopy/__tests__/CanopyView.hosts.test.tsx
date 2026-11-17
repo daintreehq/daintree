@@ -429,6 +429,26 @@ describe("the Canopy host picker", () => {
     expect(own.searchScreens).not.toHaveBeenCalled();
   });
 
+  it("names the picked host when its terminals couldn't be searched (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
+  });
+
   it("draws no counts for a host that isn't connected, rather than zero", async () => {
     state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
     installElectron();
@@ -1062,8 +1082,7 @@ describe("All hosts", () => {
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).toBeNull();
     const note = screen.getByTestId("canopy-search-incomplete");
-    expect(note.textContent).toContain("studio-01");
-    expect(note.textContent).not.toContain("This Mac");
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
 
     studioSearches = true;
     const searchesBefore = state.invoke.mock.calls.filter(
@@ -1082,6 +1101,35 @@ describe("All hosts", () => {
     expect(cardOf("local", "shared-run")).not.toBeNull();
     expect(cardOf("studio", "shared-run")).not.toBeNull();
     expect(screen.queryByTestId("canopy-search-incomplete")).toBeNull();
+  });
+
+  it("names every host that couldn't search in the host list's order (#17594)", async () => {
+    state.hosts = [host("studio", "studio-01"), host("lab", "lab-02")];
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue([]);
+    state.invoke.mockImplementation(async (hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") {
+        // The studio's run asks for the user, so it is listed, and asked, first.
+        return hostId === "studio"
+          ? canopySnapshot({ cards: [approvalCard("shared-run")] })
+          : remoteCanopy;
+      }
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    const asked = state.invoke.mock.calls
+      .filter((call) => call[1] === "canopy:search-screens")
+      .map((call) => call[0]);
+    expect(asked).toEqual(["studio", "lab"]);
+    expect(screen.getByText("Couldn't search terminals on lab-02 and studio-01")).not.toBeNull();
   });
 
   it("never calls a search with an unsearched host's terminals a search with no match (#17594)", async () => {

@@ -560,22 +560,33 @@ describe("createAllHostsRoute", () => {
   });
 
   it("says nothing of a search the panel closed on, its own or its hosts'", async () => {
-    const answers: Array<() => void> = [];
+    let ownAnswer: (ids: string[]) => void = () => {};
+    ownCalls.searchScreens.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((resolve) => {
+          ownAnswer = resolve;
+        })
+    );
+    const refusals: Array<() => void> = [];
     invoke.mockImplementation(
       () =>
         new Promise((_resolve, reject) => {
-          answers.push(() => reject(new Error("offline")));
+          refusals.push(() => reject(new Error("offline")));
         })
     );
-    const hosts = ["h1", "h2", "h3", "h4"];
+    const hosts = ["own", "h1", "h2", "h3"];
     const route = createAllHostsRoute("own", hosts);
     const pending = route.searchScreens(
       hosts.map((host) => ({ runId: allHostsKey(host, "t1"), spawnedAt: 1, terms: ["x"] }))
     );
+    // Three at once: the fourth host is still queued when the panel closes.
+    expect(invoke).toHaveBeenCalledTimes(2);
     route.close();
     route.open();
-    answers.forEach((answer) => answer());
+    ownAnswer(["t1"]);
+    refusals.forEach((refuse) => refuse());
     await expect(pending).resolves.toEqual([]);
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("h3");
   });
 
   it("runs no more than three host searches at once", async () => {

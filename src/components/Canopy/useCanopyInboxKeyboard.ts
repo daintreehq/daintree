@@ -72,7 +72,7 @@ export function useCanopyInboxKeyboard({
   onSelectAll,
   onPastEnd,
   sectionStop,
-  searchRetryShown = false,
+  retryStop,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
@@ -106,8 +106,11 @@ export function useCanopyInboxKeyboard({
    * false when there is no shut bar to stop on, and the walk goes on as rows.
    */
   sectionStop?: { before: number; focus: () => boolean };
-  /** A Retry under the search for the terminals it couldn't search: Tab reaches it before the rows. */
-  searchRetryShown?: boolean;
+  /**
+   * The Retry under the search for the terminals it couldn't search: plain Tab
+   * from the search goes there first. False when there is none.
+   */
+  retryStop?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
     entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
@@ -338,11 +341,15 @@ export function useCanopyInboxKeyboard({
       return;
     }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // The Retry under the search is next in the page's own order.
-    const tabOn = event.key === "Tab" && !searchRetryShown;
+    if (plain && event.key === "Tab" && retryStop?.()) {
+      event.preventDefault();
+      // The dialog's own Tab wrap must not take the keyboard on from the search.
+      event.stopPropagation();
+      return;
+    }
     if (plain && searchAssistant !== null) {
       const target = searchAssistant;
-      if (tabOn || (event.key === "ArrowDown" && listed.length === 0)) {
+      if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {
         // The pane's assistant folded away under its shut bar: the bar is where the keyboard goes.
         if (drawn(target) || !sectionStop?.focus()) focusAssistantNow(target.id);
         event.preventDefault();
@@ -380,7 +387,7 @@ export function useCanopyInboxKeyboard({
       onOpen(selected);
       return;
     }
-    if (plain && tabOn) {
+    if (plain && event.key === "Tab") {
       if (!selected) return;
       event.preventDefault();
       // The dialog's own Tab wrap must not take the keyboard on from the row.

@@ -547,17 +547,19 @@ describe("CanopyView search", () => {
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-waiting"]);
     const gap = () =>
       document.querySelector<HTMLElement>("[data-testid=canopy-search-incomplete]") ?? null;
-    expect(gap()?.textContent).toContain("Couldn't search terminals");
+    expect(gap()?.textContent).toBe("Couldn't search terminalsRetry");
     expect(searchInput().getAttribute("aria-describedby")).toBe("canopy-search-gap");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, UI_DOHERTY_THRESHOLD + 50));
     });
     expect(said).toContain("1 match so far. Couldn't search terminals");
-    // Tab from the search reaches the Retry rather than skipping to the row.
+    // Tab from the search reaches the Retry, past the field's own Clear and the selected row.
     expect(selectedRun(container)).toBe("waiting");
-    expect(fireEvent.keyDown(searchInput(), { key: "Tab" })).toBe(true);
-
+    searchInput().focus();
+    fireEvent.keyDown(searchInput(), { key: "Tab" });
     const retry = [...gap()!.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+    expect(document.activeElement).toBe(retry);
+
     await act(async () => {
       fireEvent.click(retry);
     });
@@ -574,7 +576,8 @@ describe("CanopyView search", () => {
     ).toEqual(["canopy-card-asking", "canopy-card-waiting"]);
     expect(searchInput().getAttribute("aria-describedby")).toBeNull();
     // With every terminal searched, Tab goes on to the selected row again.
-    expect(fireEvent.keyDown(searchInput(), { key: "Tab" })).toBe(false);
+    fireEvent.keyDown(searchInput(), { key: "Tab" });
+    expect(document.activeElement?.id).toBe("canopy-card-waiting");
     unsubscribe();
   });
 
@@ -596,6 +599,46 @@ describe("CanopyView search", () => {
     expect(document.querySelector("[data-testid=canopy-search-incomplete]")?.textContent).toContain(
       "Couldn't search terminals"
     );
+
+    // What one query found is never carried into another.
+    await search("segv");
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(3);
+    expect(cards(container)).toHaveLength(0);
+  });
+
+  it("lets a terminal search in flight land through a refresh, never after a newer answer", async () => {
+    const canopy = installElectron();
+    const answers: Array<(ids: string[]) => void> = [];
+    canopy.searchScreens.mockImplementation(
+      () =>
+        new Promise<string[]>((resolve) => {
+          answers.push(resolve);
+        })
+    );
+    const refresh = (at: number) =>
+      act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: at } }));
+    const { container } = render(<CanopyView frame={frame} />);
+    await frames();
+    await search("segfault");
+    await screenSearchSettled();
+    refresh(NOW + 1);
+    await screenSearchSettled();
+    refresh(NOW + 2);
+    await screenSearchSettled();
+    expect(answers).toHaveLength(3);
+    await act(async () => {
+      answers[0]!(["asking"]);
+    });
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
+    await act(async () => {
+      answers[2]!([]);
+    });
+    expect(cards(container)).toHaveLength(0);
+    await act(async () => {
+      answers[1]!(["asking"]);
+    });
+    expect(cards(container)).toHaveLength(0);
   });
 
   it("selects the top terminal match, wherever the selection was before", async () => {

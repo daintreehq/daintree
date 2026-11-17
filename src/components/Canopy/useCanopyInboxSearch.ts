@@ -15,6 +15,8 @@ interface ScreenHits {
   ask: string;
   hosts: ReadonlyMap<HostId, ReadonlySet<string>>;
   unsearched: readonly HostId[];
+  /** The Retry it was asked under: a Retry answered is said, even as it was before. */
+  retry: number;
 }
 
 /**
@@ -56,8 +58,14 @@ export function useCanopyInboxSearch({
   );
   // The ask as a value: a terminal's matches stand only for the very runs,
   // incarnations and words they were found for, on the host that found them.
+  // The rows' order is no part of it: a re-rank asks nothing new.
   const screenAsk = useMemo(
-    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
+    () =>
+      screenTargets.length === 0
+        ? null
+        : `${hostId ?? ""}|${JSON.stringify(
+            [...screenTargets].sort((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
+          )}`,
     [screenTargets, hostId]
   );
   const screenTargetsRef = useRef(screenTargets);
@@ -67,13 +75,31 @@ export function useCanopyInboxSearch({
   const [screenHits, setScreenHits] = useState<ScreenHits | null>(null);
   // Asked again on Retry, the query and its targets as they stand.
   const [retries, setRetries] = useState(0);
+  // One ask on one host while the panel is open: a refresh of it lets the
+  // search already in flight land, so a slow host's answer is never lost to a
+  // busy one. A new query, host or close ends it, and what it was sent says nothing.
+  const sessionRef = useRef<{ live: boolean } | null>(null);
+  useEffect(() => {
+    if (!isOpen || screenAsk === null) return;
+    const session = { live: true };
+    sessionRef.current = session;
+    return () => {
+      session.live = false;
+    };
+  }, [isOpen, screenAsk, searchScreens]);
+  // Answers land in the order they were asked: an older one never overwrites a newer.
+  const sentRef = useRef(0);
+  const shownRef = useRef(0);
   // Asked again as screens are read anew, since a terminal's words move on.
   useEffect(() => {
     if (!isOpen || screenAsk === null) return;
-    let live = true;
+    const session = sessionRef.current;
+    const retry = retries;
     const timer = setTimeout(() => {
+      const sent = ++sentRef.current;
       void searchScreens(screenTargetsRef.current).then((outcomes) => {
-        if (!live) return;
+        if (!session?.live || sent < shownRef.current) return;
+        shownRef.current = sent;
         setScreenHits((prior) => {
           const earlier = prior?.ask === screenAsk ? prior.hosts : null;
           const hosts = new Map<HostId, ReadonlySet<string>>();
@@ -88,14 +114,11 @@ export function useCanopyInboxSearch({
             unsearched.push(outcome.hostId);
             hosts.set(outcome.hostId, earlier?.get(outcome.hostId) ?? NO_HITS);
           }
-          return { ask: screenAsk, hosts, unsearched };
+          return { ask: screenAsk, hosts, unsearched, retry };
         });
       });
     }, SCREEN_SEARCH_DEBOUNCE_MS);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
+    return () => clearTimeout(timer);
   }, [isOpen, screenAsk, searchScreens, refreshedAt, retries]);
   const current = screenHits !== null && screenHits.ask === screenAsk ? screenHits : null;
   const onScreen = useMemo(
@@ -104,6 +127,7 @@ export function useCanopyInboxSearch({
     [current]
   );
   const screenUnsearched = current?.unsearched ?? NO_HOSTS;
+  const screenRetry = current?.retry ?? 0;
   const retryScreenSearch = () => setRetries((count) => count + 1);
 
   return {
@@ -118,6 +142,7 @@ export function useCanopyInboxSearch({
     onScreen,
     /** The hosts whose terminals the settled search couldn't read: its terminal matches are only the rest's. */
     screenUnsearched,
+    screenRetry,
     retryScreenSearch,
   };
 }

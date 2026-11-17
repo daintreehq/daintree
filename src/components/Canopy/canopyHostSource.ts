@@ -117,11 +117,13 @@ export type CanopyScreenSearch = (
 
 /** The one host a panel shows, searched as a single outcome. */
 export function singleHostScreenSearch(api: CanopyApi, hostId: HostId): CanopyScreenSearch {
-  return (targets) =>
-    api.searchScreens(targets).then(
-      (runIds): CanopyScreenSearchOutcome[] => [{ hostId, runIds }],
-      (): CanopyScreenSearchOutcome[] => [{ hostId, failed: true }]
-    );
+  return async (targets) => {
+    try {
+      return [{ hostId, runIds: await api.searchScreens(targets) }];
+    } catch {
+      return [{ hostId, failed: true }];
+    }
+  };
 }
 
 /**

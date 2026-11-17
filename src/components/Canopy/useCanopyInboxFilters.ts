@@ -65,6 +65,7 @@ export function useCanopyInboxFilters({
   screenAsk,
   onScreen,
   screenGap,
+  screenRetry,
   listHidden,
 }: {
   isOpen: boolean;
@@ -94,6 +95,8 @@ export function useCanopyInboxFilters({
   onScreen: ReadonlySet<string> | null;
   /** What the search says of the hosts whose terminals it couldn't search, or null when every one answered. */
   screenGap: string | null;
+  /** The Retry the settled search was asked under. */
+  screenRetry: number;
   listHidden: () => void;
 }) {
   // Workers, Daintree Assistants or both. A role the filter hides keeps its
@@ -348,13 +351,15 @@ export function useCanopyInboxFilters({
       : onlyReadMatch
         ? "No unread matches"
         : "No matches";
+  // Only workers' terminals are searched: with workers hidden, nothing listed is missing.
+  const searchGap = workersShown ? screenGap : null;
   const outcome =
     !searching || !searchSettled
       ? null
-      : screenGap === null
+      : searchGap === null
         ? found
-        : `${found} so far. ${screenGap}`;
-  const announceKey = `${searchKey}|${unreadOnly}|${screenGap ?? ""}`;
+        : `${found} so far. ${searchGap}`;
+  const announceKey = `${searchKey}|${unreadOnly}|${searchGap ?? ""}|${screenRetry}`;
   const announcedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!searching) {
@@ -408,5 +413,6 @@ export function useCanopyInboxFilters({
     firstAssistant,
     listRef,
     onlyReadMatch,
+    searchGap,
   };
 }
