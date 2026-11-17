@@ -157,12 +157,12 @@ export type SilenceableEventKind = "completed" | "waiting" | "workingPulse" | "u
  * ones `project.silenceNotificationKind` accepts. Routing-only kinds ("git",
  * "host", ...) pass `NotificationEventKind` but have nothing to silence.
  */
+const SILENCEABLE_EVENT_KINDS: ReadonlySet<string> = new Set(
+  Object.keys(EVENT_KIND_TO_SETTING_KEY)
+);
+
 export function isSilenceableEventKind(v: string | undefined): v is SilenceableEventKind {
-  return (
-    v !== undefined &&
-    Object.prototype.hasOwnProperty.call(EVENT_KIND_TO_SETTING_KEY, v) &&
-    EVENT_KIND_TO_SETTING_KEY[v as NotificationEventKind] !== undefined
-  );
+  return v !== undefined && SILENCEABLE_EVENT_KINDS.has(v);
 }
 
 const INTERRUPTION_TO_PRIORITY: Record<EventInterruption, NotificationPriority> = {
