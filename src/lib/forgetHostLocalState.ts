@@ -1,8 +1,12 @@
 import { parseHostScopedKey, type HostId } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
+import { forgetCrossHostTargetsOf } from "@/components/Fleet/crossHostFleet";
 import { forgetBuildMismatchNotices } from "@/components/Hosts/buildMismatchNotice";
+import { forgetHostProjects } from "@/components/Hosts/hostProjects";
+import { hostEnvDrafts } from "@/components/Settings/Hosts/hostEnvDrafts";
 import { QUICK_RUN_KEY_PREFIXES } from "@/components/Project/quickRunStorageKeys";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { backupKeyFor } from "@/store/persistence/safeStorage";
 import { SIDEBAR_VIEW_KEY_PREFIX } from "@/store/sidebarViewStore";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
@@ -59,10 +63,12 @@ const HOST_KEYED_STORES = [
 ] as const;
 
 /**
- * Drop what this view's renderer keeps under a removed host's id: prompt and
- * URL history, split layouts, sidebar view picks, QuickRun's toggles and build notices, all keyed
- * by the host's id. Stored copies are scrubbed first, then each store's own
- * state, so its next write records the removal rather than bringing it back.
+ * Drop what this view's renderer keeps under a removed or re-pointed host's
+ * id: prompt and URL history, split layouts, sidebar view picks, QuickRun's
+ * toggles and build notices, unsaved environment edits, armed fleet agents,
+ * project and worktree lists, and load history. Stored copies are scrubbed
+ * first, then each store's own state, so its next write records the removal
+ * rather than bringing it back.
  */
 export function forgetHostLocalState(hostId: HostId): void {
   try {
@@ -93,6 +99,10 @@ export function forgetHostLocalState(hostId: HostId): void {
   const ratios = withoutHost(useTwoPaneSplitStore.getState().ratioByWorktreeId, hostId);
   if (ratios) useTwoPaneSplitStore.setState({ ratioByWorktreeId: ratios });
   forgetBuildMismatchNotices(hostId);
+  hostEnvDrafts.delete(hostId);
+  forgetCrossHostTargetsOf(hostId);
+  forgetHostProjects(hostId);
+  useHostMetricsStore.getState().forget(hostId);
 }
 
 /** Every view clears a host's state here when the host is removed from this device. */

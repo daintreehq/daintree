@@ -15,6 +15,7 @@ import {
   confirmCrossHostResend,
   crossHostSafeRetryDeadline,
   crossHostTargetKey,
+  forgetCrossHostTargetsOf,
   needsCrossHostResendConfirmation,
   getArmedCrossHostTargets,
   retainCrossHostTargetsFor,
@@ -178,6 +179,48 @@ describe("cross-host fleet targets", () => {
       "local-1",
       crossHostTargetKey("studio-02", "t1"),
     ]);
+  });
+
+  it("drops a re-pointed host's agents and unconfirmed submits, keeping its id's neighbours", async () => {
+    armCrossHostTarget({
+      hostId: "studio-0",
+      hostName: "studio-0",
+      terminalId: "t1",
+      title: "Gemini",
+    });
+    const lost = () =>
+      submitFleet.mockRejectedValueOnce(
+        new Error("[AppError|OUTCOME_UNKNOWN] Couldn't confirm fleet submit")
+      );
+    const forgotten = crossHostTargetKey("studio-01", "t1");
+    const kept = crossHostTargetKey("studio-0", "t1");
+    lost();
+    await expect(submitCrossHostTarget(forgotten, "go")).rejects.toBeTruthy();
+    lost();
+    await expect(submitCrossHostTarget(kept, "go")).rejects.toBeTruthy();
+    const oldOpId = submitFleet.mock.calls[0]![0].opId;
+
+    forgetCrossHostTargetsOf("studio-01");
+
+    // The host list still names studio-01, so only the forget can take its agent out.
+    expect(getArmedCrossHostTargets().map((t) => t.hostId)).toEqual(["studio-02", "studio-0"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual([
+      "local-1",
+      crossHostTargetKey("studio-02", "t1"),
+      kept,
+    ]);
+    expect(crossHostSafeRetryDeadline(forgotten, "go")).toBeNull();
+    expect(crossHostSafeRetryDeadline(kept, "go")).not.toBeNull();
+
+    // Armed again on the new machine, a retry is a fresh send, never the old machine's opId.
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude",
+    });
+    await submitCrossHostTarget(forgotten, "go", { retry: true });
+    expect(submitFleet.mock.calls[2]![0].opId).not.toBe(oldOpId);
   });
 
   it("sends another host's agent the draft as typed, as its preview shows", async () => {

@@ -665,8 +665,10 @@ function SettingsDialogInner({
       return false;
     }
     // A host's unsaved environment edit holds the close the same way, on that host's page.
-    const unsavedHost = hostEnvDrafts.firstUnsaved();
-    if (unsavedHost && machineOptions.some((option) => option.hostId === unsavedHost)) {
+    const unsavedHost = hostEnvDrafts.firstUnsaved((hostId) =>
+      machineOptions.some((option) => option.hostId === hostId)
+    );
+    if (unsavedHost) {
       setSearchQuery("");
       setHiddenSettingBanner(null);
       if (activeScope !== "global") {

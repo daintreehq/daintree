@@ -26,8 +26,15 @@ export const hostEnvDrafts = {
   delete: (hostId: string): void => {
     drafts.delete(hostId);
   },
-  /** The first host with an unsaved edit, which a close shows instead of closing. */
-  firstUnsaved: (): string | undefined => drafts.keys().next().value,
+  /**
+   * The first host still offered with an unsaved edit, which a close shows
+   * instead of closing. One that is no longer offered can't be shown, and
+   * must not stand in front of another that can.
+   */
+  firstUnsaved: (offered: (hostId: string) => boolean): string | undefined => {
+    for (const hostId of drafts.keys()) if (offered(hostId)) return hostId;
+    return undefined;
+  },
   clear: (): void => {
     drafts.clear();
   },

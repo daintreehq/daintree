@@ -57,6 +57,21 @@ export function retainCrossHostTargetsFor(hostIds: ReadonlySet<HostId>): void {
   }
 }
 
+/**
+ * Drop one host's agents and their unconfirmed submits. A host re-pointed at
+ * another machine keeps its id, so the list alone never says they are gone.
+ */
+export function forgetCrossHostTargetsOf(hostId: HostId): void {
+  const kept = new Set<HostId>();
+  for (const target of getArmedCrossHostTargets()) {
+    if (target.hostId !== hostId) kept.add(target.hostId);
+  }
+  useFleetArmingStore.getState().retainCrossHostTargetsFor(kept);
+  // Host ids never hold a colon, so this prefix names that host's targets alone.
+  const prefix = crossHostTargetKey(hostId, "");
+  for (const key of [...unresolved.keys()]) if (key.startsWith(prefix)) unresolved.delete(key);
+}
+
 export function useArmedCrossHostTargets(): readonly CrossHostFleetTarget[] {
   return useFleetArmingStore((s) => s.crossHostTargets);
 }
