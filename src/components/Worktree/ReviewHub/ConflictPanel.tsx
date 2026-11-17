@@ -1135,8 +1135,8 @@ export function ConflictPanel({
             ) : pendingMarkerConfirm.found.hunkCount > 0 ? (
               <span>
                 <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
-                has {pluralize(pendingMarkerConfirm.found.hunkCount, "conflict region")}. Marking
-                it resolved stages the conflict markers as file content.
+                has {pluralize(pendingMarkerConfirm.found.hunkCount, "conflict region")}. Marking it
+                resolved stages the conflict markers as file content.
               </span>
             ) : (
               <span>

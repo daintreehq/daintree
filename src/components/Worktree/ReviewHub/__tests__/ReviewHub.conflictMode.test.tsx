@@ -1351,7 +1351,9 @@ describe("ReviewHub", () => {
         // The overtaken scan read the file before the newer one did.
         await act(async () => {
           if (outcome === "answers") {
-            settleFirst?.resolve([{ path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 }]);
+            settleFirst?.resolve([
+              { path: "src/app.ts", hunkCount: 3, hasMarkers: true, firstMarkerLine: 12 },
+            ]);
           } else {
             settleFirst?.reject(new Error("EACCES"));
           }
@@ -1439,7 +1441,9 @@ describe("ReviewHub", () => {
       });
 
       await act(async () => {
-        resolveOther?.([{ path: "src/app.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 5 }]);
+        resolveOther?.([
+          { path: "src/app.ts", hunkCount: 1, hasMarkers: true, firstMarkerLine: 5 },
+        ]);
       });
       expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
       fireEvent.click(openButton());
@@ -1540,7 +1544,9 @@ describe("ReviewHub", () => {
           expect(scanConflictMarkersMock).toHaveBeenCalledWith(OTHER_PATH, ["src/app.ts"])
         );
         await act(async () => {
-          reread.resolve([{ path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 4 }]);
+          reread.resolve([
+            { path: "src/app.ts", hunkCount: 2, hasMarkers: true, firstMarkerLine: 4 },
+          ]);
         });
 
         expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -1557,7 +1563,9 @@ describe("ReviewHub", () => {
         moveToOther();
         moveToOther.moveBack();
         await act(async () => {
-          reread.resolve([{ path: "src/app.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null }]);
+          reread.resolve([
+            { path: "src/app.ts", hunkCount: 0, hasMarkers: false, firstMarkerLine: null },
+          ]);
         });
 
         expect(screen.queryByRole("alertdialog")).toBeNull();
