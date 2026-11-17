@@ -163,4 +163,93 @@ describe("ProjectLinksSection (#17091)", () => {
 
     expect(queryByText("Couldn't load the links")).toBeNull();
   });
+
+  describe("focus after removing a row", () => {
+    const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
+    const docs: ProjectLink = { id: "c", title: "Docs", url: "https://docs.example.com/" };
+
+    async function removeLink(
+      getByRole: (role: string, o: { name: string }) => HTMLElement,
+      queryByRole: (role: string, o: { name: string }) => HTMLElement | null,
+      link: ProjectLink,
+      remaining: ProjectLink[]
+    ) {
+      mainAnswers(remaining, link);
+      const button = getByRole("button", { name: `Remove ${link.title}` });
+      button.focus();
+      expect(document.activeElement).toBe(button);
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(changeMock).toHaveBeenCalledWith({
+        projectId: "proj-1",
+        actor: "user",
+        change: { op: "remove", id: link.id },
+      });
+      expect(queryByRole("button", { name: `Remove ${link.title}` })).toBeNull();
+    }
+
+    beforeEach(() => {
+      useProjectSettingsStore.setState({
+        projectId: "proj-1",
+        settings: { runCommands: [], links: [staging, ci, docs] },
+      });
+    });
+
+    it("moves focus to the next row's remove button when a middle row goes", async () => {
+      const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      await removeLink(getByRole, queryByRole, ci, [staging, docs]);
+      expect(document.activeElement).toBe(getByRole("button", { name: "Remove Docs" }));
+    });
+
+    it("moves focus to the row before when the last row goes", async () => {
+      const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      await removeLink(getByRole, queryByRole, docs, [staging, ci]);
+      expect(document.activeElement).toBe(getByRole("button", { name: "Remove CI" }));
+    });
+
+    it("moves focus to the add field when the only row goes", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "proj-1",
+        settings: { runCommands: [], links: [staging] },
+      });
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      await removeLink(getByRole, queryByRole, staging, []);
+      expect(document.activeElement).toBe(input(container, 0));
+    });
+
+    it("leaves focus where the user moved it while the removal was saving", async () => {
+      let answer!: () => void;
+      changeMock.mockImplementationOnce(
+        (payload: ProjectLinksChangePayload) =>
+          new Promise((resolve) => {
+            answer = () => {
+              patchCachedProjectLinks(payload.projectId, [staging, docs]);
+              resolve({ saved: true, links: [staging, docs], link: ci });
+            };
+          })
+      );
+      const { container, getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      await act(async () => {
+        fireEvent.click(getByRole("button", { name: "Remove CI" }));
+      });
+      const elsewhere = input(container, 1);
+      elsewhere.focus();
+      await act(async () => answer());
+      expect(document.activeElement).toBe(elsewhere);
+    });
+
+    it("leaves focus alone when the removal is refused", async () => {
+      changeMock.mockResolvedValueOnce({ saved: false, code: "not-found", message: "Gone" });
+      const { getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      const button = getByRole("button", { name: "Remove CI" });
+      button.focus();
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(document.activeElement).toBe(button);
+    });
+  });
 });

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { useRowFocus } from "@/components/Settings/useRowFocus";
 import { HeardAsMovePrompt, heardAsMoveQuestion } from "@/components/Settings/HeardAsMovePrompt";
 import {
   MAX_DICTIONARY_TERM_LENGTH,
@@ -94,6 +95,7 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
   // A refused add whose draft had moved on by the time main answered.
   const [notice, setNotice] = useState<string | null>(null);
   const termInputRef = useRef<HTMLInputElement>(null);
+  const { register: registerRemove, registerFallback, focusAfterDelete } = useRowFocus();
   // The draft as typed, read when a save lands after further edits.
   const draftRef = useRef({ term, heardAs });
   useEffect(() => {
@@ -198,8 +200,13 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     );
   };
 
-  const remove = (entryTerm: string) => {
-    change(() => window.electron.voiceDictionary.removeFromProject({ projectId, term: entryTerm }));
+  const remove = (entryTerm: string, index: number) => {
+    const terms = entries.map((e) => e.term);
+    change(
+      () => window.electron.voiceDictionary.removeFromProject({ projectId, term: entryTerm }),
+      // The removed row's button is gone, so focus goes to a neighbour's, or to the term field.
+      () => focusAfterDelete(terms, index)
+    );
   };
 
   const submitOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -243,7 +250,10 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
               </p>
               <div className="flex flex-wrap gap-2">
                 <Input
-                  ref={termInputRef}
+                  ref={(el) => {
+                    termInputRef.current = el;
+                    registerFallback(el);
+                  }}
                   type="text"
                   value={term}
                   maxLength={MAX_DICTIONARY_TERM_LENGTH}
@@ -281,7 +291,7 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
             </div>
           )}
         />
-        {entries.map((entry) => (
+        {entries.map((entry, index) => (
           <SettingsRow
             key={entry.term}
             label={entry.term}
@@ -290,7 +300,8 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
               <Button
                 size="icon-sm"
                 variant="ghost-danger"
-                onClick={() => remove(entry.term)}
+                ref={registerRemove(entry.term)}
+                onClick={() => remove(entry.term, index)}
                 aria-label={`Remove ${entry.term}`}
               >
                 <Trash2 aria-hidden="true" />

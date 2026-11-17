@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { useRowFocus } from "@/components/Settings/useRowFocus";
 import { projectClient } from "@/clients";
 import { changeProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectLink, ProjectLinkChange, ProjectLinkRefusal } from "@shared/types";
@@ -54,6 +55,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
   const urlInputRef = useRef<HTMLInputElement>(null);
   const editTitleRef = useRef<HTMLInputElement>(null);
   const editUrlRef = useRef<HTMLInputElement>(null);
+  const { register: registerRemove, registerFallback, focusAfterDelete } = useRowFocus();
   // Bumped whenever the page moves to a project, so anything still in flight
   // for an earlier one is dropped.
   const visitRef = useRef(0);
@@ -161,7 +163,13 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
 
   const remove = async (link: ProjectLink) => {
     setRowError(null);
-    await change({ op: "remove", id: link.id }, (message) => setRowError({ id: link.id, message }));
+    const ids = links.map((l) => l.id);
+    const index = ids.indexOf(link.id);
+    const outcome = await change({ op: "remove", id: link.id }, (message) =>
+      setRowError({ id: link.id, message })
+    );
+    // The removed row's button is gone, so focus goes to a neighbour's, or to the add field.
+    if (outcome === "saved") focusAfterDelete(ids, index);
   };
 
   const submitOnEnter = (action: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -192,7 +200,10 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
           control={({ labelId, descriptionId }) => (
             <div className="flex flex-wrap gap-2">
               <Input
-                ref={titleInputRef}
+                ref={(el) => {
+                  titleInputRef.current = el;
+                  registerFallback(el);
+                }}
                 type="text"
                 value={draft.title}
                 maxLength={MAX_PROJECT_LINK_TITLE_LENGTH}
@@ -316,6 +327,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
                   <Button
                     size="icon-sm"
                     variant="ghost-danger"
+                    ref={registerRemove(link.id)}
                     onClick={() => void remove(link)}
                     disabled={pending}
                     aria-label={`Remove ${link.title}`}
