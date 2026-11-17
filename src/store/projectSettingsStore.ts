@@ -149,14 +149,15 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       }
 
       const current = get().settings;
-      let settings = applyPatchesAwaitingLoad(
-        projectId,
-        settingsRevision !== revisionAtStart && current ? current : data,
-        revisionAtStart
-      );
+      const kept = settingsRevision !== revisionAtStart ? current : null;
+      let settings = applyPatchesAwaitingLoad(projectId, kept ?? data, revisionAtStart);
       // Links main returned while this read was out are at least as new as it.
       if (cachedLinksRevision > linksRevisionAtStart && current) {
         settings = withPortalLinks(settings, current.portalLinks);
+      } else if (kept && portalLinksRevision === linksRevisionAtStart) {
+        // The whole-settings write kept the cached links, which this read is
+        // newer than: another window may have changed them.
+        settings = withPortalLinks(settings, data.portalLinks);
       }
       const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));

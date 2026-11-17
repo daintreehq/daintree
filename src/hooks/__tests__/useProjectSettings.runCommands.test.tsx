@@ -39,6 +39,7 @@ import { useProjectSettings } from "../useProjectSettings";
 
 const PROJECT_ID = "proj-1";
 const OTHER_PROJECT_ID = "proj-2";
+const THIRD_PROJECT_ID = "proj-3";
 
 const dev: RunCommand = { id: "rc-1", name: "Dev", command: "npm run dev" };
 const test: RunCommand = { id: "rc-2", name: "Test", command: "npm test" };
@@ -80,8 +81,10 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
     disk.clear();
     disk.set(PROJECT_ID, { runCommands: [dev], devServerCommand: "npm run dev" });
     disk.set(OTHER_PROJECT_ID, { runCommands: [dev] });
+    disk.set(THIRD_PROJECT_ID, { runCommands: [lint] });
     projectState.currentProject = { id: PROJECT_ID };
     vi.clearAllMocks();
+    vi.mocked(projectClient.detectRunners).mockResolvedValue([]);
     useProjectSettingsStore.getState().reset();
   });
 
@@ -154,7 +157,9 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
   });
 
   it("keeps fields saved out of band when pinning for a project other than the current one", async () => {
+    vi.mocked(projectClient.detectRunners).mockResolvedValue([dev, test, lint]);
     const { result } = await renderOtherProject();
+    expect(result.current.detectedRunners).toEqual([test, lint]);
     await writeOutOfBand(OTHER_PROJECT_ID, { daintreeMcpTier: "core" });
 
     await act(async () => {
@@ -163,9 +168,60 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
 
     expect(stored(OTHER_PROJECT_ID).daintreeMcpTier).toBe("core");
     expect(commandsOnDisk(OTHER_PROJECT_ID)).toEqual(["npm run dev", "npm test", "npm run lint"]);
+    expect(result.current.settings?.daintreeMcpTier).toBe("core");
     expect(result.current.settings?.runCommands.map((c) => c.command)).toEqual([
       "npm run dev",
       "npm test",
+      "npm run lint",
+    ]);
+    expect(result.current.detectedRunners).toEqual([]);
+
+    await act(async () => {
+      await result.current.removeFromSaved(dev.command);
+    });
+
+    expect(result.current.detectedRunners).toEqual([dev]);
+    expect(result.current.allDetectedRunners).toEqual([dev, test, lint]);
+  });
+
+  it("finishes a pin for the project it started on without showing it on the next one", async () => {
+    const hook = renderHook(({ projectId }) => useProjectSettings(projectId), {
+      initialProps: { projectId: OTHER_PROJECT_ID },
+    });
+    await waitFor(() => {
+      expect(hook.result.current.settings).not.toBeNull();
+    });
+
+    let releaseSave!: () => void;
+    const saveHeld = new Promise<void>((resolve) => (releaseSave = resolve));
+    vi.mocked(projectClient.saveSettings).mockImplementationOnce(async (projectId, settings) => {
+      await saveHeld;
+      disk.set(projectId, JSON.parse(JSON.stringify(settings)));
+    });
+
+    let pinning!: Promise<void>;
+    act(() => {
+      pinning = hook.result.current.promoteToSaved(test);
+    });
+    await waitFor(() => {
+      expect(projectClient.saveSettings).toHaveBeenCalled();
+    });
+
+    hook.rerender({ projectId: THIRD_PROJECT_ID });
+    await waitFor(() => {
+      expect(hook.result.current.settings?.runCommands.map((c) => c.command)).toEqual([
+        "npm run lint",
+      ]);
+    });
+
+    await act(async () => {
+      releaseSave();
+      await pinning;
+    });
+
+    expect(commandsOnDisk(OTHER_PROJECT_ID)).toEqual(["npm run dev", "npm test"]);
+    expect(commandsOnDisk(THIRD_PROJECT_ID)).toEqual(["npm run lint"]);
+    expect(hook.result.current.settings?.runCommands.map((c) => c.command)).toEqual([
       "npm run lint",
     ]);
   });
@@ -214,6 +270,25 @@ describe("useProjectSettings pin and unpin beside other settings writers (#17199
     });
 
     expect(failed).toBeInstanceOf(Error);
+    expect(commandsOnDisk()).toEqual(["npm run dev", "npm run lint"]);
+    expect(result.current.settings?.runCommands.map((c) => c.command)).toEqual([
+      "npm run dev",
+      "npm run lint",
+    ]);
+  });
+
+  it("rejects a pin whose save failed and publishes nothing from it", async () => {
+    const { result } = await renderCurrentProject();
+    vi.mocked(projectClient.saveSettings).mockRejectedValueOnce(new Error("ENOSPC"));
+    const { promoteToSaved } = result.current;
+
+    let failed: unknown;
+    await act(async () => {
+      const results = await Promise.allSettled([promoteToSaved(test), promoteToSaved(lint)]);
+      failed = results[0].status === "rejected" ? results[0].reason : undefined;
+    });
+
+    expect((failed as Error).message).toBe("ENOSPC");
     expect(commandsOnDisk()).toEqual(["npm run dev", "npm run lint"]);
     expect(result.current.settings?.runCommands.map((c) => c.command)).toEqual([
       "npm run dev",

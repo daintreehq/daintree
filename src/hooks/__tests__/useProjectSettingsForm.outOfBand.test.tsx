@@ -168,7 +168,7 @@ describe("useProjectSettingsForm saving alongside another settings writer (#1643
     expect(stored().daintreeMcpTier).toBe("full");
   });
 
-  it("keeps Quick Run pins and unpins made beside the dialog's saves, in either order (#17199)", async () => {
+  it("keeps a Quick Run pin made beside the dialog's save (#17199)", async () => {
     const hook = await renderClosedForm();
     await openForm(hook);
     const quickRun = renderHook(() => useProjectSettings(PROJECT_ID));
@@ -186,19 +186,46 @@ describe("useProjectSettingsForm saving alongside another settings writer (#1643
 
     expect(stored().devServerCommand).toBe("npm start");
     expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run dev", "npm run lint"]);
+  });
+
+  it("holds a Quick Run unpin until the dialog's save running ahead of it lands (#17199)", async () => {
+    const hook = await renderClosedForm();
+    await openForm(hook);
+    const quickRun = renderHook(() => useProjectSettings(PROJECT_ID));
+
+    let formSaveStarted!: () => void;
+    const formSaving = new Promise<void>((resolve) => (formSaveStarted = resolve));
+    let releaseFormSave!: () => void;
+    const formSaveHeld = new Promise<void>((resolve) => (releaseFormSave = resolve));
+    vi.mocked(projectClient.saveSettings).mockImplementationOnce(async (projectId, settings) => {
+      formSaveStarted();
+      await formSaveHeld;
+      disk.set(projectId, JSON.parse(JSON.stringify(settings)));
+    });
 
     act(() => {
-      hook.result.current.setDevServerCommand("npm run serve");
+      hook.result.current.setDevServerCommand("npm start");
     });
+    let flushing!: Promise<unknown>;
+    let unpinning!: Promise<void>;
     await act(async () => {
-      await Promise.all([
-        hook.result.current.flush(),
-        quickRun.result.current.removeFromSaved("npm run dev"),
-      ]);
+      flushing = hook.result.current.flush();
+      await formSaving;
+      unpinning = quickRun.result.current.removeFromSaved("npm run dev");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run dev"]);
+
+    await act(async () => {
+      releaseFormSave();
+      await flushing;
+      await unpinning;
     });
 
-    expect(stored().devServerCommand).toBe("npm run serve");
-    expect(stored().runCommands.map((c) => c.command)).toEqual(["npm run lint"]);
+    expect(stored().devServerCommand).toBe("npm start");
+    expect(stored().runCommands).toEqual([]);
+    expect(quickRun.result.current.settings?.runCommands).toEqual([]);
+    expect(quickRun.result.current.settings?.devServerCommand).toBe("npm start");
   });
 });
 
