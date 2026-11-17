@@ -427,14 +427,19 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     expect(env.store.bindings()[0]!.lastError).toBeNull();
   });
 
-  it("drops a renewal's answer, or its failure, once its provider was replaced", async () => {
-    for (const outcome of ["answer", "failure"] as const) {
+  it("drops a renewal's answer, or its failure, once its provider left or was replaced", async () => {
+    for (const outcome of ["answer", "failure", "left"] as const) {
       const env = await importedHost();
       const before = env.lifecycle.statuses()[0]!.autoStopAt;
       const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
       vi.mocked(env.provider.renewLifetime!).mockImplementationOnce(async () => {
         env.unregister();
-        env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+        if (outcome !== "left") {
+          env.registry.register(replacement, {
+            owner: pluginOwner,
+            apiUrl: "https://api.acme.test",
+          });
+        }
         if (outcome === "failure") throw new Error("down");
         return resource({ autoStopAt: new Date(NOW + 120 * 60_000).toISOString() });
       });
@@ -457,19 +462,8 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     const renewing = env.lifecycle.renewDue();
     await vi.waitFor(() => expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1));
     const changing = env.lifecycle.setLifetime(env.hostId, 4);
-    // Its replacement fixes a machine's limit at create: a change saved now would never be sent.
+    // A replacement that renews too would take the change; only the guard stops it.
     const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
-    const info = replacement.info;
-    replacement.info = (platform) => {
-      const described = info(platform);
-      return {
-        ...described,
-        capabilities: {
-          ...described.capabilities,
-          lifetime: { kind: "fixed-at-create", canChangeWhileStopped: false },
-        },
-      };
-    };
     env.unregister();
     env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
     release();
@@ -478,6 +472,22 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
     expect(env.provider.renewLifetime).toHaveBeenCalledTimes(1);
     expect(replacement.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("keeps nothing of a lifetime change answered after its provider was replaced", async () => {
+    const env = await importedHost();
+    const before = env.lifecycle.statuses()[0]!.autoStopAt;
+    const replacement = fakeProvider(PLUGIN_PROVIDER, () => resource());
+    vi.mocked(env.provider.renewLifetime!).mockImplementationOnce(async () => {
+      env.unregister();
+      env.registry.register(replacement, { owner: pluginOwner, apiUrl: "https://api.acme.test" });
+      return resource({ autoStopAt: new Date(NOW + 240 * 60_000).toISOString() });
+    });
+    await expect(env.lifecycle.setLifetime(env.hostId, 4)).rejects.toThrow(
+      /changed while this was being saved/
+    );
+    expect(env.store.bindings()[0]!.lifetimeSeconds).toBe(7200);
+    expect(env.lifecycle.statuses()[0]!.autoStopAt).toBe(before);
   });
 
   it("polls again as soon as its provider is back, not after the time it was gone", async () => {

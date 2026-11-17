@@ -661,10 +661,30 @@ export class CloudHostLifecycle {
         return;
       }
     }
-    // A limit asked for under a model the provider has since dropped is refused, never sent as none.
-    if (binding.lifetimeSeconds !== null && !cloudLifetimeIsChosen(lifetimeModelOf(provider))) {
-      const message = `${nameOf(provider)} no longer takes a lifetime for its machines, so nothing was created. Remove the host and add it again.`;
-      this.recordError(bindingId, { code: "unsupported", message, at: this.now() });
+    // Asked only of the provider registered now, and only for what it still takes: a limit
+    // asked for under a model it has since dropped is refused, never sent as none.
+    const changed = !this.stillRegistered(binding.providerId, provider);
+    if (
+      changed ||
+      (binding.lifetimeSeconds !== null && !cloudLifetimeIsChosen(lifetimeModelOf(provider)))
+    ) {
+      // An earlier send may still have made a machine: that stays "outcome unknown", so
+      // removing the host goes the delete way, which looks for it first.
+      const sent = creation.sentAt !== null;
+      const reason = changed
+        ? `${nameOf(provider)} changed while the machine was being asked for.`
+        : `${nameOf(provider)} no longer takes a lifetime for its machines, so Daintree won't ask for one with it.`;
+      const next = sent
+        ? "An earlier request may still have made it; removing the host deletes it if it turns up."
+        : changed
+          ? "Nothing was asked for; Retry asks again."
+          : "Nothing was created; remove the host and add it again.";
+      const message = `${reason} ${next}`;
+      this.recordError(bindingId, {
+        code: sent ? "outcome-unknown" : changed ? "failed" : "unsupported",
+        message,
+        at: this.now(),
+      });
       throw invalid(message);
     }
     const provisioning = this.sendableProvisioning(binding, provider);
@@ -1163,7 +1183,10 @@ export class CloudHostLifecycle {
     // A running machine's own deadline moves first: a refusal leaves both the
     // machine and the lifetime Settings shows as they were.
     const { provider, credentials } = await this.context(binding);
-    // A provider registered in its place while the renewal settled answers for itself.
+    // Sent only through the provider still registered, and its answer kept only while it still is.
+    if (!this.stillRegistered(binding.providerId, provider) || provider !== owner) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
+    }
     if (!canRenewLifetime(provider)) {
       throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
     }
@@ -1172,6 +1195,9 @@ export class CloudHostLifecycle {
       resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
       throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (!this.stillRegistered(binding.providerId, provider)) {
+      throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
     }
     keep();
     this.observe(binding.id, resource);

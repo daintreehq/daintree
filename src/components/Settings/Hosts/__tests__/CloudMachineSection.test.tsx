@@ -491,6 +491,9 @@ describe("CloudMachineSection lifetime row", () => {
     cleanup();
     show(machine(fixed, { lifetimeSeconds: 7200, autoStopAt: null }));
     expect(lifetimeText()).toContain("hasn't said when this run stops");
+    cleanup();
+    show(machine(fixed, { lifetimeSeconds: null, autoStopAt: null }));
+    expect(lifetimeText()).toMatch(/^Never\. This run doesn't stop by itself\./);
   });
 
   it("lets a fixed limit change only while the machine is stopped, where the provider allows", () => {

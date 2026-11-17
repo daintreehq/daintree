@@ -1314,28 +1314,72 @@ describe("CloudHostLifecycle lifetime models", () => {
     }
   });
 
-  it("refuses to retry a create whose limit its provider no longer takes, rather than drop it", async () => {
-    const { lifecycle, provider, store } = await setup();
-    vi.mocked(provider.create).mockRejectedValueOnce(
+  /** Swaps the provider's lifetime model in place, as an update to its plugin would. */
+  function nowDescribes(provider: CloudProvider, lifetime: CloudLifetimeModel) {
+    const info = provider.info;
+    provider.info = (platform) => {
+      const described = info(platform);
+      return { ...described, capabilities: { ...described.capabilities, lifetime } };
+    };
+  }
+
+  async function lostCreate() {
+    const env = await setup();
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
       new BoatApiError("network", "lost", null, null, null)
     );
+    await env.lifecycle.create({
+      accountId: env.store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    return env;
+  }
+
+  it("refuses to retry a create whose limit its provider no longer takes, rather than drop it", async () => {
+    const { lifecycle, provider } = await lostCreate();
+    nowDescribes(provider, NONE);
+    await expect(lifecycle.retryCreate("build")).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringMatching(/no longer takes a lifetime/),
+    });
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    // The lost first request may still have made it: removal must still go the delete way.
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("outcome-unknown");
+  });
+
+  it("refuses a first create whose limit its provider stopped taking before it was sent", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.catalog).mockImplementationOnce(async (credentials) => {
+      nowDescribes(provider, IDLE);
+      return fakeProvider({ machine: resource() }).catalog(credentials);
+    });
     await lifecycle.create({
       accountId: store.accounts()[0]!.id,
       name: "build",
       machineType: "default",
       lifetimeHours: 2,
     });
-    await vi.waitFor(() =>
-      expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
-    );
-    const info = provider.info;
-    provider.info = (platform) => {
-      const described = info(platform);
-      return { ...described, capabilities: { ...described.capabilities, lifetime: NONE } };
-    };
-    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/no longer takes a lifetime/);
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.lastError?.code).toBe("unsupported"));
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(store.bindings()[0]!.creation!.sentAt).toBeNull();
+  });
+
+  it("asks no provider for a machine when its provider was replaced during the lookup", async () => {
+    const { lifecycle, provider, accounts } = await lostCreate();
+    const replacement = fakeProvider({ machine: resource() });
+    vi.mocked(provider.list).mockImplementationOnce(async () => {
+      vi.spyOn(accounts, "provider").mockReturnValue(replacement);
+      return [];
+    });
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/changed while the machine/);
     expect(provider.create).toHaveBeenCalledTimes(1);
-    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("unsupported");
+    expect(replacement.create).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("outcome-unknown");
   });
 
   it("creates a machine with a fixed runtime limit from the same choices", async () => {

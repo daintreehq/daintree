@@ -190,6 +190,8 @@ describe("cloud host labels", () => {
     expect(cloudCostFacts(status({ lifetime: fixed, lifetimeSeconds: null }))).toContain(
       "no auto-stop"
     );
+    // Boat's renewable lifetime says what it always said with no deadline reported.
+    expect(cloudCostFacts(status({ lifetimeSeconds: 7200 }))).toContain("no auto-stop");
     const deadline = new Date(Date.UTC(2026, 10, 14, 12)).toISOString();
     expect(
       cloudCostFacts(

@@ -159,6 +159,13 @@ describe("AddCloudHostDialog lifetime", () => {
     expect(screen.getByText(/Acme can't extend it while the machine runs/)).toBeTruthy();
     expect(initial).toContain("2 hours after starting, and that can't be extended while it runs");
     expect(initial).not.toContain("unless it's in use here");
+    await choose(lifetimeChoice()!, "8 hours");
+    expect(review()).toContain("8 hours after starting, and that can't be extended");
+    expect(await createAndSend()).toBe(8);
+  });
+
+  it("drops the fixed limit's warning once Never is chosen, and sends none", async () => {
+    await open({ kind: "fixed-at-create", canChangeWhileStopped: true });
     await choose(lifetimeChoice()!, "Never");
     expect(review()).toContain("It runs until you stop it.");
     expect(screen.queryByText(/it stops then even if/)).toBeNull();
