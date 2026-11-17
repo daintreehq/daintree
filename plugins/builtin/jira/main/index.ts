@@ -52,7 +52,7 @@ function isDataCenterSite(value: unknown): boolean {
  */
 async function wireProvenance(host: PluginHostApi): Promise<boolean> {
   let provenance: CredentialProvenance | null | "unknown";
-  let tracked = false;
+  let tracked: boolean;
   try {
     const [stored, marker, siteUrl] = await Promise.all([
       host.storage.get<unknown>(CREDENTIAL_PROVENANCE_KEY),
