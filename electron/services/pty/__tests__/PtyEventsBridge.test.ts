@@ -39,6 +39,25 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("carries the terminal-closing mark onto the bus, and only when set (#17193)", () => {
+    const closing: Array<true | undefined> = [];
+    events.on("agent:state-changed", (payload) => closing.push(payload.terminalClosing));
+    const edge = {
+      type: "agent-state",
+      id: "term-1",
+      state: "idle",
+      previousState: "working",
+      timestamp: 1,
+      trigger: "exit",
+      confidence: 1,
+    } as const;
+
+    bridgePtyEvent({ ...edge, terminalClosing: true });
+    bridgePtyEvent(edge);
+
+    expect(closing).toEqual([true, undefined]);
+  });
+
   it("keeps a host throwaway run's agent observations off the bus (#14445)", () => {
     const heard: unknown[] = [];
     events.on("agent:state-changed", (payload) => heard.push(payload));

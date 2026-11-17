@@ -811,6 +811,8 @@ export type PtyHostEvent =
       traceId?: string;
       trigger: string;
       confidence: number;
+      /** The transition happened while Daintree was ending the terminal (#17193). */
+      terminalClosing?: true;
       /** Terminal cwd (the worktree root in the typical case). */
       cwd?: string;
       waitingReason?: WaitingReason;
