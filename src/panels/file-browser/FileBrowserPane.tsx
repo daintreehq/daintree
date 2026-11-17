@@ -1424,6 +1424,7 @@ export function FileBrowserPane({
             <PendingUploadChips
               surface={uploadSurface}
               className="shrink-0 border-t border-divider p-2"
+              onReturnFocus={focusTree}
             />
             <LazyUploadConfirmHost />
           </>
