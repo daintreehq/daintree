@@ -697,9 +697,8 @@ describe("FileSearchService", () => {
     });
 
     it("fences a descendant load in flight when its ancestor is invalidated", async () => {
-      // A load in flight against the root itself would still be fenced by an
-      // exact-key drop; only a nested cwd needs the overlap scan of in-flight
-      // keys.
+      // The in-flight scan has to match a cwd beneath the invalidated root, not
+      // only the root itself.
       const dir = makeTempDir();
       tempDirs.push(dir);
       const nested = path.join(dir, "src");
@@ -736,10 +735,10 @@ describe("FileSearchService", () => {
       await pending.reached;
 
       const worktrees = Array.from({ length: 200 }, (_, i) =>
-        path.join(os.tmpdir(), `daintree-retired-worktree-${i}`)
+        path.resolve(os.tmpdir(), `daintree-retired-worktree-${i}`)
       );
       const cwds = Array.from({ length: 200 }, (_, i) =>
-        path.join(os.tmpdir(), `daintree-retired-cwd-${i}`)
+        path.resolve(os.tmpdir(), `daintree-retired-cwd-${i}`)
       );
       const retired = new Set([...worktrees, ...cwds]);
 
@@ -771,7 +770,13 @@ describe("FileSearchService", () => {
       await inFlight;
       service.sweep();
 
-      expect([...retired].filter((key) => holders.some((holder) => holder.has(key)))).toEqual([]);
+      // A structure the service keeps collects the paths of many calls; a call's
+      // own scratch set holds at most its own path and is garbage once it
+      // returns, though `holders` keeps it reachable here.
+      const heldPerHolder = [...new Set(holders)].map(
+        (holder) => [...retired].filter((key) => holder.has(key)).length
+      );
+      expect(heldPerHolder.filter((held) => held > 1)).toEqual([]);
       expect(service.getRetainedKeyCount()).toBe(baseline);
     });
 
