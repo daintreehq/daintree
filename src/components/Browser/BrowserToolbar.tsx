@@ -730,7 +730,7 @@ export function BrowserToolbar({
     }
   }, [url]);
 
-  // The pane-toolbar icon button, shared with the portal and the file viewers.
+  // The pane-toolbar icon button, shared with the file viewers.
   const buttonClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
   // The stored preference survives the dev server stopping, but with no terminal

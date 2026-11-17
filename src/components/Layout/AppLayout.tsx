@@ -268,7 +268,7 @@ export function AppLayout({
   // The plugin manager (#9558) is a full-screen overlay; while it owns the
   // viewport its claim marks the app chrome inert, same as the theme browser.
   // The view itself is mounted in App.tsx (it carries deep-link props), so
-  // AppLayout only needs the inert coordination, not the portal.
+  // AppLayout only needs the inert coordination, not the mount.
   const isPluginManagerOpen = useOverlayOpen("plugin-manager");
   const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);

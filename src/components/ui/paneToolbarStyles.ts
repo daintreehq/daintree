@@ -1,6 +1,6 @@
 /**
  * The one in-pane toolbar icon button: file viewer, diff, cross-worktree diff,
- * browser, portal, notification center and the find bars all spell their icon
+ * browser, notification center and the find bars all spell their icon
  * buttons with these, so the same action cannot look or respond differently
  * depending on which pane it sits in.
  *

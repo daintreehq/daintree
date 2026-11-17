@@ -51,9 +51,8 @@ export function WorktreeDialogs({
   const deleteDialogMounted = useKeepMounted(showDeleteDialog);
   const issuePickerMounted = useKeepMounted(showIssuePicker);
   // Every sidebar card holds these, so a closed dialog is never mounted until
-  // its first open: each mounted AppDialog subscribes to the portal store,
-  // which writes on every frame of a Portal Dock resize. Latched open after
-  // that, so the dialog's own presence gate still plays the exit.
+  // its first open. Latched open after that, so the dialog's own presence gate
+  // still plays the exit.
   const confirmDialogMounted = useKeepMounted(confirmDialog.isOpen);
   const titleDialogMounted = useKeepMounted(showTitleDialog);
   return (

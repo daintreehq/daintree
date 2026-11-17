@@ -49,7 +49,7 @@ export interface ResizeHandleProps extends Omit<
 
 /**
  * Every draggable edge in the app: the sidebar, the assistant panel, a two-pane split,
- * the diagnostics dock, the dev-preview tool drawer, the dock popovers, the portal, the
+ * the diagnostics dock, the dev-preview tool drawer, the dock popovers, the
  * file tree and the scratchpad. One target size, one grip ink ladder, one focus outline
  * and one reset gesture, so an edge reads and behaves the same wherever it sits.
  *
