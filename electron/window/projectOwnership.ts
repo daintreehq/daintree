@@ -223,28 +223,13 @@ export function redirectToProjectOwner(
   const browserWindow = context.browserWindow;
   const targetWindowId = context.windowId;
 
-  if (state === "foreground") {
-    revealWindow(browserWindow);
-    const stillArriving = projectViewManager.getOutgoingBridgeProjectId() !== null;
-    const webContents = projectViewManager.getActiveView()?.webContents;
-    if (webContents && !webContents.isDestroyed()) {
-      webContents.focus();
-      if (focusIntent && !stillArriving) {
-        webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, focusIntent);
-      }
-    }
-    if (focusIntent && stillArriving) {
-      projectViewManager.setPendingFocusIntent(project.id, focusIntent);
-    }
+  if (state !== "cached") {
+    focusWorkspaceOwner({ ...owner, state }, project.id, focusIntent);
     return { outcome: "focused-elsewhere", project, targetWindowId };
   }
 
   if (focusIntent) {
     projectViewManager.setPendingFocusIntent(project.id, focusIntent);
-  }
-  if (state === "activating") {
-    revealWindow(browserWindow);
-    return { outcome: "focused-elsewhere", project, targetWindowId };
   }
 
   // A window that has since moved to a remote host can still hold this
@@ -260,6 +245,42 @@ export function redirectToProjectOwner(
   requestOwnerSwitch(ownerSwitchRenderer(projectViewManager, browserWindow), project.id);
   revealWindow(browserWindow);
   return { outcome: "activated-elsewhere", project, targetWindowId };
+}
+
+/**
+ * Bring forward the window showing a workspace, or on its way to it, instead of
+ * opening a second view of it: a project and a scratch alike, since nothing
+ * here switches anything.
+ *
+ * On screen there, the workspace view itself takes keyboard focus and is sent
+ * the focus intent, unless a cold switch to it is still arriving, where the
+ * intent is parked for that switch to deliver. Still activating there, the
+ * active view may still be the workspace being left, so nothing is focused and
+ * the intent is parked for the activation under way.
+ */
+export function focusWorkspaceOwner(
+  owner: ProjectOwner & { state: "foreground" | "activating" },
+  workspaceId: string,
+  focusIntent?: ProjectFocusOnActivateIntent
+): void {
+  const { context, projectViewManager, state } = owner;
+  if (state === "activating") {
+    if (focusIntent) projectViewManager.setPendingFocusIntent(workspaceId, focusIntent);
+    revealWindow(context.browserWindow);
+    return;
+  }
+  revealWindow(context.browserWindow);
+  const stillArriving = projectViewManager.getOutgoingBridgeProjectId() !== null;
+  const webContents = projectViewManager.getActiveView()?.webContents;
+  if (webContents && !webContents.isDestroyed()) {
+    webContents.focus();
+    if (focusIntent && !stillArriving) {
+      webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, focusIntent);
+    }
+  }
+  if (focusIntent && stillArriving) {
+    projectViewManager.setPendingFocusIntent(workspaceId, focusIntent);
+  }
 }
 
 /**

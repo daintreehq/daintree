@@ -4,11 +4,17 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
+import {
+  collectActiveProjectIds,
+  projectViewManagersFrom,
+} from "../../../window/activeProjectIds.js";
+import { beginWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import type { PtyClient } from "../../../services/PtyClient.js";
+import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import type { WindowRegistry } from "../../../window/WindowRegistry.js";
 import type { Scratch } from "../../../../shared/types/scratch.js";
 
@@ -18,6 +24,11 @@ import type { Scratch } from "../../../../shared/types/scratch.js";
  * menu and titles, the PTY host's active workspace, and a fresh terminal port
  * for the view. Shared by `scratch:switch` and a window coming back to a
  * scratch from a remote host, which otherwise left its terminals unreachable.
+ *
+ * The window also lets go of the project it left (#17186): its workspace host
+ * stops counting the window as a holder, so a project no window shows any more
+ * stops foreground polling and can be reclaimed, and the project's row goes to
+ * the background unless another window still shows it.
  */
 export function activateScratchInWindow(options: {
   scratch: Scratch;
@@ -26,12 +37,32 @@ export function activateScratchInWindow(options: {
   view: WebContents | null | undefined;
   windowRegistry: WindowRegistry | null | undefined;
   ptyClient: PtyClient | null | undefined;
+  workspaceClient: WorkspaceClient | null | undefined;
+  /**
+   * The workspace the window showed before the scratch, read from the
+   * sender's own binding before the swap, never from the global pointer,
+   * which names whichever window switched last. Null when it showed none.
+   */
+  outgoingWorkspaceId: string | null;
 }): Scratch {
-  const { scratch, windowId, window, view, windowRegistry, ptyClient } = options;
+  const { scratch, windowId, window, view, windowRegistry, ptyClient, workspaceClient } = options;
+
+  if (windowId !== undefined) {
+    // A deferred tail of an earlier project switch in this window (a failed
+    // swap's restore, a cloned project's load) would attach the window to that
+    // project again behind the scratch.
+    beginWindowSwitch(windowId);
+    // A scratch has no workspace host. The pool drops the window as a holder
+    // of whatever it was attached to and backgrounds that host once nothing
+    // else holds it.
+    workspaceClient?.unregisterWindow(windowId);
+  }
+
   // Mutually exclusive with project: clear the project pointer so the
   // renderer's `getCurrentProject` does not race-restore the previous project.
   const updated = scratchStore.setCurrentScratch(scratch.id);
   projectStore.clearCurrentProject();
+  backgroundDepartedProject(options.outgoingWorkspaceId, windowRegistry);
 
   // Re-persist which workspace each window is showing (#11492). Built from
   // `getActiveProjectId()` across every window, so it runs after the swap.
@@ -55,6 +86,35 @@ export function activateScratchInWindow(options: {
     }
   }
 
-  broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: updated, switchId: randomUUID() });
+  // Only the scratch's own view: a broadcast would also make the scratch the
+  // current one in every other window's views, whatever they show.
+  if (view && !view.isDestroyed()) {
+    view.send(CHANNELS.SCRATCH_ON_SWITCH, { scratch: updated, switchId: randomUUID() });
+  }
   return updated;
+}
+
+/**
+ * The project the window left goes to the background, as a project switch
+ * backgrounds the one it leaves, unless another window, or a remote Shell,
+ * still shows it. A row that is not active (closed, missing, already in the
+ * background) is left as it is.
+ */
+function backgroundDepartedProject(
+  outgoingWorkspaceId: string | null,
+  windowRegistry: WindowRegistry | null | undefined
+): void {
+  if (!outgoingWorkspaceId) return;
+  const departed = projectStore.getProjectById(outgoingWorkspaceId);
+  if (departed?.status !== "active") return;
+  const shown = collectActiveProjectIds(
+    projectViewManagersFrom(windowRegistry ?? undefined),
+    null,
+    "scratch-switch"
+  );
+  if (shown.has(departed.id)) return;
+  broadcastToRenderer(
+    CHANNELS.PROJECT_UPDATED,
+    projectStore.updateProjectStatus(departed.id, "background")
+  );
 }
