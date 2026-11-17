@@ -1130,8 +1130,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
     function tripCrashLoop(hostIndex: number): void {
       const calls = devWorkerMock.instances[hostIndex].on.mock.calls as unknown[][];
       const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
-        | ((code: number) => void)
-        | undefined;
+        ((code: number) => void) | undefined;
       expect(onCrashLoop).toBeTypeOf("function");
       onCrashLoop?.(139);
     }
@@ -1210,9 +1209,9 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       await writeLoopingPlugin("dev-loop", "acme.dev-loop");
       const service = startService();
       await service.initialize();
-      (
-        service as unknown as { plugins: Map<string, { devMode?: boolean }> }
-      ).plugins.get("acme.dev-loop")!.devMode = true;
+      (service as unknown as { plugins: Map<string, { devMode?: boolean }> }).plugins.get(
+        "acme.dev-loop"
+      )!.devMode = true;
       await service.activatePlugin("acme.dev-loop");
 
       tripCrashLoop(base.hosts);
