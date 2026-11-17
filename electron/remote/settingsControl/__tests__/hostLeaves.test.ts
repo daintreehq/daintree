@@ -205,6 +205,7 @@ describe("the host's own setters for named settings (#14167)", () => {
         policyChanged.mockClear();
         seen.length = 0;
         leaves.write(leaf);
+        expect(stored.set).toHaveBeenCalledWith(...Object.entries(leaf)[0]!);
         expect(policyChanged).toHaveBeenCalledTimes(1);
         expect(seen).toEqual([1]);
       }
