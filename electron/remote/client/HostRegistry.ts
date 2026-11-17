@@ -330,7 +330,8 @@ export class HostRegistry {
         next.wake = wake;
       }
     }
-    if (payload.pendingPlacement !== undefined) applyPendingPlacement(next, payload.pendingPlacement);
+    if (payload.pendingPlacement !== undefined)
+      applyPendingPlacement(next, payload.pendingPlacement);
     if (payload.notificationsEnabled !== undefined) {
       if (typeof payload.notificationsEnabled !== "boolean") {
         throw invalid("notificationsEnabled must be true or false.");

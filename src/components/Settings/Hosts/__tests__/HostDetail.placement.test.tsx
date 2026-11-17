@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostConnectionState, HostListEntry, PendingHostPlacement } from "@shared/types/remoteHosts";
+import type {
+  HostConnectionState,
+  HostListEntry,
+  PendingHostPlacement,
+} from "@shared/types/remoteHosts";
 
 const client = vi.hoisted(() => ({
   update: vi.fn(async (payload: unknown) => payload),

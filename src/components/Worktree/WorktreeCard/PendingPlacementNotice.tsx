@@ -32,7 +32,8 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
   // Cancel removes this notice from under the button that was pressed.
   const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
   // A window on another host shows that host's worktrees, never one waiting here.
-  const found = getViewHostId() === null ? placementForWorktree(hosts, projectId, worktreeId) : null;
+  const found =
+    getViewHostId() === null ? placementForWorktree(hosts, projectId, worktreeId) : null;
   if (!found) return null;
 
   const hostId = found.host.descriptor.id;
@@ -66,9 +67,7 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
       >
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <span className="break-words text-text-secondary select-text">
-            {failure
-              ? failure.message
-              : "It opens there once Daintree is set up and connected."}
+            {failure ? failure.message : "It opens there once Daintree is set up and connected."}
           </span>
           {cancelError && <span className="text-text-primary">{cancelError}</span>}
           <div className="flex flex-wrap items-center gap-2">

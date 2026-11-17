@@ -383,7 +383,12 @@ describe("HostRegistry", () => {
       const registry = new HostRegistry(
         memoryStore({
           hosts: [
-            { id: "a", name: "a", connection: { kind: "ssh", target: "a" }, pendingPlacement: placement },
+            {
+              id: "a",
+              name: "a",
+              connection: { kind: "ssh", target: "a" },
+              pendingPlacement: placement,
+            },
             {
               id: "b",
               name: "b",

@@ -67,7 +67,11 @@ describe("watchOwnedHostCleanup", () => {
     const forget = vi.fn(async () => {});
     const clearPlacement = vi.fn(async () => {});
     stop = watchOwnedHostCleanup({
-      list: () => [waiting("studio", "/wt/a"), waiting("mini", "/wt/b"), waiting("box", "/wt/a", "/wt/a")],
+      list: () => [
+        waiting("studio", "/wt/a"),
+        waiting("mini", "/wt/b"),
+        waiting("box", "/wt/a", "/wt/a"),
+      ],
       forget,
       clearPlacement,
       probe: enoent,
