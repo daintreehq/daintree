@@ -63,14 +63,14 @@ const workingAgent = {
 
 const HOLD_TTL_MS = 60 * 60_000;
 
-function heldSend(token: string, text: string): HeldComposerSend {
+function heldSend(token: string, text: string, ttlMs = HOLD_TTL_MS): HeldComposerSend {
   return {
     terminalId: "t1",
     token,
     text,
     imagePaths: [],
     heldAt: Date.now(),
-    expiresAt: Date.now() + HOLD_TTL_MS,
+    expiresAt: Date.now() + ttlMs,
     status: "held",
   };
 }
@@ -170,12 +170,15 @@ describe("@notes in a held pane composer send", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
   });
 
-  async function sendHeld(): Promise<void> {
-    const sendText = setupSendText();
+  async function sendHeld(sendText = setupSendText()): Promise<void> {
     await act(async () => {
       expect(await sendText("Fix @notes", { submit: paneSubmit })).toBe(true);
     });
-    expect(hold).toHaveBeenCalledWith("t1", expect.stringContaining('"Rename this"'), undefined);
+    expect(hold).toHaveBeenLastCalledWith(
+      "t1",
+      expect.stringContaining('"Rename this"'),
+      undefined
+    );
     expect(terminalClient.submit).not.toHaveBeenCalled();
   }
 
@@ -184,6 +187,15 @@ describe("@notes in a held pane composer send", () => {
 
     // Held well past any wait for the composer's own token to reach the terminal.
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(pending(note)).toBe(true);
+
+    // Another pane's held send being delivered says nothing of this one.
+    useHeldComposerSendStore.getState().applyChange({
+      terminalId: "t2",
+      held: null,
+      ended: { token: "other", outcome: { kind: "delivered" } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
     expect(pending(note)).toBe(true);
 
     endHeld("hold-1", { kind: "delivered" });
@@ -204,13 +216,63 @@ describe("@notes in a held pane composer send", () => {
     expect(pending(note)).toBe(false);
   });
 
-  it("stops following a held send it never hears end, and leaves its notes", async () => {
+  it("still counts a held send typed just before it expired and confirmed just after", async () => {
     await sendHeld();
 
-    await vi.advanceTimersByTimeAsync(HOLD_TTL_MS + 10 * 60_000);
+    await vi.advanceTimersByTimeAsync(HOLD_TTL_MS + 60_000);
+    endHeld("hold-1", { kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(false);
+  });
+
+  it("stops following a held send it never hears end, by that send's own expiry", async () => {
+    hold.mockImplementation(async (_id, text) => ({
+      held: true,
+      send: heldSend("hold-1", text, 2 * 60_000),
+    }));
+    await sendHeld();
+
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
     endHeld("hold-1", { kind: "delivered" });
     await vi.advanceTimersByTimeAsync(0);
     expect(pending(note)).toBe(true);
+  });
+
+  it("refuses a second @notes send while the first is held, and clears on the first's delivery", async () => {
+    const sendText = setupSendText();
+    await sendHeld(sendText);
+
+    await act(async () => {
+      expect(await sendText("Again @notes", { submit: paneSubmit })).toBe(false);
+    });
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(terminalClient.submit).not.toHaveBeenCalled();
+    expect(pending(note)).toBe(true);
+
+    endHeld("hold-1", { kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(false);
+  });
+
+  it("follows the notes into a send held again after a drop", async () => {
+    const sendText = setupSendText();
+    await sendHeld(sendText);
+    endHeld("hold-1", { kind: "dropped", reason: "typed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(true);
+
+    hold.mockImplementation(async (_id, text) => ({
+      held: true,
+      send: heldSend("hold-2", text),
+    }));
+    await sendHeld(sendText);
+    expect(hold).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pending(note)).toBe(true);
+
+    endHeld("hold-2", { kind: "delivered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending(note)).toBe(false);
   });
 
   it.each<ComposerHoldOutcome>([
