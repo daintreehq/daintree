@@ -3,6 +3,7 @@ import { toHostSnapshot } from "../index.js";
 import type { SemanticSearchMatch } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerMap, HostContext } from "./types.js";
 import { mapTerminalInfo } from "./terminalInfo.js";
+import { findCaseInsensitiveLiteral } from "./caseInsensitiveLiteralMatch.js";
 
 export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, sendEvent } = ctx;
@@ -148,7 +149,6 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           return;
         }
       }
-      const needle = msg.isRegex ? null : msg.query.toLowerCase();
       for (const t of ptyManager.getAll()) {
         const buffer = t.semanticBuffer;
         if (!buffer || buffer.length === 0) continue;
@@ -163,11 +163,11 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
               start = m.index;
               end = m.index + m[0].length;
             }
-          } else if (needle !== null && needle.length > 0) {
-            const idx = cleaned.toLowerCase().indexOf(needle);
-            if (idx !== -1) {
-              start = idx;
-              end = idx + needle.length;
+          } else {
+            const range = findCaseInsensitiveLiteral(cleaned, msg.query);
+            if (range) {
+              start = range.start;
+              end = range.end;
             }
           }
           if (start !== -1 && end !== -1) {
