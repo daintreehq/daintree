@@ -735,6 +735,29 @@ describe("/mcp/decisions (#16011)", () => {
     }
   });
 
+  it("gives an agent no way to answer its own question as the person (#17101)", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+    const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Ship it?" });
+    const questionId = asked.structuredContent.question_id as string;
+
+    for (const name of ["answer_question", "answerQuestion", "answer"]) {
+      const answer = await rpc(port, "pane-token-pane-a", "tools/call", {
+        name,
+        arguments: { question_id: questionId, questionId, selectedOptionIds: ["approve"] },
+      });
+      expect(answer.status, name).toBe(200);
+      expect(answer.body, name).not.toContain('"sent"');
+    }
+
+    // Nothing was signed or queued for the person: the question still waits, unanswered.
+    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
+    expect((await store.getQuestion(questionId))?.answers_json).toBe("[]");
+    const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
+    expect(read.structuredContent).toMatchObject({ status: "queued", provenance: null });
+  });
+
   it("shows and cancels a question only for the pane that asked it", async () => {
     await boot(false);
     add(pane("pane-a"), pane("pane-b"));
