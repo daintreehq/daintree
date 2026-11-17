@@ -1605,7 +1605,7 @@ describe("git-write commit and working diff", () => {
 
       await handler(null, { cwd: "/tmp/repo", type: "head" });
 
-      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD"]);
+      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD", "--"]);
     });
 
     it("rejects an invalid diff type without invoking git", async () => {
