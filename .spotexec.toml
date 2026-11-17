@@ -13,21 +13,24 @@ queue_timeout = "60m"
 pool = ["aws"]
 env_allow = ["NODE_OPTIONS", "TZ"]
 
-# One shared pool for every command: 8-vCPU VMs with at least 32 GiB, up to four
+# One shared pool for every command: 8-vCPU VMs with at least 32 GiB, up to six
 # jobs to a VM (exclusive tasks take a whole one), and at most twelve VMs per
-# machine. Past that, even a workflow of thirty agents queues for a slot
-# instead of launching more. Starting a VM costs a minute or more, and every VM
-# then bills its idle timeout after its last job, so a few warm VMs beat many
-# cold ones. Builds on the machine's global runner named aws (its account,
-# regions, and its baked images and fleet state, which follow the runner's
-# name), or else its first aws-spot runner.
+# machine. Past that, even a workflow of thirty agents queues for a slot instead
+# of launching more. Starting a VM costs a minute or more, and every VM then
+# bills its idle timeout after its last job, so a few warm VMs beat many cold
+# ones. Six, not eight: these jobs average about 1.5 busy CPUs each, so six keep
+# all eight busy while they share the CPUs, and six typechecks (~3 GB each)
+# still fit 32 GiB. This is background batch work, so a busy VM matters more
+# than how fast any one job finishes. Builds on the machine's global runner
+# named aws (its account, regions, and its baked images and fleet state, which
+# follow the runner's name), or else its first aws-spot runner.
 [runners.aws]
 extends = "aws"
 extends_type = "aws-spot"
 vcpus = 8
 min_memory_gib = 32
 instance_types = ["m6a.*", "m7a.*", "m8a.*", "r6a.*", "r7a.*", "r8a.*"]
-max_slots = 4
+max_slots = 6
 max_instances = 12
 idle_timeout = "10m"
 
