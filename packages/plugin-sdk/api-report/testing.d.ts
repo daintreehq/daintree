@@ -283,9 +283,9 @@ interface Deployment {
  *
  * Returns the deployments the forge associates with the target, newest first
  * by creation time, failed and inactive ones included. A provider may read only
- * a recent window of a busy target's history, so the list can be incomplete,
- * and one environment can appear more than once: a rollout still in progress
- * doesn't hide the deployment it is replacing.
+ * part of a target's history, so the list can be incomplete. One environment
+ * can appear more than once, such as a rollout still in progress beside the
+ * deployment it is replacing, so pick per environment rather than per row.
  *
  * `null` means the branch or pull request doesn't exist on the forge; one with
  * nothing deployed returns `{ deployments: [] }`. A provider that can't read

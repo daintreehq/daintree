@@ -1221,10 +1221,10 @@ function requireValidDeployments(value: unknown): ForgeDeployment[] {
   if (!Array.isArray(raw)) {
     throw new Error("Forge provider returned a malformed deployment list");
   }
-  // `Array.from` turns a sparse array's holes into `undefined`, which fails
-  // validation below; `map` would skip them and forward the holes.
-  const rows: ForgeDeployment[] = Array.from(raw, (entry) => {
-    const d = entry as Partial<Deployment> | null | undefined;
+  // By index, not by iteration: a hole (or an iterator that skips one) reads as
+  // `undefined` and fails validation instead of silently dropping a row.
+  const rows: ForgeDeployment[] = Array.from({ length: raw.length }, (_, index) => {
+    const d = raw[index] as Partial<Deployment> | null | undefined;
     if (
       !d ||
       typeof d !== "object" ||

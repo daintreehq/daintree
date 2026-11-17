@@ -358,15 +358,24 @@ describe("deployments.getDeployments (pull request)", () => {
       "refs/heads/",
       "dependabot/npm_and_yarn/deps-9ea22ff7bb"
     );
-    mockGraphQLClient.mockResolvedValueOnce(prWith({ head: [sameName], isCrossRepository: true }));
-    expect((await getDeployments(pullRequest(12692)))?.deployments.map((d) => d.id)).not.toContain(
-      "upstream-branch"
-    );
+    const bareCommit = { ...recordedTipNode, id: "bare-commit" };
+    const ownPullRef = withRef("own-pull-ref", "refs/pull/", "12692/head");
+    const head = [sameName, bareCommit, ownPullRef];
+    const timeline = [withRef("timeline-release", "refs/heads/", "release")];
+    const ids = async () =>
+      (await getDeployments(pullRequest(12692)))?.deployments.map((d) => d.id).sort();
 
-    mockGraphQLClient.mockResolvedValueOnce(prWith({ head: [sameName], isCrossRepository: false }));
-    expect((await getDeployments(pullRequest(12692)))?.deployments.map((d) => d.id)).toContain(
-      "upstream-branch"
-    );
+    mockGraphQLClient.mockResolvedValueOnce(prWith({ head, timeline, isCrossRepository: true }));
+    expect(await ids()).toEqual([
+      "DE_kwDOIuCgE88AAAAB09I9GQ",
+      "DE_kwDOIuCgE88AAAABzY13lQ",
+      "bare-commit",
+      "own-pull-ref",
+      "timeline-release",
+    ]);
+
+    mockGraphQLClient.mockResolvedValueOnce(prWith({ head, timeline, isCrossRepository: false }));
+    expect(await ids()).toContain("upstream-branch");
   });
 
   it("reads only the timeline for a PR with no head commits, but rejects a missing commit list", async () => {
@@ -381,6 +390,11 @@ describe("deployments.getDeployments (pull request)", () => {
     delete unreadable.repository.pullRequest.commits;
     mockGraphQLClient.mockResolvedValueOnce(unreadable);
     await expect(getDeployments(pullRequest(12692))).rejects.toThrow(/head commit list/);
+
+    const nullHead = structuredClone(PR_FAILED_ACROSS_PUSHES);
+    nullHead.repository.pullRequest.commits.nodes = [null as never];
+    mockGraphQLClient.mockResolvedValueOnce(nullHead);
+    await expect(getDeployments(pullRequest(12692))).rejects.toThrow(/unreadable head commit/);
   });
 
   it("returns null for a PR number that doesn't exist", async () => {
