@@ -123,7 +123,7 @@ export function useProjectBranding(projectId?: string): UseProjectBrandingReturn
   const currentProject = useProjectStore((state) => state.currentProject);
   const targetId = projectId || currentProject?.id;
 
-  // Subscribe to cache changes — re-renders on any cache mutation
+  // Re-runs the fetch effect on any cache mutation
   const currentVersion = useSyncExternalStore(subscribe, getSnapshot);
 
   useEffect(() => {
@@ -137,12 +137,16 @@ export function useProjectBranding(projectId?: string): UseProjectBrandingReturn
     if (targetId) fetchBranding(targetId);
   }, [targetId, currentVersion]);
 
-  if (!targetId) {
-    return { projectIconSvg: undefined, isLoading: false };
-  }
+  // Read through snapshots, not straight from the maps: React Compiler memoizes
+  // a bare map read by targetId alone, so a mounted consumer would never see an
+  // icon that lands after its first render.
+  const projectIconSvg = useSyncExternalStore(subscribe, () =>
+    targetId ? brandingCache.get(targetId) : undefined
+  );
+  const isLoading = useSyncExternalStore(
+    subscribe,
+    () => !!targetId && !brandingCache.has(targetId) && pendingFetches.has(targetId)
+  );
 
-  return {
-    projectIconSvg: brandingCache.get(targetId),
-    isLoading: !brandingCache.has(targetId) && pendingFetches.has(targetId),
-  };
+  return { projectIconSvg, isLoading };
 }
