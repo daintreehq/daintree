@@ -11,6 +11,19 @@ function normalizeForComparison(p: string, caseInsensitive: boolean): string {
 }
 
 /**
+ * The absolute path of a file git reported relative to a worktree, spelled by
+ * the host's rules. Git separates with "/" everywhere, so on a POSIX host a
+ * backslash belongs to a name (`a\b.txt` is not `a/b.txt`) and survives. A
+ * Windows host can't name a file with one and takes either separator.
+ */
+export function joinWorktreeFilePath(worktreePath: string, relativePath: string): string {
+  const windows = isHostWindows();
+  const base = windows ? worktreePath.replace(/\\/g, "/") : worktreePath;
+  const tail = windows ? relativePath.replace(/\\/g, "/") : relativePath;
+  return `${base.replace(/\/+$/, "")}/${tail.replace(/^\/+/, "")}`;
+}
+
+/**
  * Infer a worktreeId from a terminal's cwd by longest-prefix matching against the
  * worktrees list. Returns undefined when no worktree's path is a prefix of cwd.
  * Uses segment-aware matching after normalizing separators on both sides, so

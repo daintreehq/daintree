@@ -294,6 +294,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import {
   beginStagingStatusRead,
   rememberStagingStatus,
@@ -614,6 +615,77 @@ describe("ReviewHub", () => {
           path: `${WORKTREE_PATH}/src/app.ts`,
           line: 17,
           projectId: REVIEW_PROJECT_ID,
+        });
+      });
+    });
+
+    describe("editor target spelling", () => {
+      afterEach(() => {
+        _resetHostPlatformForTests();
+      });
+
+      it("keeps a literal backslash in a POSIX file name instead of opening the nested path", async () => {
+        setHostPlatformInfo({ platform: "linux" });
+        // Both exist on a POSIX host: a file whose name holds a backslash, and
+        // an unrelated `b.txt` inside a folder `a`.
+        getStagingStatusMock.mockResolvedValue(
+          makeMergingStatus({
+            conflicted: ["a\\b.txt"],
+            conflictedFiles: [{ path: "a\\b.txt", xy: "UU", label: "both modified" }],
+            unstaged: [{ path: "a/b.txt", status: "modified", insertions: 1, deletions: 0 }],
+          })
+        );
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "a\\b.txt", hunkCount: 1, firstMarkerLine: 9 },
+        ]);
+
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={"/home/user/pro\\ject/"}
+            onClose={vi.fn()}
+          />
+        );
+
+        // The marker line reaches the row with the scan, which the badge shows.
+        await screen.findByTestId("conflict-hunk-count-a\\b.txt");
+        fireEvent.click(screen.getByRole("button", { name: "Open a\\b.txt in external editor" }));
+
+        await waitFor(() => {
+          expect(openInEditorMock).toHaveBeenCalledWith({
+            path: "/home/user/pro\\ject/a\\b.txt",
+            line: 9,
+            projectId: REVIEW_PROJECT_ID,
+          });
+        });
+      });
+
+      it("joins a Windows worktree with forward slashes and keeps the marker line", async () => {
+        setHostPlatformInfo({ platform: "win32" });
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 4 },
+        ]);
+
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={"C:\\Users\\dev\\project\\"}
+            onClose={vi.fn()}
+          />
+        );
+
+        await screen.findByTestId("conflict-hunk-count-src/app.ts");
+        fireEvent.click(
+          screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+        );
+
+        await waitFor(() => {
+          expect(openInEditorMock).toHaveBeenCalledWith({
+            path: "C:/Users/dev/project/src/app.ts",
+            line: 4,
+            projectId: REVIEW_PROJECT_ID,
+          });
         });
       });
     });
