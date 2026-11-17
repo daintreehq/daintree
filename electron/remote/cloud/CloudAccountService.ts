@@ -403,20 +403,21 @@ export class CloudAccountService {
       // Removed while the check was out: nothing is sealed for an account that's gone.
       const before = this.requireAccount(account.id);
       this.requireCurrentOrigin(before);
-      const previous = await this.deps.vault.get(account.id).catch(() => null);
+      // Read before anything is overwritten: a set that can't be read now couldn't be put back.
+      const previous = await this.deps.vault.get(account.id);
       await this.deps.vault.put(account.id, credentials);
       try {
         this.deps.store.putAccount({
-          ...this.requireAccount(account.id),
+          // A check of the old set may have written its identity while this one was sealed.
+          ...(this.deps.store.account(account.id) ?? before),
           keyHint: this.hint(provider, credentials),
           credentialRevision: newCredentialRevision(),
           validation: { status: "valid", checkedAt: this.now() },
         });
       } catch (error) {
-        // The account still names the set it had, so the vault goes back to holding it.
-        const kept = previous && this.deps.store.account(account.id);
+        // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
         await (
-          kept ? this.deps.vault.put(account.id, previous) : this.deps.vault.delete(account.id)
+          previous ? this.deps.vault.put(account.id, previous) : this.deps.vault.delete(account.id)
         ).catch(() => {});
         throw error;
       }

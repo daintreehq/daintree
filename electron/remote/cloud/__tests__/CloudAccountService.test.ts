@@ -650,6 +650,37 @@ describe("CloudAccountService with declared credential sets", () => {
     refuse(Object.assign(new Error("revoked"), { code: "401" }));
     expect(await listing).toBeInstanceOf(AppError);
     expect(accounts.summaries()[0]!.validation).toMatchObject({ status: "valid" });
+
+    // The same refusal of the set kept now does mark it.
+    list.mockRejectedValueOnce(Object.assign(new Error("revoked"), { code: "401" }));
+    await expect(accounts.listResources(added.id)).rejects.toBeInstanceOf(AppError);
+    expect(accounts.summaries()[0]!.validation).toMatchObject({ status: "invalid" });
+  });
+
+  it("stops a replacement that can't read the set it would replace, before overwriting it", async () => {
+    const provider = fieldsProvider("acme.clouds.gce", KEY_FILE);
+    const { accounts, vault, store } = service({ provider });
+    const first = { keyFile: serviceAccountKey("key-one"), project: "acme-build" };
+    const added = await accounts.addAccount({
+      providerId: "acme.clouds.gce",
+      credentials: first,
+      scopeId: "personal",
+    });
+    vi.spyOn(vault, "get").mockRejectedValueOnce(new Error("keychain timed out"));
+    const put = vi.spyOn(vault, "put");
+    const remove = vi.spyOn(vault, "delete");
+    vi.spyOn(store, "putAccount").mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+    await expect(
+      accounts.replaceCredentials(added.id, {
+        keyFile: serviceAccountKey("key-two"),
+        project: "acme-build",
+      })
+    ).rejects.toThrow("keychain timed out");
+    expect(put).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(vault.sets.get(added.id)).toEqual(first);
   });
 
   it("doesn't cache a catalog read with credentials since replaced", async () => {
@@ -777,22 +808,30 @@ describe("CloudAccountService with declared credential sets", () => {
       },
       scopeId: "personal",
     });
-    vi.spyOn(vault, "put").mockRejectedValueOnce(new Error("keychain locked"));
+    let fail: (error: Error) => void = () => {};
+    const put = vi
+      .spyOn(vault, "put")
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => (fail = reject)));
     const second = {
       accessKeyId: "AKIAEXAMPLE0002",
       secretAccessKey: "secret-access-key-two",
       region: "us-east-1",
     };
-    const results = await Promise.allSettled([
-      accounts.replaceCredentials(added.id, second),
-      accounts.replaceCredentials(added.id, second),
-    ]);
-    expect(results[0]).toMatchObject({
-      status: "rejected",
-      reason: { message: "keychain locked" },
-    });
-    expect(results[1]).toMatchObject({ status: "fulfilled" });
-    expect(vault.sets.get(added.id)).toEqual(second);
+    const third = {
+      accessKeyId: "AKIAEXAMPLE0003",
+      secretAccessKey: "secret-access-key-three",
+      region: "us-east-1",
+    };
+    const first = accounts.replaceCredentials(added.id, second).catch((e: unknown) => e);
+    const next = accounts.replaceCredentials(added.id, third);
+    await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    // The second waits its turn: nothing of it is sealed while the first is still sealing.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(put).toHaveBeenCalledTimes(1);
+    fail(new Error("keychain locked"));
+    expect(await first).toMatchObject({ message: "keychain locked" });
+    expect(await next).toMatchObject({ keyHint: "hree" });
+    expect(vault.sets.get(added.id)).toEqual(third);
   });
 
   it("keeps working with an account whose bare key was sealed before sets", async () => {

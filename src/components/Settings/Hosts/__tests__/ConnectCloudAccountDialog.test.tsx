@@ -229,17 +229,52 @@ describe("ConnectCloudAccountDialog", () => {
     type("cloud-account-credential-project", "acme-build");
     expect(isDisabled(button("Check credentials"))).toBe(false);
     chooseFile("cloud-account-credential-keyFile", new File(["  \n"], "blank.json"));
-    expect((await screen.findByRole("alert")).textContent).toMatch(/empty/);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/empty/);
+    // The picker is the field's control: its label names it and its error describes it.
+    const picker = button("Choose file for Service account key");
+    const label = [...document.querySelectorAll("label")].find(
+      (candidate) => candidate.textContent === "Service account key (optional)"
+    );
+    expect(label?.control).toBe(picker);
+    expect(picker.getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
     expect(isDisabled(button("Check credentials"))).toBe(true);
-    fireEvent.keyDown(screen.getByTestId("cloud-account-credential-project"), { key: "Enter" });
+    const project = screen.getByTestId("cloud-account-credential-project");
+    fireEvent.keyDown(project, { key: "Enter" });
     expect(cloudClient.checkAccountCredentials).not.toHaveBeenCalled();
     fireEvent.click(button("Clear Service account key"));
     expect(screen.queryByRole("alert")).toBeNull();
-    fireEvent.click(button("Check credentials"));
+    fireEvent.keyDown(project, { key: "Enter" });
     await screen.findByRole("radio", { name: /Personal/ });
     expect(cloudClient.checkAccountCredentials).toHaveBeenCalledWith("acme.clouds.gce", {
       project: "acme-build",
     });
+  });
+
+  it("says a file couldn't be read, even when the failure has no words of its own", async () => {
+    const optionalFile = provider("acme.clouds.gce", [
+      field("project", "Project", "single-line", { secret: false }),
+      field("keyFile", "Service account key", "key-file", { required: false }),
+    ]);
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={optionalFile} />);
+    type("cloud-account-credential-project", "acme-build");
+    const unreadable = new File(["{}"], "locked.json");
+    Object.defineProperty(unreadable, "text", { value: () => Promise.reject(new Error("")) });
+    chooseFile("cloud-account-credential-keyFile", unreadable);
+    expect((await screen.findByRole("alert")).textContent).toContain("That file couldn't be read");
+    expect(isDisabled(button("Check credentials"))).toBe(true);
+  });
+
+  it("checks nothing for a provider whose every field is optional until one is filled in", () => {
+    const optional = provider("acme.clouds.do", [
+      field("token", "Token", "single-line", { required: false }),
+    ]);
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={optional} />);
+    expect(isDisabled(button("Check key"))).toBe(true);
+    type("cloud-account-credential-token", "   ");
+    expect(isDisabled(button("Check key"))).toBe(true);
+    type("cloud-account-credential-token", "dop_v1_token");
+    expect(isDisabled(button("Check key"))).toBe(false);
   });
 
   it("replaces an account's whole set", async () => {
@@ -276,6 +311,10 @@ describe("ConnectCloudAccountDialog", () => {
     fireEvent.click(button("Check key"));
     fireEvent.click(await screen.findByRole("button", { name: "Connect account" }));
     await waitFor(() => expect(cloudClient.addAccount).toHaveBeenCalled());
+    expect(cloudClient.checkAccountCredentials.mock.calls).toEqual([
+      ["boat", { apiKey: "boat_e2e_wrong_key" }],
+      ["boat", { apiKey: "boat_live_0123456789abcd" }],
+    ]);
     expect(cloudClient.addAccount.mock.calls[0]![0]).toMatchObject({
       providerId: "boat",
       credentials: { apiKey: "boat_live_0123456789abcd" },

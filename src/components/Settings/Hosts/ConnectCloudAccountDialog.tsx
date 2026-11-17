@@ -179,6 +179,7 @@ export function ConnectCloudAccountDialog({
   const complete =
     reading.size === 0 &&
     Object.keys(fieldErrors).length === 0 &&
+    Object.keys(entered).length > 0 &&
     fields.every((field) => !field.required || own(entered, field.id) !== undefined);
   const reviewed = !replacing && checked !== null && checkedEdits === edits;
 
@@ -246,7 +247,11 @@ export function ConnectCloudAccountDialog({
       (failure: unknown) => {
         if (fileReads.current.get(field.id) !== read) return;
         setReadingField(field.id, false);
-        setFieldError(field.id, errorText(failure, "That file couldn't be read"));
+        // Never blank: an empty error would read as no error and let the form go on without it.
+        setFieldError(
+          field.id,
+          errorText(failure, "That file couldn't be read") || "That file couldn't be read"
+        );
       }
     );
   };
