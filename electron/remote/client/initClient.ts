@@ -45,6 +45,7 @@ import {
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
+import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
 import { createCloudTransports } from "../cloud/cloudTransport.js";
@@ -860,7 +861,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     backend: store as unknown as CloudHostsStoreBackend,
     emit: broadcastLocal,
     onAccountRemoved: (accountId) => cloudFiles.forgetAccount(accountId),
+    beforeAccountRemoved: async (accountId) => machineKeys?.revokePending(accountId),
   });
+  // Bound once the host list and links exist (below).
+  let machineKeys: CloudMachineKeys | null = null;
   // Bound once the host list and client exist (below); a dial before then is refused.
   let cloudLifecycle: CloudHostLifecycle | null = null;
   const requireCloudLifecycle = (): CloudHostLifecycle => {
@@ -1096,11 +1100,23 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await client.update({ hostId, pendingPlacement: null });
     },
   });
+  machineKeys = new CloudMachineKeys({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const keysForMachines = machineKeys;
+  const stopArmingMachines = manager.onSessionOpened((hostId, session) =>
+    keysForMachines.sessionOpened(hostId, session)
+  );
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
     files: cloudFiles,
     clientDir,
+    machineKeys,
     hosts: {
       add: (name, connection) => client.add({ name, connection }),
       get: (hostId) => registry.get(hostId),
@@ -1166,6 +1182,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterSignIn();
       // Before the masters close at quit: one it was starting is then among them.
       await signIn.dispose();
+      stopArmingMachines();
+      machineKeys?.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

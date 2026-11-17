@@ -147,10 +147,20 @@ export function idleClockSentence(
   sampledAt: number | null
 ): string {
   if (!idle) return IDLE_TIME_COUNTED;
-  if (idle.busy || idle.idleEndsAt === null) return `In use now. ${IDLE_TIME_COUNTED}.`;
+  if (idle.busy || idle.idleEndsAt === null) {
+    return idle.stopsWhenIdle
+      ? `In use now. ${IDLE_TIME_COUNTED}, and it stops by itself once idle that long.`
+      : `In use now. ${IDLE_TIME_COUNTED}.`;
+  }
   const since = clockTime(new Date(idle.lastWorkAt).toISOString());
   const ends = clockTime(new Date(idle.idleEndsAt).toISOString());
   const ended = sampledAt !== null && idle.idleEndsAt <= sampledAt;
+  // Only the host's own word that it holds a key says it will stop (#17361).
+  if (idle.stopsWhenIdle) {
+    return ended
+      ? `Idle since ${since}. Its idle time ended ${ends}, so it stops by itself.`
+      : `Idle since ${since}. It stops by itself ${ends} if it stays idle.`;
+  }
   return `Idle since ${since}. Its idle time ${ended ? "ended" : "ends"} ${ends}.`;
 }
 

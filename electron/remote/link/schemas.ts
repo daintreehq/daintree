@@ -198,6 +198,7 @@ const HostSummarySchema = z.object({
       lastWorkAt: epochMs,
       busy: z.boolean(),
       idleEndsAt: epochMs.nullable(),
+      stopsWhenIdle: z.boolean().optional(),
     })
     .optional(),
 });

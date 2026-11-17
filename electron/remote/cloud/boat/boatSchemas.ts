@@ -191,13 +191,48 @@ export const boatErrorEnvelopeSchema = z
     code: z.string().optional(),
     message: z.string().optional(),
     requestId: z.string().optional(),
+    // An object on most routes; a bare code on some (`scoped_api_key_creation_disabled`).
     error: z
+      .union([
+        z.string(),
+        z
+          .object({
+            code: z.string().optional(),
+            message: z.string().optional(),
+            details: z.record(z.string(), z.unknown()).optional(),
+          })
+          .loose(),
+      ])
+      .optional(),
+  })
+  .loose();
+
+const scopeSetSchema = z.union([z.literal("*"), z.array(z.string())]);
+
+/** An API key's metadata; Boat never returns a secret here. */
+export const boatApiKeySchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().optional().default(""),
+    expiresAt: nullableString,
+    scope: z
       .object({
-        code: z.string().optional(),
-        message: z.string().optional(),
-        details: z.record(z.string(), z.unknown()).optional(),
+        actions: z.array(z.string()).optional(),
+        sandboxes: scopeSetSchema.optional(),
+        environments: scopeSetSchema.optional(),
       })
       .loose()
       .optional(),
   })
   .loose();
+
+export type BoatApiKey = z.infer<typeof boatApiKeySchema>;
+
+/** A created key: its metadata and the secret, which Boat shows this once. */
+export const boatScopedKeyResponseSchema = z
+  .object({ apiKey: boatApiKeySchema, secret: z.string().min(8) })
+  .loose();
+
+export type BoatScopedKeyResponse = z.infer<typeof boatScopedKeyResponseSchema>;
+
+export const boatApiKeyListSchema = z.object({ apiKeys: z.array(z.unknown()) }).loose();

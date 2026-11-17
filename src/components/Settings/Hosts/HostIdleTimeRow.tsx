@@ -59,6 +59,8 @@ interface HostIdleTimeRowProps {
   idle: HostIdleObservation | undefined;
   /** When that summary was taken, by the host's clock. */
   sampledAt: number | null;
+  /** Why the machine can't stop itself once idle, as this device found; null when nothing stands in the way. */
+  selfStopProblem?: string | null;
 }
 
 /**
@@ -72,6 +74,7 @@ export function HostIdleTimeRow({
   connected,
   idle,
   sampledAt,
+  selfStopProblem = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -236,9 +239,13 @@ export function HostIdleTimeRow({
     <SettingsSelect
       label={LABEL}
       description={
-        connected
+        (connected
           ? idleClockSentence(idle, sampledAt)
-          : `Kept on ${hostName}, as last read. Connect to change it`
+          : `Kept on ${hostName}, as last read. Connect to change it`) +
+        // Said only while the host doesn't hold a key: one it holds settles it.
+        (selfStopProblem && !idle?.stopsWhenIdle
+          ? `${connected && idle ? "" : "."} ${selfStopProblem}`
+          : "")
       }
       value={String(leaf.minutes)}
       onValueChange={save}

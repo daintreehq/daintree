@@ -529,6 +529,12 @@ export interface CloudHostStatus {
   hostKeyReview: CloudHostKeyReview | null;
   /** When this device last moved the machine's auto-stop forward because it was in use here. */
   keptRunningAt: number | null;
+  /**
+   * Why the machine can't renew and stop itself by its host's idle time, as
+   * this device last found (#17361); null when nothing stands in the way, or
+   * its provider has no such keys. Optional for snapshots from before it.
+   */
+  selfStopProblem?: string | null;
 }
 
 /** The machine as it would be created. */

@@ -123,10 +123,36 @@ export interface StoredCloudBinding {
   createdAt: number;
 }
 
+/**
+ * A key Daintree issued so one machine can renew and stop itself (#17361):
+ * never its secret, which only the machine holds, but enough to revoke it.
+ * Written before the provider is asked, so a key whose answer was lost is
+ * still found by its name.
+ */
+export interface StoredMachineKey {
+  id: string;
+  bindingId: string;
+  accountId: string;
+  providerId: CloudProviderId;
+  resourceId: string;
+  /** Unique to this issue, so a create whose answer was lost can be found. */
+  name: string;
+  keyId: string | null;
+  expiresAt: number | null;
+  /**
+   * `issuing` until the provider answers, `delivering` until the machine
+   * confirms it holds it, `active` while it does, and `revoke` once nothing
+   * should: replaced, refused, or its host removed.
+   */
+  state: "issuing" | "delivering" | "active" | "revoke";
+  createdAt: number;
+}
+
 export interface CloudHostsValue {
   version: 1;
   accounts: StoredCloudAccount[];
   bindings: StoredCloudBinding[];
+  machineKeys?: StoredMachineKey[];
 }
 
 export interface CloudHostsStoreBackend {
@@ -361,23 +387,57 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
   };
 }
 
+const MACHINE_KEY_STATES = new Set(["issuing", "delivering", "active", "revoke"]);
+
+function readMachineKey(raw: unknown): StoredMachineKey | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const id = nonEmpty(value.id);
+  const bindingId = nonEmpty(value.bindingId);
+  const accountId = nonEmpty(value.accountId);
+  const providerId = nonEmpty(value.providerId);
+  const resourceId = nonEmpty(value.resourceId);
+  const name = nonEmpty(value.name);
+  if (!id || !bindingId || !accountId || !providerId || !resourceId || !name) return null;
+  if (!isCloudProviderId(providerId) || !MACHINE_KEY_STATES.has(value.state as string)) return null;
+  return {
+    id,
+    bindingId,
+    accountId,
+    providerId,
+    resourceId,
+    name,
+    keyId: nonEmpty(value.keyId),
+    expiresAt: num(value.expiresAt),
+    state: value.state as StoredMachineKey["state"],
+    createdAt: num(value.createdAt) ?? 0,
+  };
+}
+
 /**
  * Reads tolerate anything a hand edit or another build left; a record that
  * doesn't read is skipped here but kept on disk, through every write, so a
  * downgrade never deletes what it can't understand by reading it. A record
  * whose provider isn't registered now still reads: its provider id is valid.
  */
+interface RawCloudHosts {
+  accounts: unknown[];
+  bindings: unknown[];
+  machineKeys: unknown[];
+}
+
 export class CloudHostStore {
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly backend: CloudHostsStoreBackend) {}
 
-  private raw(): { accounts: unknown[]; bindings: unknown[] } {
+  private raw(): RawCloudHosts {
     const value = this.backend.get("cloudHosts") as
-      { accounts?: unknown; bindings?: unknown } | undefined;
+      { accounts?: unknown; bindings?: unknown; machineKeys?: unknown } | undefined;
     return {
       accounts: Array.isArray(value?.accounts) ? value.accounts : [],
       bindings: Array.isArray(value?.bindings) ? value.bindings : [],
+      machineKeys: Array.isArray(value?.machineKeys) ? value.machineKeys : [],
     };
   }
 
@@ -443,9 +503,54 @@ export class CloudHostStore {
     return next;
   }
 
+  /** Removes the binding and, in the same write, marks every key its machine was given for revoking. */
   removeBinding(id: string): void {
     this.mutate((raw) => {
       raw.bindings = raw.bindings.filter((entry) => (entry as { id?: unknown })?.id !== id);
+      raw.machineKeys = raw.machineKeys.map((entry) => {
+        const key = entry as { bindingId?: unknown } | null;
+        return key?.bindingId === id ? { ...key, state: "revoke" } : entry;
+      });
+    });
+  }
+
+  machineKeys(): StoredMachineKey[] {
+    return this.raw()
+      .machineKeys.map(readMachineKey)
+      .filter((key): key is StoredMachineKey => key !== null);
+  }
+
+  machineKey(id: string): StoredMachineKey | null {
+    return this.machineKeys().find((key) => key.id === id) ?? null;
+  }
+
+  putMachineKey(key: StoredMachineKey): void {
+    this.mutate((raw) => {
+      const index = raw.machineKeys.findIndex(
+        (entry) => (entry as { id?: unknown })?.id === key.id
+      );
+      if (index >= 0) raw.machineKeys[index] = key;
+      else raw.machineKeys.push(key);
+    });
+  }
+
+  /** Changes one key record in place; one that is gone stays gone. */
+  updateMachineKey(
+    id: string,
+    change: (key: StoredMachineKey) => StoredMachineKey
+  ): StoredMachineKey | null {
+    const current = this.machineKey(id);
+    if (!current) return null;
+    const next = change(current);
+    this.putMachineKey(next);
+    return next;
+  }
+
+  removeMachineKey(id: string): void {
+    this.mutate((raw) => {
+      raw.machineKeys = raw.machineKeys.filter(
+        (entry) => (entry as { id?: unknown })?.id !== id
+      );
     });
   }
 
@@ -454,13 +559,14 @@ export class CloudHostStore {
     return () => this.listeners.delete(listener);
   }
 
-  private mutate(change: (raw: { accounts: unknown[]; bindings: unknown[] }) => void): void {
+  private mutate(change: (raw: RawCloudHosts) => void): void {
     const raw = this.raw();
     change(raw);
     this.backend.set("cloudHosts", {
       version: 1,
       accounts: raw.accounts as StoredCloudAccount[],
       bindings: raw.bindings as StoredCloudBinding[],
+      machineKeys: raw.machineKeys as StoredMachineKey[],
     });
     for (const listener of [...this.listeners]) {
       try {

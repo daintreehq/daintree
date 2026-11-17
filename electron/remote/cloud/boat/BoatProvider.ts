@@ -7,6 +7,8 @@ import type {
 } from "../../../../shared/types/cloudHosts.js";
 import type {
   CloudProvider,
+  IssuedMachineKey,
+  MachineKeyIssuer,
   ProviderCatalog,
   ProviderCreateRequest,
   ProviderCredentials,
@@ -17,7 +19,12 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isSafeSshUser, normalizeHostKey, parseSshEndpoint } from "../sshEndpoint.js";
 import { BoatApiError, BoatClient, type BoatRequestContext } from "./BoatClient.js";
-import type { BoatLimits, BoatSandbox } from "./boatSchemas.js";
+import type {
+  BoatActionResponse,
+  BoatApiKey,
+  BoatLimits,
+  BoatSandbox,
+} from "./boatSchemas.js";
 import { BOAT_SIZE_MULTIPLIERS, BOAT_SIZE_SPECS, boatMachineState } from "./boatState.js";
 
 const SIZE_ORDER = ["small", "default", "large", "xlarge"];
@@ -82,6 +89,20 @@ export function boatResource(sandbox: BoatSandbox): ProviderResource {
   };
 }
 
+/** The machine as a stop's answer reports it, with the stop it started; null when it named none. */
+export function boatStopResource(response: BoatActionResponse): ProviderResource | null {
+  if (!response.sandbox) return null;
+  const resource = boatResource(response.sandbox);
+  if (!resource.stop && response.operation) {
+    resource.stop = {
+      id: response.operation.id,
+      status: stopStatus(response.operation.status),
+      error: response.operation.error ?? null,
+    };
+  }
+  return resource;
+}
+
 /** The hourly list price for a size, from the account's own rate when Boat reports one. */
 function hourlyFor(type: string, limits: BoatLimits): number | null {
   const rate = limits.overagePrices?.vmHourDollars;
@@ -99,10 +120,95 @@ function tightestStarts(limits: BoatLimits): number | null {
   return remaining.length > 0 ? Math.min(...remaining) : null;
 }
 
+/**
+ * What a machine's own key may do (#17361): read its sandbox, move its
+ * lifetime (a sandbox write) and stop it normally. Never resume, delete,
+ * exec or anything on the account.
+ */
+export const BOAT_MACHINE_KEY_ACTIONS: readonly string[] = [
+  "sandbox.read",
+  "sandbox.update",
+  "sandbox.stop",
+];
+
+/**
+ * Whether the key Boat issued is no broader than the one asked for. A scope
+ * Boat leaves out of its answer is taken as the one the request named: the
+ * create refuses unknown fields, so it can't have read the request wrongly.
+ */
+function scopedToMachine(key: BoatApiKey, resourceId: string): boolean {
+  const scope = key.scope;
+  if (!scope) return true;
+  if (
+    scope.actions !== undefined &&
+    !scope.actions.every((action) => BOAT_MACHINE_KEY_ACTIONS.includes(action))
+  ) {
+    return false;
+  }
+  if (
+    scope.sandboxes !== undefined &&
+    (scope.sandboxes === "*" || scope.sandboxes.length !== 1 || scope.sandboxes[0] !== resourceId)
+  ) {
+    return false;
+  }
+  return scope.environments === undefined || (scope.environments !== "*" && scope.environments.length === 0);
+}
+
+class BoatMachineKeys implements MachineKeyIssuer {
+  constructor(
+    private readonly clientFor: (apiUrl: string) => BoatClient,
+    private readonly ctx: (credentials: ProviderCredentials) => BoatRequestContext
+  ) {}
+
+  async issue(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    request: { name: string; ttlDays: number }
+  ): Promise<IssuedMachineKey> {
+    const client = this.clientFor(credentials.apiUrl);
+    const created = await client.createScopedKey(this.ctx(credentials), {
+      name: request.name,
+      ttl: `${request.ttlDays}d`,
+      actions: [...BOAT_MACHINE_KEY_ACTIONS],
+      sandboxIds: [resourceId],
+    });
+    const expiresAt = Date.parse(created.apiKey.expiresAt ?? "");
+    if (!Number.isFinite(expiresAt) || !scopedToMachine(created.apiKey, resourceId)) {
+      // Never handed to the machine: a key that never expires, or reaches more than it, is turned off.
+      await client.revokeKey(this.ctx(credentials), created.apiKey.id).catch(() => {});
+      throw new BoatApiError(
+        "bad-response",
+        "Boat issued a key broader than the one asked for, so it wasn't used",
+        null,
+        null,
+        null
+      );
+    }
+    return { keyId: created.apiKey.id, secret: created.secret, expiresAt };
+  }
+
+  async revoke(credentials: ProviderCredentials, keyId: string): Promise<void> {
+    try {
+      await this.clientFor(credentials.apiUrl).revokeKey(this.ctx(credentials), keyId);
+    } catch (error) {
+      if (error instanceof BoatApiError && error.kind === "not-found") return;
+      throw error;
+    }
+  }
+
+  async findByName(credentials: ProviderCredentials, name: string): Promise<string[]> {
+    const keys = await this.clientFor(credentials.apiUrl).listKeys(this.ctx(credentials));
+    return keys.filter((key) => key.name === name).map((key) => key.id);
+  }
+}
+
 export class BoatProvider implements CloudProvider {
   readonly id = "boat" as const;
+  readonly machineKeys: MachineKeyIssuer;
 
-  constructor(private readonly clientFor: (apiUrl: string) => BoatClient) {}
+  constructor(private readonly clientFor: (apiUrl: string) => BoatClient) {
+    this.machineKeys = new BoatMachineKeys(clientFor, (credentials) => this.ctx(credentials));
+  }
 
   info(platform: NodeJS.Platform): CloudProviderInfo {
     return {
@@ -303,20 +409,9 @@ export class BoatProvider implements CloudProvider {
     credentials: ProviderCredentials,
     resourceId: string
   ): Promise<ProviderResource | null> {
-    const response = await this.clientFor(credentials.apiUrl).stopSandbox(
-      this.ctx(credentials),
-      resourceId
+    return boatStopResource(
+      await this.clientFor(credentials.apiUrl).stopSandbox(this.ctx(credentials), resourceId)
     );
-    if (!response.sandbox) return null;
-    const resource = boatResource(response.sandbox);
-    if (!resource.stop && response.operation) {
-      resource.stop = {
-        id: response.operation.id,
-        status: stopStatus(response.operation.status),
-        error: response.operation.error ?? null,
-      };
-    }
-    return resource;
   }
 
   async renewLifetime(

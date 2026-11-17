@@ -143,6 +143,8 @@ export interface CloudAccountServiceDeps {
   now?: () => number;
   /** An account was removed from this device: drop what was kept for it (its ssh key). */
   onAccountRemoved?(accountId: string): Promise<void>;
+  /** Before the account's key leaves this device: the last chance to use it, best effort. */
+  beforeAccountRemoved?(accountId: string): Promise<void>;
 }
 
 /** The provider's check result, carried on as exactly the declared shape and nothing else. */
@@ -488,6 +490,8 @@ export class CloudAccountService {
           `${account.displayName} still has ${bound.length === 1 ? "a cloud host" : `${bound.length} cloud hosts`}. Remove ${bound.length === 1 ? "it" : "them"} first, so no machine is left running with nothing here able to stop it.`
         );
       }
+      // Keys its machines were given are revoked with it while it still can (#17361).
+      await this.deps.beforeAccountRemoved?.(account.id).catch(() => {});
       // The credentials first: if their file can't be written, the account stays listed and removable again.
       await this.deps.vault.delete(account.id);
       this.deps.store.removeAccount(account.id);
