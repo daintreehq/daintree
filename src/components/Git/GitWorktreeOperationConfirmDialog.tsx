@@ -381,8 +381,9 @@ function GitWorktreeOperationConfirmDialogInner() {
       retryTestId="git-base-integration-base-checked-out-retry"
       testId="git-base-integration-base-checked-out"
     >
-      This worktree has {preview?.baseBranch ?? baseBranch} itself checked out, so integrating the
-      base branch would rewrite it. Check out the branch you want to update, then retry.
+      This worktree has {preview?.baseBranch ?? baseBranch} itself checked out, and integrating the
+      base branch never writes to the base branch. Check out the branch you want to update, then
+      retry.
     </PreviewNotice>
   ) : treeBlocker?.reason === "conflicts" ? (
     <PreviewNotice
@@ -402,9 +403,12 @@ function GitWorktreeOperationConfirmDialogInner() {
       onRetry={loadPreview}
       retryTestId="git-base-integration-dirty-retry"
       testId="git-base-integration-dirty"
+      // A plain `git stash` leaves untracked files behind, and they block this
+      // too, so the stash named is the one that clears them.
+      command="git stash push --include-untracked"
     >
       Git won&apos;t integrate the base branch over uncommitted changes, untracked files included.
-      Commit or stash them, then retry.
+      Commit them, or stash everything before you retry:
     </PreviewNotice>
   ) : null;
 

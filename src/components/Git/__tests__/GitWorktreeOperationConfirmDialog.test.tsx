@@ -148,6 +148,7 @@ describe("GitWorktreeOperationConfirmDialog — base integration blockers (#1718
     }
     cleanup();
     vi.restoreAllMocks();
+    delete (window as { electron?: unknown }).electron;
   });
 
   describe.each(KINDS)("%s", (kind) => {
@@ -170,7 +171,8 @@ describe("GitWorktreeOperationConfirmDialog — base integration blockers (#1718
 
       const notice = screen.getByTestId("git-base-integration-dirty");
       expect(notice.textContent).toContain("3 uncommitted changes");
-      expect(notice.textContent).toContain("untracked");
+      // Plain `git stash` leaves the untracked files that block this too.
+      expect(notice.textContent).toContain("--include-untracked");
       expect(screen.getByTestId("git-base-integration-dirty-retry")).toBeTruthy();
       expect(isDisabled(confirmButton(kind))).toBe(true);
       // What the operation would do is still worth seeing while deciding to commit first.
@@ -236,6 +238,22 @@ describe("GitWorktreeOperationConfirmDialog — base integration blockers (#1718
       expect(screen.getByTestId("git-base-integration-base-checked-out-retry")).toBeTruthy();
       expect(isDisabled(confirmButton(kind))).toBe(true);
       expect(screen.queryByTestId("git-base-integration-in-sync")).toBeNull();
+      expect(screen.queryByTestId("git-base-integration-summary")).toBeNull();
+    });
+
+    it("holds approval for a clean branch already level with the base", async () => {
+      listBaseIntegrationCommits.mockResolvedValue(
+        measured(kind, { commits: [], total: 0, behind: 0 })
+      );
+      render(<GitWorktreeOperationConfirmDialog />);
+      const outcome = await open(kind);
+
+      expect(screen.getByTestId("git-base-integration-in-sync")).toBeTruthy();
+      expect(isDisabled(confirmButton(kind))).toBe(true);
+      await act(async () => {
+        confirmButton(kind).click();
+      });
+      expect(outcome.result).toBeNull();
     });
 
     it("re-enables approval once Retry reads a clean tree, approving the new commits", async () => {

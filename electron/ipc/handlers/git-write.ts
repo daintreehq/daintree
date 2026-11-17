@@ -1120,6 +1120,22 @@ async function requireUnmovedSince(
 const baseIntegratingCwds = new Set<string>();
 
 /**
+ * Refuse while this worktree already has a base integration running. The
+ * preview asks too: until git writes its first sentinel, a running integration
+ * leaves the tree looking clean and level, and the preview would measure an
+ * approval the write is certain to refuse.
+ */
+function requireNoBaseIntegrationRunning(cwd: string, op: string): void {
+  if (!baseIntegratingCwds.has(cwd)) return;
+  const message = "A base-branch integration is already running in this worktree.";
+  throw new GitOperationError(
+    "conflict-unresolved",
+    encodeGitOperationErrorMessage("conflict-unresolved", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/**
  * Run a base integration end to end: preflight, then exactly one git command.
  *
  * A halt is NOT an error to clean up. `git rebase` stopping on a conflict
@@ -1143,14 +1159,7 @@ async function runBaseIntegration(
   const baseBranch = requireBaseBranch(payload?.baseBranch);
   const op = kind === "rebase-onto-base" ? "rebase-onto-base" : "merge-base";
 
-  if (baseIntegratingCwds.has(payload.cwd)) {
-    const message = "A base-branch integration is already running in this worktree.";
-    throw new GitOperationError(
-      "conflict-unresolved",
-      encodeGitOperationErrorMessage("conflict-unresolved", message),
-      { cwd: payload.cwd, op, rawMessage: message }
-    );
-  }
+  requireNoBaseIntegrationRunning(payload.cwd, op);
   // Claimed INSIDE the try, so the `finally` that releases it dominates every
   // path that could have claimed it. Adding before `createHardenedGit` left the
   // cwd marked forever if that factory rejected — a deleted worktree would then
@@ -1278,6 +1287,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           throw new Error("Invalid integration kind");
         }
         const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+        requireNoBaseIntegrationRunning(payload.cwd, "list-base-integration-commits");
 
         const git = await createHardenedGit(payload.cwd);
         try {
