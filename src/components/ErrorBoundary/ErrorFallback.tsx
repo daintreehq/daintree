@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { logsClient } from "@/clients/logsClient";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -50,13 +51,17 @@ function buildDetailsText(
   return lines.join("\n");
 }
 
+const LOGS_UNAVAILABLE_MESSAGE = "Couldn't open the log file. Try again, or reload the window.";
+
 // Direct IPC rather than actionService: this renders during startup crashes and
 // in auxiliary windows where renderer action definitions are never registered.
-function openLogs() {
+// Resolves false for every failure (a missing preload bridge throws synchronously).
+async function openLogs(): Promise<boolean> {
   try {
-    void logsClient.openFile().catch(() => {});
+    await logsClient.openFile();
+    return true;
   } catch {
-    // preload bridge unavailable
+    return false;
   }
 }
 
@@ -84,6 +89,21 @@ export function ErrorFallback({
   });
 
   const announcedRef = useRef(false);
+  const [logsFailed, setLogsFailed] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const handleViewLogs = useCallback(() => {
+    setLogsFailed(false);
+    void openLogs().then((ok) => {
+      if (!ok && mountedRef.current) setLogsFailed(true);
+    });
+  }, []);
 
   // Fullscreen carries role="alertdialog" + autoFocus on its primary button —
   // AT already gets a focus shift + accessible-name read, so a duplicate
@@ -256,12 +276,24 @@ export function ErrorFallback({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={openLogs}
+              onClick={handleViewLogs}
               data-testid="error-fallback-logs"
             >
               View logs
             </Button>
           </div>
+        )}
+
+        {logsFailed && !isComponent && (
+          <Callout
+            severity="error"
+            size="compact"
+            role="alert"
+            data-testid="error-fallback-logs-error"
+            className="text-left"
+          >
+            {LOGS_UNAVAILABLE_MESSAGE}
+          </Callout>
         )}
 
         {showIncidentId && !isComponent && (
