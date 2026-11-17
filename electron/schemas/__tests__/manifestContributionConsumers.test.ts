@@ -1092,7 +1092,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: SEARCH_PROVIDER_REGISTRY, symbol: "searchKeywordRefusals" },
         { file: "src/hooks/useQuickSwitcher.ts", symbol: "keywordProvider" },
       ],
-      note: "Typed then Tab to scope the switcher; the first provider to claim it in a project keeps it.",
+      note: "Typed then Tab to scope the switcher; the first provider the user left shown to claim it in a project keeps it.",
     },
     iconId: {
       mode: "derived-input",

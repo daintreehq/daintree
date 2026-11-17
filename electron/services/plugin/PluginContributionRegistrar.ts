@@ -882,7 +882,7 @@ export class PluginContributionRegistrar {
           refused,
           provider.pluginId,
           "warn",
-          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is already taken by ${takenBy.pluginName}, so the quick switcher refuses it wherever both plugins are on. Choose a different keyword.`
+          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is already taken by ${takenBy.pluginName}, so the quick switcher leaves it out wherever both plugins are on, unless the user switches ${takenBy.pluginName}'s provider off. Choose a different keyword.`
         );
       }
     }

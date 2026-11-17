@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SearchProvidersSection } from "../SearchProvidersSection";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
 
@@ -96,6 +96,60 @@ describe("SearchProvidersSection", () => {
     expect(setSearchProviderShown).toHaveBeenLastCalledWith("acme.tools.issues", false);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("says who has a switched-off provider's keyword, and that turning it on takes it back", async () => {
+    const other = provider({
+      key: "other.issues",
+      pluginId: "other",
+      pluginName: "Other Issues",
+    });
+    getSearchProviders.mockResolvedValue([provider(), other]);
+    let answer!: (list: PluginSearchProviderInfo[]) => void;
+    setSearchProviderShown.mockReturnValueOnce(
+      new Promise<PluginSearchProviderInfo[]>((resolve) => {
+        answer = resolve;
+      })
+    );
+    render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
+    const row = await screen.findByTestId("search-provider-acme.tools.issues");
+    const toggle = screen.getByTestId("search-provider-switch-acme.tools.issues");
+
+    fireEvent.click(toggle);
+    // The switch answers at once; who holds the keyword is main's to say.
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(row.textContent).toContain('Type "ai" then Tab to search it');
+
+    await act(async () => answer([provider({ shown: false }), other]));
+    expect(row.textContent).toContain(
+      `While it's off, its keyword "ai" goes to Other Issues. Turning it on takes it back.`
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("says a provider has its keyword only while an earlier one is switched off", async () => {
+    getSearchProviders.mockResolvedValue([
+      provider({ shown: false }),
+      provider({ key: "other.issues", pluginId: "other", pluginName: "Other Issues" }),
+    ]);
+    render(<SearchProvidersSection pluginId="other" scope="installed" refreshKey="shown" />);
+
+    const row = await screen.findByTestId("search-provider-other.issues");
+    expect(row.textContent).toContain(
+      'Type "ai" then Tab to search it. It has the keyword only while Acme Tools is switched off.'
+    );
+  });
+
+  it("says a switched-off provider behind a shown one stays left out", async () => {
+    getSearchProviders.mockResolvedValue([
+      provider({ key: "first.issues", pluginId: "first", pluginName: "First" }),
+      provider({ shown: false, keywordTakenBy: "First" }),
+    ]);
+    render(<SearchProvidersSection pluginId="acme.tools" scope="installed" refreshKey="shown" />);
+
+    const row = await screen.findByTestId("search-provider-acme.tools.issues");
+    expect(row.textContent).toContain('Its keyword "ai" is taken by First');
+    expect(row.textContent).not.toContain("takes it back");
   });
 
   it("says a failed read failed rather than hiding the section, and retries it", async () => {
