@@ -26,6 +26,15 @@ export function paneWaitOf(pane: { hasDraft: boolean; queuesInput: boolean }): P
   return pane.queuesInput ? "composer" : "prompt";
 }
 
+/**
+ * Whether anything the chip says turns on the pane's wait: a question still
+ * out, or an answer or expiry notice waiting to be typed in. Only then does the
+ * chip need to read the drafts that every keystroke rewrites.
+ */
+export function readsPaneWait(state: PaneDecisionState | null): boolean {
+  return state !== null && (state.openQuestions.length > 0 || state.waitingAnswers.length > 0);
+}
+
 const PANE_WAITS: readonly PaneWait[] = ["draft", "composer", "prompt"];
 
 /** How each wait finishes a sentence: "…typing it in {once the composer is empty}". */
