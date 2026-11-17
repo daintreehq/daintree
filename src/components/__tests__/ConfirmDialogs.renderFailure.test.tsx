@@ -14,7 +14,7 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const surface = vi.hoisted(() => ({ explodeAll: false }));
+const surface = vi.hoisted(() => ({ explodeAll: false, explodePromptId: null as string | null }));
 
 function textOf(node: ReactNode): string {
   if (node === null || node === undefined || typeof node === "boolean") return "";
@@ -32,7 +32,12 @@ function OpenSurface(props: {
 }) {
   if (!props.isOpen) return null;
   const text = `${textOf(props.title)} ${textOf(props.description)}`;
-  if (surface.explodeAll || text.includes("Explode")) {
+  const promptId = usePluginPromptStore.getState().current?.promptId;
+  if (
+    surface.explodeAll ||
+    text.includes("Explode") ||
+    (promptId !== undefined && promptId === surface.explodePromptId)
+  ) {
     throw new Error(`render failed: ${text}`);
   }
   return <div data-testid="open-surface">{text}</div>;
@@ -138,6 +143,7 @@ function shownText(): string | null {
 
 beforeEach(() => {
   surface.explodeAll = false;
+  surface.explodePromptId = null;
   // The git dialogs' preview reads, which never answer here, so a dialog that
   // is shown is shown on its loading state rather than on a failed read.
   Object.defineProperty(window, "electron", {
@@ -315,15 +321,17 @@ describe("queued dialogs answer the request whose content threw and show the nex
     ],
     ["input box", () => <PluginInputBoxDialog />, () => ({ kind: "inputBox", options: {} })],
   ])("plugin %s prompt", async (_label, dialog, params) => {
-    surface.explodeAll = true;
+    surface.explodePromptId = "p1";
     render(dialog());
     let failed!: Promise<unknown>;
-    let next!: Promise<unknown>;
+    let sameKind!: Promise<unknown>;
+    let otherKind!: Promise<unknown>;
     act(() => {
       failed = enqueueUiPrompt({ promptId: "p1", pluginId: "acme.tools", params: params() });
+      sameKind = enqueueUiPrompt({ promptId: "p2", pluginId: "acme.tools", params: params() });
       // Another dialog's kind, so this one's failure must not touch it.
-      next = enqueueUiPrompt({
-        promptId: "p2",
+      otherKind = enqueueUiPrompt({
+        promptId: "p3",
         pluginId: "acme.tools",
         params: { kind: "confirm", options: { title: "Ship it?" } },
       });
@@ -331,19 +339,37 @@ describe("queued dialogs answer the request whose content threw and show the nex
     await flush();
 
     expect(await failed).toBeUndefined();
+    // The dialog comes straight back for the next prompt of its own kind.
     expect(usePluginPromptStore.getState().current?.promptId).toBe("p2");
-    expect(await isPending(next)).toBe(true);
+    expect(shownText()).not.toBeNull();
+    expect(await isPending(sameKind)).toBe(true);
+    expect(await isPending(otherKind)).toBe(true);
+  });
 
-    // The dialog comes back for its own kind's next prompt.
-    surface.explodeAll = false;
-    act(() => usePluginPromptStore.getState().resolveCurrent(true));
-    let healthy!: Promise<unknown>;
+  it("works through a long queue behind content that always throws", async () => {
+    surface.explodeAll = true;
+    render(<PluginConfirmDialog />);
+    const queued: Promise<unknown>[] = [];
     act(() => {
-      healthy = enqueueUiPrompt({ promptId: "p3", pluginId: "acme.tools", params: params() });
+      // Past React's limit of 50 nested updates, two of which each request costs.
+      for (let i = 0; i < 60; i++) {
+        queued.push(
+          requestPluginConfirmation({
+            requestId: `r${i}`,
+            pluginId: "acme.tools",
+            actionId: "acme.tools.wipe",
+            actionTitle: "Wipe",
+            actionDescription: "Wipes it.",
+            effectiveDanger: "confirm",
+            argsSummary: "",
+          })
+        );
+      }
     });
     await flush();
-    expect(await isPending(healthy)).toBe(true);
-    expect(shownText()).not.toBeNull();
+
+    const answers = await Promise.all(queued);
+    expect(answers.every((answer) => answer === "rejected")).toBe(true);
   });
 });
 
