@@ -11,6 +11,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectSettings } from "@shared/types";
 import type { ReactNode } from "react";
+import { ClientAppError } from "@/utils/clientAppError";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
 // content is left out so a disclosed label is not counted twice.
@@ -496,9 +497,19 @@ describe("BrowserPane webview lifecycle regression", () => {
         getByRole("button", { name: /retry/i }).click();
       });
       await act(async () => {});
-      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:4000/");
-      const toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
-      expect(toolbarProps.url).toBe("http://localhost:4000/");
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:4000/");
+      expect(terminalStoreState.setBrowserHistory.mock.calls.at(-1)![1]).toEqual({
+        past: ["http://localhost:5173/"],
+        present: "http://localhost:4000/",
+        future: [],
+      });
+      // It attaches at the page, so nothing loads it a second time once ready.
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:4000/" });
+      });
+      expect(webview.loadURL).not.toHaveBeenCalled();
     });
 
     it("says the port is taken here instead of showing the page at another address", async () => {
@@ -525,23 +536,62 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     describe("stepping through saved history (#17220)", () => {
-      // The forward main makes at the host's port, unless this machine's port is taken.
-      const forwardSamePortExcept = (taken: number[] = []) =>
-        vi.fn(async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => ({
-          forwardId: `f${remotePort}`,
-          hostId,
-          remotePort,
-          localPort: taken.includes(remotePort) ? remotePort + 10_000 : remotePort,
-          origin: "browser-panel",
-          label: null,
-          createdAt: 1,
-        }));
+      const lastToolbarProps = () =>
+        browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      const lastHistory = () => terminalStoreState.setBrowserHistory.mock.calls.at(-1)![1];
+
+      // Forwards each host port to the same port here; port 4000's forward is
+      // made only once `gate` settles, so a test can watch the pane wait on it.
+      function forwardWaitingOn4000(gate: Promise<unknown> = Promise.resolve()) {
+        return vi.fn(async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => {
+          if (remotePort === 4000) await gate;
+          return {
+            forwardId: `f${remotePort}`,
+            hostId,
+            remotePort,
+            localPort: remotePort,
+            origin: "browser-panel",
+            label: null,
+            createdAt: 1,
+          };
+        });
+      }
+
+      function deferred() {
+        let resolve!: () => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
+      }
+
+      const pressBack = () =>
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      const pressForward = () =>
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
+        );
 
       // A restored session: the guest has no history of its own, so Back and
       // Forward step through the saved history instead.
-      async function renderRestored(history: BrowserPaneProps["initialHistory"]) {
+      async function renderRestored(
+        history: NonNullable<BrowserPaneProps["initialHistory"]>,
+        forward: ReturnType<typeof forwardWaitingOn4000>,
+        props: Partial<BrowserPaneProps> = {}
+      ) {
+        window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+        Reflect.set(window.electron, "portForwards", { forward });
         const utils = render(
-          <BrowserPane {...baseProps} initialUrl={history!.present} initialHistory={history} />
+          <BrowserPane
+            {...baseProps}
+            {...props}
+            initialUrl={history.present}
+            initialHistory={history}
+          />
         );
         await act(async () => {});
         const webview = getWebviewElement(utils.container);
@@ -550,96 +600,277 @@ describe("BrowserPane webview lifecycle regression", () => {
           webview.setMockLoading(false);
           emitWebviewEvent(webview, "did-stop-loading");
         });
+        forward.mockClear();
         return { ...utils, webview };
       }
 
-      const lastToolbarProps = () =>
-        browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
-
-      it("forwards the host's port before going Back to a page on it", async () => {
-        window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-        const forward = forwardSamePortExcept();
-        Reflect.set(window.electron, "portForwards", { forward });
-        const { webview } = await renderRestored({
+      it("forwards the host's port before going Back to a page on it, and only then steps", async () => {
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const restored = {
           past: ["http://localhost:4000/"],
           present: "http://localhost:5173/",
-          future: [],
-        });
-        forward.mockClear();
+          future: ["http://localhost:5173/next"],
+        };
+        const { container, webview } = await renderRestored(restored, forward);
 
-        act(() => {
-          window.dispatchEvent(
-            new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
-          );
-        });
+        await act(async () => pressBack());
         expect(forward).toHaveBeenCalledWith(
           expect.objectContaining({ hostId: "studio-01", remotePort: 4000, samePort: true })
         );
         expect(webview.loadURL).not.toHaveBeenCalled();
+        expect(lastHistory()).toEqual(restored);
+        expect(getWebviewElement(container)).toBe(webview);
 
-        await act(async () => {});
-        expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:4000/");
-        expect(lastToolbarProps().url).toBe("http://localhost:4000/");
-        expect(lastToolbarProps().canGoForward).toBe(true);
+        await act(async () => gate.resolve());
+        expect(webview.loadURL).toHaveBeenCalledTimes(1);
+        expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
+        expect(lastHistory()).toEqual({
+          past: [],
+          present: "http://localhost:4000/",
+          future: ["http://localhost:5173/", "http://localhost:5173/next"],
+        });
       });
 
-      it("forwards the host's port before going Forward to a page on it", async () => {
-        window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-        const forward = forwardSamePortExcept();
-        Reflect.set(window.electron, "portForwards", { forward });
-        const { webview } = await renderRestored({
-          past: [],
-          present: "http://localhost:5173/",
-          future: ["http://localhost:4000/"],
-        });
-        forward.mockClear();
+      it("forwards the host's port before going Forward to a page on it, keeping what's beyond", async () => {
+        const forward = forwardWaitingOn4000();
+        const { webview } = await renderRestored(
+          {
+            past: [],
+            present: "http://localhost:5173/",
+            future: ["http://localhost:4000/", "http://localhost:5173/last"],
+          },
+          forward
+        );
 
-        act(() => {
-          window.dispatchEvent(
-            new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
-          );
-        });
+        act(() => pressForward());
         expect(forward).toHaveBeenCalledWith(
           expect.objectContaining({ hostId: "studio-01", remotePort: 4000, samePort: true })
         );
         expect(webview.loadURL).not.toHaveBeenCalled();
 
         await act(async () => {});
-        expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:4000/");
-        expect(lastToolbarProps().url).toBe("http://localhost:4000/");
-        expect(lastToolbarProps().canGoBack).toBe(true);
+        expect(webview.loadURL).toHaveBeenCalledTimes(1);
+        expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
+        expect(lastHistory()).toEqual({
+          past: ["http://localhost:5173/"],
+          present: "http://localhost:4000/",
+          future: ["http://localhost:5173/last"],
+        });
       });
 
       it("stays put and says why when the port Back needs is taken here, and Retry takes the same step", async () => {
-        window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-        const forward = forwardSamePortExcept([4000]);
-        Reflect.set(window.electron, "portForwards", { forward });
-        const { container, getByRole, webview } = await renderRestored({
+        const forward = forwardWaitingOn4000();
+        // The forward came back at another port: loading the URL anyway would
+        // reach this machine's own server on 4000.
+        forward.mockImplementation(async ({ hostId, remotePort }) => ({
+          forwardId: "f",
+          hostId,
+          remotePort,
+          localPort: remotePort === 4000 ? 14000 : remotePort,
+          origin: "browser-panel",
+          label: null,
+          createdAt: 1,
+        }));
+        const restored = {
           past: ["http://localhost:4000/"],
           present: "http://localhost:5173/",
           future: [],
-        });
+        };
+        const { container, getByRole, webview } = await renderRestored(restored, forward);
 
-        await act(async () => {
-          window.dispatchEvent(
-            new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
-          );
-        });
-        // Loading the URL anyway would reach this machine's own server on 4000.
+        await act(async () => pressBack());
         expect(webview.loadURL).not.toHaveBeenCalled();
         expect(container.textContent).toContain("Port 4000 is in use on this machine");
-        expect(lastToolbarProps().url).toBe("http://localhost:5173/");
+        expect(lastHistory()).toEqual(restored);
 
-        forward.mockImplementation(forwardSamePortExcept());
+        forward.mockImplementation(forwardWaitingOn4000());
         await act(async () => {
           getByRole("button", { name: /retry/i }).click();
         });
         await act(async () => {});
-        expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:4000/");
+        expect(webview.loadURL).toHaveBeenCalledTimes(1);
+        expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
         // A step back, not a new page: what Back left is still ahead.
-        expect(lastToolbarProps().url).toBe("http://localhost:4000/");
-        expect(lastToolbarProps().canGoBack).toBe(false);
-        expect(lastToolbarProps().canGoForward).toBe(true);
+        expect(lastHistory()).toEqual({
+          past: [],
+          present: "http://localhost:4000/",
+          future: ["http://localhost:5173/"],
+        });
+      });
+
+      it("stays put when the host refuses the port Forward needs, and Retry takes the same step", async () => {
+        const forward = forwardWaitingOn4000();
+        const restored = {
+          past: [],
+          present: "http://localhost:5173/",
+          future: ["http://localhost:4000/", "http://localhost:5173/last"],
+        };
+        const { container, getByRole, webview } = await renderRestored(restored, forward);
+        forward.mockRejectedValueOnce(
+          new ClientAppError(
+            "PORT_IN_USE",
+            "port in use",
+            "Port 4000 is already forwarded for another host."
+          )
+        );
+
+        await act(async () => pressForward());
+        expect(webview.loadURL).not.toHaveBeenCalled();
+        expect(container.textContent).toContain("Port 4000 is already forwarded for another host.");
+        expect(lastHistory()).toEqual(restored);
+
+        await act(async () => {
+          getByRole("button", { name: /retry/i }).click();
+        });
+        await act(async () => {});
+        expect(webview.loadURL).toHaveBeenCalledTimes(1);
+        expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
+        expect(lastHistory()).toEqual({
+          past: ["http://localhost:5173/"],
+          present: "http://localhost:4000/",
+          future: ["http://localhost:5173/last"],
+        });
+      });
+
+      it("drops a Back still being forwarded once a newer navigation starts", async () => {
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const { webview } = await renderRestored(
+          { past: ["http://localhost:4000/"], present: "http://localhost:5173/", future: [] },
+          forward
+        );
+
+        await act(async () => pressBack());
+        await act(async () => {
+          window.dispatchEvent(
+            new CustomEvent("daintree:browser-navigate", {
+              detail: { id: "browser-panel-1", url: "http://localhost:5173/other" },
+            })
+          );
+        });
+        expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/other");
+
+        await act(async () => gate.resolve());
+        expect(webview.loadURL).not.toHaveBeenCalledWith("http://localhost:4000/");
+        expect(lastHistory()).toEqual({
+          past: ["http://localhost:4000/", "http://localhost:5173/"],
+          present: "http://localhost:5173/other",
+          future: [],
+        });
+      });
+
+      it("drops a Back still being forwarded once the guest goes back on its own", async () => {
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const restored = {
+          past: ["http://localhost:4000/"],
+          present: "http://localhost:5173/",
+          future: [],
+        };
+        const { webview } = await renderRestored(restored, forward);
+
+        await act(async () => pressBack());
+        webview.canGoBack.mockReturnValue(true);
+        act(() => pressBack());
+        expect(webview.goBack).toHaveBeenCalledTimes(1);
+
+        await act(async () => gate.resolve());
+        expect(webview.loadURL).not.toHaveBeenCalled();
+        expect(lastHistory()).toEqual(restored);
+      });
+
+      it("drops a Back still being forwarded when the load is stopped", async () => {
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const restored = {
+          past: ["http://localhost:4000/"],
+          present: "http://localhost:5173/",
+          future: [],
+        };
+        const { webview } = await renderRestored(restored, forward);
+
+        await act(async () => pressBack());
+        act(() => (lastToolbarProps().onStop as () => void)());
+
+        await act(async () => gate.resolve());
+        expect(webview.loadURL).not.toHaveBeenCalled();
+        expect(lastHistory()).toEqual(restored);
+      });
+
+      it("adds the page as a new one when the page moved on while Back was being forwarded", async () => {
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const { webview } = await renderRestored(
+          {
+            past: ["http://localhost:4000/"],
+            present: "http://localhost:5173/",
+            future: ["http://localhost:5173/next"],
+          },
+          forward
+        );
+
+        await act(async () => pressBack());
+        act(() => {
+          emitWebviewEvent(webview, "did-navigate-in-page", {
+            isMainFrame: true,
+            url: "http://localhost:5173/moved",
+          });
+        });
+
+        await act(async () => gate.resolve());
+        expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
+        // Applying the step taken before would lose /moved and bring back /next.
+        expect(lastHistory()).toEqual({
+          past: ["http://localhost:4000/", "http://localhost:5173/", "http://localhost:5173/moved"],
+          present: "http://localhost:4000/",
+          future: [],
+        });
+      });
+
+      it("waits for a guest that replaced the one Back began with before loading into it", async () => {
+        terminalStoreState.activeDockTerminalId = "browser-panel-1";
+        const gate = deferred();
+        const forward = forwardWaitingOn4000(gate.promise);
+        const dockProps: Partial<BrowserPaneProps> = { location: "dock" };
+        const restored = {
+          past: ["http://localhost:4000/"],
+          present: "http://localhost:5173/",
+          future: [],
+        };
+        const { container, rerender, webview } = await renderRestored(restored, forward, dockProps);
+        // A fresh element each time: the mocked store doesn't subscribe, so a
+        // rerender with the same element would never read the dock change.
+        const ui = () => (
+          <BrowserPane
+            {...baseProps}
+            {...dockProps}
+            initialUrl={restored.present}
+            initialHistory={restored}
+          />
+        );
+
+        await act(async () => pressBack());
+        // Hidden behind another dock panel, evicted, then opened again.
+        terminalStoreState.activeDockTerminalId = "another-panel";
+        rerender(ui());
+        const onDestroy = (
+          window.electron.window.onDestroyHiddenWebviews as unknown as ReturnType<typeof vi.fn>
+        ).mock.calls.at(-1)![0] as (payload: { tier: 1 | 2 }) => void;
+        act(() => onDestroy({ tier: 1 }));
+        // The replacement starts on its first load, as a fresh guest does.
+        webviewInitiallyLoading = true;
+        terminalStoreState.activeDockTerminalId = "browser-panel-1";
+        rerender(ui());
+        const replacement = getWebviewElement(container);
+        expect(replacement).not.toBe(webview);
+
+        await act(async () => gate.resolve());
+        // Not yet attached: a loadURL now would throw.
+        expect(replacement.loadURL).not.toHaveBeenCalled();
+        act(() => emitWebviewEvent(replacement, "dom-ready"));
+        expect(replacement.loadURL).toHaveBeenCalledTimes(1);
+        expect(replacement.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
       });
     });
   });
@@ -1128,6 +1359,17 @@ describe("BrowserPane webview lifecycle regression", () => {
         present: "http://localhost:5173/dashboard",
         future: [],
       });
+
+      // Once attached, the reopened guest's seed stays put as it navigates (#9940).
+      act(() => {
+        emitWebviewEvent(remounted, "dom-ready");
+        emitWebviewEvent(remounted, "did-navigate-in-page", {
+          isMainFrame: true,
+          url: "http://localhost:5173/dashboard/users",
+        });
+      });
+      expect(remounted.getAttribute("src")).toBe("http://localhost:5173/dashboard");
+      expect(remounted.loadURL).not.toHaveBeenCalled();
     });
 
     it("keeps the pages ahead when it reopens after stepping back through saved history", () => {
