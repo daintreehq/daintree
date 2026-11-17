@@ -48,6 +48,15 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+/** Whether this window can open a resource's box as a host, and the handoff Create starts. */
+const machineHandoff = vi.hoisted(() => ({ offered: false, open: vi.fn() }));
+vi.mock("@/components/Hosts/resourceHostHandoff", () => ({
+  canOfferResourceBoxHandoff: () => machineHandoff.offered,
+}));
+vi.mock("@/components/Worktree/openCreatedWorktreeOnMachine", () => ({
+  openCreatedWorktreeOnMachine: (...args: unknown[]) => machineHandoff.open(...args),
+}));
+
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
@@ -4452,5 +4461,223 @@ describe("NewWorktreeDialog — a new cloud machine (#17359)", () => {
     await submit();
     expect(actionCalls("worktree.create")).toHaveLength(1);
     expect(startCloudWorktreePlacement).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewWorktreeDialog — open on its environment's machine (#17358)", () => {
+  const RUN_HERE = { id: "r-here", name: "Dev server", terminals: [{ type: "terminal" }] };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    machineHandoff.offered = true;
+    machineHandoff.open.mockResolvedValue({ status: "placing", hostId: "dt-box" });
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      switch (actionId) {
+        case "worktree.create":
+          return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+        case "worktree.waitUntilReady":
+          return {
+            ok: true,
+            result: { setupState: "ready", stage: null, error: null, timedOut: false },
+          };
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "t-1" } };
+        default:
+          return { ok: true, result: undefined };
+      }
+    });
+    projectSettingsFixture.value = { resourceEnvironments: { cloud: {}, staging: {} } };
+  });
+
+  afterEach(() => {
+    machineHandoff.offered = false;
+    firstAgentFixtures.lastAgentByProject = {};
+    recipePickerCalls.selected = null;
+    projectSettingsFixture.value = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function pickEnvironment(name: string) {
+    const group = screen.getByRole("radiogroup", { name: "Environment" });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("radio", { name }));
+    });
+  }
+
+  async function chooseOpenOnMachine() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("open-on-machine"));
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  function actionCalls(actionId: string) {
+    return mockDispatch.mock.calls.filter(([id]) => id === actionId);
+  }
+
+  it("offers it for an environment, never for Local", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await pickEnvironment("cloud");
+
+    const toggle = screen.getByTestId("open-on-machine");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("open-on-machine-detail")).toBeNull();
+  });
+
+  it("isn't offered where this window can't open a machine as a host", async () => {
+    machineHandoff.offered = false;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await pickEnvironment("cloud");
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+  });
+
+  it("isn't offered, and does nothing, while another host is chosen", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+
+    await act(async () => {
+      placement.onCommitChange?.({
+        hostId: "studio-02",
+        hostName: "studio-02",
+        homeName: "This Mac",
+        status: "idle",
+        unavailable: null,
+        relativePath: null,
+        submit: vi.fn(),
+      });
+    });
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+  });
+
+  it("names what Create will do and turns the agent and recipe off here", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await pickEnvironment("cloud");
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBeNull();
+
+    await chooseOpenOnMachine();
+
+    expect(screen.getByTestId("open-on-machine-detail").textContent).toContain(
+      "Once cloud's status names its ssh machine"
+    );
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+    expect(
+      (document.getElementById("recipe-selector-trigger") as HTMLButtonElement | null)?.disabled
+    ).toBe(true);
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  it("provisions here, then hands the created worktree to its machine, starting nothing locally", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    recipePickerCalls.selected = RUN_HERE;
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { provisionResource: true, worktreeMode: "cloud" },
+    });
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    expect(machineHandoff.open).toHaveBeenCalledWith({
+      worktreeId: "new-wt-id",
+      projectId: "test-project",
+      environment: "cloud",
+      label: "feature/test",
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(0);
+    expect(runRecipe).not.toHaveBeenCalled();
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.objectContaining({ worktreeMode: "cloud", openOnMachine: true })
+    );
+  });
+
+  it("creates as before when it isn't chosen", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await submit();
+
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+    expect(mockAddPendingCreation.mock.calls.at(-1)?.[1]).not.toHaveProperty("openOnMachine");
+  });
+
+  it("asks again after a switch to another environment", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("true");
+
+    await pickEnvironment("staging");
+
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps the choice through a Retry", async () => {
+    renderDialog({
+      restoreDraft: retryDraft({
+        baseBranch: "main",
+        branchMode: "new",
+        worktreeMode: "cloud",
+        openOnMachine: true,
+      }),
+    });
+    await advanceTimersGradually(800);
+
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("true");
+    await submit();
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "new-wt-id", environment: "cloud" })
+    );
   });
 });

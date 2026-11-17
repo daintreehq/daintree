@@ -1013,7 +1013,7 @@ export function NewWorktreeDialog({
         // The user's own words; a Retry reads the issue afresh.
         prompt: snapFirstPrompt,
         includeIssue: snapIncludeIssue,
-        openOnMachine: snapOpenOnMachine,
+        ...(snapOpenOnMachine ? { openOnMachine: true } : {}),
       });
     }
 
