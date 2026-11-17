@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { open, realpath, type FileHandle } from "node:fs/promises";
+import { open, realpath, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { DeclaredProjectLink } from "../../shared/types/projectLinks.js";
 import { declaredLinksFromPackageJson } from "../../shared/utils/declaredProjectLinks.js";
@@ -56,10 +56,11 @@ function closeLater(handle: Promise<FileHandle> | FileHandle): void {
  * The links the package.json at the project's root declares (#17252). Read
  * from disk on every call and never written: a missing, unreadable, oversized
  * or malformed file declares nothing. A manifest linked from outside the root
- * is refused, and the open is non-blocking so a FIFO standing at the path
- * can't hold it. A failure that may pass (a stalled or busy disk, a full
- * descriptor table) rejects instead, so the caller keeps what it last showed
- * and asks again later rather than emptying the list.
+ * is refused, anything but a regular file declares nothing, and the open is
+ * non-blocking so a FIFO swapped in after the check can't hold it. A failure
+ * that may pass (a stalled or busy disk, a full descriptor table) rejects
+ * instead, so the caller keeps what it last showed and asks again later
+ * rather than emptying the list.
  */
 export async function readDeclaredProjectLinks(
   projectRoot: string
@@ -69,6 +70,9 @@ export async function readDeclaredProjectLinks(
     const realRoot = await io(() => realpath(projectRoot));
     const manifestPath = await io(() => realpath(join(realRoot, "package.json")));
     if (!isWithin(realRoot, manifestPath)) return [];
+    // Settles a socket, FIFO or folder at the path before an open that some
+    // of them refuse with errors that say nothing about what stands there.
+    if (!(await io(() => stat(manifestPath))).isFile()) return [];
     let opening: Promise<FileHandle> | undefined;
     let handle: FileHandle;
     try {

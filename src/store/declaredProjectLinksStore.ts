@@ -48,7 +48,8 @@ let current: Read | null = null;
  * answer that would clear a list while another read is already queued waits
  * for that read: an editor saving the file can be caught between truncating
  * and writing it, and clearing the list would take the toolbar button, and an
- * open launcher with it, away for a moment.
+ * open launcher with it, away for a moment. If that read fails, the empty
+ * answer stands, since it is the last thing the file said.
  */
 export async function refreshDeclaredProjectLinks(projectId: string): Promise<void> {
   if (current?.projectId === projectId) {
@@ -58,6 +59,7 @@ export async function refreshDeclaredProjectLinks(projectId: string): Promise<vo
   const read: Read = { projectId, again: false };
   current = read;
   try {
+    let held: DeclaredProjectLink[] | null = null;
     do {
       read.again = false;
       let links: DeclaredProjectLink[];
@@ -67,13 +69,20 @@ export async function refreshDeclaredProjectLinks(projectId: string): Promise<vo
         logDebug("Couldn't read the project's package.json links", {
           error: formatErrorMessage(error, "unknown error"),
         });
+        if (held !== null && !read.again && current === read) {
+          useDeclaredProjectLinksStore.setState({ projectId, links: held });
+        }
         continue;
       }
       if (current !== read) return;
+      held = null;
       const state = useDeclaredProjectLinksStore.getState();
       const shown = state.projectId === projectId;
       if (shown && sameLinks(state.links, links)) continue;
-      if (shown && links.length === 0 && state.links.length > 0 && read.again) continue;
+      if (shown && links.length === 0 && state.links.length > 0 && read.again) {
+        held = links;
+        continue;
+      }
       useDeclaredProjectLinksStore.setState({ projectId, links });
     } while (read.again && current === read);
   } finally {

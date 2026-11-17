@@ -52,8 +52,9 @@ describe("project-links:get-declared (#17252)", () => {
   it("reads the package.json in the named project's own registered folder", async () => {
     projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
     const result = await getDeclared({ projectId: "p2" });
-    expect(projectStoreMock.getProjectById.mock.calls).toEqual([["p2"]]);
-    expect(readMock.mock.calls).toEqual([["/repos/gadget"]]);
+    await getDeclared({ projectId: "p1" });
+    expect(projectStoreMock.getProjectById.mock.calls).toEqual([["p2"], ["p1"]]);
+    expect(readMock.mock.calls).toEqual([["/repos/gadget"], ["/repos/widget"]]);
     expect(result).toEqual([HOMEPAGE]);
   });
 

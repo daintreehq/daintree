@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fsMock = vi.hoisted(() => ({
   realpath: vi.fn<(path: string) => Promise<string>>(),
   open: vi.fn<(path: string, flags: number) => Promise<unknown>>(),
+  stat: vi.fn<(path: string) => Promise<{ isFile: () => boolean }>>(),
 }));
 
 vi.mock("node:fs/promises", () => ({
   realpath: (path: string) => fsMock.realpath(path),
   open: (path: string, flags: number) => fsMock.open(path, flags),
+  stat: (path: string) => fsMock.stat(path),
 }));
 
 // A gate with a short deadline, so a stalled call is given up on quickly.
@@ -37,6 +39,8 @@ beforeEach(() => {
   fsMock.realpath.mockReset();
   fsMock.realpath.mockImplementation(async (path) => path);
   fsMock.open.mockReset();
+  fsMock.stat.mockReset();
+  fsMock.stat.mockResolvedValue({ isFile: () => true });
 });
 
 describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
@@ -51,6 +55,26 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
 
     expect(outcome).toBe("PROJECT_IO_STALLED");
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("gives up on a stalled byte read too, without waiting for the handle to close", async () => {
+    const close = vi.fn(() => new Promise<void>(() => {}));
+    fsMock.open.mockResolvedValue({
+      stat: async () => ({ isFile: () => true, size: 64 }),
+      read: () => new Promise(() => {}),
+      close,
+    });
+
+    await expect(readDeclaredProjectLinks(freshRoot())).rejects.toMatchObject({
+      code: "PROJECT_IO_STALLED",
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("declares nothing for a socket or other non-file at the path, without opening it", async () => {
+    fsMock.stat.mockResolvedValue({ isFile: () => false });
+    await expect(readDeclaredProjectLinks(freshRoot())).resolves.toEqual([]);
+    expect(fsMock.open).not.toHaveBeenCalled();
   });
 
   it("closes a descriptor whose open landed after the gate gave up on it", async () => {

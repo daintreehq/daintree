@@ -165,6 +165,22 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     expect(useDeclaredProjectLinksStore.getState().links).toEqual([HOMEPAGE, REPOSITORY]);
   });
 
+  it("clears the list it held back when the read queued behind the empty one fails", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+
+    const midSave = refreshDeclaredProjectLinks("p1");
+    void refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([]);
+    await settle();
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([HOMEPAGE]);
+
+    h.pending[2]!.reject(new Error("EIO"));
+    await midSave;
+    expect(useDeclaredProjectLinksStore.getState()).toEqual({ projectId: "p1", links: [] });
+  });
+
   it("clears the list when the last read says the file declares nothing", async () => {
     const first = refreshDeclaredProjectLinks("p1");
     h.pending[0]!.resolve([HOMEPAGE]);
