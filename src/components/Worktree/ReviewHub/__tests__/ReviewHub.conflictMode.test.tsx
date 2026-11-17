@@ -640,11 +640,7 @@ describe("ReviewHub", () => {
         ]);
 
         render(
-          <ReviewHubContent
-            isOpen={true}
-            worktreePath={"/home/user/pro\\ject/"}
-            onClose={vi.fn()}
-          />
+          <ReviewHubContent isOpen={true} worktreePath={`${WORKTREE_PATH}/`} onClose={vi.fn()} />
         );
 
         // The marker line reaches the row with the scan, which the badge shows.
@@ -653,7 +649,7 @@ describe("ReviewHub", () => {
 
         await waitFor(() => {
           expect(openInEditorMock).toHaveBeenCalledWith({
-            path: "/home/user/pro\\ject/a\\b.txt",
+            path: `${WORKTREE_PATH}/a\\b.txt`,
             line: 9,
             projectId: REVIEW_PROJECT_ID,
           });

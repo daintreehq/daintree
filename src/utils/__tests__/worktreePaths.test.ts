@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { isWindowsMock } = vi.hoisted(() => ({ isWindowsMock: vi.fn<() => boolean>() }));
-vi.mock("@/hooks/useHostPlatform", () => ({ isHostWindows: isWindowsMock }));
+const { isWindowsMock, isRemoteMock } = vi.hoisted(() => ({
+  isWindowsMock: vi.fn<() => boolean>(),
+  isRemoteMock: vi.fn<() => boolean>(),
+}));
+vi.mock("@/hooks/useHostPlatform", () => ({
+  isHostWindows: isWindowsMock,
+  isRemoteWindow: isRemoteMock,
+}));
 
 import { inferWorktreeIdFromCwd, joinWorktreeFilePath } from "../worktreePaths";
 
 beforeEach(() => {
   isWindowsMock.mockReset();
+  isRemoteMock.mockReset().mockReturnValue(false);
 });
 
 describe("inferWorktreeIdFromCwd on Windows", () => {
@@ -65,6 +72,12 @@ describe("joinWorktreeFilePath on POSIX", () => {
     expect(joinWorktreeFilePath("/home/pro\\ject\\", "src/app.ts")).toBe(
       "/home/pro\\ject\\/src/app.ts"
     );
+  });
+
+  it("keeps a remote window's backslashes when this Windows machine answers for an unseeded host", () => {
+    isWindowsMock.mockReturnValue(true);
+    isRemoteMock.mockReturnValue(true);
+    expect(joinWorktreeFilePath("/repo/", "a\\b.txt")).toBe("/repo/a\\b.txt");
   });
 
   it("joins with exactly one slash however the sides are padded", () => {
