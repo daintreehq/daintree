@@ -222,9 +222,17 @@ describe("SettingsDialog closed over an Integrations draft", () => {
   });
 
   describe("while an image viewer Save is still running", () => {
+    let held: Array<{ resolve: () => void; reject: (reason: Error) => void }> = [];
+
+    // A test that fails mid-way must not leave the project's write queue blocked
+    // behind a write it held.
+    afterEach(() => {
+      held.forEach((write) => write.resolve());
+      held = [];
+    });
+
     /** Holds each write until the test settles it, in the order they arrive. */
     function holdSaves() {
-      const held: Array<{ resolve: () => void; reject: (reason: Error) => void }> = [];
       saveSettings.mockImplementation(async (_projectId: string, next: Record<string, unknown>) => {
         await new Promise<void>((resolve, reject) => held.push({ resolve, reject }));
         settingsFile = next;
@@ -244,30 +252,30 @@ describe("SettingsDialog closed over an Integrations draft", () => {
     }
 
     it("closes only once the command edited since is saved too", async () => {
-      const held = holdSaves();
+      const writes = holdSaves();
       const onClose = await openOnIntegrations();
       await saveViewerThenEdit("gimp", "feh");
 
       await pressEscape();
-      await act(async () => held[0]!.resolve());
+      await act(async () => writes[0]!.resolve());
       await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
       expect(onClose).not.toHaveBeenCalled();
 
-      await act(async () => held[1]!.resolve());
+      await act(async () => writes[1]!.resolve());
 
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
       expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });
     });
 
     it("stays open on the command edited since when its own save fails", async () => {
-      const held = holdSaves();
+      const writes = holdSaves();
       const onClose = await openOnIntegrations();
       await saveViewerThenEdit("gimp", "feh");
 
       await pressEscape();
-      await act(async () => held[0]!.resolve());
+      await act(async () => writes[0]!.resolve());
       await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
-      await act(async () => held[1]!.reject(new Error("Read-only file system")));
+      await act(async () => writes[1]!.reject(new Error("Read-only file system")));
 
       expect(await screen.findByText(/Read-only file system/)).toBeTruthy();
       expect(onClose).not.toHaveBeenCalled();
@@ -279,7 +287,7 @@ describe("SettingsDialog closed over an Integrations draft", () => {
         ...settingsFile,
         preferredImageViewer: { mode: "custom", customCommand: "feh" },
       };
-      const held = holdSaves();
+      const writes = holdSaves();
       const onClose = await openOnIntegrations();
       await saveViewerThenEdit("gimp");
 
@@ -288,9 +296,9 @@ describe("SettingsDialog closed over an Integrations draft", () => {
         target: { value: "feh" },
       });
       await pressEscape();
-      await act(async () => held[0]!.resolve());
+      await act(async () => writes[0]!.resolve());
       await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
-      await act(async () => held[1]!.resolve());
+      await act(async () => writes[1]!.resolve());
 
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
       expect(settingsFile.preferredImageViewer).toEqual({ mode: "custom", customCommand: "feh" });

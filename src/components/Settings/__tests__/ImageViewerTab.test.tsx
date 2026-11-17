@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useContext, type ContextType } from "react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImageViewerTab } from "../ImageViewerTab";
 import { SettingsFlushContext, SettingsFlushProvider } from "../SettingsFlushRegistry";
@@ -231,15 +231,23 @@ describe("ImageViewerTab flushed by a close", () => {
   });
 
   describe("with a newer draft than the Save still running", () => {
+    let settle: { resolve: () => void; reject: (reason: Error) => void } | undefined;
+
+    // A test that fails mid-way must not leave the project's write queue blocked
+    // behind the Save it held.
+    afterEach(() => {
+      settle?.resolve();
+      settle = undefined;
+    });
+
     function holdFirstSave() {
-      let settle!: { resolve: () => void; reject: (reason: Error) => void };
       vi.mocked(projectClient.saveSettings).mockImplementationOnce(
         () =>
           new Promise<void>((resolve, reject) => {
             settle = { resolve, reject };
           })
       );
-      return () => settle;
+      return () => settle!;
     }
 
     function savedCommands() {
