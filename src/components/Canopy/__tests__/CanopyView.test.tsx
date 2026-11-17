@@ -593,9 +593,9 @@ describe("CanopyView search", () => {
     await screenSearchSettled();
     expect(canopy.searchScreens).toHaveBeenCalledTimes(2);
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
-    expect(
-      document.querySelector("[data-testid=canopy-search-incomplete]")?.textContent
-    ).toContain("Couldn't search terminals");
+    expect(document.querySelector("[data-testid=canopy-search-incomplete]")?.textContent).toContain(
+      "Couldn't search terminals"
+    );
   });
 
   it("selects the top terminal match, wherever the selection was before", async () => {
