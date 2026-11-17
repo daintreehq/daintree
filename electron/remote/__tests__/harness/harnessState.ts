@@ -80,6 +80,14 @@ export const memoryProjectStore = {
   clearCurrentProject(): void {
     harnessState.currentProjectId = null;
   },
+  /** One row's status, as ProjectStore writes it, returning the row written. */
+  updateProjectStatus(id: string, status: NonNullable<HarnessProject["status"]>): HarnessProject {
+    const project = harnessState.projects.get(id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    const updated = { ...project, status };
+    harnessState.projects.set(id, updated);
+    return updated;
+  },
   getAllProjects: () => [...harnessState.projects.values()],
   onProjectRegistryChanged: () => () => undefined,
   getProjectSummaries: () => [...harnessState.projects.values()],

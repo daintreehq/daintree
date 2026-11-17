@@ -189,6 +189,8 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { getAllAppWebContents } from "../../../window/webContentsRegistry.js";
+import { scratchStore } from "../../../services/ScratchStore.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import { resetGitMarkerCacheForTesting } from "../projectCrud/switch.js";
@@ -2208,6 +2210,35 @@ describe("project:switch PROJECT_ON_SWITCH notification", () => {
       (mock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH)![1] as { switchId: string })
         .switchId;
     expect(idOf(first)).not.toBe(idOf(second));
+  });
+
+  it("tells only the activated view that it holds no scratch (#17186)", async () => {
+    // Another window shows a scratch, the one the global pointer names.
+    const sibling = { id: 400, isDestroyed: () => false, send: vi.fn() };
+    vi.mocked(getAllAppWebContents).mockReturnValue([sibling] as never);
+    const currentScratchId = vi
+      .spyOn(scratchStore, "getCurrentScratchId")
+      .mockReturnValue("11111111-1111-4111-8111-111111111111");
+    const clearCurrentScratch = vi
+      .spyOn(scratchStore, "clearCurrentScratch")
+      .mockImplementation(() => undefined);
+    try {
+      const sendMock = await runActivation(CHANNELS.PROJECT_SWITCH);
+
+      expect(clearCurrentScratch).toHaveBeenCalled();
+      expect(sendMock).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
+        scratch: null,
+        switchId: "",
+      });
+      // That window keeps the scratch it shows.
+      expect(sibling.send.mock.calls.map(([channel]) => channel)).not.toContain(
+        CHANNELS.SCRATCH_ON_SWITCH
+      );
+    } finally {
+      vi.mocked(getAllAppWebContents).mockReturnValue([]);
+      currentScratchId.mockRestore();
+      clearCurrentScratch.mockRestore();
+    }
   });
 
   it("emits PROJECT_ON_SWITCH on reopen as well", async () => {
