@@ -74,9 +74,24 @@ function registeredHandlers(): Handlers {
   return map;
 }
 
+interface StatusDouble {
+  isClean: () => boolean;
+  conflicted: string[];
+  files: Array<{ path: string }>;
+}
+
+/** A `git status` result as simple-git shapes it: conflicted paths are in `files` too. */
+function statusOf(paths: string[], conflicted: string[] = []): StatusDouble {
+  return {
+    isClean: () => paths.length === 0,
+    conflicted,
+    files: paths.map((path) => ({ path })),
+  };
+}
+
 interface GitDoubleOptions {
   /** `git status` result. Clean unless overridden. */
-  status?: { isClean: () => boolean; conflicted: string[] };
+  status?: StatusDouble;
   /** Refs `rev-parse --verify` should report as existing. */
   existingRefs?: string[];
   /** Branch `rev-parse --abbrev-ref HEAD` reports. */
@@ -91,7 +106,7 @@ interface GitDoubleOptions {
 
 function gitDouble(options: GitDoubleOptions = {}) {
   const {
-    status = { isClean: () => true, conflicted: [] },
+    status = statusOf([]),
     existingRefs = [BASE_TRACKING_REF],
     branch = BRANCH,
     failWith,
@@ -145,6 +160,14 @@ function callsTo(git: { raw: ReturnType<typeof vi.fn> }, name: string): string[]
   return git.raw.mock.calls
     .map((c) => c[0] as string[])
     .filter((args) => args.find((a, i) => a !== "-c" && args[i - 1] !== "-c") === name);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -207,7 +230,7 @@ describe("git:rebase-onto-base", () => {
   });
 
   it("refuses a dirty worktree BEFORE touching history", async () => {
-    const git = gitDouble({ status: { isClean: () => false, conflicted: [] } });
+    const git = gitDouble({ status: statusOf(["a.ts"]) });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -220,7 +243,9 @@ describe("git:rebase-onto-base", () => {
   it("refuses when only unmerged files are present", async () => {
     // `isClean()` can be true while conflicts stand, so the conflicted list is
     // checked separately rather than trusted to fold into it.
-    const git = gitDouble({ status: { isClean: () => true, conflicted: ["a.ts"] } });
+    const git = gitDouble({
+      status: { isClean: () => true, conflicted: ["a.ts"], files: [] },
+    });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -361,7 +386,7 @@ describe("git:merge-base-into-branch", () => {
   });
 
   it("refuses a dirty worktree before merging", async () => {
-    const git = gitDouble({ status: { isClean: () => false, conflicted: [] } });
+    const git = gitDouble({ status: statusOf(["a.ts"]) });
     createHardenedGitMock.mockResolvedValue(git);
     registerGitWriteHandlers({} as never);
 
@@ -651,6 +676,249 @@ describe("git:list-base-integration-commits", () => {
         { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
       )
     ).rejects.toMatchObject({ reason: "config-missing" });
+  });
+});
+
+describe("git:list-base-integration-commits — blockers the write would refuse (#17189)", () => {
+  async function readPreview(
+    git: ReturnType<typeof gitDouble>,
+    kind: "rebase-onto-base" | "merge-base" = "rebase-onto-base"
+  ) {
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+    return (await registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+      {},
+      { cwd: CWD, baseBranch: BASE, kind }
+    )) as { blocker: unknown; branch: string | null; commits: unknown[] };
+  }
+
+  it("reports no blocker for a clean feature branch", async () => {
+    const result = await readPreview(gitDouble());
+    expect(result.blocker).toBeNull();
+    expect(result.commits).toHaveLength(1);
+  });
+
+  it("counts uncommitted changes, untracked files included", async () => {
+    const result = await readPreview(gitDouble({ status: statusOf(["a.ts", "new.txt"]) }));
+    expect(result.blocker).toEqual({ reason: "uncommitted-changes", count: 2 });
+  });
+
+  it("names unresolved conflicts ahead of the other changes", async () => {
+    const result = await readPreview(
+      gitDouble({ status: statusOf(["a.ts", "b.ts", "c.ts"], ["a.ts"]) }),
+      "merge-base"
+    );
+    expect(result.blocker).toEqual({ reason: "conflicts", count: 1 });
+  });
+
+  it("flags the base branch itself checked out, ahead of a dirty tree", async () => {
+    const result = await readPreview(gitDouble({ branch: BASE, status: statusOf(["a.ts"]) }));
+    expect(result.blocker).toEqual({ reason: "base-checked-out" });
+  });
+
+  it("flags a halted rebase on its detached HEAD instead of failing the read", async () => {
+    // A halted rebase detaches HEAD, so a read that asked for the branch first
+    // would fail with "no branch checked out" — the wrong diagnosis and the
+    // wrong fix, the same trap the pull-rebase confirm already avoids.
+    detectRepoOperationStateMock.mockResolvedValue({
+      state: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 5,
+    });
+    const git = gitDouble({ branch: "HEAD", status: statusOf(["a.ts"], ["a.ts"]) });
+    const result = await readPreview(git);
+
+    expect(result.blocker).toEqual({
+      reason: "operation-in-progress",
+      operation: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 5,
+    });
+    expect(result.branch).toBeNull();
+    expect(result.commits).toEqual([]);
+    // Nothing is measured against a HEAD that is mid-replay.
+    expect(git.log).not.toHaveBeenCalled();
+  });
+
+  it.each(["MERGING", "CHERRY_PICKING", "REVERTING"] as const)(
+    "flags a halted %s without progress it doesn't have",
+    async (state) => {
+      detectRepoOperationStateMock.mockResolvedValue({ state });
+      const git = gitDouble();
+      const result = await readPreview(git, "merge-base");
+
+      expect(result.blocker).toEqual({
+        reason: "operation-in-progress",
+        operation: state,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+      });
+      expect(git.log).not.toHaveBeenCalled();
+    }
+  );
+
+  it("flags conflicts even when the status otherwise reads clean", async () => {
+    const result = await readPreview(
+      gitDouble({ status: { isClean: () => true, conflicted: ["a.ts"], files: [] } })
+    );
+    expect(result.blocker).toEqual({ reason: "conflicts", count: 1 });
+  });
+
+  it("leaves a checked-out base unmeasured rather than reporting zero to integrate", async () => {
+    const git = gitDouble({ branch: BASE });
+    const result = (await readPreview(git)) as unknown as {
+      branch: string | null;
+      compareRef: string | null;
+      total: number | null;
+      behind: number | null;
+    };
+
+    expect(result.branch).toBe(BASE);
+    expect(result.compareRef).toBeNull();
+    expect(result.total).toBeNull();
+    expect(result.behind).toBeNull();
+    expect(git.log).not.toHaveBeenCalled();
+  });
+
+  it("still measures a dirty tree, so the commits stay visible while blocked", async () => {
+    const result = (await readPreview(gitDouble({ status: statusOf(["a.ts"]) }))) as unknown as {
+      blocker: unknown;
+      commits: unknown[];
+      behind: number | null;
+    };
+    expect(result.blocker).toEqual({ reason: "uncommitted-changes", count: 1 });
+    expect(result.commits).toHaveLength(1);
+    expect(result.behind).toBe(3);
+  });
+
+  it("fails the read when the status can't be read, never reporting no blocker", async () => {
+    const git = gitDouble();
+    git.status.mockRejectedValue(new Error("fatal: index file corrupt"));
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await expect(
+      registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+        {},
+        { cwd: CWD, baseBranch: BASE, kind: "rebase-onto-base" }
+      )
+    ).rejects.toThrow(/index file corrupt/);
+  });
+
+  it("refuses the write over a halted rebase as mid-operation, not as a detached HEAD", async () => {
+    detectRepoOperationStateMock.mockResolvedValue({ state: "REBASING" });
+    const git = gitDouble({ branch: "HEAD" });
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await expect(
+      registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!({}, { cwd: CWD, baseBranch: BASE })
+    ).rejects.toThrow(/mid-operation/);
+    expect(callsTo(git, "rebase")).toEqual([]);
+  });
+
+  // Each row pins the preview's diagnosis AND the write's own refusal for the
+  // same repository, so a blocker that drifted to a different reason, or a
+  // write that refused for some unrelated cause, fails here.
+  it.each([
+    {
+      label: "uncommitted changes",
+      options: { status: statusOf(["a.ts", "new.txt"]) },
+      halted: null,
+      blocker: { reason: "uncommitted-changes", count: 2 },
+      refusal: { reason: "worktree-dirty" },
+    },
+    {
+      label: "unresolved conflicts",
+      options: { status: statusOf(["a.ts", "b.ts", "c.ts"], ["a.ts", "b.ts"]) },
+      halted: null,
+      blocker: { reason: "conflicts", count: 2 },
+      refusal: { reason: "worktree-dirty" },
+    },
+    {
+      label: "the base branch checked out",
+      options: { branch: BASE },
+      halted: null,
+      blocker: { reason: "base-checked-out" },
+      refusal: { reason: "config-missing" },
+    },
+    {
+      label: "a halted merge",
+      options: {},
+      halted: "MERGING",
+      blocker: {
+        reason: "operation-in-progress",
+        operation: "MERGING",
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+      },
+      refusal: { reason: "conflict-unresolved", message: expect.stringMatching(/mid-operation/) },
+    },
+    {
+      label: "a clean feature branch",
+      options: {},
+      halted: null,
+      blocker: null,
+      refusal: null,
+    },
+  ] as const)(
+    "flags exactly what the write then refuses: $label",
+    async ({ options, halted, blocker, refusal }) => {
+      for (const [kind, channel, subcommand] of [
+        ["rebase-onto-base", CHANNELS.GIT_REBASE_ONTO_BASE, "rebase"],
+        ["merge-base", CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, "merge"],
+      ] as const) {
+        vi.clearAllMocks();
+        _resetRateLimitQueuesForTest();
+        detectRepoOperationStateMock.mockResolvedValue({ state: halted ?? "CLEAN" });
+        const git = gitDouble(options);
+        const result = await readPreview(git, kind);
+        expect(result.blocker).toEqual(blocker);
+
+        const write = registeredHandlers().get(channel)!({}, { cwd: CWD, baseBranch: BASE });
+        if (refusal) {
+          await expect(write).rejects.toMatchObject(refusal);
+          expect(callsTo(git, subcommand)).toEqual([]);
+        } else {
+          await write;
+          expect(callsTo(git, subcommand)).toHaveLength(1);
+        }
+      }
+    }
+  );
+
+  it("refuses the read while an integration is already running in the worktree", async () => {
+    // Until git writes its first sentinel, a running integration leaves the
+    // tree clean and level, so the read would measure an approval the write is
+    // certain to refuse as already running.
+    const factory = deferred<ReturnType<typeof gitDouble>>();
+    createHardenedGitMock.mockReturnValueOnce(factory.promise);
+    registerGitWriteHandlers({} as never);
+    const running = registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!(
+      {},
+      { cwd: CWD, baseBranch: BASE }
+    );
+
+    try {
+      await expect(
+        registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+          {},
+          { cwd: CWD, baseBranch: BASE, kind: "merge-base" }
+        )
+      ).rejects.toThrow(/already running/);
+    } finally {
+      // Settled even when the assertion fails, so the claim on the worktree
+      // never outlives this test.
+      factory.resolve(gitDouble());
+      await running;
+    }
+    // Released once the write settles, so the next read measures normally.
+    createHardenedGitMock.mockResolvedValue(gitDouble());
+    const after = (await registeredHandlers().get(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS)!(
+      {},
+      { cwd: CWD, baseBranch: BASE, kind: "merge-base" }
+    )) as { blocker: unknown };
+    expect(after.blocker).toBeNull();
   });
 });
 
