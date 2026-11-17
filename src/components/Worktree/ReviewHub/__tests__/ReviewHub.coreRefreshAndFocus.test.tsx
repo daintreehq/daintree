@@ -2388,12 +2388,12 @@ describe("ReviewHub", () => {
       ).toBeNull();
     });
 
-    it("renders the badge but disables click when decoration.url is absent", async () => {
+    it("renders a static badge, not a button, when decoration.url is absent", async () => {
       // The provider shipped the badge + tooltip + color but the deep-link
       // capability is missing (e.g. a future non-GitHub provider that
       // hasn't implemented `buildPRFileUrl` yet). The badge stays visible
-      // as an indicator; the click target is disabled so a tooltip-only
-      // row doesn't 404.
+      // as an indicator, with no interactive element for a tooltip-only
+      // row to 404 from.
       getDecorationsMock.mockResolvedValueOnce({
         "src/component.tsx": {
           badge: "3",
@@ -2404,10 +2404,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = await screen.findByRole("button", {
-        name: /3 unresolved review comments/i,
-      });
-      expect(badge.hasAttribute("disabled")).toBe(true);
+      const badge = await screen.findByTestId("base-branch-file-row-badge");
+      expect(badge.textContent).toContain("3 unresolved review comments");
+      expect(screen.queryByRole("button", { name: /3 unresolved review comments/i })).toBeNull();
 
       fireEvent.click(badge);
       // Click must NOT route through the legacy prUrl-shape fallback

@@ -184,6 +184,17 @@ describe("PrStatusChip", () => {
       expect(onOpenExternal).toHaveBeenCalledWith(url);
     });
 
+    it("holds a 24px hit box for the new-PR chip without growing the header", () => {
+      const { getByTestId } = renderNoPr({
+        state: "ready",
+        term: "pull-request",
+        url: "https://github.com/o/r/compare/develop...topic?expand=1",
+      });
+      const link = getByTestId("pr-new-link");
+      expect(link.className).toContain("min-h-6");
+      expect(link.className).toContain("-my-0.5");
+    });
+
     it("uses the forge's own word for it", () => {
       const { getByRole, queryByText } = renderNoPr({
         state: "ready",

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
@@ -159,6 +159,40 @@ describe("BaseBranchFileList keyboard rows (#16895)", () => {
         expect(press("ArrowDown", { [modifier]: true })).toBe(false);
         expect(document.activeElement).toBe(row("file-000.ts"));
       }
+    });
+
+    it("gives a clickable review-thread badge a 24px target without growing the row", () => {
+      const list = files(1);
+      renderList(list, {
+        [list[0]!.path]: { badge: "2", tooltip: "2 unresolved threads", url: "https://x.test" },
+      });
+      const badge = screen.getByRole("button", { name: "2 unresolved threads" });
+      expect(badge.className).toContain("min-h-6");
+      expect(badge.className).toContain("min-w-6");
+      expect(badge.className).toContain("-my-1");
+      expect(badge.className).toContain("cursor-pointer");
+    });
+
+    it("names a clickable badge in a tooltip on keyboard focus", async () => {
+      const list = files(1);
+      renderList(list, {
+        [list[0]!.path]: { badge: "2", tooltip: "2 unresolved threads", url: "https://x.test" },
+      });
+      const badge = screen.getByRole("button", { name: "2 unresolved threads" });
+      act(() => badge.focus());
+      const tip = await screen.findByRole("tooltip");
+      expect(tip.textContent).toContain("2 unresolved threads");
+    });
+
+    it("renders a static badge, not a disabled button, when the decoration has no url", () => {
+      const list = files(1);
+      renderList(list, {
+        [list[0]!.path]: { badge: "2", tooltip: "2 unresolved threads" },
+      });
+      expect(screen.queryByRole("button", { name: "2 unresolved threads" })).toBeNull();
+      const badge = screen.getByTestId("base-branch-file-row-badge");
+      expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe("2");
+      expect(badge.querySelector(".sr-only")?.textContent).toBe("2 unresolved threads");
     });
 
     it("leaves keys on a review-thread badge alone", () => {

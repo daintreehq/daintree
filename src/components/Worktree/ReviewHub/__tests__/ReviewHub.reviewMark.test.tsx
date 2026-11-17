@@ -540,6 +540,16 @@ describe("Review Hub review marks (#14585)", () => {
     expect(screen.queryByTestId("review-hub-review-mark-since")).toBeNull();
   });
 
+  it("gives the clear action a 24px target that leaves the line's height alone", async () => {
+    useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+    renderHub();
+
+    const clear = await screen.findByTestId("review-hub-review-mark-clear");
+    expect(clear.className).toContain("min-h-6");
+    expect(clear.className).toContain("min-w-6");
+    expect(clear.className).toContain("-my-1");
+  });
+
   it("clears the mark and drops the line once the host says it's gone", async () => {
     useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
     bridge.clear.mockResolvedValue({ status: "cleared", snapshot: snapshot({}, 3) });

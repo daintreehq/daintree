@@ -301,7 +301,9 @@ function NoPrChip({
           data-testid="pr-new-link"
           onClick={() => onOpenExternal(link.url)}
           className={cn(
-            "group/new-pr inline-flex items-center rounded-sm cursor-pointer",
+            // min-h-6 is the 24px target (WCAG 2.5.8); -my-0.5 hands the height back
+            // so the header does not grow.
+            "group/new-pr inline-flex items-center min-h-6 -my-0.5 rounded-sm cursor-pointer",
             NEW_PR_FOCUS_RING
           )}
         >
