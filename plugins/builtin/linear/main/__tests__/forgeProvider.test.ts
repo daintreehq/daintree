@@ -585,12 +585,14 @@ describe("assignment Undo history", () => {
   let assignees: Record<number, User | null>;
   let failNextWrite: boolean;
   let writeGate: Promise<void> | null;
+  let beforeRead: (() => void) | null;
   let writes: Array<string | null>;
 
   beforeEach(() => {
     assignees = { 42: GRACE, 43: LIN };
     failNextWrite = false;
     writeGate = null;
+    beforeRead = null;
     writes = [];
     fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
       const { query, variables } = JSON.parse(String(init.body)) as {
@@ -599,10 +601,10 @@ describe("assignment Undo history", () => {
       };
       if (query.includes("viewer {")) return gql({ viewer: VIEWER });
       if (query.includes("issueUpdate")) {
-        if (writeGate) await writeGate;
         const number = Number(String(variables.id).replace("issue-uuid-", ""));
         const assigneeId = (variables.input as { assigneeId: string | null }).assigneeId;
         writes.push(assigneeId);
+        if (writeGate) await writeGate;
         if (failNextWrite) {
           failNextWrite = false;
           return new Response("", { status: 503 });
@@ -611,6 +613,7 @@ describe("assignment Undo history", () => {
         return gql({ issueUpdate: { success: true, issue: { assignee: assignees[number] } } });
       }
       const number = ((variables.filter as { number: { eq: number } }).number ?? {}).eq;
+      beforeRead?.();
       return gql({
         issues: {
           nodes: [
@@ -740,6 +743,29 @@ describe("assignment Undo history", () => {
   it("doesn't carry what it remembers over to a new key", async () => {
     await assign();
     linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees[42]).toBeNull();
+  });
+
+  it("refuses an Undo whose key changed under it rather than clearing the issue", async () => {
+    await assign();
+    beforeRead = () => {
+      beforeRead = null;
+      linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+    };
+    await expect(undo()).rejects.toThrow(/key changed/);
+    expect(assignees[42]).toBe(VIEWER);
+    expect(writes).toEqual(["user-1"]);
+  });
+
+  it("keeps no record from an assignment whose key changed under it", async () => {
+    beforeRead = () => {
+      beforeRead = null;
+      linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+    };
+    await assign();
+    expect(assignees[42]).toBe(VIEWER);
+    // The new key has nothing to hand back, so it only takes the issue off the viewer.
     await expect(undo()).resolves.toEqual([]);
     expect(assignees[42]).toBeNull();
   });
