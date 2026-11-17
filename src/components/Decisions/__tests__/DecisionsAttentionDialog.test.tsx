@@ -578,8 +578,11 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     expect(document.activeElement).toBe(cancel);
   });
 
-  /** Opened for pane 3 and settled on its answer, then opened for pane 4 with its read held. */
-  async function reopenWhileOpenForPane4(): Promise<HTMLElement> {
+  /**
+   * Opened for pane 3 and settled on its answer, then opened for pane 4 with
+   * its read held, with the window away from the start when `windowAway`.
+   */
+  async function reopenWhileOpenForPane4({ windowAway = false } = {}): Promise<HTMLElement> {
     listed = [makeItem(3)];
     const { rerender } = render(tree(false));
     openFor("pane-3");
@@ -590,8 +593,11 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
 
     listed = [makeItem(3), makeItem(4)];
     holdReads();
+    const away = windowAway ? vi.spyOn(document, "hasFocus").mockReturnValue(false) : null;
+    onTestFinished(() => away?.mockRestore());
     openFor("pane-4");
     await waitFor(() => expect(held).toHaveLength(1));
+    away?.mockRestore();
     return old;
   }
 
@@ -601,6 +607,18 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     // Coming back to the window, the browser fires focus at what held it when the window lost it.
     act(() => {
       window.dispatchEvent(new FocusEvent("blur"));
+      old.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("reopened while the window was away, lands on the new pane's answer once it comes back", async () => {
+    const old = await reopenWhileOpenForPane4({ windowAway: true });
+
+    act(() => {
       old.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     });
     await landReads();

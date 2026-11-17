@@ -598,7 +598,8 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       // focus when the window lost it taking it again as the window comes
       // back, and focus behind every modal (a popover handing it back to the
       // chip that opened the list) are not.
-      let heldAtWindowBlur: Element | null = null;
+      // The window may already be away as the opening begins.
+      let heldAtWindowBlur = document.hasFocus() ? null : document.activeElement;
       // Blur doesn't bubble, so outside the capture phase only the window's own arrives.
       const onWindowBlur = () => {
         heldAtWindowBlur = document.activeElement;
