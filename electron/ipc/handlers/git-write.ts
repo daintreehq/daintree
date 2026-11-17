@@ -41,7 +41,6 @@ import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "../../../shared/types/git.js";
 import {
   validateCwd,
   createHardenedGit,
-  createStrictExitGit,
   createAuthenticatedGit,
   createContinueGit,
   createStrictExitGit,
