@@ -868,7 +868,10 @@ async function requireBaseTarget(
  */
 async function readTreeBlocker(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">
-): Promise<Extract<GitBaseIntegrationBlocker, { reason: "conflicts" | "uncommitted-changes" }> | null> {
+): Promise<Extract<
+  GitBaseIntegrationBlocker,
+  { reason: "conflicts" | "uncommitted-changes" }
+> | null> {
   const status = await git.status();
   if (status.conflicted.length > 0) {
     return { reason: "conflicts", count: status.conflicted.length };

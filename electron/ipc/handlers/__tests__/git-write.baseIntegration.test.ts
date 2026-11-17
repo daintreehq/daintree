@@ -814,27 +814,24 @@ describe("git:list-base-integration-commits — blockers the write would refuse 
     ["unresolved conflicts", { status: statusOf(["a.ts"], ["a.ts"]) }, null],
     ["the base branch checked out", { branch: BASE }, null],
     ["a halted merge", {}, "MERGING"],
-  ] as const)(
-    "flags exactly what the write then refuses: %s",
-    async (_label, options, halted) => {
-      for (const [kind, channel] of [
-        ["rebase-onto-base", CHANNELS.GIT_REBASE_ONTO_BASE],
-        ["merge-base", CHANNELS.GIT_MERGE_BASE_INTO_BRANCH],
-      ] as const) {
-        vi.clearAllMocks();
-        _resetRateLimitQueuesForTest();
-        detectRepoOperationStateMock.mockResolvedValue({ state: halted ?? "CLEAN" });
-        const git = gitDouble(options);
-        const result = await readPreview(git, kind);
-        expect(result.blocker).toMatchObject({ reason: expect.any(String) });
+  ] as const)("flags exactly what the write then refuses: %s", async (_label, options, halted) => {
+    for (const [kind, channel] of [
+      ["rebase-onto-base", CHANNELS.GIT_REBASE_ONTO_BASE],
+      ["merge-base", CHANNELS.GIT_MERGE_BASE_INTO_BRANCH],
+    ] as const) {
+      vi.clearAllMocks();
+      _resetRateLimitQueuesForTest();
+      detectRepoOperationStateMock.mockResolvedValue({ state: halted ?? "CLEAN" });
+      const git = gitDouble(options);
+      const result = await readPreview(git, kind);
+      expect(result.blocker).toMatchObject({ reason: expect.any(String) });
 
-        await expect(
-          registeredHandlers().get(channel)!({}, { cwd: CWD, baseBranch: BASE })
-        ).rejects.toBeDefined();
-        expect(callsTo(git, kind === "rebase-onto-base" ? "rebase" : "merge")).toEqual([]);
-      }
+      await expect(
+        registeredHandlers().get(channel)!({}, { cwd: CWD, baseBranch: BASE })
+      ).rejects.toBeDefined();
+      expect(callsTo(git, kind === "rebase-onto-base" ? "rebase" : "merge")).toEqual([]);
     }
-  );
+  });
 });
 
 describe("git:continue-repository-operation handler", () => {
