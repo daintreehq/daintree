@@ -1,4 +1,11 @@
-import { useEffect, useId, type ComponentProps, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { Globe } from "lucide-react";
 import { Link } from "@/components/icons";
 import { linkHost } from "@shared/utils/projectLinks";
@@ -210,6 +217,11 @@ export function LinksLauncherList({
 const CONTENT_CLASS = "w-[min(340px,var(--radix-popover-content-available-width))] p-0";
 
 /** The launcher's popover body, shared by the button and the detached anchor. */
+function isFocusStranded(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || !active.isConnected;
+}
+
 function LinksLauncherPopoverContent({
   seq,
   onCloseAutoFocus,
@@ -219,14 +231,39 @@ function LinksLauncherPopoverContent({
 }) {
   const links = useLinksLauncherLinks();
   const close = useLinksLauncherStore((s) => s.close);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // The control inside that last held focus. Kept through its removal, which
+  // fires no blur; cleared only when focus moves somewhere outside.
+  const focusedRef = useRef<Element | null>(null);
+
+  // Each opening re-reads the project's links, and the list can change under
+  // the keyboard: the row it was on, or the empty state's button, goes away
+  // and focus falls to the page, where the next Tab starts from the top and
+  // a palette closing behind the launcher would take it back.
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    const last = focusedRef.current;
+    if (content === null || last === null || last.isConnected || !isFocusStranded()) return;
+    const next = content.querySelector<HTMLElement>("button") ?? content;
+    next.focus({ preventScroll: true });
+  });
+
   return (
     <PopoverContent
+      ref={contentRef}
       align="end"
       aria-label={LINKS_LABEL}
       data-testid="links-launcher"
       {...{ [CONTENT_ATTR]: "" }}
       className={CONTENT_CLASS}
       onCloseAutoFocus={onCloseAutoFocus}
+      onFocusCapture={(event) => {
+        focusedRef.current = event.target;
+      }}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && !event.currentTarget.contains(next)) focusedRef.current = null;
+      }}
     >
       <LinksLauncherList
         links={links}
@@ -325,9 +362,9 @@ export function LinksLauncherToolbarButton({
 /**
  * Where the action palette opens the launcher while its button is out of
  * sight: an anchor at the toolbar's trailing edge. It has no control to give
- * focus back to, so a close that would strand focus hands it to the focused
- * panel instead; one that sent focus somewhere (a click away, a panel the
- * link opened) is left alone.
+ * focus back to, so a close that would strand focus returns it where the
+ * palette was opened from, or failing that to the focused panel; one that
+ * sent focus somewhere (a click away, a panel the link opened) is left alone.
  */
 export function LinksLauncherDetachedHost() {
   const opening = useLinksLauncherStore((s) => s.opening);
@@ -348,9 +385,11 @@ export function LinksLauncherDetachedHost() {
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           setTimeout(() => {
-            const active = document.activeElement;
-            if (active !== null && active !== document.body && active.isConnected) return;
-            enterFocusedPanel(usePanelStore.getState().focusedId);
+            const paletteRestore = useLinksLauncherStore.getState().takePaletteRestore();
+            if (!isFocusStranded()) return;
+            // Back where the keyboard was before the palette opened, else the panel.
+            paletteRestore?.();
+            if (isFocusStranded()) enterFocusedPanel(usePanelStore.getState().focusedId);
           }, 0);
         }}
       />

@@ -6,17 +6,26 @@ import type { GlobalLink } from "@/store/globalLinksStore";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 const h = vi.hoisted(() => ({
-  dispatch: vi.fn(() => Promise.resolve({ ok: true })),
-  openLinkUrl: vi.fn(() => Promise.resolve()),
-  enterFocusedPanel: vi.fn(() => true),
+  dispatch: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean }>>(() =>
+    Promise.resolve({ ok: true })
+  ),
+  openLinkUrl: vi.fn<(url: string) => Promise<void>>(() => Promise.resolve()),
+  enterFocusedPanel: vi.fn<(id: string | null) => boolean>(() => true),
   links: {
     projectLinks: [] as ProjectLink[],
     globalLinks: [] as GlobalLink[],
   },
+  listeners: new Set<() => void>(),
 }));
 
+/** Replace what the launcher lists, as a refresh landing would. */
+function setLinks(next: typeof h.links): void {
+  h.links = next;
+  for (const listener of h.listeners) listener();
+}
+
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: (...args: unknown[]) => h.dispatch(...(args as [])) },
+  actionService: { dispatch: (...args: unknown[]) => h.dispatch(...args) },
 }));
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => undefined,
@@ -24,19 +33,29 @@ vi.mock("@/hooks", () => ({
 }));
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("@/services/openLinkUrl", () => ({
-  openLinkUrl: (url: string) => h.openLinkUrl(url as never),
+  openLinkUrl: (url: string) => h.openLinkUrl(url),
   opensInPanel: (url: string) => url.startsWith("http://localhost"),
 }));
 vi.mock("@/components/Terminal/contentGridFocus", () => ({
-  enterFocusedPanel: (id: string | null) => h.enterFocusedPanel(id as never),
+  enterFocusedPanel: (id: string | null) => h.enterFocusedPanel(id),
 }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ focusedId: "t1" }) },
 }));
-vi.mock("@/hooks/useLinksLauncher", () => ({
-  useLinksLauncherLinks: () => h.links,
-  hasLauncherLinks: (l: typeof h.links) => l.projectLinks.length > 0 || l.globalLinks.length > 0,
-}));
+vi.mock("@/hooks/useLinksLauncher", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useLinksLauncherLinks: () =>
+      useSyncExternalStore(
+        (listener) => {
+          h.listeners.add(listener);
+          return () => h.listeners.delete(listener);
+        },
+        () => h.links
+      ),
+    hasLauncherLinks: (l: typeof h.links) => l.projectLinks.length > 0 || l.globalLinks.length > 0,
+  };
+});
 
 const {
   LinksLauncherToolbarButton,
@@ -97,9 +116,13 @@ beforeEach(() => {
   h.dispatch.mockClear();
   h.openLinkUrl.mockClear();
   h.enterFocusedPanel.mockClear();
-  h.links.projectLinks = [STAGING, LOCAL];
-  h.links.globalLinks = [DOCS];
-  useLinksLauncherStore.setState({ opening: null, refreshSeq: 0, closeFocus: null });
+  h.links = { projectLinks: [STAGING, LOCAL], globalLinks: [DOCS] };
+  useLinksLauncherStore.setState({
+    opening: null,
+    refreshSeq: 0,
+    closeFocus: null,
+    paletteRestore: null,
+  });
 });
 
 afterEach(() => {
@@ -167,6 +190,38 @@ describe("links launcher button", () => {
       fireEvent.click(button);
     });
     expect(useLinksLauncherStore.getState().refreshSeq).toBe(2);
+  });
+
+  it("keeps the keyboard in the list when a refresh removes the row it was on", async () => {
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+    act(() => rows()[0]!.focus());
+
+    await act(async () => {
+      setLinks({ projectLinks: [LOCAL], globalLinks: [DOCS] });
+    });
+
+    expect(rows().map((row) => describeRow(row).name)).toEqual(["Local app", "Team docs"]);
+    expect(document.activeElement).toBe(rows()[0]);
+    expect(launcher()).not.toBeNull();
+  });
+
+  it("leaves focus alone when a refresh changes rows it isn't on", async () => {
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+    act(() => rows()[2]!.focus());
+
+    await act(async () => {
+      setLinks({ projectLinks: [LOCAL], globalLinks: [DOCS] });
+    });
+    // Still on the same link, now the second row.
+    expect(document.activeElement).toBe(rows()[1]);
   });
 
   it("drops its opening when it leaves the toolbar while open", async () => {
@@ -240,9 +295,35 @@ describe("detached launcher", () => {
     expect(h.enterFocusedPanel).toHaveBeenCalledWith("t1");
   });
 
+  it("returns focus to where the palette was opened from when it closes", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    try {
+      render(<LinksLauncherDetachedHost />);
+      await act(async () => {
+        useLinksLauncherStore.getState().open("detached");
+        useLinksLauncherStore.setState({ paletteRestore: () => opener.focus() });
+      });
+      await flush();
+      act(() => rows()[0]!.focus());
+
+      await act(async () => {
+        fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      });
+      await flush();
+      await flush();
+
+      expect(launcher()).toBeNull();
+      expect(document.activeElement).toBe(opener);
+      expect(h.enterFocusedPanel).not.toHaveBeenCalled();
+      expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+    } finally {
+      opener.remove();
+    }
+  });
+
   it("names the next step when there is nothing to list", async () => {
-    h.links.projectLinks = [];
-    h.links.globalLinks = [];
+    h.links = { projectLinks: [], globalLinks: [] };
     render(<LinksLauncherDetachedHost />);
     await act(async () => {
       useLinksLauncherStore.getState().open("detached");

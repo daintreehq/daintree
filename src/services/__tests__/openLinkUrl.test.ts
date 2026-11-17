@@ -20,12 +20,33 @@ const panelState = vi.hoisted(() => ({
   panelIds: [] as string[],
 }));
 const selection = vi.hoisted(() => ({ activeWorktreeId: "w1" as string | null }));
+const devServers = vi.hoisted(() => ({
+  sessionsByWorktreeId: {} as Record<
+    string,
+    { panelId: string; status: string; url: string | null }
+  >,
+}));
+const remote = vi.hoisted(() => ({
+  hostId: null as string | null,
+  resolve: vi.fn<(url: string, hostId: string | null) => Promise<string>>((url) =>
+    Promise.resolve(url)
+  ),
+}));
 
 vi.mock("@/clients", () => ({ systemClient: { openExternal } }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("@/lib/notify", () => ({ notify }));
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => selection },
+}));
+vi.mock("@/store/worktreeDevServerStore", () => ({
+  useWorktreeDevServerStore: { getState: () => devServers },
+}));
+vi.mock("@/services/terminal/remoteLoopbackLinks", () => ({
+  remoteHostOfView: () => remote.hostId,
+  resolveTerminalLinkForHost: (url: string, hostId: string | null) => remote.resolve(url, hostId),
+  hostForwardFailure: (_url: string, error: unknown) =>
+    error instanceof Error ? error.message : "The host didn't answer.",
 }));
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
@@ -47,15 +68,16 @@ function browser(id: string, extra: Record<string, unknown> = {}) {
 }
 
 function preview(id: string, extra: Record<string, unknown> = {}) {
-  return {
-    id,
-    kind: "dev-preview",
-    location: "grid",
-    worktreeId: "w1",
-    devServerStatus: "running",
-    devServerUrl: "http://localhost:5173/",
-    ...extra,
-  };
+  return { id, kind: "dev-preview", location: "grid", worktreeId: "w1", ...extra };
+}
+
+function serving(
+  worktreeId: string,
+  panelId: string,
+  status = "running",
+  url = "http://localhost:5173"
+) {
+  devServers.sessionsByWorktreeId[worktreeId] = { panelId, status, url };
 }
 
 function withPanels(...panels: Array<{ id: string }>): void {
@@ -77,6 +99,9 @@ beforeEach(() => {
   setActiveTab.mockClear();
   getPanelGroup.mockReset().mockReturnValue(undefined);
   selection.activeWorktreeId = "w1";
+  devServers.sessionsByWorktreeId = {};
+  remote.hostId = null;
+  remote.resolve.mockReset().mockImplementation((url) => Promise.resolve(url));
   withPanels();
 });
 
@@ -108,7 +133,7 @@ describe("openLinkUrl for an outside address", () => {
   it("falls back to IPC when the action is refused", async () => {
     dispatch.mockResolvedValue({ ok: false });
     await openLinkUrl("https://ci.example.com");
-    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://ci.example.com/"));
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://ci.example.com"));
   });
 
   it("refuses an address that isn't http(s), with a notice", async () => {
@@ -119,11 +144,62 @@ describe("openLinkUrl for an outside address", () => {
       expect.objectContaining({ type: "error", title: "Couldn't open link" })
     );
   });
+
+  it("hands the address over exactly as saved", async () => {
+    const saved = "https://user:token@files.example.com/download/0.0.0.0?sig=AbC#part";
+    await openLinkUrl(saved);
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: saved },
+      { source: "user" }
+    );
+  });
+
+  it("reads a bare host as https", async () => {
+    await openLinkUrl("status.example.com/incidents");
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://status.example.com/incidents" },
+      { source: "user" }
+    );
+  });
+
+  it("in a view bound to a host, opens what the host's forwarding made of it", async () => {
+    remote.hostId = "studio-01";
+    const saved = "https://auth.example.com/authorize?redirect_uri=http://localhost:8765/cb";
+    remote.resolve.mockResolvedValue(`${saved}&forwarded=1`);
+    await openLinkUrl(saved);
+    expect(remote.resolve).toHaveBeenCalledWith(saved, "studio-01");
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: `${saved}&forwarded=1` },
+      { source: "user" }
+    );
+  });
+
+  it("in a view bound to a host, says why when the forward fails and opens nothing", async () => {
+    remote.hostId = "studio-01";
+    remote.resolve.mockRejectedValue(new Error("Port 8765 is in use on this machine"));
+    await openLinkUrl("https://auth.example.com/authorize?redirect_uri=http://localhost:8765/cb");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't open link",
+        message: "Port 8765 is in use on this machine",
+      })
+    );
+  });
+
+  it("never forwards in a local view", async () => {
+    await openLinkUrl("https://ci.example.com");
+    expect(remote.resolve).not.toHaveBeenCalled();
+  });
 });
 
 describe("openLinkUrl for a loopback address", () => {
   it("prefers the running dev preview serving that origin in the active worktree", async () => {
     withPanels(browser("b1", { lastActiveAt: 50 }), preview("p1"));
+    serving("w1", "p1");
     getPanelGroup.mockReturnValue({ id: "g1", panelIds: ["p1", "x"] });
     await openLinkUrl("http://localhost:5173/settings");
     expect(activateTerminal).toHaveBeenCalledWith("p1");
@@ -138,17 +214,24 @@ describe("openLinkUrl for a loopback address", () => {
     );
   });
 
-  it("passes over a preview that isn't running, serves another port, or belongs elsewhere", async () => {
-    withPanels(
-      preview("stopped", { devServerStatus: "stopped" }),
-      preview("other-port", { devServerUrl: "http://localhost:3000/" }),
-      preview("other-tree", { worktreeId: "w2" }),
-      preview("trashed", { location: "trash" }),
-      browser("b1")
-    );
+  it.each([
+    ["isn't running", () => serving("w1", "p1", "starting")],
+    ["serves another port", () => serving("w1", "p1", "running", "http://localhost:3000")],
+    ["serves another worktree", () => serving("w2", "p1")],
+    ["has no session", () => {}],
+  ])("passes over a dev preview whose server %s", async (_label, arrange) => {
+    withPanels(preview("p1"), browser("b1"));
+    arrange();
     await openLinkUrl("http://localhost:5173/");
     expect(activateTerminal).toHaveBeenCalledWith("b1");
     expect(setBrowserUrl).toHaveBeenCalledWith("b1", "http://localhost:5173/");
+  });
+
+  it("passes over a serving preview that can't be brought on screen", async () => {
+    withPanels(preview("p1", { location: "trash" }), browser("b1"));
+    serving("w1", "p1");
+    await openLinkUrl("http://localhost:5173/");
+    expect(activateTerminal).toHaveBeenCalledWith("b1");
   });
 
   it("reuses the most recently used browser pane of the active worktree", async () => {

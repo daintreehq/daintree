@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openLinksLauncher, useLinksLauncherStore } from "../linksLauncherStore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  deferPaletteFocusRestore,
+  notePaletteOpening,
+} from "@/components/ui/paletteFocusRestore";
 
 function addButtonWrapper({ hidden }: { hidden: boolean }): HTMLElement {
   const wrapper = document.createElement("div");
@@ -12,7 +17,13 @@ function addButtonWrapper({ hidden }: { hidden: boolean }): HTMLElement {
 }
 
 beforeEach(() => {
-  useLinksLauncherStore.setState({ opening: null, refreshSeq: 0, closeFocus: null });
+  useLinksLauncherStore.setState({
+    opening: null,
+    refreshSeq: 0,
+    closeFocus: null,
+    paletteRestore: null,
+  });
+  notePaletteOpening();
 });
 
 afterEach(() => {
@@ -68,5 +79,47 @@ describe("openLinksLauncher", () => {
   it("opens detached when the toolbar has no button for it", () => {
     openLinksLauncher();
     expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
+  });
+});
+
+describe("openLinksLauncher from the action palette", () => {
+  it("takes over the palette's focus return for a detached opening", () => {
+    const restore = vi.fn();
+    deferPaletteFocusRestore((give) => give());
+    openLinksLauncher();
+
+    // The palette's exit hands its restore to the launcher instead of running it.
+    consumeDeferredPaletteFocusRestore()?.(restore);
+    expect(restore).not.toHaveBeenCalled();
+    const held = useLinksLauncherStore.getState().takePaletteRestore();
+    expect(held).toBe(restore);
+    expect(useLinksLauncherStore.getState().takePaletteRestore()).toBeNull();
+  });
+
+  it("gives the palette's return back at once when the launcher closed first", () => {
+    const restore = vi.fn();
+    deferPaletteFocusRestore((give) => give());
+    openLinksLauncher();
+    useLinksLauncherStore.getState().close();
+
+    consumeDeferredPaletteFocusRestore()?.(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+  });
+
+  it("leaves the palette's return alone when the launcher opens at its button", () => {
+    addButtonWrapper({ hidden: false });
+    const restore = vi.fn();
+    deferPaletteFocusRestore((give) => give());
+    openLinksLauncher();
+
+    consumeDeferredPaletteFocusRestore()?.(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(useLinksLauncherStore.getState().paletteRestore).toBeNull();
+  });
+
+  it("arms nothing when no palette is closing", () => {
+    openLinksLauncher();
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
   });
 });

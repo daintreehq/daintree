@@ -3,6 +3,7 @@ import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import {
@@ -11,25 +12,35 @@ import {
   isGridPanelLocation,
   type PanelInstance,
 } from "@shared/types/panel";
+import {
+  hostForwardFailure,
+  remoteHostOfView,
+  resolveTerminalLinkForHost,
+} from "@/services/terminal/remoteLoopbackLinks";
+
+/** Whether activating `panel` can bring it on screen: not trashed, parked or in a dialog. */
+function isReachable(panel: PanelInstance): boolean {
+  return isGridPanelLocation(panel.location) || panel.location === "dock";
+}
 
 /**
- * The most recently used panel `matches` accepts in the worktree that
- * activating can bring on screen. Trashed, parked and dialog panes stay in
- * `panelIds`, and navigating one looks to the user like the click did nothing
- * (#14965). A pane never used, or tied, keeps `panelIds` order behind any used one.
+ * The browser pane a localhost link takes over: the most recently used one in
+ * the worktree that activating can bring on screen. Trashed, parked and dialog
+ * panes stay in `panelIds`, and navigating one looks to the user like the click
+ * did nothing (#14965). A pane never used, or tied, keeps `panelIds` order
+ * behind any used one.
  */
-function pickMostRecentPanel(
+export function pickReusableBrowser(
   panelIds: readonly string[],
   panelsById: Readonly<Record<string, PanelInstance>>,
-  worktreeId: string | null,
-  matches: (panel: PanelInstance) => boolean
+  worktreeId: string | null
 ): PanelInstance | undefined {
   let best: PanelInstance | undefined;
   let bestUsedAt = 0;
   for (const id of panelIds) {
     const panel = panelsById[id];
-    if (!panel || (panel.worktreeId ?? null) !== worktreeId || !matches(panel)) continue;
-    if (!isGridPanelLocation(panel.location) && panel.location !== "dock") continue;
+    if (!panel || !isBrowserPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) continue;
+    if (!isReachable(panel)) continue;
     const stamp = panel.lastActiveAt;
     const usedAt = stamp !== undefined && Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
     if (best === undefined || usedAt > bestUsedAt) {
@@ -40,16 +51,7 @@ function pickMostRecentPanel(
   return best;
 }
 
-/** The browser pane a localhost link takes over, when there is one to take. */
-export function pickReusableBrowser(
-  panelIds: readonly string[],
-  panelsById: Readonly<Record<string, PanelInstance>>,
-  worktreeId: string | null
-): PanelInstance | undefined {
-  return pickMostRecentPanel(panelIds, panelsById, worktreeId, isBrowserPanel);
-}
-
-function originOf(url: string | undefined): string | null {
+function originOf(url: string | null | undefined): string | null {
   if (!url) return null;
   const normalized = normalizeBrowserUrl(url);
   if (!normalized.url) return null;
@@ -60,22 +62,24 @@ function originOf(url: string | undefined): string | null {
   }
 }
 
-/** A dev preview whose running server answers at `origin`. */
-function pickServingDevPreview(
-  panelIds: readonly string[],
+/**
+ * The worktree's dev preview when its server is running at `origin`. Read from
+ * main's session broadcasts: the panel record's own dev-server fields are
+ * never written, so they can't say whether the server is up.
+ */
+function servingDevPreview(
   panelsById: Readonly<Record<string, PanelInstance>>,
   worktreeId: string | null,
   origin: string
 ): PanelInstance | undefined {
-  return pickMostRecentPanel(
-    panelIds,
-    panelsById,
-    worktreeId,
-    (panel) =>
-      isDevPreviewPanel(panel) &&
-      panel.devServerStatus === "running" &&
-      originOf(panel.devServerUrl) === origin
-  );
+  if (worktreeId === null) return undefined;
+  const session = useWorktreeDevServerStore.getState().sessionsByWorktreeId[worktreeId];
+  if (session?.status !== "running" || originOf(session.url) !== origin) return undefined;
+  const panel = panelsById[session.panelId];
+  if (!panel || !isDevPreviewPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) {
+    return undefined;
+  }
+  return isReachable(panel) ? panel : undefined;
 }
 
 /**
@@ -83,7 +87,7 @@ function pickServingDevPreview(
  * tab over the focused one, so a pane behind another tab would take focus and
  * stay hidden. The store only records the address; the pane navigates (and, on
  * a host, forwards) on `browser.navigate`, which a dev preview also answers by
- * mapping the address onto its own proxy.
+ * mapping the address onto its own proxy, so its stored address stays its own.
  */
 export function showPanelAt(panelId: string, url: string, logPrefix: string): void {
   const store = usePanelStore.getState();
@@ -119,6 +123,27 @@ function panelAddress(url: string): string | undefined {
   return local.url !== undefined && isLocalhostUrl(local.url) ? local.url : undefined;
 }
 
+/**
+ * `url` as the system browser gets it: exactly as saved, so a path, query or
+ * sign-in that a pane's address rules would rewrite reaches the site intact.
+ * A bare host is read as https, as terminal links are. Only http(s) passes.
+ */
+function externalAddress(url: string): string | undefined {
+  const trimmed = url.trim();
+  const candidate = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+  try {
+    const { protocol } = new URL(candidate);
+    return protocol === "http:" || protocol === "https:" ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function linkRefused(message: string): void {
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+  notify({ type: "error", title: "Couldn't open link", message });
+}
+
 /** Whether {@link openLinkUrl} shows `url` in a panel, which takes focus as it comes forward. */
 export function opensInPanel(url: string): boolean {
   return panelAddress(url) !== undefined;
@@ -130,34 +155,38 @@ export function opensInPanel(url: string): boolean {
  * browser pane used, else a new one), anything else in the system browser.
  * Nothing here embeds an outside address, so the browser pane's attach gate
  * keeps deciding what a pane may load. In a view bound to a remote host the
- * panel keeps the host's address and forwards the port itself.
+ * panel keeps the host's address and forwards the port itself, and an outside
+ * address whose sign-in returns to the host's localhost gets that port
+ * forwarded first, as a terminal link's does.
  */
 export async function openLinkUrl(url: string): Promise<void> {
   const target = panelAddress(url);
   if (target === undefined) {
-    // Any http(s) host, which only the system browser is handed.
-    const web = normalizeBrowserUrl(url, {});
-    if (web.url === undefined) {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Couldn't open link",
-        message: web.error ?? "The saved address isn't a web address.",
-      });
+    const external = externalAddress(url);
+    if (external === undefined) {
+      linkRefused("Only http and https addresses can be opened.");
       return;
     }
-    openUrlExternally(web.url, LOG_PREFIX);
+    const hostId = remoteHostOfView();
+    if (hostId === null) {
+      openUrlExternally(external, LOG_PREFIX);
+      return;
+    }
+    try {
+      openUrlExternally(await resolveTerminalLinkForHost(external, hostId), LOG_PREFIX);
+    } catch (error) {
+      logError(`${LOG_PREFIX} Failed to forward the link's port`, error);
+      linkRefused(hostForwardFailure(external, error));
+    }
     return;
   }
 
   const worktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const store = usePanelStore.getState();
   const origin = originOf(target);
-  const preview =
-    origin === null
-      ? undefined
-      : pickServingDevPreview(store.panelIds, store.panelsById, worktreeId, origin);
-  const existing = preview ?? pickReusableBrowser(store.panelIds, store.panelsById, worktreeId);
+  const existing =
+    (origin === null ? undefined : servingDevPreview(store.panelsById, worktreeId, origin)) ??
+    pickReusableBrowser(store.panelIds, store.panelsById, worktreeId);
   if (existing) {
     showPanelAt(existing.id, target, LOG_PREFIX);
     return;

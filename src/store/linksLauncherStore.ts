@@ -1,4 +1,8 @@
 import { create } from "zustand";
+import {
+  consumeDeferredPaletteFocusRestore,
+  deferPaletteFocusRestore,
+} from "@/components/ui/paletteFocusRestore";
 
 /**
  * Where the links launcher hangs: its own toolbar button, or, when the action
@@ -26,11 +30,18 @@ interface LinksLauncherState {
    * it hangs off: set by a close that is hiding that control. Spent by the close.
    */
   closeFocus: (() => HTMLElement | null) | null;
+  /**
+   * The action palette's own focus return, held for a detached opening the
+   * palette opened: the launcher has no control of its own to give focus back
+   * to, and the palette's opener is where the keyboard was. Spent by the close.
+   */
+  paletteRestore: (() => void) | null;
   open: (origin: LinksLauncherOrigin) => void;
   /** Close the launcher — only if it is still opening `seq`, when given. */
   close: (seq?: number, focus?: (() => HTMLElement | null) | null) => void;
   requestRefresh: () => void;
   takeCloseFocus: () => (() => HTMLElement | null) | null;
+  takePaletteRestore: () => (() => void) | null;
 }
 
 let nextSeq = 1;
@@ -40,11 +51,13 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
   opening: null,
   refreshSeq: 0,
   closeFocus: null,
+  paletteRestore: null,
   open: (origin) =>
     set((s) => ({
       opening: { origin, seq: nextSeq++ },
       refreshSeq: s.refreshSeq + 1,
       closeFocus: null,
+      paletteRestore: null,
     })),
   close: (seq, focus = null) => {
     const { opening } = get();
@@ -58,6 +71,11 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
     if (closeFocus !== null) set({ closeFocus: null });
     return closeFocus;
   },
+  takePaletteRestore: () => {
+    const { paletteRestore } = get();
+    if (paletteRestore !== null) set({ paletteRestore: null });
+    return paletteRestore;
+  },
 }));
 
 /**
@@ -65,10 +83,28 @@ export const useLinksLauncherStore = create<LinksLauncherState>((set, get) => ({
  * palette, a keybinding): beside the button when it is on screen, else at the
  * detached anchor. A wrapper the overflow measurement keeps mounted but hidden
  * carries `aria-hidden`, which is how a button in `…` is told apart.
+ *
+ * A palette pick arms a hand-off of the palette's focus return before it
+ * dispatches. A detached opening takes it over: the palette would otherwise
+ * give the keyboard back to its opener on its way out whenever focus is
+ * between controls (the list re-rendering under it), and the launcher's
+ * anchor has nowhere to return it to when it closes.
  */
 export function openLinksLauncher(): void {
   const shown = Array.from(
     document.querySelectorAll('[data-toolbar-button-id="links-launcher"]')
   ).some((wrapper) => wrapper.isConnected && wrapper.closest('[aria-hidden="true"]') === null);
-  useLinksLauncherStore.getState().open(shown ? "button" : "detached");
+  const store = useLinksLauncherStore.getState();
+  store.open(shown ? "button" : "detached");
+  if (shown) return;
+  const seq = useLinksLauncherStore.getState().opening?.seq;
+  if (consumeDeferredPaletteFocusRestore() === null) return;
+  deferPaletteFocusRestore((restore) => {
+    // Already closed: its close found no return yet, so give it back now.
+    if (useLinksLauncherStore.getState().opening?.seq !== seq) {
+      restore();
+      return;
+    }
+    useLinksLauncherStore.setState({ paletteRestore: restore });
+  });
 }

@@ -581,6 +581,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `links.open` | Open links | safe | — |
 | `ui.refresh` | Reload application | safe | — |
 | `ui.sidebar.resetWidth` | Reset sidebar width | safe | — |
 | `window.close` | Close window | safe | — |
