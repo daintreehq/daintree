@@ -126,8 +126,7 @@ describe("buildDefaultKeybindings", () => {
   });
 
   it("keeps Windows in core order with replacements in place and additions after", () => {
-    // Remote Hosts appends Switch host to the core list everywhere but Windows.
-    const core = mac.filter((b) => b.actionId !== "host.switch");
+    const core = mac;
     const changed = windows
       .slice(0, core.length)
       .filter((b, i) => b !== core[i])
@@ -163,8 +162,14 @@ describe("buildDefaultKeybindings", () => {
     }
   });
 
-  it("keeps Switch host clear of every other global default where it exists", () => {
-    for (const table of [mac, linux]) {
+  it("binds Switch host to Ctrl+Alt+U on Windows and Linux", () => {
+    for (const table of [windows, linux]) {
+      expect(globalCombo(table, "host.switch").map(foldCmd)).toEqual(["Ctrl+Alt+U"]);
+    }
+  });
+
+  it("keeps Switch host clear of every other global default on every platform", () => {
+    for (const table of [mac, windows, linux]) {
       const [hostSwitch] = table.filter((b) => b.actionId === "host.switch");
       expect(hostSwitch).toBeDefined();
       const collisions = table.filter(
