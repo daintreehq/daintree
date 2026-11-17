@@ -1,5 +1,5 @@
 import http from "node:http";
-import type net from "node:net";
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hooks = vi.hoisted(() => ({

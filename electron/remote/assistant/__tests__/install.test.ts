@@ -869,3 +869,66 @@ describe("installRetiredSendsNotice (#13496)", () => {
     off();
   });
 });
+
+describe("installHostControlLinkClient forgetting a host's credential (#17207)", () => {
+  const teardown: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const off of teardown.splice(0).reverse()) off();
+  });
+
+  function linkClient(retiring: Set<string>): HostControlLinkClient {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-link-credential-"));
+    const sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    sharedDb.sqlite = sqlite;
+    teardown.push(() => {
+      sharedDb.sqlite = null;
+      sqlite.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    teardown.push(
+      installHostControlLinkClient({
+        session: async () => null,
+        onSessionOpened: () => () => {},
+        // Re-pointing keeps the id: the host is still in the list throughout.
+        knownHosts: () => ["studio", "other"],
+        onHostsChanged: () => () => {},
+        hostName: (hostId) => hostId,
+        isRetiring: (hostId) => retiring.has(hostId),
+      })
+    );
+    return getRemoteService("hostControlLinkClient")!;
+  }
+
+  it("mints a fresh one for the next machine under the same id, leaving other hosts' alone", () => {
+    const client = linkClient(new Set());
+    const before = client.pluginCredential("studio");
+    const beforeSender = client.senderIdOf("studio");
+    const other = client.pluginCredential("other");
+    expect(beforeSender).not.toBeNull();
+
+    client.forgetHost("studio");
+
+    expect(client.senderIdOf("studio")).toBeNull();
+    expect(client.pluginCredential("studio")).not.toBe(before);
+    expect(client.senderIdOf("studio")).not.toBe(beforeSender);
+    expect(client.pluginCredential("other")).toBe(other);
+  });
+
+  it("neither mints nor presents one while the host is being re-pointed", () => {
+    const retiring = new Set<string>();
+    const client = linkClient(retiring);
+    client.pluginCredential("studio");
+    retiring.add("studio");
+
+    // A link still up meanwhile reaches the old machine: it is shown nothing.
+    expect(() => client.pluginCredential("studio")).toThrow();
+    expect(client.senderIdOf("studio")).toBeNull();
+    client.forgetHost("studio");
+    expect(() => client.pluginCredential("studio")).toThrow();
+
+    retiring.delete("studio");
+    expect(client.pluginCredential("studio")).toEqual(expect.any(String));
+    expect(client.senderIdOf("studio")).not.toBeNull();
+  });
+});

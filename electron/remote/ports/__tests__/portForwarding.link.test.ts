@@ -390,9 +390,9 @@ describe("dev preview through a forward", () => {
 
   it("asks a forgotten host afresh for a preview it answered, with no forward open (#17207)", async () => {
     const m = manager();
-    previewResolution = { kind: "not-running" };
+    previewResolution = { kind: "not-running", status: "stopped" };
     const first = m.resolvePreview("dp-proj-panel");
-    await expect(first).resolves.toEqual({ kind: "not-running" });
+    await expect(first).resolves.toEqual({ kind: "not-running", status: "stopped" });
     expect(m.resolvePreview("dp-proj-panel")).toBe(first);
 
     await m.forgetHost(HOST);
