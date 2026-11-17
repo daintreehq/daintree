@@ -99,6 +99,8 @@ describe("CanopyPlace branch reads", () => {
     });
 
     await settle(() => reads[1]!.resolve("feature/after-checkout"));
+    // Even once the cache has let the branch go, the read on screen stands.
+    __resetCanopyPlaceForTests();
     await settle(() => reads[0]!.reject(new Error("Too many requests")));
     expect(shownBranch()).toBe("feature/after-checkout");
   });

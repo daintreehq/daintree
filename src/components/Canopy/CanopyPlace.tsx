@@ -43,7 +43,8 @@ function useRunBranch(
     let sent = 0;
     let shown = 0;
     const readBranch = () => {
-      const seq = ++sent;
+      const seq = sent + 1;
+      sent = seq;
       return runBranch(runId, { spawnedAt }).then(
         (branch) => {
           if (!live || seq < shown) return;
