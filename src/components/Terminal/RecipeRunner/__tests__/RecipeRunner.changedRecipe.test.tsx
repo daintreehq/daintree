@@ -171,7 +171,11 @@ describe("RecipeRunner — a confirmed recipe that changed before it started (#1
   });
 
   it("keeps the refusal above the empty state when that was the last recipe", async () => {
-    await confirmAfterChange(needsPr(), [needsPr({ terminals: [{ type: "terminal", env: {} }] })]);
+    const before = await confirmAfterChange(needsPr(), [
+      needsPr({ terminals: [{ type: "terminal", env: {} }] }),
+    ]);
+    const dismiss = within(before).getByRole("button", { name: "Dismiss" });
+    dismiss.focus();
 
     act(() => {
       useRecipeStore.setState({ recipes: [] });
@@ -180,6 +184,8 @@ describe("RecipeRunner — a confirmed recipe that changed before it started (#1
     expect(screen.getByTestId("recipe-runner-empty")).toBeTruthy();
     const banner = screen.getByTestId("recipe-changed-banner");
     expect(banner.textContent).toMatch(/'Review'/);
+    // The same banner, not a remount: focus stays where the user left it.
+    expect(document.activeElement).toBe(dismiss);
     fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByTestId("recipe-changed-banner")).toBeNull();
   });

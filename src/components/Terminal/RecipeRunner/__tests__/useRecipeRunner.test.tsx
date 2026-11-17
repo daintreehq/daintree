@@ -1293,11 +1293,17 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     act(() => {
       result.current.handleRun("mine");
     });
-    // A team recipe of the same name lands while the confirm is open.
+    // A team recipe of the same name lands while the confirm is open, behind a
+    // plugin's same-name recipe whose id happens to carry the legacy in-repo prefix.
     recipes.splice(
       0,
       1,
       needsPr({ id: "mine", name: "Dev", shadowedBy: "Dev" }),
+      needsPr({
+        id: "inrepo-acme.tools.dev",
+        name: "Dev",
+        origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "dev" },
+      }),
       needsPr({ id: "team-dev", name: "Dev", scope: "inrepo" })
     );
     await answer(true);
