@@ -449,7 +449,10 @@ export class CloudHostLifecycle {
       if (binding.lastError || this.operations.has(binding.id)) continue;
       this.recordError(binding.id, {
         code: "failed",
-        message: "Setup stopped before a machine was asked for. Retry to create it.",
+        message:
+          binding.provisioning === "unreadable"
+            ? "Setup stopped before a machine was asked for, and where it was meant to run can't be read back. Remove the host and create it again."
+            : "Setup stopped before a machine was asked for. Retry to create it.",
         at: this.now(),
       });
     }

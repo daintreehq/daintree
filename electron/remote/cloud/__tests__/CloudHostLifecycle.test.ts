@@ -1995,6 +1995,8 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(cached.lastChoice).toEqual(IRELAND);
     expect(cached.provisioning.location?.defaultId).toBe("us-east-1");
     expect((await accounts.catalog(account.id, { refresh: true })).lastChoice).toEqual(IRELAND);
+    // The create goes on in the background, making the account's SSH key.
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
   });
 
   it("refuses a missing region, an unavailable one, or an image from another region before anything is sent", async () => {
@@ -2389,6 +2391,20 @@ describe("CloudHostLifecycle SSH key at create", () => {
     await next.lifecycle.retryCreate("build");
     expect(provider.create).toHaveBeenCalledTimes(1);
     expect(next.lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789" });
+    next.lifecycle.dispose();
+  });
+
+  it("says to recreate a host Daintree quit before sending whose choices can't be read back", async () => {
+    const { lifecycle, store, files, account, restart } = await setup({}, { sshKey: "at-create" });
+    vi.spyOn(files, "publicKey").mockReturnValueOnce(new Promise<string>(() => {}));
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(files.publicKey).toHaveBeenCalled());
+    store.putBinding({ ...store.bindings()[0]!, provisioning: { location: 5 } as never });
+    const next = restart(lifecycle);
+    expect(next.lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "failed",
+      message: expect.stringContaining("Remove the host and create it again"),
+    });
     next.lifecycle.dispose();
   });
 
