@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
+import type { ConflictSideChoice, RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
@@ -65,7 +65,7 @@ interface ConflictPanelProps {
   worktreePath: string;
   onMarkResolved: (filePath: string) => Promise<void> | void;
   onOpenInEditor: (args: { path: string; line?: number }) => Promise<void> | void;
-  onCheckoutOursTheirs: (filePath: string, side: "ours" | "theirs") => Promise<void> | void;
+  onCheckoutOursTheirs: (filePath: string, choice: ConflictSideChoice) => Promise<void> | void;
   onAbort: () => Promise<void>;
   onContinue: () => Promise<void>;
   /**
@@ -310,6 +310,60 @@ function ResolvedFileLabel({ path }: { path: string }) {
 
 type Side = "ours" | "theirs";
 
+// Git's unmerged codes encode which stages hold the file (`wt-status.c`): a
+// side without one is the side that deleted it, or never added it.
+const OURS_ABSENT = new Set(["DU", "UA", "DD"]);
+const THEIRS_ABSENT = new Set(["UD", "AU", "DD"]);
+
+/**
+ * What the row offers for taking a side. A side without the file is taken by
+ * deleting it, since `checkout` has no version to write; when neither side has
+ * it there is one deletion to offer, not two.
+ */
+function sideChoices(xy: string): ConflictSideChoice[] {
+  if (OURS_ABSENT.has(xy) && THEIRS_ABSENT.has(xy)) return [{ resolution: "delete", side: "both" }];
+  return (["ours", "theirs"] as const).map((side) =>
+    (side === "ours" ? OURS_ABSENT : THEIRS_ABSENT).has(xy)
+      ? { resolution: "delete", side }
+      : { resolution: "checkout", side }
+  );
+}
+
+function CheckoutConsequence({
+  filePath,
+  choice,
+  sideSource,
+}: {
+  filePath: string;
+  choice: ConflictSideChoice;
+  sideSource: Record<Side, string>;
+}) {
+  const path = <span className="font-mono break-all">{filePath}</span>;
+  if (choice.resolution === "checkout") {
+    return (
+      <span>
+        Overwrites {path} with the {sideSource[choice.side]} version, and any manual conflict edits
+        in this file are discarded.
+      </span>
+    );
+  }
+  if (choice.side === "both") {
+    return (
+      <span>
+        Deletes {path} from the worktree, since neither side has it. Any manual edits in this file
+        are discarded.
+      </span>
+    );
+  }
+  const other: Side = choice.side === "ours" ? "theirs" : "ours";
+  return (
+    <span>
+      Deletes {path} from the worktree to match the {sideSource[choice.side]}. The{" "}
+      {sideSource[other]} version and any manual conflict edits in this file are discarded.
+    </span>
+  );
+}
+
 // A dialog's exit plus a margin for its focus restore to run first.
 const DIALOG_EXIT_SETTLE_MS = UI_EXIT_DURATION * 2 + 60;
 
@@ -328,7 +382,7 @@ export function ConflictPanel({
   const [isAbortOpen, setIsAbortOpen] = useState(false);
   const [pendingCheckout, setPendingCheckout] = useState<{
     filePath: string;
-    side: Side;
+    choice: ConflictSideChoice;
   } | null>(null);
   const [pendingMarkerConfirm, setPendingMarkerConfirm] = useState<{
     filePath: string;
@@ -625,8 +679,8 @@ export function ConflictPanel({
   );
 
   const handleCheckoutSide = useCallback(
-    (filePath: string, side: Side) =>
-      resolveOptimistically(filePath, true, () => onCheckoutOursTheirs(filePath, side)),
+    (filePath: string, choice: ConflictSideChoice) =>
+      resolveOptimistically(filePath, true, () => onCheckoutOursTheirs(filePath, choice)),
     [resolveOptimistically, onCheckoutOursTheirs]
   );
 
@@ -650,6 +704,18 @@ export function ConflictPanel({
   const sideSource: Record<Side, string> = isRebase
     ? { ours: "destination branch", theirs: "incoming commit" }
     : { ours: "current branch", theirs: "incoming changes" };
+  const choiceLabel = (choice: ConflictSideChoice): string =>
+    choice.resolution === "checkout"
+      ? `Use ${sideSource[choice.side]}`
+      : choice.side === "both"
+        ? "Delete file"
+        : `Delete file to match ${sideSource[choice.side]}`;
+  const choiceAriaLabel = (choice: ConflictSideChoice, filePath: string): string =>
+    choice.resolution === "checkout"
+      ? `Use ${sideSource[choice.side]} for ${filePath} (${choice.side})`
+      : choice.side === "both"
+        ? `Delete ${filePath}, which neither side has`
+        : `Delete ${filePath} to match ${sideSource[choice.side]} (${choice.side})`;
 
   const isRebaseMidSequence =
     isRebase &&
@@ -835,15 +901,17 @@ export function ConflictPanel({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="min-w-[220px]">
-                        {(["ours", "theirs"] as const).map((side) => (
+                        {sideChoices(file.xy).map((choice) => (
                           <DropdownMenuItem
-                            key={side}
+                            key={choice.side}
                             destructive
-                            onSelect={() => setPendingCheckout({ filePath: file.path, side })}
-                            aria-label={`Use ${sideSource[side]} for ${file.path} (${side})`}
+                            onSelect={() => setPendingCheckout({ filePath: file.path, choice })}
+                            aria-label={choiceAriaLabel(choice, file.path)}
                           >
-                            Use {sideSource[side]}
-                            <DropdownMenuMeta>{side}</DropdownMenuMeta>
+                            {choiceLabel(choice)}
+                            {choice.side !== "both" && (
+                              <DropdownMenuMeta>{choice.side}</DropdownMenuMeta>
+                            )}
                           </DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
@@ -944,28 +1012,36 @@ export function ConflictPanel({
         onClose={() => setPendingCheckout(null)}
         title={
           pendingCheckout
-            ? `Use ${sideSource[pendingCheckout.side]} for '${splitPath(pendingCheckout.filePath).base}'?`
+            ? pendingCheckout.choice.resolution === "delete"
+              ? `Delete '${splitPath(pendingCheckout.filePath).base}'?`
+              : `Use ${sideSource[pendingCheckout.choice.side]} for '${splitPath(pendingCheckout.filePath).base}'?`
             : ""
         }
         description={
           pendingCheckout ? (
-            <span>
-              Overwrites <span className="font-mono break-all">{pendingCheckout.filePath}</span>{" "}
-              with the {sideSource[pendingCheckout.side]} version, and any manual conflict edits in
-              this file are discarded.
-            </span>
+            <CheckoutConsequence
+              filePath={pendingCheckout.filePath}
+              choice={pendingCheckout.choice}
+              sideSource={sideSource}
+            />
           ) : (
             ""
           )
         }
-        confirmLabel={pendingCheckout ? `Use ${sideSource[pendingCheckout.side]}` : "Use version"}
+        confirmLabel={
+          pendingCheckout
+            ? pendingCheckout.choice.resolution === "delete"
+              ? "Delete file"
+              : `Use ${sideSource[pendingCheckout.choice.side]}`
+            : "Use version"
+        }
         cancelLabel="Cancel"
         variant="destructive"
         onConfirm={() => {
           if (!pendingCheckout) return;
-          const { filePath, side } = pendingCheckout;
+          const { filePath, choice } = pendingCheckout;
           setPendingCheckout(null);
-          handleCheckoutSide(filePath, side).catch(() => {});
+          handleCheckoutSide(filePath, choice).catch(() => {});
         }}
       />
 
