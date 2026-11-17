@@ -689,23 +689,21 @@ export class ProjectPulseService {
         return null;
       }
 
-      // Get the root commit(s) - commits with no parents
-      const rootSha = await git.raw(["rev-list", "--max-parents=0", "HEAD"]);
-      const firstRootSha = rootSha.trim().split("\n")[0];
+      // Merging unrelated histories leaves several reachable roots, and rev-list prints
+      // them newest first, so the project's start is the earliest root timestamp rather
+      // than whichever line comes first. Each line is "<committer timestamp> <sha>".
+      const rootsOut = await git.raw(["rev-list", "--max-parents=0", "--timestamp", "HEAD"]);
 
-      if (!firstRootSha) {
-        return null;
+      let earliest: number | null = null;
+      for (const line of rootsOut.split("\n")) {
+        const timestamp = parseInt(line.trim().split(/\s+/)[0] ?? "", 10);
+        if (isNaN(timestamp)) continue;
+        if (earliest === null || timestamp < earliest) {
+          earliest = timestamp;
+        }
       }
 
-      // Get the timestamp of the first root commit
-      const output = await git.raw(["log", "-1", "--format=%ct", firstRootSha]);
-      const timestamp = parseInt(output.trim(), 10);
-
-      if (isNaN(timestamp)) {
-        return null;
-      }
-
-      return new Date(timestamp * 1000);
+      return earliest === null ? null : new Date(earliest * 1000);
     } catch (error) {
       logError("Failed to get first commit date", { error: (error as Error).message });
       return null;

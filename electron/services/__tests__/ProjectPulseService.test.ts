@@ -499,13 +499,14 @@ describe("ProjectPulseService", () => {
     // must short-circuit before we ever call rev-list.
     const recentDate = new Date(baseTime);
     recentDate.setDate(recentDate.getDate() - 5);
+    const boundaryTimestamp = Math.floor(recentDate.getTime() / 1000);
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
       if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
-      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
       if (cmd === "log") return "";
       return "";
     });
@@ -549,13 +550,15 @@ describe("ProjectPulseService", () => {
       commitTimestamps.push(Math.floor(date.getTime() / 1000));
     }
     const commitOutput = commitTimestamps.join("\n");
+    // A boundary only days old would mark most cells isBeforeProject if the guard were gone.
+    const boundaryTimestamp = commitTimestamps[4] as number;
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
       if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "true\n";
-      if (cmd === "rev-list") return "shallowboundary\n";
+      if (cmd === "rev-list") return `${boundaryTimestamp} shallowboundary\n`;
       if (cmd === "log") return commitOutput;
       return "";
     });
@@ -599,10 +602,7 @@ describe("ProjectPulseService", () => {
       if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
-      if (cmd === "rev-list") return "rootsha\n";
-      if (cmd === "log" && args.includes("--format=%ct") && args.includes("rootsha")) {
-        return `${firstCommitTimestamp}\n`;
-      }
+      if (cmd === "rev-list") return `${firstCommitTimestamp} rootsha\n`;
       if (cmd === "log") return "";
       return "";
     });
@@ -632,6 +632,51 @@ describe("ProjectPulseService", () => {
     expect(recentCells.every((cell) => !cell.isBeforeProject)).toBe(true);
   });
 
+  it("dates the project from the earliest root when rev-list prints several, in any order", async () => {
+    const baseTime = new Date("2025-01-15T12:00:00.000Z");
+    vi.setSystemTime(baseTime);
+
+    const daysAgo = (days: number) => {
+      const d = new Date(baseTime);
+      d.setDate(d.getDate() - days);
+      return Math.floor(d.getTime() / 1000);
+    };
+    // rev-list prints newest first, so the old root is the last line here and the
+    // first in the reversed run: neither order may change the answer.
+    const orders = [
+      [`${daysAgo(5)} newroot`, `${daysAgo(20)} oldroot`],
+      [`${daysAgo(20)} oldroot`, `${daysAgo(5)} newroot`],
+    ];
+
+    for (const lines of orders) {
+      vi.resetModules();
+      const raw = vi.fn(async (args: string[]) => {
+        const cmd = args[0];
+        if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
+        if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+        if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
+        if (cmd === "rev-list") return `${lines.join("\n")}\n`;
+        return "";
+      });
+      vi.doMock("../../utils/hardenedGit.js", () => ({
+        createHardenedGit: () => createGitStub(raw),
+      }));
+
+      const { ProjectPulseService } = await import("../ProjectPulseService.js");
+      const pulse = await new ProjectPulseService().getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-multi-root",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+
+      // 20 days back + inclusive today = 21 days, from the older root.
+      expect(pulse.projectAgeDays).toBe(21);
+    }
+  });
+
   it("treats unknown --is-shallow-repository response as non-shallow (old git fallback)", async () => {
     const baseTime = new Date("2025-01-15T12:00:00.000Z");
     vi.setSystemTime(baseTime);
@@ -648,10 +693,7 @@ describe("ProjectPulseService", () => {
       // Pre-2.15 git echoes back the unknown flag.
       if (cmd === "rev-parse" && args.includes("--is-shallow-repository"))
         return "--is-shallow-repository\n";
-      if (cmd === "rev-list") return "rootsha\n";
-      if (cmd === "log" && args.includes("--format=%ct") && args.includes("rootsha")) {
-        return `${firstCommitTimestamp}\n`;
-      }
+      if (cmd === "rev-list") return `${firstCommitTimestamp} rootsha\n`;
       if (cmd === "log") return "";
       return "";
     });
