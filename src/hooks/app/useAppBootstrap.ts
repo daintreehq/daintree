@@ -16,6 +16,7 @@ import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReve
 import { usePluginDeepLink } from "./usePluginDeepLink";
 import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
+import { useNotificationSnoozeExpiry } from "./useNotificationSnoozeExpiry";
 import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
 import { useProjectLayoutSeed } from "@/hooks/useProjectLayoutSeed";
@@ -148,6 +149,7 @@ export function useAppBootstrap() {
   useProjectApplicationWelcome(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
+  useNotificationSnoozeExpiry();
   // Gated on the idle flag so the prerequisite probe — which spawns
   // subprocesses and awaits refreshPath()'s 10s budget — lands after first
   // paint rather than on the boot path (#11763).

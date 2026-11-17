@@ -584,9 +584,9 @@ interface NotificationHistoryState {
    */
   clearSnooze: (correlationId: string) => void;
   /**
-   * Drop every snooze whose expiry has passed. Called on a `setTimeout`
-   * registered by `useSnoozeExpiryTimer`. No-op when nothing has expired so
-   * the persist write doesn't fire on every tick.
+   * Drop every snooze whose expiry has passed. Called by the view-lifetime
+   * `useNotificationSnoozeExpiry` at each expiry and on wake. No-op when
+   * nothing has expired so the persist write doesn't fire on every tick.
    */
   clearExpiredSnoozes: (now?: number) => void;
 }
