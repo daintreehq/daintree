@@ -219,22 +219,28 @@ describe("ProjectLinksSection (#17091)", () => {
       expect(input(container, EDIT_TITLE).value).toBe("CI");
     });
 
-    it("returns focus to the same link's Edit button when the editor is cancelled", () => {
-      const { getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
-      openEditor(getByRole, "CI");
+    it.each(["Staging", "CI"])(
+      "returns focus to %s's own Edit button when its editor is cancelled",
+      (title) => {
+        const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+        openEditor(getByRole, title);
 
-      fireEvent.click(getByRole("button", { name: "Cancel" }));
+        fireEvent.click(getByRole("button", { name: "Cancel" }));
 
-      expect(document.activeElement).toBe(getByRole("button", { name: "Edit CI" }));
-      expect(changeMock).not.toHaveBeenCalled();
-    });
+        expect(queryByRole("button", { name: "Save" })).toBeNull();
+        expect(document.activeElement).toBe(getByRole("button", { name: `Edit ${title}` }));
+        expect(changeMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("returns focus to the Edit button after a save from the Save button", async () => {
-      const renamed: ProjectLink = { ...ci, title: "CI EU" };
-      mainAnswers([staging, renamed], renamed);
-      const { container, getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
-      openEditor(getByRole, "CI");
-      fireEvent.change(input(container, EDIT_TITLE), { target: { value: "CI EU" } });
+      const renamed: ProjectLink = { ...staging, title: "Staging EU" };
+      mainAnswers([renamed, ci], renamed);
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      openEditor(getByRole, "Staging");
+      fireEvent.change(input(container, EDIT_TITLE), { target: { value: "Staging EU" } });
       const save = getByRole("button", { name: "Save" });
       save.focus();
 
@@ -242,12 +248,15 @@ describe("ProjectLinksSection (#17091)", () => {
         fireEvent.click(save);
       });
 
-      expect(document.activeElement).toBe(getByRole("button", { name: "Edit CI EU" }));
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
+      expect(document.activeElement).toBe(getByRole("button", { name: "Edit Staging EU" }));
     });
 
     it("returns focus to the Edit button after a save from Enter in a field", async () => {
       mainAnswers([staging, ci], ci);
-      const { container, getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
       openEditor(getByRole, "CI");
       expect(document.activeElement).toBe(input(container, EDIT_TITLE));
 
@@ -255,6 +264,7 @@ describe("ProjectLinksSection (#17091)", () => {
         fireEvent.keyDown(input(container, EDIT_TITLE), { key: "Enter" });
       });
 
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
       expect(document.activeElement).toBe(getByRole("button", { name: "Edit CI" }));
     });
 
@@ -310,7 +320,9 @@ describe("ProjectLinksSection (#17091)", () => {
             };
           })
       );
-      const { container, getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
       openEditor(getByRole, "CI");
       await act(async () => {
         fireEvent.keyDown(input(container, EDIT_TITLE), { key: "Enter" });
@@ -320,6 +332,8 @@ describe("ProjectLinksSection (#17091)", () => {
 
       await act(async () => answer());
 
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
+      expect(queryByRole("button", { name: "Edit CI" })).not.toBeNull();
       expect(document.activeElement).toBe(elsewhere);
     });
   });
@@ -363,13 +377,14 @@ describe("ProjectLinksSection (#17091)", () => {
     });
 
     it("finds the next row's remove button when its id reads like an Edit button's key", async () => {
+      // Staging's Edit button registers as "edit:a", the same string as Odd's id.
       const odd: ProjectLink = { id: "edit:a", title: "Odd", url: "https://odd.example.com/" };
       useProjectSettingsStore.setState({
         projectId: "proj-1",
-        settings: { runCommands: [], links: [staging, odd] },
+        settings: { runCommands: [], links: [ci, odd, staging] },
       });
       const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
-      await removeLink(getByRole, queryByRole, staging, [odd]);
+      await removeLink(getByRole, queryByRole, ci, [odd, staging]);
       expect(document.activeElement).toBe(getByRole("button", { name: "Remove Odd" }));
     });
 
