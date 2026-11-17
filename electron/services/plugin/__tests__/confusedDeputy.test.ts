@@ -147,6 +147,7 @@ vi.mock("../../PluginMcpSupervisor.js", () => ({
     shutdown: vi.fn(async () => undefined),
     shutdownAll: vi.fn(async () => undefined),
     removeState: vi.fn(),
+    removeStatesWhere: vi.fn(),
     list: vi.fn(() => []),
   }),
 }));

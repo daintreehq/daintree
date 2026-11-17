@@ -187,6 +187,8 @@ const mockPluginMcpSupervisor = {
   restart: vi.fn(),
   list: vi.fn(() => []),
   getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
+  removeState: vi.fn(),
+  removeStatesWhere: vi.fn(),
 };
 vi.mock("../PluginMcpSupervisor.js", () => ({
   getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
@@ -504,6 +506,38 @@ describe("installed package instance mode (#14103)", () => {
 
     expect(seam.installedInstanceKeys.has(KEY_A)).toBe(false);
     expect(seam.plugins.has(KEY_A)).toBe(false);
+  });
+
+  it("uninstall evicts the MCP state of every instance, a closed project's too (#17212)", async () => {
+    const { service } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, "/repo/b", PKG, true);
+    await service.onProjectClosed(PROJECT_B);
+    expect(mockPluginMcpSupervisor.removeStatesWhere).not.toHaveBeenCalled();
+
+    await service.uninstallPlugin(PKG);
+
+    expect(mockPluginMcpSupervisor.removeState).toHaveBeenCalledWith(PKG);
+    expect(mockPluginMcpSupervisor.removeStatesWhere).toHaveBeenCalledTimes(1);
+    const [owns] = mockPluginMcpSupervisor.removeStatesWhere.mock.calls[0] as [
+      (pluginId: string) => boolean,
+    ];
+    expect(owns(KEY_A)).toBe(true);
+    expect(owns(KEY_B)).toBe(true);
+    expect(owns(REPO_KEY_A)).toBe(false);
+    expect(owns(PKG)).toBe(false);
+    expect(owns(makeInstalledProjectInstanceKey(PROJECT_A, "acme.ledger-pro"))).toBe(false);
+  });
+
+  it("keeps instance MCP state when the package is only disabled (#17212)", async () => {
+    const { service } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+
+    await service.setEnabled(PKG, false);
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, false);
+
+    expect(mockPluginMcpSupervisor.removeStatesWhere).not.toHaveBeenCalled();
+    expect(mockPluginMcpSupervisor.removeState).not.toHaveBeenCalled();
   });
 
   it("forgets enablements on uninstall even when the package was disabled at startup", async () => {

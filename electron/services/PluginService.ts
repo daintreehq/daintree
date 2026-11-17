@@ -7381,6 +7381,27 @@ export class PluginService {
       this.projectInstanceStore.removePackage(manifestId);
       this.projectInstancePackages.delete(manifestId);
       this.forgetPackageInstanceLaunches(manifestId);
+      this.evictPackageInstanceMcpState(manifestId);
+    }
+  }
+
+  /**
+   * Drop the MCP server state of every per-project instance of an uninstalled
+   * package, including instances of a project that isn't open, whose stopped
+   * entries no unload reaches (#17212). The installer evicts the package's own
+   * id; these instance keys are only known here.
+   */
+  private evictPackageInstanceMcpState(manifestId: string): void {
+    try {
+      getPluginMcpSupervisor().removeStatesWhere((owner) => {
+        const parsed = parseProjectPluginInstanceKey(owner);
+        return parsed?.installed === true && parsed.manifestId === manifestId;
+      });
+    } catch (err) {
+      console.error(
+        `[PluginService] MCP state eviction for the instances of "${manifestId}" threw:`,
+        err
+      );
     }
   }
 
