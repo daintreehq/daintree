@@ -333,6 +333,68 @@ describe("HostRegistry", () => {
     expect(moved).not.toHaveProperty("wake");
   });
 
+  describe("agent forwarding switch (#17432)", () => {
+    const add = (registry: HostRegistry) =>
+      registry.add({ name: "studio", connection: { kind: "ssh", target: "me@studio" } });
+
+    it("starts off, keeps a change across a reload and a rename, and refuses a non-boolean", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = add(registry);
+      expect(host).not.toHaveProperty("forwardSshAgent");
+
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+      registry.update({ hostId: host.id, name: "studio two" });
+      expect(new HostRegistry(store).get(host.id)?.forwardSshAgent).toBe(true);
+
+      expect(() =>
+        registry.update({ hostId: host.id, forwardSshAgent: "yes" as unknown as boolean })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+      registry.update({ hostId: host.id, forwardSshAgent: false });
+      expect(registry.get(host.id)).not.toHaveProperty("forwardSshAgent");
+    });
+
+    it("turns off when the host is pointed at another machine, even in an update asking for it", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = add(registry);
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+
+      const moved = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@mini" },
+      });
+      expect(moved).not.toHaveProperty("forwardSshAgent");
+
+      const both = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@studio" },
+        forwardSshAgent: true,
+      });
+      expect(both).not.toHaveProperty("forwardSshAgent");
+
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+      const same = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@studio" },
+        forwardSshAgent: true,
+      });
+      expect(same.forwardSshAgent).toBe(true);
+    });
+
+    it("reads anything but true a settings file left as off", () => {
+      const registry = new HostRegistry(
+        memoryStore({
+          hosts: [
+            { id: "a", name: "a", connection: { kind: "ssh", target: "a" }, forwardSshAgent: true },
+            { id: "b", name: "b", connection: { kind: "ssh", target: "b" }, forwardSshAgent: "1" },
+          ],
+        })
+      );
+      expect(registry.list().map((host) => host.forwardSshAgent === true)).toEqual([true, false]);
+      expect(registry.get("b")).not.toHaveProperty("forwardSshAgent");
+    });
+  });
+
   describe("pending placement (#17355)", () => {
     const placement = {
       projectId: "proj-1",

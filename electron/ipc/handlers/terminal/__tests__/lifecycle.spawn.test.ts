@@ -359,6 +359,7 @@ import { AGENT_REGISTRY, setUserRegistry } from "../../../../../shared/config/ag
 import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
+import { registerRemoteService } from "../../../../remote/runtime.js";
 import {
   _resetRelayRemovalLaunchesForTesting,
   noteRelayRemovalLaunch,
@@ -4469,5 +4470,66 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
     } finally {
       delete capabilities.inlineModeEnv;
     }
+  });
+});
+
+describe("terminal spawn handler - forwarded ssh-agent (#17432)", () => {
+  const project = { id: "project-a-id", name: "Project A", path: "/projects/a" };
+  let ptyClient: { spawn: ReturnType<typeof vi.fn>; hasTerminal: ReturnType<typeof vi.fn> };
+  let unregister: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = { spawn: vi.fn(), hasTerminal: vi.fn(() => false) };
+    mockGetProjectById.mockReturnValue(project);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    unregister?.();
+    unregister = null;
+  });
+
+  async function spawnEnv(options: Record<string, unknown> = {}) {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    await getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+      projectId: project.id,
+      cols: 80,
+      rows: 24,
+      ...options,
+    });
+    return ptyClient.spawn.mock.calls[0]![1].env as Record<string, string> | undefined;
+  }
+
+  it("points a new terminal at the project's socket while its driver forwards an agent", async () => {
+    const socketForSpawn = vi.fn(async (projectId: string) =>
+      projectId === project.id ? "/run/user/1000/daintree/agent/abc.sock" : null
+    );
+    unregister = registerRemoteService("agentForwardingHost", {
+      socketForSpawn,
+      dispose: async () => {},
+    });
+
+    const env = await spawnEnv({ env: { SSH_AUTH_SOCK: "/from/project/env", KEEP: "1" } });
+
+    expect(socketForSpawn).toHaveBeenCalledWith(project.id);
+    expect(env).toMatchObject({
+      SSH_AUTH_SOCK: "/run/user/1000/daintree/agent/abc.sock",
+      KEEP: "1",
+    });
+  });
+
+  it("leaves the environment alone when nobody forwards one", async () => {
+    unregister = registerRemoteService("agentForwardingHost", {
+      socketForSpawn: async () => null,
+      dispose: async () => {},
+    });
+
+    expect((await spawnEnv({ env: { KEEP: "1" } }))?.SSH_AUTH_SOCK).toBeUndefined();
+  });
+
+  it("spawns as before on a machine not in Host mode", async () => {
+    expect((await spawnEnv())?.SSH_AUTH_SOCK).toBeUndefined();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

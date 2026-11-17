@@ -46,6 +46,7 @@ const SHELL_DIRS = [
   "projects",
   "hybrid",
   "assistant",
+  "agentForwarding",
 ];
 
 const GATED_DIRS = [
@@ -61,6 +62,7 @@ const GATED_DIRS = [
   "projects",
   "hybrid",
   "assistant",
+  "agentForwarding",
 ];
 
 async function bundledInputs(remoteHosts: boolean, hostRole = remoteHosts): Promise<string[]> {
@@ -170,6 +172,9 @@ describe("Remote Hosts build gate tree-shaking", () => {
     expect(remote).toContain("electron/remote/voice/client.ts");
     expect(remote).not.toContain("electron/remote/voice/host.ts");
     expect(remote).not.toContain("electron/remote/voice/hostInstall.ts");
+    // Answering a host's agent requests is the Shell's; listening for them is the Host's.
+    expect(remote).toContain("electron/remote/agentForwarding/shellRelay.ts");
+    expect(remote).not.toContain("electron/remote/agentForwarding/hostForwarder.ts");
     // The WSL client is what a Windows build is for.
     expect(remote).toContain("electron/remote/client/wslTransport.ts");
   });
@@ -181,6 +186,7 @@ describe("Remote Hosts build gate tree-shaking", () => {
       "electron/remote/host/HostServer.ts",
       "electron/remote/host/attachStdioCli.ts",
       "electron/remote/host/headlessHostTakeover.ts",
+      "electron/remote/agentForwarding/hostForwarder.ts",
     ]) {
       expect(remote).toContain(input);
     }
