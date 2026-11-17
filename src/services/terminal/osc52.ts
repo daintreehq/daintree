@@ -115,8 +115,8 @@ const PREVIEW_CODE_POINTS = 60;
 
 // C0/C1 controls, and the invisible characters that reorder or hide text
 // (bidi embeddings, overrides and isolates, zero-width marks, BOM).
-// eslint-disable-next-line no-control-regex -- finding control characters is the point
 const HIDDEN =
+  // eslint-disable-next-line no-control-regex -- finding control characters is the point
   /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
 
 /**
