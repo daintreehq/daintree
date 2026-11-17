@@ -61,8 +61,10 @@ import {
   windowsStoreNotifierService,
   buildStoreUrl,
   MS_STORE_FALLBACK_URL,
+  FETCH_TIMEOUT_MS,
 } from "../WindowsStoreNotifierService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { TimeoutError } from "../../utils/withTimeout.js";
 
 function makeResponse(opts: { status?: number; body?: string; etag?: string | null }): {
   status: number;
@@ -229,6 +231,7 @@ describe("WindowsStoreNotifierService", () => {
       const [, options] = netMock.fetch.mock.calls[0];
       expect(options.headers["If-None-Match"]).toBe('"prev"');
       expect(broadcastMock).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
     });
 
     it("drops stored ETag when the channel switches", async () => {
@@ -287,21 +290,24 @@ describe("WindowsStoreNotifierService", () => {
 
     function trackSettled(promise: Promise<void>): () => boolean {
       let settled = false;
-      void promise.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        }
-      );
+      void promise.then(() => {
+        settled = true;
+      });
       return () => settled;
+    }
+
+    function sleepHandlers(): { onSuspend: () => void; onWake: () => void } {
+      return {
+        onSuspend: (systemSleepMock.onSuspend.mock.calls[0] as unknown[])[0] as () => void,
+        onWake: (systemSleepMock.onWake.mock.calls[0] as unknown[])[0] as () => void,
+      };
     }
 
     it("shares a pending check with a later trigger instead of sending a second request", async () => {
       const fetch = pendingFetch();
       const first = windowsStoreNotifierService._checkNowForTest();
       const second = windowsStoreNotifierService._checkNowForTest();
+      expect(second).toBe(first);
       expect(netMock.fetch).toHaveBeenCalledTimes(1);
 
       fetch.resolve(makeResponse({ body: "version: 1.2.0\n", etag: null }));
@@ -318,43 +324,89 @@ describe("WindowsStoreNotifierService", () => {
       const settled = trackSettled(windowsStoreNotifierService._checkNowForTest());
       expect(fetch.init().signal?.aborted).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS);
       expect(settled()).toBe(true);
-      expect(fetch.init().signal?.aborted).toBe(true);
+      expect(fetch.init().signal?.reason).toBeInstanceOf(TimeoutError);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
       expect(broadcastMock).not.toHaveBeenCalled();
     });
 
-    it("times out a stalled response body", async () => {
-      netMock.fetch.mockResolvedValueOnce({
-        ...makeResponse({ etag: '"stalled"' }),
-        text: () => new Promise<string>(() => {}),
-      });
+    it("one deadline covers the request and the body read together", async () => {
+      const fetch = pendingFetch();
       const settled = trackSettled(windowsStoreNotifierService._checkNowForTest());
+      await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS - 1_000);
+
+      const text = vi.fn(() => new Promise<string>(() => {}));
+      fetch.resolve({ ...makeResponse({ etag: '"stalled"' }), text });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(text).toHaveBeenCalledTimes(1);
+      expect(settled()).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(settled()).toBe(false);
-      await vi.advanceTimersByTimeAsync(60_000);
       expect(settled()).toBe(true);
+      expect(fetch.init().signal?.reason).toBeInstanceOf(TimeoutError);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
       expect(broadcastMock).not.toHaveBeenCalled();
     });
 
     it("treats a body Chromium ends as a plain abort at the deadline as a timeout", async () => {
-      netMock.fetch.mockImplementationOnce(async (_url: string, init: FetchInit) => ({
-        ...makeResponse({ etag: null }),
-        text: () =>
-          new Promise<string>((_resolve, reject) => {
-            init.signal?.addEventListener("abort", () =>
-              reject(new DOMException("The operation was aborted.", "AbortError"))
-            );
-          }),
-      }));
+      netMock.fetch
+        .mockImplementationOnce(async (_url: string, init: FetchInit) => ({
+          ...makeResponse({ etag: null }),
+          text: () =>
+            new Promise<string>((_resolve, reject) => {
+              init.signal?.addEventListener("abort", () =>
+                reject(new DOMException("The operation was aborted.", "AbortError"))
+              );
+            }),
+        }))
+        .mockResolvedValueOnce(makeResponse({ status: 304 }));
       void windowsStoreNotifierService._checkNowForTest();
-      await vi.advanceTimersByTimeAsync(60_000);
+
+      await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS);
+      expect(console.error).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(console.error).mock.calls[0][1]).toBeInstanceOf(TimeoutError);
 
       // A timeout is transient, so the retry ladder sends a fresh request.
-      netMock.fetch.mockResolvedValueOnce(makeResponse({ status: 304 }));
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
+      expect(console.error).toHaveBeenCalledTimes(1);
+    });
+
+    it("a failed status aborts its unread body and still takes the retry ladder", async () => {
+      let init: FetchInit | undefined;
+      netMock.fetch
+        .mockImplementationOnce(async (_url: string, i: FetchInit) => {
+          init = i;
+          return { ...makeResponse({ status: 503 }), text: () => new Promise<string>(() => {}) };
+        })
+        .mockResolvedValueOnce(makeResponse({ status: 304 }));
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(init?.signal?.aborted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("a resume trigger joins a pending check instead of sending a second request", async () => {
+      windowsStoreNotifierService.initialize();
+      const { onSuspend, onWake } = sleepHandlers();
+      // Clears the startup jitter and periodic timers, leaving wake as the only trigger.
+      onSuspend();
+      const fetch = pendingFetch();
+      const check = windowsStoreNotifierService._checkNowForTest();
+      const channelReads = () =>
+        storeMock.get.mock.calls.filter(([key]) => key === "updateChannel").length;
+      const readsBeforeWake = channelReads();
+
+      onWake();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(channelReads()).toBeGreaterThan(readsBeforeWake);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+
+      fetch.resolve(makeResponse({ body: "version: 1.7.0\n", etag: null }));
+      await check;
+      expect(broadcastMock).toHaveBeenCalledTimes(1);
     });
 
     it("retries after a timeout with a fresh request", async () => {
@@ -394,8 +446,7 @@ describe("WindowsStoreNotifierService", () => {
 
     it("suspend cancels a pending check and wake sends a fresh request", async () => {
       windowsStoreNotifierService.initialize();
-      const onSuspend = (systemSleepMock.onSuspend.mock.calls[0] as unknown[])[0] as () => void;
-      const onWake = (systemSleepMock.onWake.mock.calls[0] as unknown[])[0] as () => void;
+      const { onSuspend, onWake } = sleepHandlers();
       const held = pendingFetch();
       const check = windowsStoreNotifierService._checkNowForTest();
 
@@ -403,6 +454,8 @@ describe("WindowsStoreNotifierService", () => {
       expect(held.init().signal?.aborted).toBe(true);
       held.reject(new Error("net::ERR_NETWORK_CHANGED"));
       await check;
+      // No retry armed behind wake's back.
+      expect(vi.getTimerCount()).toBe(0);
 
       netMock.fetch.mockResolvedValueOnce(makeResponse({ body: "version: 1.6.0\n", etag: null }));
       onWake();
@@ -458,7 +511,7 @@ describe("WindowsStoreNotifierService", () => {
       });
     });
 
-    it("dispose suppresses the retry a late transient failure would schedule", async () => {
+    it("a request rejected after dispose stays silent", async () => {
       const fetch = pendingFetch();
       const check = windowsStoreNotifierService._checkNowForTest();
 
@@ -468,6 +521,66 @@ describe("WindowsStoreNotifierService", () => {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(1);
       expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it("dispose drops a transient failure that already arrived instead of retrying it", async () => {
+      netMock.fetch.mockResolvedValueOnce({
+        ...makeResponse({ status: 503 }),
+        // Dispose lands after the response arrived but before the check handles it.
+        get ok() {
+          windowsStoreNotifierService.dispose();
+          return false;
+        },
+      });
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it("dispose drops a manifest that was already read", async () => {
+      const response = makeResponse({ body: "version: 9.9.9\n", etag: '"read"' });
+      netMock.fetch.mockResolvedValueOnce({
+        ...response,
+        headers: {
+          // The last read before the check continues.
+          get: (key: string) => {
+            windowsStoreNotifierService.dispose();
+            return response.headers.get(key);
+          },
+        },
+      });
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(broadcastMock).not.toHaveBeenCalled();
+      expect(windowsStoreNotifierService.getLastDetectedUpdate()).toBeNull();
+    });
+
+    it("a channel switch drops the old feed's uncommitted ETag", async () => {
+      let channel = "stable" as "stable" | "nightly";
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "updateChannel") return channel;
+        return undefined;
+      });
+      windowsStoreNotifierService.initialize();
+      const dismiss = ipcMainMock.handle.mock.calls.find(
+        ([ch]) => ch === CHANNELS.STORE_UPDATE_DISMISS
+      )![1];
+      netMock.fetch.mockResolvedValueOnce(
+        makeResponse({ body: "version: 2.0.0\n", etag: '"stable"' })
+      );
+      await windowsStoreNotifierService._checkNowForTest();
+
+      channel = "nightly";
+      const nightly = pendingFetch();
+      const nightlyCheck = windowsStoreNotifierService._checkNowForTest();
+      // The renderer acknowledges the stable notification while nightly is out.
+      dismiss({ senderFrame: { url: "app://daintree/index.html" } }, "2.0.0");
+      expect(storeMock.set).toHaveBeenCalledWith("lastNotifiedStoreVersion", "2.0.0");
+      expect(storeMock.set).not.toHaveBeenCalledWith("storeNotifierEtag", expect.any(String));
+
+      nightly.resolve(makeResponse({ status: 304 }));
+      await nightlyCheck;
     });
 
     it("a check after dispose sends its own request and the cancelled one can't release it", async () => {

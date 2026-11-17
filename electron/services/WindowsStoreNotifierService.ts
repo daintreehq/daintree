@@ -195,6 +195,9 @@ class WindowsStoreNotifierService {
       } catch {
         // Best-effort — corrupted store reads here shouldn't block polling.
       }
+      // An undismissed notification from the old feed would otherwise commit
+      // its validator back on DISMISS.
+      this.pendingEtag = null;
     }
     this.activeFeedUrl = feedUrl;
   }
@@ -209,13 +212,20 @@ class WindowsStoreNotifierService {
       headers["If-None-Match"] = storedEtag;
     }
     const deadline = timeoutSignal(FETCH_TIMEOUT_MS, cancelSignal);
+    const release = new AbortController();
     try {
       const res = await untilAborted(
-        net.fetch(manifestUrl(feedUrl), { headers, signal: deadline.signal }),
+        net.fetch(manifestUrl(feedUrl), {
+          headers,
+          signal: AbortSignal.any([deadline.signal, release.signal]),
+        }),
         deadline.signal
       );
       if (res.status === 304) return null;
       if (!res.ok) {
+        // The status decides this; abort the unread body so a stalled one
+        // can't hold the request open past the deadline's disposal.
+        release.abort();
         const err: Error & { statusCode?: number } = new Error(
           `Manifest fetch failed: HTTP ${res.status}`
         );
@@ -258,6 +268,8 @@ class WindowsStoreNotifierService {
       feedUrl = this.configuredFeedUrl();
     } catch (err) {
       console.error(`[MAIN] ${context} Store update check failed:`, err);
+      // Same as any non-transient failure, unless a running check owns the ladder.
+      if (!this.inflightCheck) this.resetRetryState();
       return Promise.resolve();
     }
     const inflight = this.inflightCheck;
@@ -518,4 +530,4 @@ class WindowsStoreNotifierService {
 }
 
 export const windowsStoreNotifierService = new WindowsStoreNotifierService();
-export { buildStoreUrl, MS_STORE_FALLBACK_URL };
+export { buildStoreUrl, MS_STORE_FALLBACK_URL, FETCH_TIMEOUT_MS };
