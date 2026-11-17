@@ -178,6 +178,10 @@ async function setup(
       const stdout = scan.byTypes[types] ?? scan.output;
       return { code: 0, stdout, stderr: "", spawnError: null, timedOut: false };
     }
+    // Only ssh-keygen makes files; anything else (a master's `-O exit`) just answers.
+    if (cmd !== "ssh-keygen") {
+      return { code: 0, stdout: "", stderr: "", spawnError: null, timedOut: false };
+    }
     const keyPath = args[args.length - 1]!;
     await fs.writeFile(keyPath, "PRIVATE");
     await fs.writeFile(`${keyPath}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClient daintree");
