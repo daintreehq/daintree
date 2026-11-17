@@ -225,18 +225,6 @@ describe("expandDraftContext @terminal", () => {
     expect(await injected()).toBe(command);
   });
 
-  it("keeps a space that opens the continuation row", async () => {
-    const command = `echo ${"a".repeat(15)} bbbbbb`;
-    await showing(20, command);
-    expect(await injected()).toBe(command);
-  });
-
-  it("drops the cell a wide character left blank at the margin", async () => {
-    const text = `${"a".repeat(19)}漢字`;
-    await showing(20, text);
-    expect(await injected()).toBe(text);
-  });
-
   it("keeps the line breaks the program wrote", async () => {
     await showing(20, "first line\r\nsecond line\r\n\r\nafter a blank");
     expect(await injected()).toBe("first line\nsecond line\n\nafter a blank");

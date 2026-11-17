@@ -1,0 +1,92 @@
+import { describe, expect, it } from "vitest";
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
+import { CLIPPED_LINE_MARKER, readTerminalTail } from "../readTerminalTail";
+
+async function render(
+  cols: number,
+  output: string,
+  { rows = 10, scrollback = 1000 }: { rows?: number; scrollback?: number } = {}
+): Promise<HeadlessTerminal> {
+  const terminal = new HeadlessTerminal({ cols, rows, scrollback, allowProposedApi: true });
+  await new Promise<void>((resolve) => terminal.write(output, resolve));
+  return terminal;
+}
+
+function tail(terminal: HeadlessTerminal, maxLines = 100, maxRows = 400): string {
+  return readTerminalTail(terminal.buffer.active, maxLines, maxRows);
+}
+
+const url = "https://example.com/a/very/long/path/without/any/breaks/index.html?q=1&r=2";
+
+describe("readTerminalTail", () => {
+  it("joins the rows xterm wrapped an unbroken URL across, narrow or wide", async () => {
+    const output = `$ open\r\n${url}\r\n$`;
+    const narrow = await render(8, output);
+    expect(narrow.buffer.active.getLine(2)?.isWrapped).toBe(true);
+    expect(tail(narrow)).toBe(`$ open\n${url}\n$`);
+    expect(tail(await render(80, output))).toBe(`$ open\n${url}\n$`);
+  });
+
+  it("keeps a command's spaces where they fall on either side of a wrap", async () => {
+    // At 8 columns the space after `ab` is the row's last cell.
+    const command = "echo ab def ghi";
+    expect(tail(await render(8, command))).toBe(command);
+    // At 7 columns a space opens the continuation row instead.
+    expect(tail(await render(7, command))).toBe(command);
+    expect(tail(await render(80, command))).toBe(command);
+  });
+
+  it("drops the margin cell a wide character skipped when it wrapped", async () => {
+    const text = "1234567界abc";
+    const terminal = await render(8, text);
+    expect(terminal.buffer.active.getLine(0)?.translateToString(false)).toBe("1234567 ");
+    expect(tail(terminal)).toBe(text);
+  });
+
+  it("keeps the breaks and blank lines the program wrote", async () => {
+    const terminal = await render(10, "first\r\n\r\nsecond line here\r\nthird");
+    expect(tail(terminal)).toBe("first\n\nsecond line here\nthird");
+  });
+
+  it("counts lines, not rows, so the pane's width doesn't change what's read", async () => {
+    const output = Array.from({ length: 6 }, (_, i) => `line ${i} ${"x".repeat(20)}`).join("\r\n");
+    const expected = [4, 5].map((i) => `line ${i} ${"x".repeat(20)}`).join("\n");
+    expect(tail(await render(8, output), 2)).toBe(expected);
+    expect(tail(await render(80, output), 2)).toBe(expected);
+  });
+
+  it("reads the same lines after the pane is resized", async () => {
+    // Ends on a fresh row: xterm doesn't reflow the cursor's own line.
+    const terminal = await render(10, `$ ls\r\n${url}\r\n`);
+    const before = tail(terminal);
+    terminal.resize(60, 10);
+    expect(tail(terminal)).toBe(before);
+    terminal.resize(6, 10);
+    expect(tail(terminal)).toBe(before);
+    expect(before).toBe(`$ ls\n${url}`);
+  });
+
+  it("doesn't spend the line budget on blank rows below the output", async () => {
+    const terminal = await render(20, "a\r\nb\r\nc", { rows: 30 });
+    expect(terminal.buffer.active.length).toBe(30);
+    expect(tail(terminal, 2)).toBe("b\nc");
+  });
+
+  it("keeps the tail of a line longer than the row cap, under the marker", async () => {
+    const long = "0123456789".repeat(5);
+    const terminal = await render(10, `before\r\n${long}`);
+    expect(tail(terminal, 100, 3)).toBe(`${CLIPPED_LINE_MARKER}\n${long.slice(20)}`);
+    expect(tail(terminal, 100, 6)).toBe(`before\n${long}`);
+  });
+
+  it("marks a line whose start the scrollback already dropped", async () => {
+    const long = "abcdefghij".repeat(10);
+    const terminal = await render(10, long, { rows: 5, scrollback: 2 });
+    expect(terminal.buffer.active.getLine(0)?.isWrapped).toBe(true);
+    expect(tail(terminal)).toBe(`${CLIPPED_LINE_MARKER}\n${long.slice(30)}`);
+  });
+
+  it("reads nothing from a blank screen", async () => {
+    expect(tail(await render(20, "\r\n   \r\n"))).toBe("");
+  });
+});
