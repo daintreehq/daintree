@@ -497,7 +497,7 @@ describe("host status and host figures", () => {
   it("keeps a link lost while a remounted subscriber's read was in flight over the older answer", async () => {
     list.mockResolvedValue([
       connectedHost("studio-01"),
-      connectedHost("studio-02"),
+      host("studio-02"),
       connectedHost("studio-04"),
     ]);
     const first = renderHook(() => useHostFigures());
@@ -508,6 +508,7 @@ describe("host status and host figures", () => {
     list.mockReturnValueOnce(pending.promise);
     const figures = renderHook(() => useHostFigures());
     await settle();
+    expect(list).toHaveBeenCalledTimes(2);
     expect(ids(figures.result.current.hosts)).toEqual(["studio-01", "studio-02", "studio-04"]);
     act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 5) }));
     expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(5);
@@ -543,9 +544,7 @@ describe("host status and host figures", () => {
     const view = renderHook(() => useHostList());
     act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: DOWN }));
     // A host this list doesn't have yet means the list is behind: read again.
-    act(() =>
-      emit?.({ type: "connection-changed", hostId: "studio-03", connection: connected(5, 1) })
-    );
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-03", connection: DOWN }));
     expect(list).toHaveBeenCalledTimes(2);
     act(() => emit?.({ type: "connection-changed", hostId: "studio-02", connection: DOWN }));
 
@@ -589,6 +588,7 @@ describe("host status and host figures", () => {
     const figures = renderHook(() => useHostFigures());
     const status = counted(() => useHostList());
     await settle();
+    expect(list).toHaveBeenCalledTimes(2);
     act(() => {
       for (const hostId of all) emit?.({ type: "connection-changed", hostId, connection: DOWN });
       emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(7, 2) });
@@ -612,6 +612,33 @@ describe("host status and host figures", () => {
     expect(hosts[0]?.connection).toMatchObject({ rttMs: 7 });
     expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([6, null, null]);
     expect(status.count.renders).toBe(before);
+  });
+
+  it("keeps the fresher summary for a link that stayed up through the read", async () => {
+    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    expect(list).toHaveBeenCalledTimes(2);
+    // Pings only: both links stay up, and studio-02 reports again.
+    act(() => {
+      emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(9, 2) });
+      emit?.({ type: "connection-changed", hostId: "studio-02", connection: connected(9, 2) });
+      emitMetrics({ type: "summary", summary: summary("studio-02", 8) });
+    });
+
+    await act(async () => {
+      pending.resolve([reporting("studio-01", 4), reporting("studio-02", 4)]);
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(hosts.map((h) => h.connection)).toMatchObject([{ rttMs: 9 }, { rttMs: 9 }]);
+    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([4, 8]);
   });
 
   it("stops following while main has the view cached, though the page still reads visible", async () => {
