@@ -196,7 +196,7 @@ describe("ProjectPulseService history read failures", () => {
   it("keeps git's output in the local log only", async () => {
     const subject = "Rotate the staging credentials";
     // simple-git folds what git printed before dying into the error.
-    const gitError = () => new Error(`abc123 ${subject}\nfatal: bad object`);
+    const gitError = (path: string) => new Error(`${path} ${subject}\nfatal: bad object`);
     let failing: "recent" | "supplementary" | "heatmap" = "recent";
     const raw = vi.fn(async (args: string[]) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
@@ -204,10 +204,10 @@ describe("ProjectPulseService history read failures", () => {
       }
       if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (args[0] === "rev-parse" && args[1] === "--is-shallow-repository") return "false\n";
-      if (args[0] === "log" && args[1] === "-n" && failing === "recent") throw gitError();
-      if (isStreakLog(args) && failing === "supplementary") throw gitError();
-      if (args[0] === "rev-list" && failing === "supplementary") throw gitError();
-      if (isHeatmapLog(args) && failing === "heatmap") throw gitError();
+      if (args[0] === "log" && args[1] === "-n" && failing === "recent") throw gitError("recent");
+      if (isStreakLog(args) && failing === "supplementary") throw gitError("streak");
+      if (args[0] === "rev-list" && failing === "supplementary") throw gitError("roots");
+      if (isHeatmapLog(args) && failing === "heatmap") throw gitError("heatmap");
       if (args[0] === "log") return HISTORY;
       return "";
     });
@@ -220,23 +220,20 @@ describe("ProjectPulseService history read failures", () => {
     await expect(svc.getPulse(OPTS)).rejects.toThrow();
 
     const messages = [
-      "Failed to read recent commits",
-      "Failed to get commit timestamps for full streak",
-      "Failed to get first commit date",
-      "Failed to read commit history",
+      ["Failed to read recent commits", "recent"],
+      ["Failed to get commit timestamps for full streak", "streak"],
+      ["Failed to get first commit date", "roots"],
+      ["Failed to read commit history", "heatmap"],
     ];
-    for (const message of messages) {
+    for (const [message, path] of messages) {
       expect(logger.logError).toHaveBeenCalledWith(message, undefined, { worktreeId: "wt-1" });
-      expect(
-        logger.logLocalOnly.mock.calls.some(
-          ([level, text]) =>
-            level === "error" && String(text).includes(message) && String(text).includes(subject)
-        )
-      ).toBe(true);
+      const text = logger.logLocalOnly.mock.calls.find(([, t]) => String(t).includes(message));
+      expect(text?.[0]).toBe("error");
+      expect(String(text?.[1])).toContain(`${path} ${subject}\nfatal: bad object`);
     }
-    // Errors serialised the way the logger reads them: by message.
+    // Errors serialised the way the logger reads them: message and cause chain.
     const shared = JSON.stringify(logger.logError.mock.calls, (_key, value: unknown) =>
-      value instanceof Error ? value.message : value
+      value instanceof Error ? { message: value.message, cause: value.cause } : value
     );
     expect(shared).not.toContain(subject);
   });
