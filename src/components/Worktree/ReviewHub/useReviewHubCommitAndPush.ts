@@ -84,8 +84,9 @@ export function useReviewHubCommitAndPush({
   // review is open by then.
   const reviewOwnerRef = useRef(0);
   useEffect(() => {
+    const owner = reviewOwnerRef;
     return () => {
-      reviewOwnerRef.current++;
+      owner.current++;
     };
   }, [worktreePath]);
 
