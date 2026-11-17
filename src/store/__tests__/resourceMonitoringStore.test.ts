@@ -137,6 +137,7 @@ describe("resourceMonitoringStore.updateMetrics", () => {
   it("keeps the store and map when the removed panel has no metrics", () => {
     useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
     const before = useResourceMonitoringStore.getState();
+    const metricsBefore = before.metrics;
     let notified = 0;
     const unsubscribe = useResourceMonitoringStore.subscribe(() => notified++);
 
@@ -145,7 +146,7 @@ describe("resourceMonitoringStore.updateMetrics", () => {
 
     expect(notified).toBe(0);
     expect(useResourceMonitoringStore.getState()).toBe(before);
-    expect(useResourceMonitoringStore.getState().metrics).toBe(before.metrics);
+    expect(useResourceMonitoringStore.getState().metrics).toBe(metricsBefore);
   });
 
   it("notifies and preserves other panels when an existing sample is removed", () => {
