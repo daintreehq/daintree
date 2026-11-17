@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationOutcome } from "@shared/types/remoteHosts";
 import type { OperationsEvent } from "@shared/types/ipc/operations";
 import { isUnknownOutcomeError, resolveUnknownOutcome } from "../resolveUnknownOutcome";
@@ -283,6 +283,41 @@ describe("resolveUnknownOutcome", () => {
       })
     ).resolves.toEqual(running);
     expect(client.getStatus.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  describe("after a long offline gap", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("gives an operation still running at reconnection its full follow-up window", async () => {
+      const running: OperationOutcome = { status: "running", progress: null };
+      const { client } = fakeClient([running, running, succeeded]);
+      let reconnect!: () => void;
+      const waitForConnected = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            reconnect = resolve;
+          })
+      );
+
+      const pending = resolveUnknownOutcome("op-1", {
+        waitForConnected,
+        client,
+        pollIntervalMs: 2_000,
+        settleTimeoutMs: 5 * 60_000,
+      });
+      vi.setSystemTime(Date.now() + 6 * 60_000);
+      reconnect();
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      await expect(pending).resolves.toEqual(succeeded);
+      expect(client.getStatus).toHaveBeenCalledTimes(3);
+      expect(waitForConnected).toHaveBeenCalledOnce();
+    });
   });
 
   it("rethrows an error that isn't a dropped link", async () => {
