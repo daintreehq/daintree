@@ -676,7 +676,7 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
       makeAgent("a", { cwd: "/wt/a" }),
       makeAgent("b", { cwd: "/wt/a" }),
       makeAgent("c", { cwd: "/wt/a" }),
-      makeAgent("d", { cwd: "/wt/d" }),
+      makeAgent("d", { cwd: "/wt/d", worktreeId: "wt-2" }),
     ]);
     await executeFleetBroadcast("Review @diff then @diff again", ["a", "b", "c", "d"], {
       c: "Only @diff here",
