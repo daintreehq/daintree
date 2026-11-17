@@ -76,6 +76,7 @@ vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
+import { UNDO_LINE_MS } from "../useCanopyInboxUndo";
 import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
 import { allHostsKey } from "../canopyAllHosts";
 import type { CanopyFrame } from "../canopyFrame";
@@ -1025,6 +1026,48 @@ describe("All hosts", () => {
       cardOf("studio", "shared-run")!.querySelector("[data-canopy-host]")?.textContent
     ).toContain("studio-01");
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
+  });
+
+  it("takes a trash back on the host that made it, to the last moment of its undo line", async () => {
+    const own = installElectron();
+    // The line's timer and the route's receipt clock move together.
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    try {
+      render(<CanopyView frame={frame} />);
+      await settle();
+      const row = cardOf("studio", "shared-run")!;
+      act(() => row.focus());
+      fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+      });
+      await settle();
+      expect(state.invoke).toHaveBeenCalledWith(
+        "studio",
+        "canopy:trash",
+        "shared-run",
+        expect.anything()
+      );
+      expect(own.trash).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(UNDO_LINE_MS - 1);
+      });
+      const undo = [...document.querySelectorAll("[data-canopy-undo-line] button")].find(
+        (button) => button.textContent === "Undo"
+      );
+      expect(undo).toBeDefined();
+      await act(async () => {
+        fireEvent.click(undo!);
+      });
+      expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
+      expect(own.untrash).not.toHaveBeenCalled();
+    } finally {
+      try {
+        cleanup();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {

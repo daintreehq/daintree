@@ -20,7 +20,7 @@ import {
   type CanopyUntrashOutcome,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
-import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
+import { CANOPY_TRASH_LIMIT, TRASH_TTL_MS } from "@shared/config/trash";
 import type { HostConnectionState, HostId } from "@shared/types/remoteHosts";
 
 /**
@@ -254,6 +254,41 @@ function groupByHost<T>(items: readonly T[], keyOf: (item: T) => string) {
   return groups;
 }
 
+/**
+ * The route's own trash receipts, each naming the host that trashed the run
+ * and the receipt it gave. A host keeps its receipt for TRASH_TTL_MS from its
+ * trash, which came before its answer reached here: one held here longer is
+ * an Undo the host would refuse, so it is let go rather than kept for as long
+ * as the panel stays open. Timed on the monotonic clock: a wall clock set
+ * forward must not end an Undo the host still keeps.
+ */
+export function createTrashReceipts() {
+  let last = 0;
+  const held = new Map<number, { hostId: HostId; receipt: number; at: number }>();
+  const lapsed = (at: number, now: number) => now - at > TRASH_TTL_MS;
+  return {
+    issue(hostId: HostId, receipt: number): number {
+      const now = performance.now();
+      for (const [mine, entry] of held) if (lapsed(entry.at, now)) held.delete(mine);
+      const mine = ++last;
+      held.set(mine, { hostId, receipt, at: now });
+      return mine;
+    },
+    /** Spends a receipt: null when it was spent already or has lapsed. */
+    take(mine: number): { hostId: HostId; receipt: number } | null {
+      const entry = held.get(mine);
+      if (!entry) return null;
+      held.delete(mine);
+      return lapsed(entry.at, performance.now()) ? null : entry;
+    },
+    get size() {
+      return held.size;
+    },
+  };
+}
+
+const LEFT_THE_TRASH = "That terminal has left the trash.";
+
 export interface AllHostsRoute {
   api: CanopyApi;
   terminalApi: CanopyTerminalApi;
@@ -294,8 +329,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     return () => !closed && mine === session;
   };
 
-  let receipt = 0;
-  const trashed = new Map<number, { hostId: HostId; receipt: number }>();
+  const trashed = createTrashReceipts();
 
   const api: CanopyApi = {
     setShown: async (runIds) => {
@@ -388,9 +422,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
             return outcomes.map((outcome): CanopyTrashOutcome => {
               const runId = allHostsKey(hostId, outcome.runId);
               if ("error" in outcome) return { runId, error: outcome.error };
-              const mine = ++receipt;
-              trashed.set(mine, { hostId, receipt: outcome.receipt });
-              return { runId, receipt: mine };
+              return { runId, receipt: trashed.issue(hostId, outcome.receipt) };
             });
           } catch (error) {
             return refusedOutcomes(keys, error);
@@ -404,26 +436,22 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       if (!parsed || !known.has(parsed.hostId)) return unknownRun();
       const hostReceipt = await apiFor(parsed.hostId).trash(parsed.id, target);
       if (hostReceipt === null) return null;
-      const mine = ++receipt;
-      trashed.set(mine, { hostId: parsed.hostId, receipt: hostReceipt });
-      return mine;
+      return trashed.issue(parsed.hostId, hostReceipt);
     },
     untrash: async (mine) => {
-      const entry = trashed.get(mine);
-      if (!entry) return unknownRun();
-      trashed.delete(mine);
+      const entry = trashed.take(mine);
+      if (!entry) throw new Error(LEFT_THE_TRASH);
       await apiFor(entry.hostId).untrash(entry.receipt);
     },
     untrashBatch: async (receipts) => {
       const outcomes: CanopyUntrashOutcome[] = [];
       const byHost = new Map<HostId, Array<{ mine: number; receipt: number }>>();
       for (const mine of receipts) {
-        const entry = trashed.get(mine);
+        const entry = trashed.take(mine);
         if (!entry) {
-          outcomes.push({ receipt: mine, error: "That terminal has left the trash." });
+          outcomes.push({ receipt: mine, error: LEFT_THE_TRASH });
           continue;
         }
-        trashed.delete(mine);
         const group = byHost.get(entry.hostId);
         if (group) group.push({ mine, receipt: entry.receipt });
         else byHost.set(entry.hostId, [{ mine, receipt: entry.receipt }]);
