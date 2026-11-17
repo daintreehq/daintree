@@ -28,19 +28,18 @@ export function applyOptimisticProjectUpdate(
 ): Project {
   const inherited = claimsByRow.get(project);
   const claims = new Map(inherited);
-  const next: Record<string, unknown> = { ...project };
+  const row: Project = { ...project };
   for (const [key, value] of Object.entries(updates)) {
     // The row is found by id on rollback; Main never lets a generic update change it.
     if (key === "id") continue;
     claims.set(key, {
       write,
       hadPrior: Object.hasOwn(project, key),
-      prior: (project as unknown as Record<string, unknown>)[key],
+      prior: Reflect.get(project, key),
       previous: inherited?.get(key),
     });
-    next[key] = value;
+    Reflect.set(row, key, value);
   }
-  const row = next as unknown as Project;
   claimsByRow.set(row, claims);
   return row;
 }
@@ -58,7 +57,7 @@ export function rollbackOptimisticProjectUpdate(
 ): Project {
   const claims = claimsByRow.get(project);
   if (!claims) return project;
-  let next: Record<string, unknown> | null = null;
+  let next: Project | null = null;
   const remaining = new Map(claims);
   for (const [key, claim] of claims) {
     if (claim.write !== write) {
@@ -66,16 +65,15 @@ export function rollbackOptimisticProjectUpdate(
       continue;
     }
     next ??= { ...project };
-    if (claim.hadPrior) next[key] = claim.prior;
-    else delete next[key];
+    if (claim.hadPrior) Reflect.set(next, key, claim.prior);
+    else Reflect.deleteProperty(next, key);
     const owner = claim.previous?.write.status === "pending" ? claim.previous : undefined;
     if (owner) remaining.set(key, owner);
     else remaining.delete(key);
   }
   if (!next) return project;
-  const restored = next as unknown as Project;
-  claimsByRow.set(restored, remaining);
-  return restored;
+  claimsByRow.set(next, remaining);
+  return next;
 }
 
 /** A failed write's value never saved, so whatever overwrote it inherits its baseline. */
@@ -91,14 +89,15 @@ function spliceOut(claim: FieldClaim, write: OptimisticProjectWrite): void {
 
 /** Copies `keys` from `row`, presence included; the same object when they already match. */
 export function syncProjectFields(project: Project, row: Project, keys: string[]): Project {
-  const prev = project as unknown as Record<string, unknown>;
-  const next: Record<string, unknown> = { ...project };
+  const next: Project = { ...project };
   for (const key of keys) {
-    if (Object.hasOwn(row, key)) next[key] = (row as unknown as Record<string, unknown>)[key];
-    else delete next[key];
+    if (Object.hasOwn(row, key)) Reflect.set(next, key, Reflect.get(row, key));
+    else Reflect.deleteProperty(next, key);
   }
   const same = keys.every(
-    (k) => Object.hasOwn(next, k) === Object.hasOwn(prev, k) && Object.is(next[k], prev[k])
+    (k) =>
+      Object.hasOwn(next, k) === Object.hasOwn(project, k) &&
+      Object.is(Reflect.get(next, k), Reflect.get(project, k))
   );
-  return same ? project : (next as unknown as Project);
+  return same ? project : next;
 }
