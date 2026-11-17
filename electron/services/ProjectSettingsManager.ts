@@ -403,12 +403,7 @@ export class ProjectSettingsManager {
   ): Promise<ProjectLinksChangeResult> {
     return this.serializeWrite(projectId, async () => {
       const settings = await this.readProjectSettings(projectId);
-      const result = applyProjectLinkChange(
-        settings.links ?? [],
-        change,
-        actor,
-        randomUUID
-      );
+      const result = applyProjectLinkChange(settings.links ?? [], change, actor, randomUUID);
       if (!result.saved) return result;
       await this.writeProjectSettings(projectId, { ...settings, links: result.links });
       return result;

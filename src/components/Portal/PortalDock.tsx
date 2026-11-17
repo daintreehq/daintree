@@ -18,10 +18,7 @@ import { PortalLaunchpad } from "./PortalLaunchpad";
 import { useProjectStore } from "@/store/projectStore";
 import { useGlobalLinksStore } from "@/store/globalLinksStore";
 import { withGlobalLinks } from "@/lib/portalLinks";
-import {
-  refreshCachedProjectLinks,
-  useProjectSettingsStore,
-} from "@/store/projectSettingsStore";
+import { refreshCachedProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { selectViewProject } from "@/store/viewWorkspace";

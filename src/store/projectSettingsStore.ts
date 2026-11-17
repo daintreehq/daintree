@@ -299,10 +299,7 @@ export function patchCachedProjectSettings(
   state.setSettings({ ...state.settings, ...patch });
 }
 
-function withLinks(
-  settings: ProjectSettings,
-  links: ProjectLink[] | undefined
-): ProjectSettings {
+function withLinks(settings: ProjectSettings, links: ProjectLink[] | undefined): ProjectSettings {
   if (settings.links === links) return settings;
   const next = { ...settings };
   if (links === undefined) delete next.links;
@@ -317,10 +314,7 @@ function withLinks(
  * the project the change was for; while that project's settings are still
  * loading, the list waits for the load to land.
  */
-export function patchCachedProjectLinks(
-  projectId: string,
-  links: ProjectLink[]
-): void {
+export function patchCachedProjectLinks(projectId: string, links: ProjectLink[]): void {
   const state = useProjectSettingsStore.getState();
   if (state.projectId !== projectId) return;
   linksRevision++;

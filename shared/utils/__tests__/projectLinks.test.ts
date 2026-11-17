@@ -173,9 +173,10 @@ describe("applyProjectLinkChange (#17091)", () => {
 
   it("undoes the Assistant's add only while the link is still the Assistant's", () => {
     const undo = { op: "remove", id: "mine", onlyIfAddedByAssistant: true } as const;
-    expect(
-      applyProjectLinkChange([userLink, assistantLink], undo, "user", ids())
-    ).toMatchObject({ saved: true, links: [userLink] });
+    expect(applyProjectLinkChange([userLink, assistantLink], undo, "user", ids())).toMatchObject({
+      saved: true,
+      links: [userLink],
+    });
     const takenOver = { ...assistantLink, addedByAssistant: undefined };
     expect(applyProjectLinkChange([takenOver], undo, "user", ids())).toMatchObject({
       saved: false,
@@ -184,9 +185,10 @@ describe("applyProjectLinkChange (#17091)", () => {
   });
 
   it("says when a link is gone", () => {
-    expect(
-      applyProjectLinkChange([], { op: "remove", id: "gone" }, "user", ids())
-    ).toMatchObject({ saved: false, code: "not-found" });
+    expect(applyProjectLinkChange([], { op: "remove", id: "gone" }, "user", ids())).toMatchObject({
+      saved: false,
+      code: "not-found",
+    });
   });
 });
 

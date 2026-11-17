@@ -72,9 +72,7 @@ describe("ProjectLinksSection (#17091)", () => {
   it("adds a link by hand, as the user, and lists it", async () => {
     const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
     mainAnswers([staging, ci], ci);
-    const { container, getByRole, getByText } = render(
-      <ProjectLinksSection projectId="proj-1" />
-    );
+    const { container, getByRole, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
     fireEvent.change(input(container, 0), { target: { value: "CI" } });
     fireEvent.change(input(container, 1), { target: { value: "http://10.0.0.5:8080" } });
@@ -97,9 +95,7 @@ describe("ProjectLinksSection (#17091)", () => {
       code: "invalid-url",
       message: "The URL must use http:// or https://",
     });
-    const { container, getByRole, getByText } = render(
-      <ProjectLinksSection projectId="proj-1" />
-    );
+    const { container, getByRole, getByText } = render(<ProjectLinksSection projectId="proj-1" />);
 
     fireEvent.change(input(container, 0), { target: { value: "Files" } });
     fireEvent.change(input(container, 1), { target: { value: "ftp://files.example.com" } });

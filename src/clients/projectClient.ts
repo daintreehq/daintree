@@ -290,9 +290,7 @@ export const projectClient = {
     return window.electron.project.saveSettings(projectId, settings);
   },
 
-  changeLinks: async (
-    payload: ProjectLinksChangePayload
-  ): Promise<ProjectLinksChangeResult> => {
+  changeLinks: async (payload: ProjectLinksChangePayload): Promise<ProjectLinksChangeResult> => {
     invalidateProjectSettingsCache(payload.projectId);
     try {
       return await window.electron.projectLinks.change(payload);

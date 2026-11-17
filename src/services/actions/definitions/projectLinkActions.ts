@@ -58,9 +58,7 @@ function toResult(link: ProjectLink) {
 function actorFor(ctx: ActionContext): ProjectLinkActor {
   if (ctx.dispatchSource === "agent") {
     if (ctx.hostCallerOrigin === "assistant") return "assistant";
-    throw new UnactionableTargetError(
-      "Only the Daintree Assistant can change a project's links."
-    );
+    throw new UnactionableTargetError("Only the Daintree Assistant can change a project's links.");
   }
   if (ctx.dispatchSource === "plugin") {
     throw new UnactionableTargetError("A plugin can't change a project's links.");

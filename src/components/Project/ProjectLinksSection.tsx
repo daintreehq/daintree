@@ -8,11 +8,7 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { projectClient } from "@/clients";
 import { changeProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
-import type {
-  ProjectLink,
-  ProjectLinkChange,
-  ProjectLinkRefusal,
-} from "@shared/types";
+import type { ProjectLink, ProjectLinkChange, ProjectLinkRefusal } from "@shared/types";
 import {
   MAX_PROJECT_LINK_TITLE_LENGTH,
   MAX_PROJECT_LINK_URL_LENGTH,
@@ -44,9 +40,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
   const storeLinks = useProjectSettingsStore((s) =>
     s.projectId === projectId && s.settings ? (s.settings.links ?? NO_LINKS) : null
   );
-  const [loaded, setLoaded] = useState<{ projectId: string; links: ProjectLink[] } | null>(
-    null
-  );
+  const [loaded, setLoaded] = useState<{ projectId: string; links: ProjectLink[] } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);

@@ -14,9 +14,7 @@ export type ProjectLinksPreloadBindings = {
 
 type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
-export function buildProjectLinksPreloadBindings(
-  invoke: Invoker
-): ProjectLinksPreloadBindings {
+export function buildProjectLinksPreloadBindings(invoke: Invoker): ProjectLinksPreloadBindings {
   const out: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
   for (const method of Object.keys(PROJECT_LINKS_METHOD_CHANNELS) as Array<keyof Methods>) {
     const channel = PROJECT_LINKS_METHOD_CHANNELS[method];
