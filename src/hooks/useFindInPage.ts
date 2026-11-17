@@ -24,6 +24,7 @@ export interface FindInPageState {
 }
 
 interface FindAnswer {
+  webview: Electron.WebviewTag;
   activeMatch: number;
   matchCount: number;
 }
@@ -178,7 +179,11 @@ export function useFindInPage(
       const { result } = event;
       if (result.requestId !== latestRequestIdRef.current) return;
       if (!result.finalUpdate) return;
-      setAnswer({ activeMatch: result.activeMatchOrdinal, matchCount: result.matches });
+      setAnswer({
+        webview: webviewElement,
+        activeMatch: result.activeMatchOrdinal,
+        matchCount: result.matches,
+      });
     };
 
     webviewElement.addEventListener("found-in-page", handler);
@@ -284,12 +289,16 @@ export function useFindInPage(
     }
   }, [isOpen]);
 
+  // A replaced webview's answer described the old page. It's dropped from the
+  // first render on, not when the resume effect gets to it after the paint.
+  const currentAnswer = answer?.webview === webviewElement ? answer : null;
+
   return {
     isOpen,
     query,
-    activeMatch: answer?.activeMatch ?? 0,
-    matchCount: answer?.matchCount ?? 0,
-    isPending: query !== "" && answer === null,
+    activeMatch: currentAnswer?.activeMatch ?? 0,
+    matchCount: currentAnswer?.matchCount ?? 0,
+    isPending: query !== "" && currentAnswer === null,
     matchCase,
     inputRef,
     isComposingRef,

@@ -1129,6 +1129,53 @@ describe("useFindInPage against Electron's find sessions", () => {
     expect(result.current.isPending).toBe(true);
   });
 
+  it("holds the count back after an in-page navigation until the page answers again", () => {
+    const { webview, flush } = createSessionWebview(() => 3);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    flush();
+    expect(result.current.matchCount).toBe(3);
+
+    act(() => {
+      webview._emit("did-navigate-in-page", { isMainFrame: true });
+    });
+    // The document may have changed under the same query.
+    expect(result.current.matchCount).toBe(0);
+    expect(result.current.isPending).toBe(true);
+    flush();
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.matchCount).toBe(3);
+  });
+
+  it("never shows a replaced webview's count, not even for the first render", () => {
+    const a = createSessionWebview(() => 4);
+    const b = createSessionWebview(() => 2);
+    const renders: Array<{ webview: Electron.WebviewTag; matchCount: number }> = [];
+    const { result, rerender } = renderHook(
+      ({ webview }) => {
+        const state = useFindInPage("panel-1", webview, true, true);
+        renders.push({ webview, matchCount: state.matchCount });
+        return state;
+      },
+      { initialProps: { webview: a.webview as Electron.WebviewTag } }
+    );
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("FIND"));
+    a.flush();
+    expect(result.current.matchCount).toBe(4);
+
+    rerender({ webview: b.webview });
+    expect(renders.filter((r) => r.webview === b.webview).map((r) => r.matchCount)).not.toContain(
+      4
+    );
+    expect(result.current.isPending).toBe(true);
+    b.flush();
+    expect(result.current.matchCount).toBe(2);
+  });
+
   it("is not pending once the query is emptied", () => {
     const { webview } = createSessionWebview(() => 3);
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
