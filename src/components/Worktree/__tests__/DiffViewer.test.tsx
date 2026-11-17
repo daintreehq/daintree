@@ -2130,6 +2130,34 @@ index 0123456..abcdefg 100644
 
     expect(originText()).toBe("renamed from src/old.ts");
     expect(screen.queryAllByTestId("hunk")).toHaveLength(0);
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("names the host's exact source, not the patch's quoted spelling of it", () => {
+    const quoted = String.raw`diff --git "a/src/o"ld.ts" b/src/new.ts
+similarity index 100%
+rename from "src/o"ld.ts"
+rename to src/new.ts
+`;
+    render(wrap(<DiffViewer diff={quoted} origin={{ kind: "renamed", path: 'src/o"ld.ts' }} />));
+
+    expect(originText()).toBe('renamed from src/o"ld.ts');
+  });
+
+  it("offers no generated-file disclosure for a move with nothing to show", () => {
+    const lockfileMove = `diff --git a/package-lock.json b/web/package-lock.json
+similarity index 100%
+rename from package-lock.json
+rename to web/package-lock.json
+`;
+    render(
+      wrap(
+        <DiffViewer diff={lockfileMove} origin={{ kind: "renamed", path: "package-lock.json" }} />
+      )
+    );
+
+    expect(originText()).toBe("renamed from package-lock.json");
+    expect(screen.queryByText("Generated file")).toBeNull();
   });
 
   it("names the source of an edited copy, which the patch parses as a modify", () => {

@@ -627,7 +627,10 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           if (kept) {
             // A destination now paired with another source is a different
             // patch, so the old one can't stay on screen under the new origin.
-            void fetchFileDiff(kept, kept.oldPath === open?.oldPath);
+            // The foreground load unmounts the header the focus may be in.
+            const sameSource = kept.oldPath === open?.oldPath;
+            if (!sameSource) refocusLabelRef.current = focusedComparisonControl();
+            void fetchFileDiff(kept, sameSource);
           } else {
             fileDiffTokenRef.current++;
             setSelectedFile(null);

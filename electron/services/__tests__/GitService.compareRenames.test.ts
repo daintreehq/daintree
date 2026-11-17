@@ -40,6 +40,8 @@ describe("GitService.compareWorktrees renames (real git)", () => {
     git(repoDir, ["init", "-q", "-b", "main"]);
     git(repoDir, ["config", "user.email", "test@example.com"]);
     git(repoDir, ["config", "user.name", "Test"]);
+    // GitService's own git calls read global config; pin git's default here.
+    git(repoDir, ["config", "diff.renames", "true"]);
     fs.mkdirSync(path.join(repoDir, "src"));
     fs.writeFileSync(path.join(repoDir, "src", "old.ts"), HUNDRED_LINES);
     git(repoDir, ["add", "-A"]);
@@ -77,14 +79,17 @@ describe("GitService.compareWorktrees renames (real git)", () => {
 
   it("counts and diffs only the edit on a rename with a one-line change", async () => {
     git(repoDir, ["mv", "src/old.ts", "src/new.ts"]);
-    fs.appendFileSync(path.join(repoDir, "src", "new.ts"), "line 101\n");
+    fs.writeFileSync(
+      path.join(repoDir, "src", "new.ts"),
+      HUNDRED_LINES.replace("line 50\n", "line fifty\n")
+    );
     git(repoDir, ["commit", "-qam", "rename and edit"]);
     const service = new GitService(repoDir);
 
     const { files } = asList(await service.compareWorktrees("main", "other", undefined, true));
 
     expect(files).toEqual([
-      { status: "R", path: "src/new.ts", oldPath: "src/old.ts", insertions: 1, deletions: 0 },
+      { status: "R", path: "src/new.ts", oldPath: "src/old.ts", insertions: 1, deletions: 1 },
     ]);
     const diff = await service.compareWorktrees(
       "main",
@@ -97,7 +102,7 @@ describe("GitService.compareWorktrees renames (real git)", () => {
     );
     expect(typeof diff).toBe("string");
     const changed = (diff as string).split("\n").filter((line) => /^[+-](?![+-]{2} )/.test(line));
-    expect(changed).toEqual(["+line 101"]);
+    expect(changed).toEqual(["-line 50", "+line fifty"]);
     expect(diff).toContain("rename from src/old.ts");
   });
 

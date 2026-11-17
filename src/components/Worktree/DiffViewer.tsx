@@ -1057,6 +1057,7 @@ interface FileDiffProps {
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
+const NOTHING_TO_COLLAPSE = { collapse: false, reason: null } as const;
 const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
 const FILE_NOTE_ANCHOR: DiffNoteAnchor = { kind: "file" };
@@ -1108,7 +1109,12 @@ function FileDiff({
   // and must not shift when the user expands context.
   const isLargeDiff = fileBytes > DIFF_SOFT_COLLAPSE_BYTES;
 
-  const collapseDecision = useMemo(() => shouldCollapseByDefault(file), [file]);
+  // A pure rename or mode change has no hunks, so nothing to fold away or scroll.
+  const hasHunks = (file.hunks?.length ?? 0) > 0;
+  const collapseDecision = useMemo(
+    () => (hasHunks ? shouldCollapseByDefault(file) : NOTHING_TO_COLLAPSE),
+    [file, hasHunks]
+  );
   const [isCollapsed, setIsCollapsed] = useState(collapseDecision.collapse);
 
   useEffect(() => {
@@ -2128,6 +2134,7 @@ function FileDiff({
         </button>
       )}
       {!isCollapsed &&
+        hasHunks &&
         (isCenteredSplit ? (
           <div
             id={diffRegionId}

@@ -64,13 +64,28 @@ interface MockOrigin {
 
 const originAttr = (origin?: MockOrigin) => (origin ? `${origin.kind} ${origin.path}` : undefined);
 
+// The header controls ride in the viewer's file header, so the stand-in draws
+// them beside (not inside) the diff text the assertions read.
 vi.mock("../DiffViewer", () => ({
   DiffFilePath: ({ path, origin }: { path: string; origin?: MockOrigin }) => (
-    <span data-origin={originAttr(origin)}>{path}</span>
+    <span data-testid="stand-in-path" data-origin={originAttr(origin)}>
+      {path}
+    </span>
   ),
-  DiffViewer: ({ diff, origin }: { diff: string; origin?: MockOrigin }) => (
-    <div data-testid="diff-viewer" data-origin={originAttr(origin)}>
-      {diff}
+  DiffViewer: ({
+    diff,
+    origin,
+    headerActions,
+  }: {
+    diff: string;
+    origin?: MockOrigin;
+    headerActions?: ReactNode;
+  }) => (
+    <div>
+      {headerActions}
+      <div data-testid="diff-viewer" data-origin={originAttr(origin)}>
+        {diff}
+      </div>
     </div>
   ),
 }));
@@ -317,15 +332,42 @@ describe("CrossWorktreeDiff with a renamed file", () => {
     deletions: 0,
   };
 
-  it("asks for the patch and its context by both paths and names the source", async () => {
+  it.each([
+    ["R", "renamed"],
+    ["C", "copied"],
+  ])(
+    "opens a %s row by both paths for the patch and its context and names the source",
+    async (status, kind) => {
+      files = [{ ...RENAMED, status }];
+      render(tree());
+      fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+
+      const viewer = await screen.findByTestId("diff-viewer");
+      const reads = mockCompareWorktrees.mock.calls.filter((c) => c[3] === "src/new.ts");
+      expect(new Set(reads.map((c) => c[6] !== undefined))).toEqual(new Set([false, true]));
+      expect(reads.every((c) => c[7] === "src/old.ts")).toBe(true);
+      expect(viewer.dataset.origin).toBe(`${kind} src/old.ts`);
+    }
+  );
+
+  it("keeps the patch on screen while a refresh rereads a rename with the same source", async () => {
     files = [RENAMED];
     const view = render(tree());
     await openFile(view, "src/new.ts");
 
-    const reads = mockCompareWorktrees.mock.calls.filter((c) => c[3] === "src/new.ts");
-    expect(new Set(reads.map((c) => c[6] !== undefined))).toEqual(new Set([false, true]));
-    expect(reads.every((c) => c[7] === "src/old.ts")).toBe(true);
-    expect(screen.getByTestId("diff-viewer").dataset.origin).toBe("renamed src/old.ts");
+    const diff = deferred<string>();
+    mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
+      filePath === undefined ? Promise.resolve(listResponse()) : diff.promise
+    );
+    setWorktrees({}, { worktreeChanges: { headOid: "iii" } });
+    view.rerender(tree());
+
+    await waitFor(() => expect(diffCalls("src/new.ts").length).toBe(3));
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
+    expect(diffCalls("src/new.ts").at(-1)?.[7]).toBe("src/old.ts");
+
+    await act(async () => diff.resolve("diff v2"));
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v2");
   });
 
   it("reloads in the foreground when a refresh pairs the open file with another source", async () => {
@@ -343,10 +385,36 @@ describe("CrossWorktreeDiff with a renamed file", () => {
 
     await waitFor(() => expect(screen.queryByTestId("diff-viewer")).toBeNull());
     expect(diffCalls("src/new.ts").at(-1)?.[7]).toBe("lib/other.ts");
+    expect(screen.getByTestId("stand-in-path").dataset.origin).toBe("renamed lib/other.ts");
 
     await act(async () => diff.resolve("diff v2"));
     const viewer = await screen.findByTestId("diff-viewer");
     expect(viewer.textContent).toBe("diff v2");
     expect(viewer.dataset.origin).toBe("renamed lib/other.ts");
+  });
+
+  it("keeps focus on the header control a changed source reloads out from under it", async () => {
+    files = [RENAMED];
+    const view = render(tree());
+    await openFile(view, "src/new.ts");
+    const LABEL = "Ignore whitespace changes";
+    const focusedLabel = () => document.activeElement?.getAttribute("aria-label");
+
+    const diff = deferred<string>();
+    mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
+      filePath === undefined ? Promise.resolve(listResponse()) : diff.promise
+    );
+    screen.getByLabelText(LABEL).focus();
+    expect(focusedLabel()).toBe(LABEL);
+    files = [{ ...RENAMED, oldPath: "lib/other.ts" }];
+    setWorktrees({}, { worktreeChanges: { headOid: "jjj" } });
+    view.rerender(tree());
+
+    await waitFor(() => expect(screen.queryByTestId("diff-viewer")).toBeNull());
+    expect(focusedLabel()).toBe(LABEL);
+
+    await act(async () => diff.resolve("diff v2"));
+    await screen.findByTestId("diff-viewer");
+    expect(focusedLabel()).toBe(LABEL);
   });
 });
