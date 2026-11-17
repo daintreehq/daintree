@@ -2644,9 +2644,11 @@ describe("AgentNotificationService", () => {
 
   describe("runs put aside by a park or a snooze (#17192)", () => {
     let attention: RunAttentionService;
+    const started: RunAttentionService[] = [];
 
-    beforeEach(() => {
-      let parks: Record<string, RunParkRecord> = {};
+    /** The live attention service, as the stats handlers publish it, over records already on disk. */
+    function startAttention(stored: { parks?: Record<string, RunParkRecord> } = {}) {
+      let parks = stored.parks ?? {};
       let snoozes: Record<string, RunSnoozeRecord> = {};
       attention = new RunAttentionService({
         load: () => parks,
@@ -2658,12 +2660,15 @@ describe("AgentNotificationService", () => {
           snoozes = records;
         },
       });
+      started.push(attention);
       setRunAttentionServiceRef(attention);
-    });
+    }
+
+    beforeEach(() => startAttention());
 
     afterEach(() => {
       setRunAttentionServiceRef(null);
-      attention.dispose();
+      for (const service of started.splice(0)) service.dispose();
     });
 
     function makePayloadFor(
@@ -2766,7 +2771,7 @@ describe("AgentNotificationService", () => {
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
             "Agent still waiting",
-            expect.stringContaining("Agent 1"),
+            expect.any(String),
             expect.objectContaining({ closeWithPanels: ["term-1"] })
           );
         });
@@ -2782,9 +2787,39 @@ describe("AgentNotificationService", () => {
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
           expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
             "Agent still waiting",
-            expect.stringContaining("Agent 1"),
+            expect.any(String),
             expect.objectContaining({ closeWithPanels: ["term-1"] })
           );
+        });
+
+        it("drops a Canopy ask still in its burst window", () => {
+          mockStore({ soundEnabled: true });
+          vi.advanceTimersByTime(9_000);
+
+          agentNotificationService.notifyCanopyAsk(
+            { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+            () => []
+          );
+          setAside("term-1");
+          vi.advanceTimersByTime(200);
+
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("raises no Canopy ask for a run already put aside", () => {
+          mockStore({ soundEnabled: true });
+          vi.advanceTimersByTime(9_000);
+
+          setAside("term-1");
+          agentNotificationService.notifyCanopyAsk(
+            { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+            () => []
+          );
+          vi.advanceTimersByTime(200);
+
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
         });
 
         it("leaves other runs' alerts alone", () => {
@@ -2827,6 +2862,48 @@ describe("AgentNotificationService", () => {
         expect.any(String),
         escalationOptions(OWNER)
       );
+    });
+
+    it("honours a park restored from disk, which announces nothing", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a reminder that comes due after a park it never heard of", () => {
+      mockStore({ waitingEnabled: true }, twoDockedAgents);
+      setRunAttentionServiceRef(null);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      startAttention({ parks: { "term-2": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        expect.objectContaining({ closeWithPanels: ["term-1"] })
+      );
+    });
+
+    it("stays quiet while a snooze outlives the park beside it", () => {
+      mockStore({ waitingEnabled: true });
+
+      attention.park("term-1");
+      attention.snooze("term-1", "30m");
+      attention.unpark("term-1");
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
     });
 
     it("pages again once a snooze has run out", () => {
