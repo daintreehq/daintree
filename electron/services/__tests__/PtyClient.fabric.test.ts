@@ -1074,15 +1074,18 @@ describe("PtyClient fabric", () => {
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       client.spawn("t3", { cwd: "/tmp", cols: 80, rows: 24 });
+      client.spawn("t4", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
       // Exited but kept on the shard: its own exit already cleared it.
       shardA.child.emit("message", { type: "exit", id: "t0", exitCode: 0, preserved: true });
+      // Killed, with the exit the crash swallows still to come.
+      client.kill("t4");
 
       shardA.child.emit("exit", 1);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(seen).toEqual([{ held: [], cleared: ["t1", "t2"] }]);
+      expect(seen).toEqual([{ held: [], cleared: ["t1", "t2", "t4"] }]);
       client.dispose();
     });
   });

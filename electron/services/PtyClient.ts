@@ -1067,13 +1067,15 @@ export class PtyClient extends EventEmitter {
    * after its hold ends, and the host that exited can't say it any more: its
    * replacement starts with nothing held. Clear every live terminal it owned,
    * on its own route, so no pane keeps a duration from the dead host (#17575).
-   * One already exited (a preserved entry) had its duration cleared on exit,
-   * and has no project left to route to.
+   * That includes one whose kill was still waiting for an exit the dead host
+   * will never send; one already exited (a preserved entry) had its duration
+   * cleared on exit.
    */
   private clearPauseDurationsOfShard(shard: PtyShard): void {
     const owned: string[] = [];
     for (const [id, owner] of this.terminalOwners) {
-      if (owner === shard.key && this.pendingSpawns.has(id)) owned.push(id);
+      if (owner !== shard.key) continue;
+      if (this.pendingSpawns.has(id) || this.pendingKillCount.has(id)) owned.push(id);
     }
     if (owned.length === 0) return;
     this.handleShardEvent(shard, {
