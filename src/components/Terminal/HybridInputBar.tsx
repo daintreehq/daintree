@@ -2856,7 +2856,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
-        {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
+        {isRemote && (
+          <PendingUploadChips
+            surface={uploadSurface}
+            className="mb-1.5"
+            onReturnFocus={focusEditor}
+          />
+        )}
         <HeldBackAttachmentsBanner
           surface={uploadSurface}
           disabled={disabled}

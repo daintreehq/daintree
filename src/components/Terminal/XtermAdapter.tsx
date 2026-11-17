@@ -1105,6 +1105,7 @@ export function XtermAdapter({
           <PendingUploadChips
             surface={terminalUploadSurface(terminalId)}
             className="pointer-events-auto absolute bottom-2 left-3 right-3 z-20"
+            onReturnFocus={() => peekTerminalService()?.focus(terminalId)}
           />
           <LazyUploadConfirmHost />
         </>
