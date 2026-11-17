@@ -8,6 +8,7 @@ import { BUILTIN_JIRA_PROVIDER_ID } from "../../../../../shared/utils/forgeProvi
 import type { PluginHostApi } from "../../../../../shared/types/plugin.js";
 
 const getProjectByPath = vi.fn();
+let fetchMock: ReturnType<typeof vi.fn>;
 const getSettingValuesForUi = vi.fn();
 
 vi.mock("../../../../../electron/services/ProjectStore.js", () => ({
@@ -29,10 +30,20 @@ vi.mock("../../../../../electron/services/PluginService.js", () => ({
 
 import { activate } from "../index.js";
 import { jiraForgeProvider } from "../forgeProvider.js";
-import { getToken } from "../JiraClient.js";
+import { digestToken, getToken, tokenMayGoTo } from "../JiraAuth.js";
+import { setJiraTransport } from "../JiraClient.js";
 
-function makeHost(settings: Record<string, unknown> = {}) {
+function makeHost(settings: Record<string, unknown> = {}, storage: Record<string, unknown> = {}) {
   const register = vi.fn(async () => () => undefined);
+  const storageApi = {
+    get: vi.fn(async (key: string) => storage[key]),
+    set: vi.fn(async (key: string, value: unknown) => {
+      storage[key] = value;
+    }),
+    delete: vi.fn(async (key: string) => {
+      delete storage[key];
+    }),
+  };
   const listeners = new Map<string, () => void>();
   const disposed: string[] = [];
   const onDidChange = vi.fn(async (key: string, callback: () => void) => {
@@ -46,19 +57,21 @@ function makeHost(settings: Record<string, unknown> = {}) {
   const host = {
     registerForgeProvider: register,
     settings: { get, onDidChange },
+    storage: storageApi,
   } as unknown as PluginHostApi;
-  return { host, register, listeners, disposed, get };
+  return { host, register, listeners, disposed, get, storage, storageApi };
 }
 
 beforeEach(() => {
   getProjectByPath.mockReset();
   getSettingValuesForUi.mockReset();
   updateForgeSettingsForAllProjects.mockClear();
-  vi.stubGlobal("fetch", vi.fn());
+  fetchMock = vi.fn();
+  setJiraTransport(fetchMock);
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  setJiraTransport(null);
 });
 
 describe("manifest", () => {
@@ -124,14 +137,14 @@ describe("activate", () => {
   it("reads the connection through the host's settings", async () => {
     const { host } = makeHost({ siteUrl: "acme.atlassian.net", email: "ada@example.com" });
     const dispose = await activate(host);
-    vi.mocked(fetch).mockResolvedValue(
+    fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ accountId: "abc", displayName: "Ada" }), { status: 200 })
     );
     await expect(jiraForgeProvider.validateToken("candidate")).resolves.toEqual({
       valid: true,
       account: "Ada",
     });
-    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("https://acme.atlassian.net/rest/api/3/myself");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://acme.atlassian.net/rest/api/3/myself");
     dispose();
   });
 
@@ -158,7 +171,7 @@ describe("activate", () => {
   });
 
   it("lets go of the token, readers and subscriptions on disposal", async () => {
-    const { host, disposed, get } = makeHost({
+    const { host, disposed, get, storageApi } = makeHost({
       siteUrl: "https://acme.atlassian.net",
       email: "ada@example.com",
     });
@@ -176,12 +189,74 @@ describe("activate", () => {
 
     expect(getToken()).toBeNull();
     expect(disposed.sort()).toEqual(["projectKey", "siteUrl"]);
+    // Disabling isn't clearing: re-enabling must still know where the token goes.
+    expect(storageApi.delete).not.toHaveBeenCalled();
     await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toBeNull();
     await expect(jiraForgeProvider.validateToken("candidate")).resolves.toMatchObject({
       valid: false,
     });
     expect(get).not.toHaveBeenCalled();
     expect(getProjectByPath).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("where the stored token may go", () => {
+  const BASE = "https://example.com/jira";
+  // What the host's replay does as part of registration.
+  const replaying = (host: PluginHostApi, token: string) =>
+    vi.mocked(host.registerForgeProvider).mockImplementation(async (_id, impl) => {
+      impl.setCredentials?.({ kind: "bearer", value: token });
+      return () => undefined;
+    });
+
+  it("loads the record before the host replays the token", async () => {
+    const { host } = makeHost(
+      { siteUrl: BASE },
+      { credentialProvenance: { binding: BASE, tokenDigest: digestToken("pat") } }
+    );
+    replaying(host, "pat");
+    const dispose = await activate(host);
+    expect(tokenMayGoTo(BASE)).toBe(true);
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
+    dispose();
+  });
+
+  it.each([
+    ["unreadable", () => Promise.reject(new Error("EACCES"))],
+    ["malformed", async () => ({ binding: 42 })],
+  ])("sends a token whose record is %s nowhere", async (_name, read) => {
+    const { host, storageApi } = makeHost({ siteUrl: BASE });
+    storageApi.get.mockImplementation(read);
+    replaying(host, "pat");
+    const dispose = await activate(host);
+    expect(getToken()).toBe("pat");
+    expect(tokenMayGoTo(BASE)).toBe(false);
+    expect(tokenMayGoTo("https://acme.atlassian.net")).toBe(false);
+    dispose();
+  });
+
+  it("records a saved token where it was proven, and forgets it on a clear", async () => {
+    const { host, storage } = makeHost({ siteUrl: BASE });
+    const dispose = await activate(host);
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).endsWith("/serverInfo")
+        ? new Response(JSON.stringify({ deploymentType: "DataCenter", versionNumbers: [9, 12] }))
+        : new Response(JSON.stringify({ name: "ada", displayName: "Ada" }))
+    );
+    await expect(jiraForgeProvider.validateToken("pat")).resolves.toMatchObject({ valid: true });
+    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "pat" });
+
+    await vi.waitFor(() =>
+      expect(storage.credentialProvenance).toEqual({
+        binding: BASE,
+        tokenDigest: digestToken("pat"),
+      })
+    );
+    expect(JSON.stringify(storage)).not.toContain('"pat"');
+
+    jiraForgeProvider.setCredentials?.(null);
+    await vi.waitFor(() => expect(storage.credentialProvenance).toBeUndefined());
+    dispose();
   });
 });

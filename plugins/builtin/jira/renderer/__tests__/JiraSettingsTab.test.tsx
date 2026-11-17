@@ -402,4 +402,94 @@ describe("JiraSettingsTab", () => {
       { source: "user" }
     );
   });
+
+  describe("Server or Data Center", () => {
+    function chooseDataCenter() {
+      fireEvent.click(screen.getByRole("radio", { name: "Server or Data Center" }));
+    }
+
+    it("connects with a base URL and a personal access token, with no email", async () => {
+      stored.email = "ada@example.com";
+      await renderLoaded("No credentials saved");
+      chooseDataCenter();
+      expect(screen.queryByLabelText("Jira account email")).toBeNull();
+      expect(screen.queryByRole("button", { name: /Create token on Atlassian/ })).toBeNull();
+
+      fill({ site: "https://example.com:8443/jira/browse/ENG-1", token: " pat " });
+      expect(saveButton().disabled).toBe(false);
+      fireEvent.click(saveButton());
+
+      await screen.findByText(/Signed in as Ada Lovelace/);
+      // The email belongs to Cloud and stays as it was.
+      expect(stored).toEqual({
+        siteUrl: "https://example.com:8443/jira",
+        email: "ada@example.com",
+      });
+      expect(order).toEqual(["setting:siteUrl", "credential"]);
+      expect(setCredential).toHaveBeenCalledWith(PROVIDER_ID, { [PRIMARY_FIELD]: "pat" });
+      expect(field("Jira site URL").value).toBe("https://example.com:8443/jira");
+    });
+
+    it("opens on the deployment of the saved site", async () => {
+      stored.siteUrl = "https://example.com/jira";
+      tokenStored = true;
+      await renderLoaded("Credentials saved");
+      const radio = screen.getByRole("radio", { name: "Server or Data Center" });
+      expect(radio.getAttribute("aria-checked")).toBe("true");
+      expect(screen.queryByLabelText("Jira account email")).toBeNull();
+    });
+
+    it("keeps a deployment chosen during a slow load", async () => {
+      stored.siteUrl = "https://acme.atlassian.net";
+      let finish!: () => void;
+      getSettingValues.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ values: { ...stored } });
+          })
+      );
+      render(<JiraSettingsTab />);
+      chooseDataCenter();
+      await act(async () => finish());
+      await screen.findByText("No credentials saved");
+      expect(
+        screen.getByRole("radio", { name: "Server or Data Center" }).getAttribute("aria-checked")
+      ).toBe("true");
+    });
+
+    it.each([
+      ["a Cloud address", "acme.atlassian.net", /That's a Jira Cloud address/],
+      ["a plain-HTTP address", "http://jira.example.com", /Use your Jira address over HTTPS/],
+    ])("refuses %s without writing or sending anything", async (_name, site, message) => {
+      await renderLoaded("No credentials saved");
+      chooseDataCenter();
+      fill({ site, token: "pat" });
+      fireEvent.click(saveButton());
+      await screen.findByText(message);
+      expect(setSettingValue).not.toHaveBeenCalled();
+      expect(setCredential).not.toHaveBeenCalled();
+    });
+
+    it("points a Data Center address typed under Cloud at the other choice", async () => {
+      await renderLoaded("No credentials saved");
+      fill({ site: "https://jira.example.com", email: "ada@example.com", token: "t" });
+      fireEvent.click(saveButton());
+      await screen.findByText(/choose Server or Data Center/);
+      expect(setSettingValue).not.toHaveBeenCalled();
+    });
+
+    it("puts the previous site back when Jira refuses the token", async () => {
+      stored.siteUrl = "https://acme.atlassian.net";
+      stored.email = "ada@example.com";
+      tokenStored = true;
+      setCredential.mockResolvedValueOnce({ valid: false, error: "Jira rejected the API token" });
+      await renderLoaded("Credentials saved");
+      chooseDataCenter();
+      fill({ site: "https://jira.example.com", token: "bad" });
+      fireEvent.click(saveButton());
+
+      expect((await screen.findAllByText("Jira rejected the API token")).length).toBeGreaterThan(0);
+      expect(stored).toEqual({ siteUrl: "https://acme.atlassian.net", email: "ada@example.com" });
+    });
+  });
 });

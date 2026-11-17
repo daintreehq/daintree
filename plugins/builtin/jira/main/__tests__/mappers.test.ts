@@ -4,8 +4,11 @@ import {
   issueNumberOf,
   mapComment,
   mapIssue,
+  mapUser,
   normalizeIssueState,
+  stableIssueId,
   suggestBranchName,
+  userIdOf,
 } from "../mappers.js";
 
 const SITE = "https://acme.atlassian.net";
@@ -156,5 +159,41 @@ describe("mapComment", () => {
       createdAt: 0,
       rawData: { id: "10001" },
     });
+  });
+});
+
+describe("Server and Data Center users and ids", () => {
+  const DC_USER = { name: "ada", key: "JIRAUSER10100", displayName: "Ada Lovelace" };
+
+  it("identifies a user by account id on Cloud and by username otherwise", () => {
+    expect(userIdOf({ accountId: "abc", displayName: "Ada" })).toBe("abc");
+    expect(userIdOf(DC_USER)).toBe("ada");
+    expect(userIdOf({ displayName: "Nobody" })).toBeNull();
+    expect(userIdOf(null)).toBeNull();
+  });
+
+  it("maps a user with no account id, keeping the username", () => {
+    expect(mapUser(DC_USER)).toEqual({
+      login: "Ada Lovelace",
+      rawData: { accountId: null, name: "ada" },
+    });
+    expect(mapUser({ name: "ada" }).login).toBe("ada");
+  });
+
+  it("keeps a Cloud id as it was, and an instance's port and path in its own", () => {
+    expect(stableIssueId(SITE, "10042")).toBe("acme.atlassian.net/10042");
+    expect(stableIssueId("https://example.com:8443/Jira", "10042")).toBe(
+      "example.com:8443/Jira/10042"
+    );
+  });
+
+  it("links an issue under the instance's context path", () => {
+    const issue = mapIssue(
+      { id: "10042", key: "ENG-12", fields: { summary: "Fix", description: "h1. Wiki" } },
+      "https://example.com/jira"
+    );
+    expect(issue.url).toBe("https://example.com/jira/browse/ENG-12");
+    expect(issue.id).toBe("example.com/jira/10042");
+    expect(issue.body).toBe("h1. Wiki");
   });
 });
