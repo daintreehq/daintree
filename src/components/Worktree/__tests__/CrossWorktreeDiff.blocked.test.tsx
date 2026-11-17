@@ -159,25 +159,29 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expectNothingStale();
   });
 
-  it("clears the comparison when a side detaches but still carries its last branch name", async () => {
-    const view = await openComparison();
+  it.each([
+    ["compare", "Choose a compare worktree on a branch", "wt-right"],
+    ["base", "Choose a base worktree on a branch", "wt-left"],
+  ])(
+    "clears the comparison when the %s side detaches but still carries its last branch name",
+    async (_side, title, detachedId) => {
+      const view = await openComparison();
+      const calls = mockCompareWorktrees.mock.calls.length;
 
-    setWorktrees(LEFT(), { ...snapshot("wt-right", "feature"), isDetached: true });
-    view.rerender(tree());
+      const retained = (wt: Snapshot) => (wt.id === detachedId ? { ...wt, isDetached: true } : wt);
+      setWorktrees(retained(LEFT()), retained(RIGHT()));
+      view.rerender(tree());
 
-    expect(await screen.findByText("Choose a compare worktree on a branch")).toBeTruthy();
-    expect(screen.getByText(/wt-right has a detached HEAD/)).toBeTruthy();
-    expectNothingStale();
-    const calls = mockCompareWorktrees.mock.calls.length;
-    view.rerender(tree());
-    expect(mockCompareWorktrees.mock.calls.length).toBe(calls);
-
-    setWorktrees({ ...snapshot("wt-left", "main", true), isDetached: true }, RIGHT());
-    view.rerender(tree());
-    expect(await screen.findByText("Choose a base worktree on a branch")).toBeTruthy();
-    expect(screen.getByText(/wt-left has a detached HEAD/)).toBeTruthy();
-    expectNothingStale();
-  });
+      expect(await screen.findByText(title)).toBeTruthy();
+      expect(screen.getByText(new RegExp(`${detachedId} has a detached HEAD`))).toBeTruthy();
+      expectNothingStale();
+      const option = screen.getAllByRole("option", { name: `${detachedId} (detached)` });
+      expect(option.length).toBeGreaterThan(0);
+      for (const o of option) expect((o as HTMLOptionElement).disabled).toBe(true);
+      view.rerender(tree());
+      expect(mockCompareWorktrees.mock.calls.length).toBe(calls);
+    }
+  );
 
   it("says why when the base leaves the list before a compare side is chosen", () => {
     const view = render(tree());

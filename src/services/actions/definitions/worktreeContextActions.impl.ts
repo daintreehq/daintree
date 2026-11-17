@@ -27,6 +27,7 @@ import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
+import { comparableBranch } from "@/components/Worktree/crossWorktreeDiffUtils";
 import { findReviewHubMarkTarget } from "@/components/Worktree/ReviewHub/reviewHubMarkTargets";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
@@ -800,17 +801,19 @@ export const worktreeContextActionRuns: {
     if (!right) {
       throw new Error(`Worktree not found: ${rightId}`);
     }
-    if (!left.branch) {
+    const leftBranch = comparableBranch(left);
+    const rightBranch = comparableBranch(right);
+    if (!leftBranch) {
       throw new Error(`Worktree '${leftId}' has no branch (detached HEAD); cannot compare.`);
     }
-    if (!right.branch) {
+    if (!rightBranch) {
       throw new Error(`Worktree '${rightId}' has no branch (detached HEAD); cannot compare.`);
     }
 
     const res = await window.electron.git.compareWorktrees(
       left.path,
-      left.branch,
-      right.branch,
+      leftBranch,
+      rightBranch,
       undefined,
       args.useMergeBase,
       args.ignoreWhitespace
