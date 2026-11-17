@@ -361,7 +361,7 @@ export class AwsClient {
    */
   async describeInstances(
     ctx: AwsRequestContext,
-    query: { instanceIds?: string[]; filters?: Ec2Filter[] }
+    query: { instanceIds?: string[]; filters?: Ec2Filter[]; firstPageOnly?: boolean }
   ): Promise<Ec2Instance[]> {
     const ids = query.instanceIds ?? [];
     for (const id of ids) {
@@ -386,7 +386,7 @@ export class AwsClient {
         }
       }
       token = xmlText(root, "nextToken");
-      if (!token) return out;
+      if (!token || query.firstPageOnly) return out;
     }
     throw new AwsApiError(
       "bad-response",

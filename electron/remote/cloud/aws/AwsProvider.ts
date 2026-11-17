@@ -369,7 +369,19 @@ export class AwsProvider implements CloudProvider {
         ? optional(() => this.resolveImage(ctx, DEFAULT_EC2_IMAGE, "x86_64"))
         : null,
       verdicts.get("DescribeInstances") === "allowed"
-        ? optional(async () => (await this.client.describeInstances(ctx, { filters: [] }))[0] ?? null)
+        ? optional(
+            async () =>
+              // A Daintree machine is what the start, stop and terminate verdicts are about.
+              (
+                await this.client.describeInstances(ctx, {
+                  filters: [
+                    { name: "tag-key", values: [DAINTREE_TAG] },
+                    { name: "instance-state-name", values: LIVE_STATES },
+                  ],
+                  firstPageOnly: true,
+                })
+              )[0] ?? null
+          )
         : null,
     ]);
     const groupId =
