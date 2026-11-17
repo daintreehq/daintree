@@ -384,6 +384,55 @@ describe("installPortForwardClient", () => {
     expect(service.list()[0]?.remotePort).toBe(5173);
   });
 
+  it("keeps another project's preview whose record has lapsed when a view stops it", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "alpha" },
+      11: { hostId: HOST, projectId: "beta" },
+    };
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-beta-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 11,
+      hostProjectId: "beta",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel", projectId: "beta", cwd: "/x", devCommand: "npm run dev" }],
+    });
+    await (hooks.resolver!("dp-beta-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    // Enough newer registrations push beta's record out of the bounded registry.
+    for (let i = 0; i < 512; i++) {
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId: 9,
+        hostProjectId: "alpha",
+        channel: "dev-preview:ensure",
+        args: [{ panelId: `p${i}`, projectId: "alpha", cwd: "/x", devCommand: "npm run dev" }],
+      });
+    }
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "alpha",
+      channel: "dev-preview:stop",
+      args: [{ panelId: "panel", projectId: "beta" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.list()).toHaveLength(1);
+  });
+
   it("lets a worktree's previews go when its servers are stopped, and ignores another host's stop", async () => {
     const OTHER = "studio-02";
     cleanups.push(

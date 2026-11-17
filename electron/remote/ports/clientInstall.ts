@@ -186,11 +186,14 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
     }
     return true;
   };
-  /** Whether a call from `project` speaks for the origin: no other host or project has it. */
-  const ownsPreview = (subdomain: string, project: ViewProject): boolean => {
+  const isPreviewOwner = (subdomain: string, project: ViewProject): boolean | null => {
     const owner = registeredPreviews.get(subdomain) ?? previewOwners.get(subdomain);
-    return !owner || (owner.hostId === project.hostId && owner.projectId === project.projectId);
+    if (!owner) return null;
+    return owner.hostId === project.hostId && owner.projectId === project.projectId;
   };
+  /** Whether a call from `project` speaks for the origin: no other host or project has it. */
+  const ownsPreview = (subdomain: string, project: ViewProject): boolean =>
+    isPreviewOwner(subdomain, project) !== false;
   const showsProject = (webContentsId: number, owner: ViewProject): boolean => {
     const project = projectForView(webContentsId);
     return project?.hostId === owner.hostId && project.projectId === owner.projectId;
@@ -415,7 +418,14 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
               : hostProjectId;
           const stopped: ViewProject = { hostId, projectId: stoppedProjectId };
           const stoppedSubdomain = buildDevPreviewSubdomain(stoppedProjectId, panelId);
-          if (ownsPreview(stoppedSubdomain, stopped)) forwards.releasePreview(stoppedSubdomain);
+          // A view speaks for its own project's previews; another project's goes
+          // only while it is still recorded as that project's, since an origin
+          // with no record may be another host's.
+          const releasable =
+            stoppedProjectId === hostProjectId
+              ? ownsPreview(stoppedSubdomain, stopped)
+              : isPreviewOwner(stoppedSubdomain, stopped) === true;
+          if (releasable) forwards.releasePreview(stoppedSubdomain);
           return;
         }
       }
