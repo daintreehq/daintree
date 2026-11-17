@@ -3,11 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { choiceFromCron } from "../cadenceChoice";
 import { CadencePicker } from "../CadencePicker";
-import { formatNextRunRelative, formatRunColumn } from "../runTime";
+import { formatRunColumn } from "../runTime";
 
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 11, 31, 12);
-const RUNS = [NOW + 9 * HOUR, NOW + 33 * HOUR, NOW + 57 * HOUR];
+// 6:00, 7:30 and 8:15 AM on successive days in Tokyo, so no row can pass for another.
+const RUNS = [NOW + 9 * HOUR, NOW + 34.5 * HOUR, NOW + 59.25 * HOUR];
 const ZONE = "Asia/Tokyo";
 
 function stubMachineZone(timeZone: string) {
@@ -49,11 +50,9 @@ function shownRows(): string[][] {
   );
 }
 
-function expectedRows(now: number): string[][] {
+function expectedRows(now: number, soonest: string): string[][] {
   return formatRunColumn(RUNS, ZONE, now).rows.map((row, index) =>
-    index === 0
-      ? [row.day, row.time, formatNextRunRelative(row.at, now, ZONE)]
-      : [row.day, row.time]
+    index === 0 ? [row.day, row.time, soonest] : [row.day, row.time]
   );
 }
 
@@ -66,7 +65,7 @@ describe("CadencePicker preview", () => {
   it("lists each run's day and time in order, with how soon only on the first", () => {
     stubMachineZone(ZONE);
     render(picker(NOW));
-    expect(shownRows()).toEqual(expectedRows(NOW));
+    expect(shownRows()).toEqual(expectedRows(NOW, "in 9 hours"));
     expect(preview().textContent).toContain(`Times in ${ZONE}`);
     expect(preview().textContent).not.toContain("where this schedule was made");
   });
@@ -77,9 +76,9 @@ describe("CadencePicker preview", () => {
     const before = shownRows();
 
     move("America/New_York");
-    rerender(picker(NOW + 60_000));
+    rerender(picker(NOW + 2 * HOUR));
     expect(preview().textContent).toContain(`Times in ${ZONE}, where this schedule was made`);
-    expect(shownRows()).toEqual(expectedRows(NOW + 60_000));
+    expect(shownRows()).toEqual(expectedRows(NOW + 2 * HOUR, "in 7 hours"));
     expect(shownRows()[0]?.[1]).not.toBe(before[0]?.[1]);
   });
 });

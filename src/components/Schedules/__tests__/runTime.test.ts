@@ -67,10 +67,14 @@ function stubMachineZone(timeZone: string) {
   };
 }
 
-// A module with empty caches, so the count starts from nothing built.
-async function columnConstructions(runs: readonly number[], timeZone: string) {
+// A module with empty caches, so the count starts from nothing built, after
+// filling the cache with other zones' formatters.
+async function columnConstructions(runs: readonly number[], timeZone: string, crowd = 0) {
   vi.resetModules();
   const cold = await import("../runTime");
+  for (const zone of Intl.supportedValuesOf("timeZone").slice(0, crowd)) {
+    cold.localDayNumber(NOW, zone);
+  }
   const spy = vi.spyOn(Intl, "DateTimeFormat");
   cold.formatRunColumn(runs, timeZone, NOW);
   const first = spy.mock.calls.length;
@@ -142,6 +146,14 @@ describe("formatRunColumn", () => {
     expect(long.first).toBeLessThanOrEqual(6);
     // Only the machine's zone is read again.
     expect(long.again).toBeLessThanOrEqual(1);
+  });
+
+  it("builds each formatter once even when the cache fills up partway through a column", async () => {
+    const runs = Array.from({ length: 30 }, (_, index) => NOW + index * 4 * HOUR);
+    const { first } = await columnConstructions(runs, "Asia/Tokyo");
+    for (let crowd = 1; crowd <= 40; crowd++) {
+      expect((await columnConstructions(runs, "Asia/Tokyo", crowd)).first).toBe(first);
+    }
   });
 });
 
