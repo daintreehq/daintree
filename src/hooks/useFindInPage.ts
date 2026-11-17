@@ -164,11 +164,11 @@ export function useFindInPage(
 
   // A step is only meaningful inside an open session; the kept query would
   // otherwise let a guest's Cmd+G step a search the bar no longer shows. It
-  // also steps only a session asked for exactly what the bar shows; otherwise
-  // (nothing asked yet, or a search for older text still in flight) it asks
-  // afresh. Chromium answers a step landing during a short query's delayed
-  // search with that search's own request id, so stepping there would credit
-  // the older text's count to this query.
+  // also steps only a session asked for exactly what the bar shows, and asks
+  // afresh otherwise: a step with no session open is never answered, and
+  // Chromium answers a step that lands during a short query's delayed search
+  // with that search's own request id, which would credit its text's count to
+  // this query.
   const step = useCallback(
     (forward: boolean) => {
       if (!isOpen || !query) return;
@@ -180,7 +180,7 @@ export function useFindInPage(
         return;
       }
       forgetAnswer();
-      safeFind(query, { findNext: true });
+      safeFind(query, { forward, findNext: true });
     },
     [isOpen, query, matchCase, webviewElement, forgetAnswer, safeFind]
   );
@@ -252,7 +252,10 @@ export function useFindInPage(
   // the bar reopens: close ended the page's find session, and the kept query would
   // otherwise read "No matches". Typing and toggling matchCase already search, so
   // only a target change or a reopen acts here. Declared after the found-in-page
-  // listener so a reopen's results find it attached.
+  // listener so a reopen's results find it attached. Close, a pane switch and a
+  // readiness drop all forget the last request, so one already made of this
+  // ready page was typed between this commit and this effect: it asked for newer
+  // text than this render's query, and asking again would overtake it.
   const resumeTargetRef = useRef({ webviewElement, isWebviewReady, isOpen });
   useEffect(() => {
     const prev = resumeTargetRef.current;
@@ -261,6 +264,7 @@ export function useFindInPage(
     const reopened = isOpen && !prev.isOpen;
     resumeTargetRef.current = { webviewElement, isWebviewReady, isOpen };
     if (!isOpen || (!targetChanged && !reopened)) return;
+    if (isWebviewReady && latestRequestRef.current?.webview === webviewElement) return;
     forgetAnswer();
     if (query && !isComposingRef.current) safeFind(query, { findNext: true });
   }, [webviewElement, isWebviewReady, isOpen, query, forgetAnswer, safeFind]);
