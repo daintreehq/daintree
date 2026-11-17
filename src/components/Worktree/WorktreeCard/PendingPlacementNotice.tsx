@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -39,11 +39,11 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
   const hostName = found.host.descriptor.name;
   const failure = found.placement.failure ?? null;
 
-  const handleSetUp = (event: React.MouseEvent) => {
+  const handleSetUp = (event: MouseEvent) => {
     event.stopPropagation();
     retryPlacementSetup(hostId);
   };
-  const handleCancel = (event: React.MouseEvent) => {
+  const handleCancel = (event: MouseEvent) => {
     event.stopPropagation();
     setCancelError(null);
     cancelPlacement(hostId).catch((err: unknown) =>
@@ -68,7 +68,7 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
           <span className="break-words text-text-secondary select-text">
             {failure
               ? failure.message
-              : "It waits for Daintree to be installed and Host mode turned on there."}
+              : "It opens there once Daintree is set up and connected."}
           </span>
           {cancelError && <span className="text-text-primary">{cancelError}</span>}
           <div className="flex flex-wrap items-center gap-2">
