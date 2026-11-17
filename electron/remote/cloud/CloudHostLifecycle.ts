@@ -872,6 +872,8 @@ export class CloudHostLifecycle {
       async (signal) => {
         await this.settleRenewal(binding.id);
         await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+        // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
         await this.runStop(binding.id, signal);
       },
       () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))

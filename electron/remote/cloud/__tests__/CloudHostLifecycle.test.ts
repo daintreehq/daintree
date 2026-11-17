@@ -1162,6 +1162,47 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     expect(provider.start).not.toHaveBeenCalled();
   });
 
+  it("holds the machine for a Stop while it lets go of the link, and shares it with a second Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const first = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    expect(lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    const second = lifecycle.stopMachine("build");
+    expect(provider.stop).not.toHaveBeenCalled();
+    release();
+    await Promise.all([first, second]);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+  });
+
+  it("lets a Delete cancel a Stop still letting go of the link, before the provider hears of it", async () => {
+    const { lifecycle, provider, disconnect, hosts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
   it("leaves the intent and the link alone when a delete under way refuses a Stop", async () => {
     const { lifecycle, provider, store, disconnect } = await keeper(
       { connected: true, busy: true, shown: false },
