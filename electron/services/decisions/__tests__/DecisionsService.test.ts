@@ -734,6 +734,12 @@ describe("DecisionsService question list (#17229)", () => {
 
     service.updateSettings(on(HOST));
     await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
+
+    // The same, through a start of the lifetime already running.
+    await service.start(on({ hostId: null }));
+    await vi.waitFor(() => expect(lists.at(-1)).toEqual([]));
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(lists.at(-1)).toHaveLength(1));
     await service.stop();
   });
 

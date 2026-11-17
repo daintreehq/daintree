@@ -171,22 +171,18 @@ function settledAt(
   return reply !== null && Date.parse(reply) > Date.parse(newest.at) ? reply : newest.at;
 }
 
-/** When the person first followed up after the agent's latest request for a reply; null without one. */
+/**
+ * When the person replied to the agent's latest request for a reply: the
+ * message right after it, when that is theirs. One of the agent's after the
+ * request supersedes it, as `threadAwaitsHuman` reads the thread; null then,
+ * and without a request.
+ */
 function replyAt(row: QuestionRow): string | null {
-  const messages = parseMessages(row.messages_json);
-  let asked: number | null = null;
-  for (const message of messages) {
-    if (message.side === "agent" && message.expects_reply) {
-      asked = Math.max(asked ?? 0, message.event_seq);
-    }
-  }
-  if (asked === null) return null;
-  let reply: { seq: number; at: string } | null = null;
-  for (const message of messages) {
-    if (message.side !== "human" || message.event_seq <= asked) continue;
-    if (reply === null || message.event_seq < reply.seq) {
-      reply = { seq: message.event_seq, at: message.created_at };
-    }
-  }
-  return reply?.at ?? null;
+  const messages = [...parseMessages(row.messages_json)].sort((a, b) => a.event_seq - b.event_seq);
+  let asked = -1;
+  messages.forEach((message, index) => {
+    if (message.side === "agent" && message.expects_reply) asked = index;
+  });
+  const next = asked === -1 ? undefined : messages[asked + 1];
+  return next?.side === "human" ? next.created_at : null;
 }

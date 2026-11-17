@@ -507,7 +507,15 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
-import type { DecisionQuestionImagePartResult } from "../../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionQuestionImagePartResult,
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "../../../../shared/types/decisionsQuestion.js";
+import {
+  getDecisionQuestionList,
+  onDecisionQuestionsChanged,
+} from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
 
 const RELAY = {
@@ -623,6 +631,50 @@ describe("Decisions entry", () => {
     await stopDecisions();
 
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("lets the question list only empty once quit begins, and pushes no list to windows (#17229)", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    // The publisher the entry handed the service, as its feed calls it.
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[]
+    ) => void;
+    const item = (questionId: string): DecisionQuestionListItem => ({
+      reference: { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    const heard: DecisionQuestionList[] = [];
+    const off = onDecisionQuestionsChanged((list) => heard.push(list));
+    try {
+      statusView.send.mockClear();
+      publish([item("q_quit_000001")]);
+      expect(getDecisionQuestionList().questions).toEqual([item("q_quit_000001")]);
+      expect(listPushes()).toHaveLength(1);
+
+      await stopDecisions();
+      publish([item("q_quit_000001"), item("q_quit_000002")]);
+
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(heard.map((list) => list.questions.length)).toEqual([1, 0]);
+      expect(listPushes()).toHaveLength(1);
+    } finally {
+      off();
+    }
   });
 
   it("makes no service at boot while the setting is off", async () => {

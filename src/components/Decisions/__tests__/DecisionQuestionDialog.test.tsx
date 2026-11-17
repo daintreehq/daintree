@@ -158,6 +158,8 @@ function pushList(revision: number, kinds: { qa: Kind; qz: Kind }) {
     listener({
       revision,
       questions: [
+        // The same question id on another machine is another question.
+        item({ ...OTHER_PROJECT, hostId: "host_2" }, 8, kinds.qz),
         item(OTHER_PROJECT, 7, kinds.qa),
         item({ ...OTHER_PROJECT, questionId: "qz" }, 9, kinds.qz),
       ],
@@ -588,6 +590,26 @@ describe("DecisionQuestionDialog", () => {
       act(() => useDecisionsQuestionViewStore.getState().close());
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-cancel");
+      await act(async () => {});
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(cancelQuestion).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("never brings a confirmation back after the view stepped away and back", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    try {
+      openView(["qw", "qa"], "qw");
+      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      await screen.findByRole("alertdialog");
+
+      act(() => useDecisionsQuestionViewStore.getState().step(1));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      act(() => useDecisionsQuestionViewStore.getState().step(-1));
       await screen.findByTestId("decision-question-cancel");
       await act(async () => {});
 

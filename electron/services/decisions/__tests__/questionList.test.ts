@@ -436,6 +436,72 @@ describe("standingOf", () => {
     expect(item?.settledAt).toBe("2026-11-01T10:08:00.000Z");
   });
 
+  it("settles at a correction that came after the reply, and at nothing an agent's later message superseded", () => {
+    const request = {
+      message_id: "message-1",
+      side: "agent" as const,
+      expects_reply: true,
+      event_seq: 7,
+      created_at: "2026-11-01T10:07:00.000Z",
+      delivery: null,
+    };
+    const reply = {
+      message_id: "message-2",
+      event_seq: 8,
+      created_at: "2026-11-01T10:08:00.000Z",
+      delivery: { status: "terminal-delivered" as const },
+    };
+    const [corrected, superseded] = projectDecisionQuestions(
+      [
+        row(1, {
+          ...delivered,
+          answers_json: answers(
+            { delivered: true, revision: 1, event_seq: 5, created_at: "2026-11-01T10:05:00.000Z" },
+            {
+              entry_id: "entry-2",
+              delivered: true,
+              revision: 2,
+              correction: true,
+              event_seq: 9,
+              created_at: "2026-11-01T10:09:00.000Z",
+            }
+          ),
+          messages_json: messages(request, reply),
+        }),
+        row(2, {
+          ...delivered,
+          answers_json: answers({
+            delivered: true,
+            event_seq: 5,
+            created_at: "2026-11-01T10:05:00.000Z",
+          }),
+          messages_json: messages(
+            request,
+            {
+              message_id: "message-3",
+              side: "agent",
+              expects_reply: false,
+              event_seq: 8,
+              created_at: "2026-11-01T10:08:00.000Z",
+              delivery: null,
+            },
+            {
+              ...reply,
+              message_id: "message-4",
+              event_seq: 9,
+              created_at: "2026-11-01T10:09:00.000Z",
+            }
+          ),
+        }),
+      ],
+      new Map(),
+      HOST
+    );
+    expect(corrected?.settledAt).toBe("2026-11-01T10:09:00.000Z");
+    expect(superseded?.standing).toMatchObject({ kind: "settled", outcome: "answered" });
+    expect(superseded?.settledAt).toBe("2026-11-01T10:05:00.000Z");
+  });
+
   it("settles a closed question even when its delivery status is left from before", () => {
     expect(
       standing(row(1, { local_status: "cancelled", delivery_status: "desktop-received" }))
