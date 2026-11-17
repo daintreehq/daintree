@@ -311,7 +311,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `presentation?`, `reuseExisting?`, `size?`, `toggle?`, `worktreeId?` |
 | `panel.palette` | Panel palette | safe | — |
 | `panel.toggleDiagnostics` | Toggle diagnostics | safe | — |
-| `panel.togglePortal` | Toggle portal | safe | — |
 
 ## plugins
 
@@ -320,41 +319,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `plugin.diagnostics` | Read plugin diagnostics | safe | `pluginId`, `logLimit?` |
 | `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?`, `page?`, `scope?`, `section?` |
 | `plugin.validate` | Validate plugin manifest | safe | `path` |
-
-## portal
-
-| Action | Title | Danger | Arguments |
-| --- | --- | --- | --- |
-| `portal.activateTab` | Activate portal tab | safe | `tabId` |
-| `portal.closeAllTabs` | Close all portal tabs | safe | `confirmed?` |
-| `portal.closeOthers` | Close other portal tabs | safe | `confirmed?`, `tabId?` |
-| `portal.closeTab` | Close portal tab | safe | `tabId?` |
-| `portal.closeToRight` | Close tabs to the right | safe | `confirmed?`, `tabId?` |
-| `portal.copyTabUrl` | Copy portal tab URL | safe | `tabId?` |
-| `portal.copyUrl` | Copy portal URL | safe | `tabId?` |
-| `portal.duplicateTab` | Duplicate portal tab | safe | `tabId?` |
-| `portal.goBack` | Portal back | safe | `tabId?` |
-| `portal.goForward` | Portal forward | safe | `tabId?` |
-| `portal.links.add` | Add portal link | safe | `title`, `url`, `alwaysEnabled?`, `icon?` |
-| `portal.links.remove` | Remove portal link | confirm | `id` |
-| `portal.links.reorder` | Reorder portal links | safe | `fromIndex`, `toIndex` |
-| `portal.links.toggle` | Toggle portal link | safe | `id` |
-| `portal.links.update` | Update portal link | safe | `id`, `updates` |
-| `portal.listTabs` | List portal tabs | safe | — |
-| `portal.newTab` | New portal tab | safe | — |
-| `portal.nextTab` | Next portal tab | safe | — |
-| `portal.openExternal` | Open portal URL externally | safe | `tabId?` |
-| `portal.openLaunchpad` | Open portal launchpad | safe | — |
-| `portal.openTabExternal` | Open portal tab externally | safe | `tabId?` |
-| `portal.openUrl` | Open URL in portal | safe | `url`, `background?`, `title?` |
-| `portal.prevTab` | Previous portal tab | safe | — |
-| `portal.reload` | Reload portal | safe | `tabId?` |
-| `portal.reloadTab` | Reload portal tab | safe | `tabId?` |
-| `portal.resetWidth` | Reset portal width | safe | — |
-| `portal.setDefaultNewTab` | Set default new tab | safe | `url` |
-| `portal.tabs.reorder` | Reorder portal tabs | safe | `fromIndex`, `toIndex` |
-| `portal.toggle` | Toggle portal | safe | — |
-| `portal.width.set` | Set portal width | safe | `width` |
 
 ## preferences
 
