@@ -84,6 +84,26 @@ describe("ProjectNotificationsTab", () => {
       expect(projectLabels).toContain(label);
       expect(globalLabels).toContain(label);
     }
+    // One level for this device: a project can't override it.
+    expect(globalLabels).toContain("Volume");
+    expect(projectLabels).not.toContain("Volume");
+  });
+
+  it("names an inherited imported sound by its label, and offers this device's imports", async () => {
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    getSettings.mockResolvedValue({ ...GLOBAL, waitingSoundFile: id });
+    Reflect.set(window, "electron", {
+      notification: { getSettings, setSettings: vi.fn(), playSound: vi.fn() },
+      notificationSounds: {
+        list: vi.fn().mockResolvedValue([{ id, label: "Door bell", available: true }]),
+      },
+    });
+    render(<ProjectNotificationsTab overrides={{}} onChange={vi.fn()} />);
+
+    expect(await screen.findByText(/Using global default · Door bell/)).toBeTruthy();
+    const picker = screen.getByRole("combobox", { name: "Waiting sound" });
+    expect(picker.textContent).toContain("Door bell");
+    expect(picker.parentElement?.querySelector('input[type="file"]')).toBeTruthy();
   });
 
   it("resetting a row clears only that row's override", async () => {

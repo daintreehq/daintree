@@ -115,6 +115,7 @@ describe("WebAudioService", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).electron = {
       sound: { getSoundDir: vi.fn().mockResolvedValue("/app/resources/sounds") },
+      notificationSounds: { getCustomDir: vi.fn().mockResolvedValue("/user/sounds/custom") },
     };
 
     const service = await import("@/services/WebAudioService");
@@ -145,6 +146,36 @@ describe("WebAudioService", () => {
     expect(sources[0]!.connect).toHaveBeenCalled();
     expect(sources[0]!.gainNode).toBeTruthy();
     expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("fetches an imported sound from the custom directory by its uuid", async () => {
+    const { service, mockFetch, mockSuccessfulFetch, mockStart } = await setupTest();
+    mockSuccessfulFetch();
+    const uuid = "0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+
+    await service.playSound(`custom:${uuid}`);
+
+    const url = new URL(mockFetch.mock.calls[0]![0] as string);
+    expect(url.searchParams.get("path")).toBe(`/user/sounds/custom/${uuid}.wav`);
+    expect(url.searchParams.get("root")).toBe("/user/sounds/custom");
+    expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps only the most recently played imports decoded", async () => {
+    const { service, mockFetch, mockSuccessfulFetch } = await setupTest();
+    const ids = Array.from(
+      { length: 9 },
+      (_, i) => `custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e${String(i).padStart(2, "0")}`
+    );
+    for (let i = 0; i < 11; i++) mockSuccessfulFetch();
+
+    for (const id of ids) await service.playSound(id);
+    await service.playSound(ids[8]!);
+    await service.playSound(ids[1]!);
+    expect(mockFetch).toHaveBeenCalledTimes(9);
+
+    await service.playSound(ids[0]!);
+    expect(mockFetch).toHaveBeenCalledTimes(10);
   });
 
   it("caches decoded buffers on second play", async () => {
