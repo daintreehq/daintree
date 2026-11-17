@@ -173,7 +173,7 @@ async function setup(
   const listeners = new Set<() => void>();
   const disconnect = vi.fn(async () => {});
   const run = vi.fn(async (cmd: string, args: string[]) => {
-    if (cmd.endsWith("ssh-keyscan")) {
+    if (path.basename(cmd).startsWith("ssh-keyscan")) {
       const types = args[args.indexOf("-t") + 1]!;
       const stdout = scan.byTypes[types] ?? scan.output;
       return { code: 0, stdout, stderr: "", spawnError: null, timedOut: false };
@@ -406,7 +406,8 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
   }
 
   const keyscans = (run: { mock: { calls: unknown[][] } }) =>
-    run.mock.calls.filter((call) => String(call[0]).endsWith("ssh-keyscan")).length;
+    run.mock.calls.filter((call) => path.basename(String(call[0])).startsWith("ssh-keyscan"))
+      .length;
 
   async function pinnedKey(route: { configPath: string }): Promise<string> {
     return fs.readFile(path.join(path.dirname(route.configPath), "known_hosts"), "utf8");

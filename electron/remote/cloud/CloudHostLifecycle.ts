@@ -1265,18 +1265,19 @@ export class CloudHostLifecycle {
     if (!confirmsHostKeys(this.deps.accounts.provider(binding.providerId))) return;
     // A resolution already under way may have chosen the old access before the
     // refusal; joining it would skip the look. It settles first.
-    for (let waits = 0; waits < 3; waits++) {
-      const pending = this.accessInFlight.get(bindingId);
-      if (!pending) break;
+    const cancelled = () => new TransportError("Cancelled", null);
+    let pending: Promise<CloudSshRoute> | undefined;
+    while ((pending = this.accessInFlight.get(bindingId))) {
+      const settling = pending;
       // This dial may give up while it waits; the shared resolution carries on.
       await new Promise<void>((resolve, reject) => {
-        const onAbort = () => reject(new TransportError("Cancelled", null));
+        const onAbort = () => reject(cancelled());
         if (signal?.aborted) {
           onAbort();
           return;
         }
         signal?.addEventListener("abort", onAbort, { once: true });
-        void pending
+        void settling
           .catch(() => {})
           .then(() => {
             signal?.removeEventListener("abort", onAbort);
@@ -1284,6 +1285,7 @@ export class CloudHostLifecycle {
           });
       });
     }
+    if (signal?.aborted) throw cancelled();
     // No await from here into ensureAccess: the resolution it starts reads the cleared access.
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));
     await this.ensureAccess(bindingId, signal);
