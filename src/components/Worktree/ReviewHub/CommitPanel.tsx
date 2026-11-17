@@ -11,7 +11,11 @@ import {
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitPushCommitPreview, GitPushDestination } from "@shared/types/git";
+import type {
+  GitPushCommitPreview,
+  GitPushDestination,
+  GitStagedSnapshot,
+} from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -155,6 +159,8 @@ interface CommitPanelProps {
   /**
    * The staged paths themselves. The push confirm is a D2 preview, and a count
    * alone is not one: it lists what the commit about to be pushed contains.
+   * Shown only until the confirm's own snapshot of the index lands, which is
+   * what it lists and holds the commit to from then on (#17563).
    */
   stagedPaths?: readonly string[];
   /**
@@ -287,9 +293,16 @@ export function CommitPanel({
   // for every other push preview. The push can't be approved until it lands
   // (#15557): on a branch with no tracking ref the read waits on the network,
   // and a click inside that window published commits the confirm never listed.
+  // The same read snapshots what is staged on that tip (#17563): the files the
+  // confirm lists, and the identity the commit is held to, so a restage while
+  // it is open can't be committed and pushed under an unchanged file list.
   const [outgoing, setOutgoing] = useState<
-    | { key: string; status: "ready"; preview: GitPushCommitPreview }
-    | { key: string; status: "error"; changedTo?: GitPushDestination }
+    | {
+        key: string;
+        status: "ready";
+        preview: GitPushCommitPreview & { staged: GitStagedSnapshot };
+      }
+    | { key: string; status: "error"; changedTo?: GitPushDestination; stagedUnread?: true }
     | null
   >(null);
   // Bumped by every opening and every Retry, so no answer outlives the request
@@ -316,7 +329,9 @@ export function CommitPanel({
     // Inside the chain so a failure to even start the read lands in `catch`.
     Promise.resolve()
       .then(() =>
-        window.electron.git.listPushCommits(worktreePath, currentBranch, PREVIEW_COMMIT_LIMIT)
+        window.electron.git.listPushCommits(worktreePath, currentBranch, PREVIEW_COMMIT_LIMIT, {
+          includeStaged: true,
+        })
       )
       .then((preview) => {
         if (cancelled) return;
@@ -330,7 +345,14 @@ export function CommitPanel({
           reportDestinationChanged();
           return;
         }
-        setOutgoing({ key: outgoingKey, status: "ready", preview });
+        // A host that predates the snapshot answers without one. With nothing
+        // to hold the commit to, the confirm can't stand for what it commits.
+        const { staged } = preview;
+        if (!staged) {
+          setOutgoing({ key: outgoingKey, status: "error", stagedUnread: true });
+          return;
+        }
+        setOutgoing({ key: outgoingKey, status: "ready", preview: { ...preview, staged } });
       })
       .catch(() => {
         if (!cancelled) setOutgoing({ key: outgoingKey, status: "error" });
@@ -350,6 +372,7 @@ export function CommitPanel({
     outgoingRange?.commits.map((c) => ({ hash: c.hash, message: c.message, author: c.author })) ??
     [];
   const canConfirmPush = outgoingRange !== null;
+  const confirmPaths = outgoingRange?.staged.paths ?? stagedPaths;
   const retryOutgoing = useCallback(() => setOutgoingAttempt((n) => n + 1), []);
 
   // Doherty-gated: a range read that lands within 400ms shows no interim line.
@@ -545,12 +568,12 @@ export function CommitPanel({
         setPushConfirmOpen(true);
         return;
       }
-      // Nothing was previewed, so there is no tip to hold the commit to; the
-      // push is still pinned to the commit itself.
+      // Nothing was previewed, so there is no tip or staged snapshot to hold
+      // the commit to; the push is still pinned to the commit itself.
       void handleCommitAndPush(commitMessage, {
         branch: currentBranch,
         destination: pushDestination,
-        reviewedHeadOid: null,
+        reviewed: null,
       });
     } else {
       void handleCommit();
@@ -581,12 +604,13 @@ export function CommitPanel({
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     // What the dialog previewed is what gets pushed, even if a history recall
-    // landed in the composer behind it while it was open: its message, and the
-    // tip and destination its outgoing list was measured from.
+    // landed in the composer behind it while it was open: its message, the tip
+    // and destination its outgoing list was measured from, and the staged
+    // changes it listed.
     void handleCommitAndPush(pushConfirmMessage, {
       branch: currentBranch,
       destination: outgoingRange.destination,
-      reviewedHeadOid: outgoingRange.headOid,
+      reviewed: { headOid: outgoingRange.headOid, stagedIdentity: outgoingRange.staged.identity },
     });
   }, [
     currentBranch,
@@ -1051,10 +1075,10 @@ export function CommitPanel({
           >
             {pushConfirmMessage}
           </pre>
-          {stagedPaths.length > 0 && (
+          {confirmPaths.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="text-xs text-text-secondary">
-                {pluralize(stagedPaths.length, "file")} in this commit
+                {pluralize(confirmPaths.length, "file")} in this commit
               </p>
               {/* Focusable because it scrolls and holds nothing else that can
                   take focus (WCAG 2.1.1). */}
@@ -1068,7 +1092,7 @@ export function CommitPanel({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                {stagedPaths.map((path) => (
+                {confirmPaths.map((path) => (
                   <PushConfirmPath key={path} path={path} />
                 ))}
               </ul>
@@ -1133,7 +1157,9 @@ export function CommitPanel({
               action={retryOutgoingButton}
               data-testid="commit-panel-push-confirm-unpushed-error"
             >
-              {outgoingResult.changedTo ? (
+              {outgoingResult.stagedUnread ? (
+                <p>Couldn&apos;t read the staged changes this commit would contain.</p>
+              ) : outgoingResult.changedTo ? (
                 <p>
                   Git now resolves this push to{" "}
                   <span className="font-mono text-text-primary">

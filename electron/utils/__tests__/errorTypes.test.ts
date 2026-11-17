@@ -166,6 +166,7 @@ describe("getRetryability", () => {
       "conflict-unresolved",
       "push-rejected-outdated",
       "push-rejected-policy",
+      "commit-review-stale",
       "pull-rebase-review-stale",
       "repo-operation-changed",
       "pathspec-invalid",

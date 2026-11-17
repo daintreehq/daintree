@@ -975,7 +975,21 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "git:commit": {
-    args: [payload: { cwd: string; message: string }];
+    args: [
+      payload: {
+        cwd: string;
+        message: string;
+        /**
+         * What a Commit & push confirm reviewed (#17563): all three or none.
+         * With them the commit refuses (`commit-review-stale`) unless the
+         * worktree is still on that branch, at that commit, with exactly those
+         * changes staged, and the result reports `stagedIdentity`.
+         */
+        expectedBranch?: string;
+        expectedHeadOid?: string;
+        expectedStagedIdentity?: string;
+      },
+    ];
     result: GitCommitResult;
   };
   "git:push": {

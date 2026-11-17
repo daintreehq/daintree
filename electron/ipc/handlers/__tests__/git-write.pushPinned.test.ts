@@ -13,8 +13,14 @@ const ipcMainMock = vi.hoisted(() => ({
 /** Runs once, synchronously, as the handler calls `push` — after every check. */
 const pushHook = vi.hoisted(() => ({ before: null as (() => void) | null }));
 
-/** Runs once, synchronously, the moment `git commit` returns — before anything reads it back. */
-const commitHook = vi.hoisted(() => ({ after: null as (() => void) | null }));
+/**
+ * Each runs once, synchronously: `before` just ahead of `git commit` (after every
+ * check), `after` the moment it returns, before anything reads it back.
+ */
+const commitHook = vi.hoisted(() => ({
+  before: null as (() => void) | null,
+  after: null as (() => void) | null,
+}));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -55,6 +61,9 @@ vi.mock("../../../utils/hardenedGit.js", async (importOriginal) => ({
 function withCommitHook<T extends { commit: (...args: never[]) => unknown }>(client: T): T {
   const commit = client.commit.bind(client) as (...args: never[]) => Promise<unknown>;
   client.commit = (async (...args: never[]) => {
+    const before = commitHook.before;
+    commitHook.before = null;
+    before?.();
     const result = await commit(...args);
     const hook = commitHook.after;
     commitHook.after = null;
@@ -166,14 +175,20 @@ interface PushPreview {
   destination: { remote: string; branch: string };
   headOid: string;
   commits: Array<{ hash: string }>;
+  staged?: { identity: string; paths: string[] };
 }
 
 /** What the confirm reads to show the approver, through the real handler. */
-async function preview(cwd: string, branchName: string): Promise<PushPreview> {
+async function preview(
+  cwd: string,
+  branchName: string,
+  options: { includeStaged?: boolean } = {}
+): Promise<PushPreview> {
   return (await getHandler("git:list-push-commits")(FAKE_EVENT, {
     cwd,
     branchName,
     limit: 20,
+    ...options,
   })) as PushPreview;
 }
 
@@ -216,6 +231,7 @@ afterAll(() => {
 
 beforeEach(() => {
   pushHook.before = null;
+  commitHook.before = null;
   commitHook.after = null;
   ipcMainMock.handle.mockClear();
   _resetRateLimitQueuesForTest();
@@ -710,5 +726,167 @@ describe("first commit, then its reviewed push (#17588)", () => {
 
     expect(error).toMatch(/\[GitError\|push-rejected-outdated\|/);
     expect(remoteTip(bare, "refs/heads/main")).toBe(existing);
+  });
+});
+
+describe("commit & push — held to the staged changes its confirm listed (#17563)", () => {
+  interface ReviewedCommit {
+    oid: string | null;
+    parentOids: string[];
+    stagedIdentity?: string | null;
+  }
+
+  function stageText(repo: string, file: string, text: string): void {
+    fs.writeFileSync(path.join(repo, file), text);
+    git(repo, ["add", file]);
+  }
+
+  /** The confirm's read: the push range plus what is staged on the same tip. */
+  async function reviewCommit(repo: string, branch: string) {
+    const shown = await preview(repo, branch, { includeStaged: true });
+    if (!shown.staged) throw new Error("preview carried no staged snapshot");
+    return { shown, staged: shown.staged };
+  }
+
+  function commitAsReviewed(
+    repo: string,
+    branch: string,
+    shown: PushPreview,
+    message = "user change"
+  ): Promise<ReviewedCommit> {
+    return getHandler("git:commit")(FAKE_EVENT, {
+      cwd: repo,
+      message,
+      expectedBranch: branch,
+      expectedHeadOid: shown.headOid,
+      expectedStagedIdentity: shown.staged?.identity,
+    }) as Promise<ReviewedCommit>;
+  }
+
+  function expectCommitStale(error: string | null): void {
+    expect(error).toMatch(/\[GitError\|commit-review-stale\|/);
+    expect(error).toMatch(/Nothing was committed or pushed/);
+  }
+
+  it("refuses a content-only restage under the same branch, tip and file list, and commits nothing", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    expect(staged.paths).toEqual(["user.txt"]);
+
+    // An agent restages the listed file while the confirm is open.
+    stageText(fixture.repo, "user.txt", "different text\n");
+    const now = await reviewCommit(fixture.repo, "topic");
+    expect(now.shown.headOid).toBe(shown.headOid);
+    expect(now.staged.paths).toEqual(staged.paths);
+    expect(now.staged.identity).not.toBe(staged.identity);
+
+    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error).toMatch(/the staged changes are different/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(fixture.reviewed);
+    expect(git(fixture.repo, ["show", ":user.txt"])).toBe("different text");
+    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
+  });
+
+  it("commits what was listed and reports the same identity back", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    // A mode-only change and an intent-to-add file: neither may make the
+    // index's identity and the commit's disagree.
+    git(fixture.repo, ["update-index", "--chmod=+x", "topic.txt"]);
+    fs.writeFileSync(path.join(fixture.repo, "later.txt"), "not staged");
+    git(fixture.repo, ["add", "-N", "later.txt"]);
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    expect(staged.paths).toEqual(["topic.txt", "user.txt"]);
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(committed.stagedIdentity).toBe(staged.identity);
+    expect(git(fixture.repo, ["show", `${committed.oid}:user.txt`])).toBe("reviewed text");
+  });
+
+  it("reports what the commit holds when the index changes after the final check", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    commitHook.before = () => stageText(fixture.repo, "user.txt", "different text\n");
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(git(fixture.repo, ["show", `${committed.oid}:user.txt`])).toBe("different text");
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(committed.stagedIdentity).toEqual(expect.any(String));
+    expect(committed.stagedIdentity).not.toBe(staged.identity);
+  });
+
+  it("refuses when the branch gained a commit while the confirm was open", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown } = await reviewCommit(fixture.repo, "topic");
+    // An agent commits something else, leaving the user's file staged.
+    fs.writeFileSync(path.join(fixture.repo, "agent.txt"), "agent");
+    git(fixture.repo, ["add", "agent.txt"]);
+    git(fixture.repo, ["commit", "-q", "-m", "agent", "--", "agent.txt"]);
+    const agentTip = git(fixture.repo, ["rev-parse", "HEAD"]);
+
+    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error).toMatch(/'topic' moved to a different commit/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(agentTip);
+  });
+
+  it("refuses a switch to another branch at the same commit with the same changes staged", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown } = await reviewCommit(fixture.repo, "topic");
+    git(fixture.repo, ["checkout", "-q", "-b", "twin"]);
+
+    const error = await rejection(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error).toMatch(/switched from 'topic' to 'twin'/);
+    expect(git(fixture.repo, ["rev-parse", "twin"])).toBe(fixture.reviewed);
+  });
+
+  it.each([
+    ["the staged identity", { expectedStagedIdentity: undefined }],
+    ["the branch", { expectedBranch: undefined }],
+    ["a well-formed staged identity", { expectedStagedIdentity: "not-an-identity" }],
+  ])("refuses a review without %s, and commits nothing", async (_label, override) => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+
+    const error = await rejection(
+      getHandler("git:commit")(FAKE_EVENT, {
+        cwd: fixture.repo,
+        message: "user change",
+        expectedBranch: "topic",
+        expectedHeadOid: shown.headOid,
+        expectedStagedIdentity: staged.identity,
+        ...override,
+      })
+    );
+
+    expect(error).toMatch(/Invalid commit review/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(fixture.reviewed);
+  });
+
+  it("reads nothing staged unless asked, and reports no identity for an unreviewed commit", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+
+    const shown = await preview(fixture.repo, "topic");
+    const committed = (await getHandler("git:commit")(FAKE_EVENT, {
+      cwd: fixture.repo,
+      message: "plain commit",
+    })) as ReviewedCommit;
+
+    expect(shown.staged).toBeUndefined();
+    expect("stagedIdentity" in committed).toBe(false);
   });
 });

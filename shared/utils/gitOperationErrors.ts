@@ -294,6 +294,8 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "This remote is set up as a mirror (remote.<name>.mirror), which pushes every ref at once. Daintree only pushes the branch it showed, so push from a terminal, or turn mirroring off for this remote.",
   "push-review-stale":
     "The branch, its commits or its push destination changed after the push was reviewed, so nothing was pushed. Review the push again to see what it would publish now.",
+  "commit-review-stale":
+    "The staged changes, the branch or its tip changed after the commit was reviewed, so nothing was committed or pushed. Commit and push again to review what is staged now.",
   "pull-rebase-review-stale":
     "The worktree switched branches or gained commits after the pull and rebase was previewed, so nothing was rebased. Pull and rebase again to see what it would replay now.",
   "repo-operation-changed":

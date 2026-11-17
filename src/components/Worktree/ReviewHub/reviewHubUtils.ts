@@ -11,37 +11,66 @@ import { pluralize } from "@/lib/pluralize";
 export type DiffMode = "working-tree" | "base-branch" | "since-review";
 
 /**
- * Where Commit & push publishes, and the branch tip its confirm put on screen.
- * `reviewedHeadOid` is `null` only when the confirm was opted out and nothing
- * was previewed.
+ * Where Commit & push publishes, and what its confirm put on screen: the branch
+ * tip the commit goes on top of and the staged changes it is made from.
+ * `reviewed` is `null` only when the confirm was opted out and nothing was
+ * previewed.
  */
 export interface CommitPushTarget {
   branch: string;
   destination: GitPushDestination;
-  reviewedHeadOid: string | null;
+  reviewed: { headOid: string; stagedIdentity: string } | null;
 }
 
+/** The push to run after Commit & push's commit, or why none may run. */
+export type CommittedPush = { review: GitPushReview } | { withheld: string };
+
 /**
- * The push review for the commit Commit & push just made, or `null` when the
- * push must not run (#16790).
+ * The push review for the commit Commit & push just made, or why the push must
+ * not run (#16790, #17563).
  *
  * Pinned to that commit, so neither the push nor a Retry after it can publish
  * a commit an agent lands later: main refuses with `push-review-stale` once the
  * branch has moved past it. A confirmed push also requires the commit to sit
- * directly on the tip the confirm previewed. An agent commit landing while the
- * confirm was open would otherwise ride along beneath it, and a merge commit
- * would bring in history the preview never listed.
+ * directly on the tip the confirm previewed, and to hold exactly the staged
+ * changes it listed. An agent commit landing while the confirm was open would
+ * otherwise ride along beneath it, a merge commit would bring in history the
+ * preview never listed, and a restage after the commit's own check would be
+ * published under the name of a file the confirm showed.
  */
 export function reviewForCommittedPush(
   committed: GitCommitResult,
   target: CommitPushTarget
-): GitPushReview | null {
-  if (!committed.oid) return null;
-  if (target.reviewedHeadOid !== null) {
-    const [parent, ...rest] = committed.parentOids;
-    if (rest.length > 0 || parent !== target.reviewedHeadOid.toLowerCase()) return null;
+): CommittedPush {
+  if (!committed.oid) {
+    return { withheld: "The commit was made, but couldn't be read back to pin the push to it." };
   }
-  return { branch: target.branch, headOid: committed.oid, destination: target.destination };
+  if (target.reviewed !== null) {
+    const [parent, ...rest] = committed.parentOids;
+    if (rest.length > 0 || parent !== target.reviewed.headOid.toLowerCase()) {
+      return {
+        withheld:
+          "The branch moved while the push was being reviewed, so the commit sits on history the review didn't show.",
+      };
+    }
+    // Absent from a host that predates the check, `null` when unreadable:
+    // either way nothing shows the commit holds what was reviewed.
+    if (typeof committed.stagedIdentity !== "string") {
+      return {
+        withheld:
+          "The commit was made, but what it contains couldn't be checked against the review.",
+      };
+    }
+    if (committed.stagedIdentity !== target.reviewed.stagedIdentity) {
+      return {
+        withheld:
+          "The staged changes changed while the push was being reviewed, so the commit holds changes the review didn't show.",
+      };
+    }
+  }
+  return {
+    review: { branch: target.branch, headOid: committed.oid, destination: target.destination },
+  };
 }
 
 export interface PushErrorState {
@@ -158,6 +187,15 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     // A push error also blocks readiness, which hides the clean-tree Push
     // button, so without this the banner asks for a review nothing offers.
     cta: { kind: "review-push", label: "Review push" },
+  },
+  // Raised by the commit, before anything reaches the push, so it surfaces as
+  // the composer's commit error rather than this banner. Listed for the map's
+  // exhaustiveness; no CTA, since the composer's own button is the fresh review.
+  "commit-review-stale": {
+    message:
+      getGitRecoveryHint("commit-review-stale") ??
+      "The staged changes changed since the commit was reviewed. Nothing was committed or pushed.",
+    detailPolicy: "hide",
   },
   "pull-rebase-review-stale": {
     message:

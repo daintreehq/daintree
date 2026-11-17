@@ -104,7 +104,7 @@ describe("CommitPanel shortcut handler", () => {
     expect(props.onCommitAndPush).toHaveBeenCalledWith("fix: bug", {
       branch: "feature/x",
       destination: { remote: "origin", branch: "feature/x" },
-      reviewedHeadOid: null,
+      reviewed: null,
     });
   });
 

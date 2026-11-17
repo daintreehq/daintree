@@ -115,6 +115,7 @@ interface RenderProps {
   skipPushConfirm?: boolean;
   onCommitAndPush?: (message: string, target: CommitPushTarget) => Promise<void>;
   onSetSkipPushConfirm?: (value: boolean) => void;
+  stagedPaths?: readonly string[];
 }
 
 function renderPanel(overrides: RenderProps = {}) {
@@ -124,9 +125,10 @@ function renderPanel(overrides: RenderProps = {}) {
   // missing-branch path — `??` would coalesce null to the default.
   const currentBranch =
     "currentBranch" in overrides ? (overrides.currentBranch ?? null) : "feature/x";
-  const panel = (commitMessage: string) => (
+  const panel = (commitMessage: string, stagedPaths = overrides.stagedPaths) => (
     <CommitPanel
       stagedCount={1}
+      stagedPaths={stagedPaths}
       isDetachedHead={false}
       hasConflicts={false}
       hasRemote={overrides.hasRemote ?? true}
@@ -156,6 +158,9 @@ function renderPanel(overrides: RenderProps = {}) {
     onCommitAndPush,
     onSetSkipPushConfirm,
     setCommitMessage: (message: string) => rerender(panel(message)),
+    /** A staging-status refresh behind the open dialog. */
+    setStagedPaths: (paths: readonly string[]) =>
+      rerender(panel(overrides.commitMessage ?? "fix: bug", paths)),
   };
 }
 
@@ -167,20 +172,25 @@ function pushPreview(overrides: Partial<GitPushCommitPreview> = {}): GitPushComm
     total: 0,
     behind: 0,
     headOid: "0".repeat(40),
+    staged: { identity: STAGED_IDENTITY, paths: ["src/staged.ts"] },
     ...overrides,
   };
 }
 
+/** What the confirm's read found staged on the tip, unless a test says otherwise. */
+const STAGED_IDENTITY = "e".repeat(64);
+
 /**
- * What a confirmed push is pinned to (#16790): the branch, and the destination
- * and tip its preview measured.
+ * What a confirmed push is pinned to (#16790, #17563): the branch, and the
+ * destination, tip and staged changes its preview measured.
  */
 function previewed(
   branch: string,
   destination: { remote: string; branch: string } = { remote: "origin", branch },
-  reviewedHeadOid = pushPreview().headOid
+  headOid = pushPreview().headOid,
+  stagedIdentity = STAGED_IDENTITY
 ) {
-  return { branch, destination, reviewedHeadOid };
+  return { branch, destination, reviewed: { headOid, stagedIdentity } };
 }
 
 /** Tips told apart, so a target kept from an earlier read can't pass for the current one. */
@@ -189,7 +199,7 @@ const CURRENT_TIP = "2".repeat(40);
 
 /** An opted-out push previewed nothing, so only the commit itself pins it. */
 function unpreviewed(branch: string) {
-  return { branch, destination: { remote: "origin", branch }, reviewedHeadOid: null };
+  return { branch, destination: { remote: "origin", branch }, reviewed: null };
 }
 
 function earlierCommits(count: number): GitPushCommitPreview["commits"] {
@@ -373,8 +383,58 @@ describe("CommitPanel — push confirm", () => {
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug", {
       branch: "feature/x",
       destination: { remote: "origin", branch: "feature/x" },
-      reviewedHeadOid: headOid,
+      reviewed: { headOid, stagedIdentity: STAGED_IDENTITY },
     });
+  });
+
+  it("lists and pins the staged changes its own read found, not a status refresh behind it (#17563)", async () => {
+    const identity = "c".repeat(64);
+    listPushCommits.mockResolvedValueOnce(
+      pushPreview({
+        destination: { remote: "origin", branch: "feature/x" },
+        staged: { identity, paths: ["src/reviewed.ts", "src/also.ts"] },
+      })
+    );
+    const { onCommitAndPush, setStagedPaths } = renderPanel({
+      currentBranch: "feature/x",
+      stagedPaths: ["src/reviewed.ts"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await flushReadStart();
+    expect(listPushCommits).toHaveBeenCalledWith("/repo", "feature/x", expect.any(Number), {
+      includeStaged: true,
+    });
+    const files = () =>
+      Array.from(screen.getByTestId("commit-panel-push-confirm-files").querySelectorAll("li")).map(
+        (li) => li.textContent
+      );
+    await waitFor(() => expect(files()).toEqual(["src/reviewed.ts", "src/also.ts"]));
+
+    // An agent restages while the dialog is open; the next status read lands.
+    setStagedPaths(["src/reviewed.ts", "src/agent.ts"]);
+    expect(files()).toEqual(["src/reviewed.ts", "src/also.ts"]);
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+
+    expect(listPushCommits).toHaveBeenCalledTimes(1);
+    expect(onCommitAndPush).toHaveBeenCalledWith(
+      "fix: bug",
+      previewed("feature/x", undefined, undefined, identity)
+    );
+  });
+
+  it("blocks the push when the read comes back without a staged snapshot (#17563)", async () => {
+    const { staged: _none, ...fromOlderHost } = pushPreview();
+    listPushCommits.mockResolvedValue(fromOlderHost);
+    const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x" });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+
+    const error = await screen.findByTestId("commit-panel-push-confirm-unpushed-error");
+    expect(error.textContent).toContain("Couldn't read the staged changes");
+    const confirm = confirmButton(/Push to origin\/feature\/x/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(confirm);
+    act(() => confirmDialogProps.onConfirm?.());
+    expect(onCommitAndPush).not.toHaveBeenCalled();
   });
 
   it("opens the confirm despite the opt-out when there is no branch to pin the push to", () => {
@@ -865,7 +925,8 @@ describe("CommitPanel — earlier commits in the push (#15557)", () => {
         expect(listPushCommits).toHaveBeenLastCalledWith(
           next.worktreePath,
           next.currentBranch,
-          expect.any(Number)
+          expect.any(Number),
+          { includeStaged: true }
         )
       );
 
