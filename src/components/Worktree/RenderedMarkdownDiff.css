@@ -162,7 +162,7 @@
    the block fill and the bar still carry the state. A rendered Mermaid
    diagram counts as a fence here. */
 .rendered-markdown-diff__block--removed[data-whole="true"]
-  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(
+  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd, .markdown-frontmatter):not(
     :has(pre, table, .markdown-mermaid)
   ) {
   text-decoration: line-through;

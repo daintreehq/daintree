@@ -972,10 +972,14 @@ describe("TableOfContents", () => {
     expect(markdownHeadings(`﻿---\nname: x\n---${body}`).map((h) => h.text)).toEqual([
       "Release check",
     ]);
+    expect(markdownHeadings("---\rname: x\r---\r# Title").map((h) => h.text)).toEqual(["Title"]);
     // Not front matter: unclosed, not on the first line, or not exactly three markers.
     expect(markdownHeadings("---\nname: x\n\n# Title").map((h) => h.text)).toEqual(["Title"]);
     expect(markdownHeadings("\n---\nname: x\n---\n").map((h) => h.text)).toEqual(["name: x"]);
     expect(markdownHeadings("----\nname: x\n----\n").map((h) => h.text)).toEqual(["name: x"]);
+    expect(markdownHeadings("---\nname: x\n--- x\n\n# Title").map((h) => h.text)).toEqual([
+      "Title",
+    ]);
   });
 
   it("never matches one drawn heading twice", () => {

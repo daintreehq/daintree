@@ -342,6 +342,13 @@ describe("parseMarkdownBlocks", () => {
     expect(parseMarkdownBlocks('+++\ntitle = "x"\n+++\n').blocks[0]?.type).toBe("toml");
   });
 
+  it("slices whole blocks from a document that opens with a byte order mark", () => {
+    // The parser skips the mark and its offsets don't count it.
+    const { blocks } = parseMarkdownBlocks("\uFEFF---\nname: x\n---\n\n# Title\n");
+
+    expect(blocks.map((block) => block.source)).toEqual(["---\nname: x\n---", "# Title"]);
+  });
+
   it("drops blank front matter, which renders nothing", () => {
     const { blocks } = parseMarkdownBlocks("---\n\n---\n\n# Title\n");
 

@@ -576,7 +576,9 @@ describe("RenderedMarkdownDiff", () => {
     const { container } = renderDiff(diff, source);
 
     expect(blockKinds(container)).toEqual(["removed", "added", "unchanged"]);
-    const added = container.querySelector(".rendered-markdown-diff__block--added [data-frontmatter]");
+    const added = container.querySelector(
+      ".rendered-markdown-diff__block--added [data-frontmatter]"
+    );
     expect(visibleText(added)).toBe(
       "name: release-check\ndescription: Checks the release branch before tagging"
     );
@@ -589,6 +591,44 @@ describe("RenderedMarkdownDiff", () => {
     expect([...container.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual([
       "Release check",
     ]);
+  });
+
+  it("renders a later block that opens with a fence as the document does, not as front matter", () => {
+    const source = 'Body.\n\n+++\nname = "new"\n+++\n';
+    const diff = patch([
+      "@@ -1,5 +1,5 @@",
+      " Body.",
+      " ",
+      " +++",
+      '-name = "old"',
+      '+name = "new"',
+      " +++",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector("[data-frontmatter]")).toBeNull();
+    expect(
+      visibleText(container.querySelector(".rendered-markdown-diff__block--added p"))
+    ).toContain('name = "new"');
+  });
+
+  it("strikes a deleted front matter block whole, keeping its lines visible", () => {
+    const source = "# Release check\n";
+    const diff = patch([
+      "@@ -1,5 +1,1 @@",
+      "----",
+      "-name: release-check",
+      "----",
+      "-",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    const removed = container.querySelector(".rendered-markdown-diff__block--removed");
+    expect(removed?.getAttribute("data-whole")).toBe("true");
+    expect(removed?.querySelector("[data-frontmatter]")?.textContent).toBe("name: release-check");
   });
 
   it("keeps a footnote's text in the rendered output", () => {

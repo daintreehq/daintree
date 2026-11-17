@@ -660,6 +660,7 @@ describe("MarkdownDocument front matter (#17334)", () => {
     const yaml = [
       "name: release-check",
       "description: Checks the release branch",
+      "",
       "allowed-tools:",
       "  - Bash(git log:*)",
     ].join("\n");
@@ -674,7 +675,8 @@ describe("MarkdownDocument front matter (#17334)", () => {
     expect(rest).toEqual([]);
     expect(block?.dataset.frontmatter).toBe("yaml");
     expect(block?.tagName).toBe("DIV");
-    // Raw and whole: the nested list keeps the indentation that makes it YAML.
+    // Raw and whole: the blank line stays, and the nested list keeps the
+    // indentation that makes it YAML.
     expect(block?.textContent).toBe(yaml);
     expect(container.querySelector(".markdown-document")?.firstElementChild).toBe(block);
     expect(container.querySelector("hr")).toBeNull();
@@ -729,13 +731,13 @@ describe("MarkdownDocument front matter (#17334)", () => {
     expect(container.querySelector(".markdown-document")?.firstElementChild?.tagName).toBe("H1");
   });
 
-  it("keeps heading ids and their lines past the front matter", () => {
-    const source = "---\ntitle: Risks\n---\n\n# Risks\n\n## Risks";
+  it("keeps heading ids and their lines past the front matter, whose `#` lines are comments", () => {
+    const source = "---\n# Risks\ntitle: Plan\n---\n\n# Risks\n\n## Risks";
     const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content={source} />);
 
     const ids = [...container.querySelectorAll("[id^='user-content-']")].map((el) => el.id);
     expect(ids).toEqual(["user-content-risks", "user-content-risks-1"]);
-    expect(ids.map((id) => markdownTargetLine(source, `#${id}`))).toEqual([5, 7]);
+    expect(ids.map((id) => markdownTargetLine(source, `#${id}`))).toEqual([6, 8]);
   });
 });
 

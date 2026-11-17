@@ -1300,7 +1300,7 @@ function frontmatterLineCount(lines: readonly string[]): number {
  */
 export function markdownHeadings(markdown: string): PluginTocHeading[] {
   const out: PluginTocHeading[] = [];
-  const lines = markdown.split(/\r?\n/);
+  const lines = markdown.split(/\r\n?|\n/);
   let fence: { char: string; size: number } | null = null;
   let paragraph: string | null = null;
   for (const line of lines.slice(frontmatterLineCount(lines))) {

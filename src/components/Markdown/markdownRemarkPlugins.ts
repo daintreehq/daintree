@@ -19,8 +19,12 @@ export const MARKDOWN_FRONTMATTER_CLASS = "markdown-frontmatter";
 
 export type FrontmatterNode = Extract<RootContent, { type: "yaml" | "toml" }>;
 
+export function isFrontmatterType(type: string): type is FrontmatterNode["type"] {
+  return type === "yaml" || type === "toml";
+}
+
 export function isFrontmatterNode(node: RootContent): node is FrontmatterNode {
-  return node.type === "yaml" || node.type === "toml";
+  return isFrontmatterType(node.type);
 }
 
 /**

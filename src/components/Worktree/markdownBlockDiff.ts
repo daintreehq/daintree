@@ -4,7 +4,10 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import type { Root, RootContent } from "mdast";
 import type { GitStatus } from "@shared/types/git";
-import { isFrontmatterNode, MARKDOWN_REMARK_PLUGINS } from "@/components/Markdown/markdownRemarkPlugins";
+import {
+  isFrontmatterNode,
+  MARKDOWN_REMARK_PLUGINS,
+} from "@/components/Markdown/markdownRemarkPlugins";
 import {
   inlineChangeRanges,
   MAX_INLINE_TOKENS,
@@ -463,7 +466,11 @@ export interface ParsedMarkdown {
  * arbitrary repo files render inside an Electron renderer at all; a retained
  * html block would be an empty tinted box standing for something invisible.
  */
-export function parseMarkdownBlocks(source: string): ParsedMarkdown {
+export function parseMarkdownBlocks(input: string): ParsedMarkdown {
+  // The parser skips a leading byte order mark and its offsets don't count it,
+  // so slicing the input by them would cut every block one character short,
+  // front matter's closing fence included.
+  const source = input.startsWith("\uFEFF") ? input.slice(1) : input;
   let tree: Root;
   try {
     tree = markdownProcessor.parse(source);

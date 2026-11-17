@@ -17,7 +17,10 @@ import {
   useMarkdownRenderPolicy,
 } from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
-import { MARKDOWN_REMARK_PLUGINS } from "@/components/Markdown/markdownRemarkPlugins";
+import {
+  isFrontmatterType,
+  MARKDOWN_REMARK_PLUGINS,
+} from "@/components/Markdown/markdownRemarkPlugins";
 import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
@@ -379,6 +382,7 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
 
 function DiffBlock({
   kind,
+  blockType,
   source,
   definitions,
   ranges,
@@ -392,6 +396,8 @@ function DiffBlock({
   urlTransform,
 }: {
   kind: BlockKind;
+  /** The block's mdast type, as the engine split it. */
+  blockType: string;
   source: string;
   definitions: string;
   ranges: readonly TextRange[];
@@ -423,7 +429,14 @@ function DiffBlock({
   // footnote section, so attaching them to every block put one under every
   // paragraph. Two blocks citing different footnotes still mint the same
   // generated ids, which is a cosmetic duplicate rather than a wrong render.
-  const content = definitions ? `${source}\n\n${definitions}` : source;
+  //
+  // Rendered alone, every block starts its own document, which is the one place
+  // front matter is recognised: a later paragraph opening with a `+++` line
+  // would turn into a metadata block. A leading blank line keeps any block but
+  // the document's actual front matter out of that position, and renders as
+  // nothing.
+  const body = isFrontmatterType(blockType) ? source : `\n${source}`;
+  const content = definitions ? `${body}\n\n${definitions}` : body;
   const rehypePlugins = useMemo<PluggableList>(
     () => (ranges.length ? [inlineRangePlugin(ranges, expectedText, kind)] : []),
     [ranges, expectedText, kind]
@@ -746,6 +759,7 @@ function UnchangedRun({
         tabIndex={reveal ? -1 : undefined}
         pending={!admitted.has(runUnitKey(runId, index))}
         stageKey={runUnitKey(runId, index)}
+        blockType={block.type}
         source={block.source}
         // Every block renders on its own, so one citing `[docs][d]` needs the
         // definition appended or it renders the literal brackets and loses its
@@ -948,6 +962,7 @@ function BlockChange({
   return (
     <DiffBlock
       kind={kind}
+      blockType={change.block.type}
       source={change.block.source}
       definitions={definitions}
       ranges={NO_RANGES}
@@ -983,6 +998,7 @@ function ModifiedPair({
     <div ref={pairRef} className="rendered-markdown-diff__pair">
       <DiffBlock
         kind="removed"
+        blockType={change.old.type}
         source={change.old.source}
         definitions={change.old.referenceIds.length ? oldDefinitions : ""}
         ranges={change.inline.old}
@@ -992,6 +1008,7 @@ function ModifiedPair({
       />
       <DiffBlock
         kind="added"
+        blockType={change.new.type}
         source={change.new.source}
         definitions={change.new.referenceIds.length ? newDefinitions : ""}
         ranges={change.inline.new}
