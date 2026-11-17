@@ -33,7 +33,7 @@ describe("findCaseInsensitiveLiteral", () => {
     expect(findCaseInsensitiveLiteral(line, "İSTANBUL")).toEqual({ start: 0, end: 8 });
     expect(slice(line, "İstanbul: DONE")).toBe(line);
     expect(slice("go to İzmir now", "İzmir")).toBe("İzmir");
-    // The query is two lowered units longer than the one-unit span it matches.
+    // The matched span is one unit longer than the query, so end must not be start + query.length.
     expect(findCaseInsensitiveLiteral("İ xi\u0307y", "İY")).toEqual({ start: 3, end: 6 });
   });
 
