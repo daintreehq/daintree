@@ -1262,6 +1262,24 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     expect(hosts).toHaveLength(0);
   });
 
+  it("ends a Stop as cancelled when its host goes while it lets go of the link", async () => {
+    const { lifecycle, provider, store, hosts, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    hosts.splice(0, 1);
+    lifecycle.start();
+    await vi.waitFor(() => expect(store.bindings()).toHaveLength(0));
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    expect(provider.stop).not.toHaveBeenCalled();
+    lifecycle.dispose();
+  });
+
   it("never sends a Stop that a shutdown cancelled while its key was read", async () => {
     const { lifecycle, provider, accounts } = await keeper(
       { connected: true, busy: true, shown: false },
@@ -1281,6 +1299,7 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     release();
     await expect(stopping).rejects.toThrow(/Cancelled/);
     expect(provider.stop).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
   });
 
   it("deletes a machine whose Stop claimed it first after both superseded a Start", async () => {
@@ -1329,9 +1348,13 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await vi.waitFor(() => expect(provider.start).toHaveBeenCalled());
     linkDropped();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // A Stop asked for now waits on the same Start, behind the delete: it can't take the machine.
+    const stopping = lifecycle.stopMachine("build");
     started();
     await expect(starting).rejects.toThrow(/Cancelled/);
+    await expect(stopping).rejects.toThrow(/deleting operation is under way/);
     await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
     expect(provider.delete).toHaveBeenCalledTimes(1);
     expect(hosts).toHaveLength(0);
   });

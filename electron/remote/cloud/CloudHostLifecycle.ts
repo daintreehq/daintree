@@ -872,6 +872,7 @@ export class CloudHostLifecycle {
       async (signal) => {
         await this.settleRenewal(binding.id);
         await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
         await this.runStop(binding.id, signal);
       },
       () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))
@@ -918,7 +919,11 @@ export class CloudHostLifecycle {
     if (confirmed.resourceId && confirmResourceId !== confirmed.resourceId) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
-    await this.supersede(confirmed.id);
+    const running = this.operations.get(confirmed.id);
+    if (running && running.kind !== "deleting") {
+      running.controller.abort();
+      await running.promise.catch(() => {});
+    }
     let binding = this.deps.store.binding(confirmed.id) ?? confirmed;
     // A create that reached the provider may have made a machine nothing here has heard
     // of yet: find it (a read) before the host, and its label, are forgotten.
@@ -943,8 +948,7 @@ export class CloudHostLifecycle {
     if (resourceId) {
       await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
       // A Stop or Start that claimed the machine while this waited gives way too.
-      await this.supersede(binding.id);
-      await this.operate(binding.id, "deleting", async (signal) => {
+      await this.operateOver(binding.id, "deleting", async (signal) => {
         const { provider, credentials } = await this.context(binding, signal);
         // The provider may have been replaced while the operation waited.
         this.requireDeletion(binding.providerId);
@@ -963,16 +967,24 @@ export class CloudHostLifecycle {
     await this.deps.hosts.forget(confirmed.hostId);
   }
 
-  /** Aborts whatever runs on the machine, and whatever claimed it next, until nothing but a delete is left. */
-  private async supersede(bindingId: string): Promise<void> {
-    for (
-      let running = this.operations.get(bindingId);
-      running && running.kind !== "deleting";
-      running = this.operations.get(bindingId)
-    ) {
+  /**
+   * Runs `work` as the machine's operation once every other one on it is
+   * aborted and finished, including any that claimed it while the last wound
+   * down. It claims the machine in the same turn as its last look, so a caller
+   * queued behind the aborted operation can't get in first.
+   */
+  private async operateOver(
+    bindingId: string,
+    kind: CloudOperationKind,
+    work: (signal: AbortSignal) => Promise<void>
+  ): Promise<void> {
+    let running = this.operations.get(bindingId);
+    while (running && running.kind !== kind) {
       running.controller.abort();
       await running.promise.catch(() => {});
+      running = this.operations.get(bindingId);
     }
+    return this.operate(bindingId, kind, work);
   }
 
   /**
