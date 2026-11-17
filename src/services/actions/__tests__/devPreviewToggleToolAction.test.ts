@@ -102,4 +102,25 @@ describe("devPreview.toggleTool availability", () => {
     const result = await runToggleTool({ toolId: TOOL });
     expect(result).toEqual({ panelId: PANEL, active: false });
   });
+
+  it("never acts on a browser panel: only the Element Picker's own command does", async () => {
+    register(() => true);
+    usePanelStore.setState({
+      panelIds: [PANEL, "browser-1"],
+      focusedId: "browser-1",
+      panelsById: {
+        [PANEL]: { id: PANEL, kind: "dev-preview", location: "grid" },
+        "browser-1": {
+          id: "browser-1",
+          kind: "browser",
+          location: "grid",
+          browserUrl: "http://localhost:5173/",
+        },
+      },
+    } as never);
+    await expect(runToggleTool({ toolId: TOOL, panelId: "browser-1" })).rejects.toThrow(
+      "not an open dev preview"
+    );
+    expect(await runToggleTool({ toolId: TOOL })).toEqual({ panelId: PANEL, active: true });
+  });
 });

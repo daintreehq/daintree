@@ -12,6 +12,10 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectSettings } from "@shared/types";
 import type { ReactNode } from "react";
 import { ClientAppError } from "@/utils/clientAppError";
+import { TOOL_NAME, ELEMENT_PICKER_TOOL_ID } from "@/panels/dev-preview/element-picker/toolId";
+import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import { __resetDevPreviewToolSessionsForTests } from "@/services/devPreviewTools/sessionManager";
+import { usePanelStore as useRealPanelStore } from "@/store/panelStore";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
 // content is left out so a disclosed label is not counted twice.
@@ -147,8 +151,12 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const { useWebviewDialogSpy } = vi.hoisted(() => ({ useWebviewDialogSpy: vi.fn() }));
 vi.mock("@/hooks/useWebviewDialog", () => ({
-  useWebviewDialog: () => ({ currentDialog: null, handleDialogRespond: vi.fn() }),
+  useWebviewDialog: (...args: unknown[]) => {
+    useWebviewDialogSpy(...args);
+    return { currentDialog: null, handleDialogRespond: vi.fn() };
+  },
 }));
 
 vi.mock("@/hooks/useFindInPage", () => ({
@@ -382,6 +390,61 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(getByTestId("group-reorder").hasAttribute("data-group-id")).toBe(false);
     act(() => getByTestId("group-reorder").click());
     expect(onTabReorder).not.toHaveBeenCalled();
+  });
+
+  describe("the Element Picker", () => {
+    function pickerToggle(): HTMLElement | null {
+      const extra = browserToolbarPropsSpy.mock.lastCall?.[0]?.extraActions as ReactNode;
+      const { queryByRole } = render(<>{extra}</>);
+      return queryByRole("button", { name: TOOL_NAME });
+    }
+
+    function showing(url: string): BrowserPaneProps {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        id: baseProps.id,
+        browserHistory: { past: [], present: url, future: [] },
+      }));
+      return {
+        ...baseProps,
+        initialUrl: url,
+        initialHistory: { past: [], present: url, future: [] },
+      };
+    }
+
+    afterEach(() => {
+      __resetDevPreviewToolSessionsForTests();
+      useDevPreviewToolStore.setState({ activeByPanel: {} });
+      useRealPanelStore.setState({ panelIds: [], panelsById: {} } as never);
+    });
+
+    it("registers its webview as a browser, which is what lets main bind the picker", () => {
+      render(<BrowserPane {...baseProps} />);
+      expect(useWebviewDialogSpy).toHaveBeenCalled();
+      for (const call of useWebviewDialogSpy.mock.calls) expect(call[3]).toBe("browser");
+    });
+
+    it("offers the picker on a page at a local address", () => {
+      render(<BrowserPane {...showing("http://app.test:3000/")} />);
+      expect(pickerToggle()?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("offers no picker on a site elsewhere", () => {
+      render(<BrowserPane {...showing("https://example.com/")} />);
+      expect(pickerToggle()).toBeNull();
+    });
+
+    it("keeps a picker that is on switchable off when the page leaves for a site elsewhere", () => {
+      // The tool host keeps a tool on only for a panel the panel store holds.
+      useRealPanelStore.setState({
+        panelIds: [baseProps.id],
+        panelsById: { [baseProps.id]: { id: baseProps.id, kind: "browser", location: "grid" } },
+      } as never);
+      useDevPreviewToolStore.setState({
+        activeByPanel: { [baseProps.id]: ELEMENT_PICKER_TOOL_ID },
+      });
+      render(<BrowserPane {...showing("https://example.com/")} />);
+      expect(pickerToggle()?.getAttribute("aria-pressed")).toBe("true");
+    });
   });
 
   it("renders webview with allowpopups attribute for target=_blank support", () => {
