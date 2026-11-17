@@ -1407,9 +1407,14 @@ export class WorkspaceHostProcess extends EventEmitter {
     requestId: string;
     success?: boolean;
     error?: string;
+    gitStarted?: true;
   }): void {
     if (event.success === false || event.error) {
-      this.broker.reject(event.requestId, new Error(event.error || "Operation failed"));
+      const error = new Error(event.error || "Operation failed");
+      // Read by the merged-worktree rule: a failure after git started may
+      // still have removed the checkout.
+      if (event.gitStarted) Object.assign(error, { gitStarted: true });
+      this.broker.reject(event.requestId, error);
     } else {
       this.broker.resolve(event.requestId, event);
     }

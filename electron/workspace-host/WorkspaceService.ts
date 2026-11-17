@@ -4207,6 +4207,9 @@ export class WorkspaceService {
     let attachmentsReserved = false;
     let deletingMonitor: WorktreeMonitor | undefined;
     let restoreFileWatching: (() => void) | undefined;
+    // Set once git is asked to remove the checkout: a failure after that may
+    // have taken it anyway, which an unattended caller settles from the disk.
+    let gitStarted = false;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4391,6 +4394,7 @@ export class WorkspaceService {
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
           markHostPerformance("wtdelete.git-remove:start", { worktreeId });
+          gitStarted = true;
           const removeResult = await this.removeGitWorktreeWithRetry(
             this.git,
             args,
@@ -4518,6 +4522,7 @@ export class WorkspaceService {
         requestId,
         success: false,
         error: (error as Error).message,
+        ...(branchOptions.unattended && gitStarted ? { gitStarted: true as const } : {}),
       });
       // Re-throw so the port path (`handleWorktreePortRequest`) can reject the
       // port `request()` with the same error string — without the throw, the

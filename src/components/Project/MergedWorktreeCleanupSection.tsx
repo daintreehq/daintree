@@ -25,6 +25,7 @@ const SKIP_REASON_LABELS: Record<MergedWorktreeSkipReason, string> = {
   "head-moved": "Has commits the PR didn't merge",
   teardown: "Deleting it would run teardown steps",
   submodules: "Has submodules git won't remove without force",
+  "removal-pending": "Waiting on the last removal attempt to finish",
   unverified: "Couldn't check",
 };
 

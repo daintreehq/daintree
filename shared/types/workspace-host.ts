@@ -1033,7 +1033,17 @@ export type WorkspaceHostEvent =
       startCommit?: string;
       error?: string;
     }
-  | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "delete-worktree-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      /**
+       * An unattended removal (#17321) failed after git was asked to remove
+       * the checkout, so it may be gone anyway.
+       */
+      gitStarted?: true;
+    }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   /**
@@ -1376,9 +1386,9 @@ export interface UnattendedRemovalGuard {
 /**
  * How an unattended removal (#17321) ended, as main can tell it: `declined`
  * when the last check before the request said no, `not-sent` when it failed
- * before the request went, `refused` when the host answered no, and `lost`
- * when the request went and no answer came back (a timeout, a host that
- * exited), so the removal may or may not have happened.
+ * before the request went, `refused` when the host said no before git ran,
+ * and `lost` when the removal may or may not have happened (no answer came
+ * back, or git failed partway).
  */
 export type UnattendedRemovalOutcome =
   | { outcome: "removed" }

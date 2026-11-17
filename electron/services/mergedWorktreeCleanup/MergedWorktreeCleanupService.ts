@@ -192,10 +192,23 @@ export class MergedWorktreeCleanupService {
         error: formatErrorMessage(error, "Couldn't list the project's worktrees"),
       };
     }
-    const worktrees = await evaluateMergedWorktrees(
+    const judged = await evaluateMergedWorktrees(
       listed,
       this.deps.readsFor(project, this.abort.signal, "preview")
     );
+    // What the sweep does with them: wait for the last attempt to settle.
+    const worktrees = judged.map((candidate): MergedWorktreeCandidate => {
+      if (candidate.status !== "removable" || !this.hasUnresolvedRemoval(project, candidate)) {
+        return candidate;
+      }
+      return {
+        worktreePath: candidate.worktreePath,
+        branch: candidate.branch,
+        status: "skipped",
+        reason: "removal-pending",
+        pr: candidate.pr,
+      };
+    });
     return { enabled, checkedAt, worktrees };
   }
 
@@ -252,6 +265,20 @@ export class MergedWorktreeCleanupService {
     this.soonTimer.unref?.();
   }
 
+  private hasUnresolvedRemoval(
+    project: MergedWorktreeProject,
+    candidate: MergedWorktreeCandidate
+  ): boolean {
+    return this.deps
+      .loadReceipts()
+      .some(
+        (entry) =>
+          entry.pending &&
+          entry.projectId === project.id &&
+          entry.worktreePath === candidate.worktreePath
+      );
+  }
+
   private announceAfter(delayMs: number): void {
     if (this.disposed || this.leaseTimer) return;
     this.leaseTimer = setTimeout(() => {
@@ -304,16 +331,17 @@ export class MergedWorktreeCleanupService {
     if (pending.length === 0) return;
     const decided = new Map<string, "settle" | "drop">();
     for (const receipt of pending) {
+      const expired = this.now() - receipt.removedAt >= MERGED_WORKTREE_PENDING_SETTLE_MS;
       let exists: boolean;
       try {
         exists = await this.deps.pathExists(receipt.worktreePath);
       } catch {
+        // Unreadable: wait, but not past the point any attempt could still run.
+        if (expired) decided.set(receipt.id, "drop");
         continue;
       }
       if (!exists) decided.set(receipt.id, "settle");
-      else if (this.now() - receipt.removedAt >= MERGED_WORKTREE_PENDING_SETTLE_MS) {
-        decided.set(receipt.id, "drop");
-      }
+      else if (expired) decided.set(receipt.id, "drop");
     }
     if (decided.size === 0) return;
     let settled = 0;
@@ -340,15 +368,7 @@ export class MergedWorktreeCleanupService {
       if (candidate.status !== "removable") continue;
       // One whose last removal never answered waits until that one is settled,
       // or a retry would file a second receipt for one removal.
-      const unresolved = this.deps
-        .loadReceipts()
-        .some(
-          (entry) =>
-            entry.pending &&
-            entry.projectId === project.id &&
-            entry.worktreePath === candidate.worktreePath
-        );
-      if (unresolved) continue;
+      if (this.hasUnresolvedRemoval(project, candidate)) continue;
       const worktree = listed.find((entry) => path.resolve(entry.path) === candidate.worktreePath);
       if (!worktree) continue;
       if (this.deps.loadReceipts().length >= MERGED_WORKTREE_RECEIPT_CAP) {
@@ -429,12 +449,7 @@ export class MergedWorktreeCleanupService {
     // A lost answer may still be a removal in progress: its receipt stays
     // pending, and later sweeps settle it from the disk.
     if (result.outcome === "lost") return;
-    // The host may refuse after git already took the checkout (its admin
-    // directory failed to go): the disk says whether it is gone.
-    const removed =
-      result.outcome === "removed" ||
-      (result.outcome === "refused" &&
-        !(await this.deps.pathExists(candidate.worktreePath).catch(() => true)));
+    const removed = result.outcome === "removed";
 
     try {
       const others = this.deps.loadReceipts().filter((entry) => entry.id !== receipt.id);

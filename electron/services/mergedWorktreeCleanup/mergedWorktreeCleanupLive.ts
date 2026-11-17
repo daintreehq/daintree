@@ -30,7 +30,9 @@ async function pathExists(target: string): Promise<boolean> {
     await lstat(target);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    // A parent replaced by a file is as definite an absence as a missing one.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
   }
 }

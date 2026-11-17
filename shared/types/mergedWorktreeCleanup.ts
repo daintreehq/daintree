@@ -26,6 +26,7 @@ export type MergedWorktreeSkipReason =
   | "head-moved"
   | "teardown"
   | "submodules"
+  | "removal-pending"
   | "unverified";
 
 export interface MergedWorktreePR {

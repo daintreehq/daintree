@@ -2203,6 +2203,29 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(removeCalls()).toEqual([]);
     });
 
+    it("marks a failure after git started, and only that one, as one that may have removed it", async () => {
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "worktree" && args[1] === "remove") {
+          throw new Error("fatal: could not remove .git/worktrees/test");
+        }
+        return undefined;
+      });
+      createAndRegisterMonitor();
+      await removeUnattended("req-after-git");
+      const resultEvent = () =>
+        mockSendEvent.mock.calls
+          .map((c) => c[0])
+          .find((e) => e.type === "delete-worktree-result" && e.success === false);
+      expect(resultEvent()).toMatchObject({ gitStarted: true });
+
+      mockSendEvent.mockClear();
+      vi.mocked(service.getDeleteTeardownPreview).mockResolvedValue({
+        phases: [{ phase: "teardown", commands: ["x"], approved: true }],
+      });
+      await removeUnattended("req-before-git");
+      expect(resultEvent()).not.toHaveProperty("gitStarted");
+    });
+
     it("refuses a request whose deadline passed, before any git", async () => {
       createAndRegisterMonitor();
 

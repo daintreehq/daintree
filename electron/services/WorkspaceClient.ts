@@ -1233,10 +1233,14 @@ export class WorkspaceClient extends EventEmitter {
         );
         return { outcome: "removed" };
       } catch (error) {
-        // The broker's own errors mean no answer came; anything else is the
-        // host's refusal, carried back in its result.
+        // The broker's own errors mean no answer came, and a failure after git
+        // started may have removed the checkout anyway: neither says what
+        // happened. Anything else is the host refusing before git ran.
+        const indeterminate =
+          error instanceof BrokerError ||
+          (error as { gitStarted?: unknown } | null)?.gitStarted === true;
         return {
-          outcome: error instanceof BrokerError ? "lost" : "refused",
+          outcome: indeterminate ? "lost" : "refused",
           error: formatErrorMessage(error, "removal failed"),
         };
       }

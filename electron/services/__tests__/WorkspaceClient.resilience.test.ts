@@ -3132,6 +3132,14 @@ describe("WorkspaceClient multi-process manager", () => {
         new BrokerError("TIMEOUT", "timed out")
       );
       expect(await lost).toMatchObject({ outcome: "lost" });
+
+      const partway = start(async () => true);
+      await vi.waitFor(() => expect(removeRequests(h(0))).toHaveLength(3));
+      h(0).rejectRequest(
+        removeRequests(h(0))[2]!.requestId,
+        Object.assign(new Error("fatal: could not remove"), { gitStarted: true })
+      );
+      expect(await partway).toMatchObject({ outcome: "lost" });
     });
   });
 });
