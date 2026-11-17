@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import type { ReactNode } from "react";
 import { AlertTriangle, ChevronRight, FolderOpen } from "lucide-react";
@@ -10,7 +11,12 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+  settingsRowFrameClass,
+} from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
@@ -628,10 +634,11 @@ export function DaintreeAssistantSettingsTab() {
             testId="assistant-dropped-agent-banner"
             title={`${getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no longer available`}
             body="The agent was removed or is no longer supported as an assistant backend. Choose another agent above."
-            action={
-              <Button variant="ghost" size="sm" onClick={clearDroppedPreferredAgent}>
-                Dismiss
-              </Button>
+            dismiss={
+              <DismissButton
+                aria-label="Dismiss removed agent notice"
+                onClick={clearDroppedPreferredAgent}
+              />
             }
           />
         )}
@@ -695,11 +702,7 @@ export function DaintreeAssistantSettingsTab() {
           <SettingsSwitchCard
             id="assistant-daintree-control"
             title="Daintree control"
-            subtitle={
-              !loading && settings.daintreeControl
-                ? "Let the assistant call Daintree actions. This starts a local HTTP server on 127.0.0.1."
-                : "Let the assistant call Daintree actions through the local MCP server"
-            }
+            subtitle="Let the assistant call Daintree actions through the local MCP server, which listens on 127.0.0.1"
             isEnabled={settings.daintreeControl}
             onChange={toggleDaintreeControl}
             ariaLabel="Allow the assistant to call Daintree control tools"
@@ -708,20 +711,21 @@ export function DaintreeAssistantSettingsTab() {
             onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
           />
           {!loading && <SettingsDependents>{mcpStatusRow}</SettingsDependents>}
-          <SettingsSwitchCard
-            id="assistant-runbook-search"
-            title="Follow runbooks"
-            subtitle={
-              !loading && !settings.daintreeControl
-                ? "Needs Daintree control. Runbooks are procedures for Daintree actions."
-                : "Before each task, the assistant loads Daintree's step-by-step procedure for it"
-            }
-            isEnabled={settings.runbookSearch}
-            onChange={toggleRunbookSearch}
-            disabled={settingsUnavailable || !settings.daintreeControl}
-            isModified={settings.runbookSearch !== DEFAULT_SETTINGS.runbookSearch}
-            onReset={() => void persist({ runbookSearch: DEFAULT_SETTINGS.runbookSearch })}
-          />
+          <SettingsDependents
+            disabled={!loading && !settings.daintreeControl}
+            reason="Needs Daintree control. Runbooks are procedures for Daintree actions."
+          >
+            <SettingsSwitchCard
+              id="assistant-runbook-search"
+              title="Follow runbooks"
+              subtitle="Before each task, the assistant loads Daintree's step-by-step procedure for it"
+              isEnabled={settings.runbookSearch}
+              onChange={toggleRunbookSearch}
+              disabled={settingsUnavailable}
+              isModified={settings.runbookSearch !== DEFAULT_SETTINGS.runbookSearch}
+              onReset={() => void persist({ runbookSearch: DEFAULT_SETTINGS.runbookSearch })}
+            />
+          </SettingsDependents>
         </SettingsGroup>
       </SettingsSection>
 
@@ -766,13 +770,17 @@ export function DaintreeAssistantSettingsTab() {
             />
           )}
           {bypassCopy && settings.bypassPermissions && (
-            <div className="flex items-start gap-2 py-2.5 pl-4 pr-4">
-              <AlertTriangle
-                className="w-4 h-4 text-status-warning shrink-0 mt-px"
-                aria-hidden="true"
-              />
-              <div className="text-xs text-text-secondary select-text">{bypassCopy.warning}</div>
-            </div>
+            <SettingsDependents>
+              <div className={settingsRowFrameClass(1)}>
+                <Callout
+                  severity="warning"
+                  data-testid="assistant-bypass-warning"
+                  className="select-text"
+                >
+                  {bypassCopy.warning}
+                </Callout>
+              </div>
+            </SettingsDependents>
           )}
 
           {/* The live value lives in the row's description, where the select's narrow
@@ -938,11 +946,13 @@ function AgentNotice({
   title,
   body,
   action,
+  dismiss,
 }: {
   testId: string;
   title: string;
   body: string;
-  action: ReactNode;
+  action?: ReactNode;
+  dismiss?: ReactNode;
 }) {
   return (
     <Callout
@@ -951,6 +961,7 @@ function AgentNotice({
       data-testid={testId}
       title={title}
       action={action}
+      dismiss={dismiss}
       className="select-text"
     >
       <p>{body}</p>
