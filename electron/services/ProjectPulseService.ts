@@ -875,9 +875,10 @@ export class ProjectPulseService {
         !signal?.aborted &&
         this.historyInFlight.get(inFlightKey) === promise &&
         getLocalTimeZone() === timeZone &&
-        (!latest || latest.seq < seq)
+        (!latest || latest.seq < seq || latest.headSha === headSha)
       ) {
-        this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt, seq });
+        const order = Math.max(seq, latest?.seq ?? 0);
+        this.historyCache.set(key, { headSha, timeZone, facts, timestamp: loadedAt, seq: order });
         this.pruneHistoryCache();
       }
       return { facts, loadedAt, complete };
