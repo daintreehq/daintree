@@ -160,18 +160,19 @@ describe("RendererCpuProfileSection — leaving Settings during a recording", ()
   });
 
   async function startRecording() {
-    startMock.mockResolvedValueOnce({ status: "started", expiresAt: Date.now() + 15_000 });
+    const expiresAt = Date.now() + 15_000;
+    startMock.mockResolvedValueOnce({ status: "started", expiresAt });
     const view = render(<RendererCpuProfileSection />);
     await act(async () => {
       fireEvent.click(getButton());
     });
     expect(getButton().textContent).toContain("Stop recording");
-    return view;
+    return { view, expiresAt };
   }
 
   it("collects the capture Main made while Settings was closed, without recording again", async () => {
     stopMock.mockResolvedValueOnce({ status: "saved" });
-    (await startRecording()).unmount();
+    (await startRecording()).view.unmount();
 
     // Using the app to reproduce the lag, well past the deadline.
     act(() => {
@@ -181,7 +182,7 @@ describe("RendererCpuProfileSection — leaving Settings during a recording", ()
 
     render(<RendererCpuProfileSection />);
     expect(getButton().textContent).toContain("Save profile");
-    expect(screen.getByText(/Recording finished and ready to save/)).toBeTruthy();
+    expect(screen.getByText(/Recording ended/)).toBeTruthy();
     act(() => {
       vi.advanceTimersByTime(5_000);
     });
@@ -194,11 +195,17 @@ describe("RendererCpuProfileSection — leaving Settings during a recording", ()
     expect(stopMock).toHaveBeenCalledTimes(1);
     expect(startMock).toHaveBeenCalledTimes(1);
     expect(getButton().textContent).toContain("Record profile");
+    expect(useRendererCpuProfileStore.getState().expiresAt).toBe(0);
   });
 
   it("resumes the countdown when reopened before the deadline and saves once at zero", async () => {
-    stopMock.mockResolvedValue({ status: "saved" });
-    (await startRecording()).unmount();
+    const stopCalledAt: number[] = [];
+    stopMock.mockImplementation(() => {
+      stopCalledAt.push(Date.now());
+      return Promise.resolve({ status: "saved" });
+    });
+    const { view, expiresAt } = await startRecording();
+    view.unmount();
 
     act(() => {
       vi.advanceTimersByTime(5_000);
@@ -207,12 +214,37 @@ describe("RendererCpuProfileSection — leaving Settings during a recording", ()
     expect(getButton().textContent).toContain("Stop recording");
     expect(screen.getByText(/auto-stops in 10s/)).toBeTruthy();
 
+    act(() => {
+      vi.advanceTimersByTime(9_999);
+    });
+    expect(screen.getByText(/auto-stops in 1s/)).toBeTruthy();
+    expect(stopMock).not.toHaveBeenCalled();
+
     await act(async () => {
-      vi.advanceTimersByTime(11_000);
+      vi.advanceTimersByTime(1_001);
+    });
+
+    expect(stopCalledAt).toEqual([expiresAt]);
+    expect(getButton().textContent).toContain("Record profile");
+  });
+
+  it("saves at once when a start reply arrives after the deadline while the row is open", async () => {
+    const start = deferred<RendererCpuProfileStartResult>();
+    startMock.mockReturnValueOnce(start.promise);
+    stopMock.mockResolvedValueOnce({ status: "saved" });
+    const expiresAt = Date.now() + 15_000;
+    render(<RendererCpuProfileSection />);
+    fireEvent.click(getButton());
+
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    await act(async () => {
+      start.resolve({ status: "started", expiresAt });
+      await start.promise;
     });
 
     expect(stopMock).toHaveBeenCalledTimes(1);
-    expect(getButton().textContent).toContain("Record profile");
   });
 
   it("keeps a start that resolves after Settings closed", async () => {
@@ -232,12 +264,34 @@ describe("RendererCpuProfileSection — leaving Settings during a recording", ()
     expect(screen.getByText(/auto-stops in 15s/)).toBeTruthy();
   });
 
+  it("keeps Record profile busy when reopened while the start is still pending", async () => {
+    const start = deferred<RendererCpuProfileStartResult>();
+    startMock.mockReturnValueOnce(start.promise);
+    const first = render(<RendererCpuProfileSection />);
+    fireEvent.click(getButton());
+    first.unmount();
+
+    render(<RendererCpuProfileSection />);
+    expect(getButton().textContent).toContain("Record profile");
+    expect(getButton().getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(getButton());
+    expect(startMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      start.resolve({ status: "started", expiresAt: Date.now() + 15_000 });
+      await start.promise;
+    });
+
+    expect(getButton().textContent).toContain("Stop recording");
+    expect(screen.getByText(/auto-stops in 15s/)).toBeTruthy();
+  });
+
   it("keeps a save that is still in flight busy across a reopen and shows its failure", async () => {
     const stop = deferred<RendererCpuProfileStopResult>();
     stopMock.mockReturnValueOnce(stop.promise);
-    const first = await startRecording();
+    const { view } = await startRecording();
     fireEvent.click(getButton());
-    first.unmount();
+    view.unmount();
 
     render(<RendererCpuProfileSection />);
     expect(getButton().textContent).toContain("Save profile");

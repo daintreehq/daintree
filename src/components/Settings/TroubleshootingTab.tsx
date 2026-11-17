@@ -175,6 +175,7 @@ export function RendererCpuProfileSection() {
   // A deadline this row hasn't ticked against yet belongs to a recording that
   // has only just started.
   const secondsLeft = tick.deadline === expiresAt ? tick.secondsLeft : CPU_PROFILE_DURATION_SECONDS;
+  const [mountedAt] = useState(() => Date.now());
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -183,18 +184,24 @@ export function RendererCpuProfileSection() {
       setTick({ deadline: expiresAt, secondsLeft: remaining });
       return remaining;
     };
-    // It finished while Settings was closed. Opening the tab mustn't throw a
-    // save dialog at the user; the row offers the capture instead.
-    if (update() <= 0) return;
+    if (update() <= 0) {
+      // A row that was open before the deadline saves at it. One opened after
+      // it, because Settings was closed when it passed, mustn't throw a save
+      // dialog at the user; the row offers the capture instead.
+      if (mountedAt < expiresAt) void collect();
+      return;
+    }
     const interval = window.setInterval(() => {
       if (update() <= 0) void collect();
     }, PROFILE_UPDATE_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [phase, expiresAt, collect]);
+  }, [phase, expiresAt, collect, mountedAt]);
 
   const captured = phase === "recording" && secondsLeft <= 0;
+  // Only the recording window is known to have passed: a debugger detach while
+  // Settings was closed surfaces when the save is attempted.
   const description = captured
-    ? "Recording finished and ready to save. The .cpuprofile file opens in Chrome DevTools."
+    ? "Recording ended. Save the profile to open it in Chrome DevTools."
     : phase === "recording"
       ? `Reproduce the slow interaction — auto-stops in ${secondsLeft}s`
       : "Captures 15 seconds of the interface's CPU activity to diagnose lag. The saved .cpuprofile file opens in Chrome DevTools.";
