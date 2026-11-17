@@ -92,7 +92,7 @@ When the update's command ends, Settings checks the relay again and says what ha
 
 ## Agents
 
-With Decisions on and a relay connected, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with four tools: `ask_human`, `get_decision`, `cancel_question` and `send_followup`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**. Before a relay is set up, or once its connection has stopped or been revoked, agents launch without it: the section says so, points to **Connection**, and lists the supported ones under **Get ask_human once connected**. A launch while the connection is retrying still gets it, and its questions go out once the relay is back.
+With Decisions on and a relay connected, every launch of a supported agent gets a `daintree-decisions` MCP server beside your own, whatever the project's MCP setting, with five tools: `ask_human`, `get_decision`, `cancel_question`, `send_followup` and `get_involvement`. Daintree hands it over at launch only: nothing is written into your agent's config or your project. An agent that was already running gets it at its next launch. **Agents** in Settings lists your installed agents under **Get ask_human** and **Not supported yet**. Before a relay is set up, or once its connection has stopped or been revoked, agents launch without it: the section says so, points to **Connection**, and lists the supported ones under **Get ask_human once connected**. A launch while the connection is retrying still gets it, and its questions go out once the relay is back.
 
 | Agent | Gets `ask_human` | Resumed to deliver an answer when its terminal is gone |
 | --- | --- | --- |
@@ -125,6 +125,12 @@ Agents are told, when they connect and in what `ask_human` returns, that your an
 A follow-up never answers the question, changes your answer or satisfies a gate, and it's never typed into any terminal. A terminal can't post on another terminal's questions, or on one that was withdrawn or expired, and a question takes at most 200 follow-ups. A relay older than 0.4.0 doesn't take them: a follow-up already queued for one is dropped once Daintree reads that, and after that it can refuse new ones outright until the relay is updated.
 
 A follow-up or reply you send from your phone is typed into the terminal that asked, like an answer (see [What gets typed](#what-gets-typed)).
+
+### How involved you want to be
+
+On your phone you can say how involved you want to be: **involve early**, where an agent asks while it's still exploring the options, or **recommend**, where it consults a number of other agents you choose, tries to get them to agree, and brings you their recommendation or their disagreement. A temporary setting goes back to your normal one when it ends. Agents are told, when they connect, to read it with `get_involvement` before they prepare a question and again just before `ask_human`, so a change on your phone reaches agents that are already running, with no relaunch. In `ask_human` an agent can say how it prepared (how many agents it consulted and whether they agreed), which your phone shows as the agent's own account.
+
+`get_involvement` reads the copy this computer last checked with the relay; it never asks you anything and sends nothing to your phone. While the relay connection is retrying, agents get that copy marked as possibly out of date. Before this computer has read one, with nothing set, or with a relay older than 0.7.0, they're told none is available. Either way an agent then uses its normal behaviour. The setting never changes what an agent may do or what needs your approval: a question that needs you still comes to you straight away, and agents agreeing is a recommendation, not an answer. Agents on a Remote Host read it through that Host's own connection. Daintree can't show or change it yet; your phone does both.
 
 ## Answers
 

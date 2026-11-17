@@ -19,6 +19,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   buildSignedAction,
+  buildSignedInvolvement,
   buildSignedMessage,
   decryptEnvelope,
   encryptAttachment,
@@ -35,6 +36,7 @@ import {
   EventData,
   MESSAGE_RECORD_TYPE,
   type DeviceCert,
+  type InvolvementRecord,
   type PhoneImageReference,
 } from "@daintreehq/decisions-protocol";
 
@@ -193,6 +195,11 @@ class FakeRelay {
   }> = [];
   /** Phone images' ciphertext, by attachment id, as the relay's R2 holds it. */
   readonly attachments = new Map<string, Uint8Array<ArrayBuffer>>();
+  /**
+   * The person's latest signed involvement preference, or null for none set;
+   * undefined answers its read with a 404, as a relay before 0.7.0 does.
+   */
+  preference: InvolvementRecord | null | undefined = undefined;
   /** While true, the socket isn't reachable: tickets fail and nothing connects. */
   down = false;
   hostDeviceId = "";
@@ -262,6 +269,12 @@ class FakeRelay {
         ticket: `ticket-${this.requests.length}`,
         expires_at: new Date(Date.now() + 30_000).toISOString(),
         ws_path: "/api/v1/socket",
+      });
+    }
+    if (method === "GET" && pathname === "/api/v1/involvement" && this.preference !== undefined) {
+      return json(200, {
+        preference: this.preference,
+        received_at: this.preference?.created_at ?? null,
       });
     }
     if (method === "GET" && pathname === "/api/v1/devices") {
@@ -933,9 +946,73 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const tickets = relay.requests.filter((request) => request.path === "/api/v1/socket-ticket");
     expect(tickets.length).toBeGreaterThan(0);
     for (const ticket of tickets) {
-      expect(ticket.body).toHaveProperty("features", ["phone-images-v1", "thread-messages-v1"]);
+      expect(ticket.body).toHaveProperty("features", [
+        "involvement-v1",
+        "phone-images-v1",
+        "thread-messages-v1",
+      ]);
     }
   }, 60_000);
+  // The person's involvement preference reaches a Host's agents from its own relay connection (#17228).
+  it("serves a Host's agents the involvement preference a phone sets, and its change without a relaunch", async () => {
+    const { owner, phone, relay, listener } = await startHost();
+    const setOnPhone = async (
+      revision: number,
+      normalMode: InvolvementRecord["normal_mode"],
+      consultCount: number
+    ) => {
+      relay.preference = await buildSignedInvolvement({
+        installationId: owner.installationId,
+        signerDeviceId: phone.deviceId,
+        signingKey: phone.keys.signing.privateKey,
+        revision,
+        normalMode,
+        consultCount,
+        override: null,
+      });
+      // The relay's hint: question-free, it only says to read the preference again.
+      relay.append({
+        event_type: "involvement.updated",
+        question_id: null,
+        question_revision: null,
+        origin_device_id: phone.deviceId,
+        data: {},
+      });
+    };
+    const read = async () =>
+      (await callTool(listener.port, "token-pane-1", "get_involvement", {})).structuredContent;
+
+    // The relay served none when the Host connected, as one before 0.7.0 does.
+    await vi.waitFor(async () => expect(await read()).toMatchObject({ reason: "unsupported" }), {
+      timeout: 15_000,
+    });
+
+    await setOnPhone(1, "involve-early", 1);
+    await vi.waitFor(
+      async () =>
+        expect(await read()).toMatchObject({
+          status: "available",
+          mode: "involve-early",
+          revision: 1,
+          stale: false,
+        }),
+      { timeout: 15_000 }
+    );
+
+    await setOnPhone(2, "recommend", 3);
+    await vi.waitFor(
+      async () =>
+        expect(await read()).toMatchObject({
+          status: "available",
+          mode: "recommend",
+          consult_count: 3,
+          revision: 2,
+          stale: false,
+        }),
+      { timeout: 15_000 }
+    );
+  }, 60_000);
+
   // A photo from the phone is stored on the Host, in the asking pane's directory, and typed as its path (#16233).
   it("stores a phone's photo where the Host's agent can open it, types its path, and deletes it with the question", async () => {
     const { owner, phone, relay, terminals, listener } = await startHost();

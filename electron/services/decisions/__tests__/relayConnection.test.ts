@@ -7,18 +7,27 @@ import {
   DecisionsBridge,
   MemoryKeyStore,
   MemoryLocalStore,
+  loadIdentity,
   type KeyStore,
   type ProxyEngine,
   type StoredIdentity,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
 import {
+  buildSignedInvolvement,
+  exportPublicKey,
   generateDeviceKeys,
   generateEpochKeyBytes,
+  issueDeviceCert,
   serializeDeviceKeys,
+  type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { pendingRotationOf } from "../keyRotation.js";
-import { bytesToBase64Url } from "@daintreehq/decisions-protocol";
+import {
+  bytesToBase64Url,
+  type DeviceCert,
+  type InvolvementRecord,
+} from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
   app: {
@@ -1646,5 +1655,218 @@ describe("RelayConnection", () => {
       expect(loads).toBe(loadsLive);
       h.connection.stop();
     });
+  });
+});
+
+describe("get_involvement over a connection (#17228)", () => {
+  const PHONE = "dev_phone_1234";
+
+  function deviceInfo(cert: DeviceCert) {
+    return {
+      device_id: cert.device_id,
+      role: cert.role,
+      label: cert.label,
+      created_at: new Date().toISOString(),
+      revoked_at: null,
+      last_seen_at: null,
+      last_ack_seq: 0,
+      cert,
+      push_enabled: false,
+    };
+  }
+
+  /**
+   * A relay holding a phone's involvement preference: its device directory
+   * (this owner and one phone, certified by the owner) and the latest signed
+   * record, which `setOnPhone` replaces as the phone would. Every ticket's
+   * declared features are kept, and `holdReads` keeps the preference's reads
+   * unanswered until released.
+   */
+  async function relayWithPreference() {
+    const keys = new MemoryKeyStore();
+    await keys.save(identity);
+    const owner = await loadIdentity(keys);
+    const phone: DeviceKeys = await generateDeviceKeys(false);
+    const certFor = async (deviceId: string, role: "owner-desktop" | "phone", of: DeviceKeys) =>
+      issueDeviceCert({
+        issuerDeviceId: RELAY.deviceId,
+        issuerSigningKey: owner.keys.signing.privateKey,
+        installationId: RELAY.installationId,
+        deviceId,
+        role,
+        label: role,
+        signingPub: await exportPublicKey(of.signing.publicKey),
+        exchangePub: await exportPublicKey(of.exchange.publicKey),
+      });
+    const devices = {
+      key_epoch: 1,
+      owner_device_id: RELAY.deviceId,
+      devices: [
+        deviceInfo(await certFor(RELAY.deviceId, "owner-desktop", owner.keys)),
+        deviceInfo(await certFor(PHONE, "phone", phone)),
+      ],
+    };
+    let preference: InvolvementRecord | null = null;
+    let held: Promise<void> = Promise.resolve();
+    const declared: unknown[] = [];
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const wrapFetch =
+      (fetchImpl: RelayFetch): RelayFetch =>
+      async (url, init) => {
+        const { pathname } = new URL(url);
+        if (pathname === "/api/v1/devices") return json(devices);
+        if (pathname === "/api/v1/involvement" && (init.method ?? "GET") === "GET") {
+          await held;
+          return json({
+            preference,
+            received_at: preference ? preference.created_at : null,
+          });
+        }
+        if (pathname === "/api/v1/socket-ticket") {
+          declared.push((JSON.parse(String(init.body)) as { features?: unknown }).features);
+        }
+        return fetchImpl(url, init);
+      };
+    return {
+      wrapFetch,
+      declared,
+      holdReads(): () => void {
+        let release!: () => void;
+        held = new Promise((resolve) => {
+          release = resolve;
+        });
+        return release;
+      },
+      async setOnPhone(
+        revision: number,
+        normalMode: InvolvementRecord["normal_mode"],
+        consultCount: number
+      ) {
+        preference = await buildSignedInvolvement({
+          installationId: RELAY.installationId,
+          signerDeviceId: PHONE,
+          signingKey: phone.signing.privateKey,
+          revision,
+          normalMode,
+          consultCount,
+          override: null,
+        });
+      },
+    };
+  }
+
+  /** The relay's hint that the preference changed: question-free, it only says to read again. */
+  function involvementHint(socket: FakeSocket, seq: number): void {
+    socket.onmessage?.({
+      data: JSON.stringify({
+        t: "event",
+        event: {
+          protocol_version: 1,
+          seq,
+          event_id: `evt_${String(seq).padStart(8, "0")}`,
+          event_type: "involvement.updated",
+          occurred_at: new Date().toISOString(),
+          question_id: null,
+          question_revision: null,
+          origin_device_id: null,
+          data: {},
+        },
+      }),
+    });
+  }
+
+  it("serves the live attempt's preference, a phone's change without a relaunch, and the verified copy between attempts", async () => {
+    const relay = await relayWithPreference();
+    await relay.setOnPhone(1, "involve-early", 1);
+    const release = relay.holdReads();
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      wrapFetch: relay.wrapFetch,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    h.connection.start();
+    await vi.waitFor(() => expect(source).not.toBeNull());
+    // One bridge for the agent's whole run, as the route holds it.
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    // Before the relay has answered a read, there is no preference.
+    await expect(bridge.getInvolvement()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "not-synced",
+      stale: true,
+    });
+
+    release();
+    const socket = await connectLive(h);
+    expect(relay.declared[0]).toContain("involvement-v1");
+    await vi.waitFor(async () =>
+      expect(await bridge.getInvolvement()).toMatchObject({
+        status: "available",
+        mode: "involve-early",
+        revision: 1,
+        stale: false,
+      })
+    );
+
+    // The person changes it on their phone; the relay hints, and the same bridge reads the new one.
+    await relay.setOnPhone(2, "recommend", 2);
+    involvementHint(socket, 1);
+    await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 1);
+    await vi.waitFor(async () =>
+      expect(await bridge.getInvolvement()).toMatchObject({
+        status: "available",
+        mode: "recommend",
+        consultCount: 2,
+        revision: 2,
+        stale: false,
+      })
+    );
+
+    // Between attempts: the copy the last attempt verified, as possibly out of date.
+    socket.drop(1006);
+    await h.status("reconnecting");
+    expect((source as unknown as QuestionSource).live()).toBeNull();
+    await expect(bridge.getInvolvement()).resolves.toMatchObject({
+      status: "available",
+      mode: "recommend",
+      revision: 2,
+      stale: true,
+    });
+    h.connection.stop();
+  });
+
+  it("keeps a 0.6.0 relay's connection, which serves no preference, and says so", async () => {
+    // The stock fake relay answers `/involvement` with a 404, as a relay from before 0.7.0 does.
+    let source: QuestionSource | null = null;
+    const h = await harness({ overrides: { onQuestionsReady: (ready) => (source = ready) } });
+    h.connection.start();
+    await connectLive(h);
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    await vi.waitFor(async () =>
+      expect(await bridge.getInvolvement()).toMatchObject({
+        status: "unavailable",
+        reason: "unsupported",
+        stale: false,
+      })
+    );
+    expect(h.statuses.at(-1)?.state).toBe("connected");
+    const asked = await bridge.registerQuestion({
+      origin: QUESTION_ORIGIN,
+      input: { question: "Still asking?" },
+    });
+    await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+    expect(asked.status).toBe("queued");
+    h.connection.stop();
   });
 });

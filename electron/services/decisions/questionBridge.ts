@@ -3,6 +3,7 @@ import {
   DecisionsBridge,
   paneIdentityOf,
   type DecisionView,
+  type InvolvementView,
   type PaneIdentity,
   type PostMessageResult,
   type QuestionOrigin,
@@ -188,6 +189,20 @@ export class QuestionBridge extends DecisionsBridge {
     const run = this.posts.then(post);
     this.posts = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * `get_involvement` (#17228). The live attempt holds the reads that keep
+   * the preference fresh: it reads it as it starts and goes live, and again
+   * on each change hint a phone's update sends. So it answers while there is
+   * one. Between attempts this bridge answers from the same verified copy,
+   * which its own never-started sync can't call fresh: the library's stale
+   * preference, or its unavailable result when none was ever read. The
+   * handler names no pane, and the preference isn't any pane's.
+   */
+  override async getInvolvement(): Promise<InvolvementView> {
+    const live = this.connected();
+    return live ? live.getInvolvement() : super.getInvolvement();
   }
 
   override async listPending(pane?: PaneIdentity): Promise<DecisionView[]> {

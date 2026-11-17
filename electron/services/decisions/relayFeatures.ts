@@ -8,13 +8,16 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * when the desktop that asked it declared that feature, so each one joins
  * this list with the Daintree work that handles it: follow-ups with their
  * typing (#16231), pane snapshots with #16230, which a bridge asks for only
- * when its connection publishes them, and phone images with their storing
- * (#16233).
+ * when its connection publishes them, phone images with their storing
+ * (#16233), and the involvement preference's change hints with
+ * `get_involvement` (#17228). Owner-desktop answers and person declines wait
+ * for the issues that handle them (#17101, #17234).
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
   "pane-snapshots-v1",
   "phone-images-v1",
+  "involvement-v1",
 ];
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
