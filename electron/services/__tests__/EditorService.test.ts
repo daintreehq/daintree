@@ -1156,7 +1156,7 @@ describe("EditorService terminal-only editors", () => {
     mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/subl"]);
     const { openFile } = await loadModule();
 
-    await openFile("/abs/file.ts", 12, 5, null);
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
 
     expect(launchedBinaries()).toEqual(["/usr/local/bin/subl"]);
     expect(shellMock.openPath).not.toHaveBeenCalled();
@@ -1166,7 +1166,7 @@ describe("EditorService terminal-only editors", () => {
     mockExistingFiles(["/usr/local/bin/nvim"]);
     const { openFile } = await loadModule();
 
-    await openFile("/abs/file.ts", 12, 5, null);
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
 
     expect(execaMock.execa).not.toHaveBeenCalled();
     expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
@@ -1177,10 +1177,11 @@ describe("EditorService terminal-only editors", () => {
     mockExistingFiles(["/usr/local/bin/nvim"]);
     const { openFile } = await loadModule();
 
-    await openFile("/abs/file.ts", 12, 5, null);
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
 
     expect(launchedBinaries()).toEqual(["open"]);
     expect(execaMock.execa.mock.calls[0]![1]).toEqual(["-t", "/abs/file.ts"]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
   // Substituting another editor for an explicit choice would hide why the
@@ -1209,8 +1210,9 @@ describe("EditorService terminal-only editors", () => {
       true
     );
 
-    expect(result).toMatchObject({ outcome: "needs-terminal" });
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
     expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
   it("an explicit Neovim choice answers the same when nvim isn't installed", async () => {
@@ -1219,8 +1221,9 @@ describe("EditorService terminal-only editors", () => {
 
     const result = await openFile("/abs/file.ts", 12, 5, { id: "neovim" });
 
-    expect(result).toMatchObject({ outcome: "needs-terminal" });
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
     expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 
   // `nvim --server <addr> --remote {file}` hands the file to a running Neovim

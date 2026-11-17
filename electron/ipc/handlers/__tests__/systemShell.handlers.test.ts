@@ -472,6 +472,10 @@ describe("system:open-in-editor containment", () => {
     await expect(
       handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
     ).resolves.toEqual(fallback);
+    // A launch with nothing to report still answers nothing.
+    await expect(
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
+    ).resolves.toBeUndefined();
   });
 
   it("propagates a launch failure to the renderer", async () => {

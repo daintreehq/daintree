@@ -1,7 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type NotifyArg = {
+  type: string;
+  title: string;
+  message: string;
+  priority?: string;
+  action?: {
+    label: string;
+    actionId?: string;
+    actionArgs?: Record<string, unknown>;
+    onClick: () => void;
+  };
+  actions?: unknown[];
+};
+
 const { notifyMock, dispatchMock } = vi.hoisted(() => ({
-  notifyMock: vi.fn(),
+  notifyMock: vi.fn<(payload: NotifyArg) => void>(),
   dispatchMock: vi.fn(),
 }));
 
@@ -10,21 +24,9 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatch
 
 import { announceOpenInEditorFallback } from "../openInEditorFallback";
 
-type NotifyArg = {
-  type: string;
-  title: string;
-  message: string;
-  action?: {
-    label: string;
-    actionId?: string;
-    actionArgs?: Record<string, unknown>;
-    onClick: () => void;
-  };
-};
-
 function lastNotice(): NotifyArg {
   expect(notifyMock).toHaveBeenCalledTimes(1);
-  return notifyMock.mock.calls[0]![0] as NotifyArg;
+  return notifyMock.mock.calls[0]![0];
 }
 
 describe("announceOpenInEditorFallback", () => {
@@ -56,6 +58,10 @@ describe("announceOpenInEditorFallback", () => {
     });
 
     const notice = lastNotice();
+    // Nothing opened, so it stays a toast (not inbox-only) with its one recovery.
+    expect(notice.type).toBe("warning");
+    expect(notice.priority).toBe("high");
+    expect(notice.actions).toBeUndefined();
     expect(notice.title).toContain("Neovim");
     expect(notice.message).toContain("Neovim runs in a terminal");
     expect(notice.message).toContain('"nvim {file}"');

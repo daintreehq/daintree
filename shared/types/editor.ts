@@ -29,13 +29,17 @@ export function isKnownEditorId(value: unknown): value is KnownEditorId {
  * selection passes over them, and choosing one explains how to run it through a
  * terminal app instead.
  */
-const TERMINAL_ONLY_EDITOR_COMMANDS: Partial<Record<KnownEditorId, string>> = {
-  neovim: "nvim",
-};
+const TERMINAL_ONLY_EDITOR_COMMANDS: ReadonlyMap<KnownEditorId, string> = new Map([
+  ["neovim", "nvim"],
+]);
 
-/** The program to run in a terminal app, or undefined for an editor that opens its own window. */
+/**
+ * The program to run in a terminal app, or undefined for an editor that opens
+ * its own window. A Map, so an id read from a settings file can never resolve
+ * to an inherited object member.
+ */
 export function terminalOnlyEditorCommand(id: KnownEditorId): string | undefined {
-  return TERMINAL_ONLY_EDITOR_COMMANDS[id];
+  return TERMINAL_ONLY_EDITOR_COMMANDS.get(id);
 }
 
 /** Persisted preference for the user's chosen editor */

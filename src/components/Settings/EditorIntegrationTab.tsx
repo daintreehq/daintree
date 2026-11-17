@@ -341,7 +341,9 @@ export function EditorIntegrationTab() {
         projectId: activeProjectId,
       });
       // A remote window copies the host path when no editor here can open it: not a pass.
-      announceOpenInEditorFallback(fallback);
+      // A terminal-only editor is already explained by the note beside this button, which
+      // the tested editor is always the selection for, so its notice would only repeat it.
+      if (fallback?.outcome !== "needs-terminal") announceOpenInEditorFallback(fallback);
       if (!isMountedRef.current) return;
       setTestResult(fallback ? "error" : "ok");
     } catch {
@@ -415,7 +417,7 @@ export function EditorIntegrationTab() {
         : "Saved for this project. No default set on this machine"
       : defaultEditor
         ? `Using the default on this machine: ${editorLabel(defaultEditor)}`
-        : "No default set: Daintree tries $VISUAL, $EDITOR, then the first editor it finds";
+        : "No default set: Daintree tries $VISUAL, $EDITOR, then the first editor it finds that opens its own window";
 
   if (!activeProjectId) {
     return (
