@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import type { RepoOperationPin } from "@shared/types/git";
 import {
   setWorktreePathIndexAccessor,
   resetStoreAccessorsForTesting,
@@ -81,12 +82,15 @@ function setupActions() {
 /** Resolve the deferred confirm the way a mounted dialog would. */
 async function settleConfirm(
   ok: boolean,
-  pinned?: { branch?: string; headOid?: string; baseOid?: string }
+  pinned?: { branch?: string; headOid?: string; baseOid?: string },
+  operation?: RepoOperationPin
 ): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(ok, pinned ?? null);
+  useGitWorktreeOperationConfirmStore
+    .getState()
+    .resolveConfirmation(ok, pinned ?? null, operation ?? null);
 }
 
 /**
@@ -428,6 +432,8 @@ describe("a failed operation is reported, not swallowed", () => {
 });
 
 describe("git.abortRepositoryOperation", () => {
+  const REBASE_A: RepoOperationPin = { operation: "REBASING", operationId: "rebase-a" };
+
   it("confirms before discarding anything", async () => {
     const { run, git } = setupActions();
     const pending = run("git.abortRepositoryOperation", {
@@ -443,10 +449,43 @@ describe("git.abortRepositoryOperation", () => {
       cwd: WT_PATH,
       operation: "REBASING",
     });
+    await settleConfirm(true, undefined, REBASE_A);
+    await pending;
+    // The operation the dialog read and the user approved, for Main to check.
+    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH, REBASE_A);
+    expect(refresh).toHaveBeenCalledWith(WT_ID);
+  });
+
+  it("aborts nothing on an approval that names no operation", async () => {
+    // The dialog can't approve without one; if anything ever did, aborting
+    // whatever is in progress is the fallback #17559 removed.
+    const { run, git } = setupActions();
+    const pending = run("git.abortRepositoryOperation", { worktreeId: WT_ID, operation: "MERGING" });
     await settleConfirm(true);
     await pending;
-    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH);
+    expect(git.abortRepositoryOperation).not.toHaveBeenCalled();
+  });
+
+  it("reports a replaced operation as such, not as a conflict", async () => {
+    const { run, git } = setupActions();
+    git.abortRepositoryOperation.mockRejectedValue(
+      gitError("repo-operation-changed", "The rebase in progress was restarted or replaced")
+    );
+    const pending = run("git.abortRepositoryOperation", { worktreeId: WT_ID, operation: "REBASING" });
+    await settleConfirm(true, undefined, REBASE_A);
+    await expect(pending).rejects.toThrow();
+
     expect(refresh).toHaveBeenCalledWith(WT_ID);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Git operation changed" })
+    );
+  });
+
+  it("lets an agent abort what it finds, with no confirm and no operation to check", async () => {
+    const { run, git } = setupActions();
+    await run("git.abortRepositoryOperation", { worktreeId: WT_ID }, { dispatchSource: "agent" });
+    expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).toBeNull();
+    expect(git.abortRepositoryOperation).toHaveBeenCalledWith(WT_PATH, undefined);
   });
 
   it("does nothing when declined", async () => {

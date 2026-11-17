@@ -1026,6 +1026,7 @@ export function stagingStatusFor(
     pushDestination: null,
     pullSource: null,
     repoState: "CLEAN",
+    repoOperationId: null,
     rebaseStep: null,
     rebaseTotalSteps: null,
     rebaseSequence: null,

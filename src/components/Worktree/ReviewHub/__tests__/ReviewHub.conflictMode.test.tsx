@@ -314,6 +314,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -468,8 +469,10 @@ describe("ReviewHub", () => {
         conflicted: ["src/app.ts"],
         conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
         repoState: "MERGING",
+        repoOperationId: "merge-a",
         ...overrides,
       });
+    const MERGE_A = { operation: "MERGING", operationId: "merge-a" } as const;
 
     it("renders the conflict panel instead of staging sections when merging", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
@@ -1581,7 +1584,7 @@ describe("ReviewHub", () => {
         const dialog = await screen.findByRole("alertdialog");
         fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
         await waitFor(() =>
-          expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH)
+          expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A)
         );
 
         moveToOther();
@@ -1672,7 +1675,7 @@ describe("ReviewHub", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
 
       await waitFor(() => {
-        expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A);
       });
     });
 
@@ -1691,7 +1694,95 @@ describe("ReviewHub", () => {
       fireEvent.click(screen.getByRole("button", { name: /^Continue /i }));
 
       await waitFor(() => {
-        expect(continueRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(continueRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A);
+      });
+    });
+
+    describe("acts only on the operation the user chose (#17559)", () => {
+      const resolvedMerge = (overrides?: Partial<StagingStatus>) =>
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1 }],
+          ...overrides,
+        });
+
+      /** The worktree's own event, which is what re-reads the hub's status. */
+      async function statusChanged(next: StagingStatus) {
+        getStagingStatusMock.mockResolvedValue(next);
+        const onWorktreeUpdate = onUpdateMock.mock.calls.find(
+          ([type]) => type === "worktree-update"
+        )?.[1] as (data: unknown) => void;
+        await act(async () => {
+          onWorktreeUpdate({ worktree: { path: WORKTREE_PATH } });
+        });
+      }
+
+      function changedError(): Error {
+        return new Error(
+          "[GitError|repo-operation-changed||] The merge in progress was restarted or replaced after you chose it. Nothing was continued; check the worktree's current state and choose again."
+        );
+      }
+
+      it("closes the abort confirm when a read shows another merge in its place", async () => {
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        await screen.findByRole("alertdialog");
+
+        // Same kind, same files: only the identity says it's a different merge.
+        await statusChanged(makeMergingStatus({ repoOperationId: "merge-b" }));
+
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        expect(abortRepositoryOperationMock).not.toHaveBeenCalled();
+      });
+
+      it("keeps the abort confirm open across a read that couldn't identify the merge", async () => {
+        getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: /^Abort /i }));
+        await screen.findByRole("alertdialog");
+
+        await statusChanged(makeMergingStatus({ repoOperationId: null }));
+        await act(async () => {});
+
+        const dialog = screen.getByRole("alertdialog");
+        fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+        // Still the merge the confirm was opened for, which Main checks again.
+        await waitFor(() =>
+          expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH, MERGE_A)
+        );
+      });
+
+      it("retries a failed continue for the merge it was chosen for, not the one there now", async () => {
+        getStagingStatusMock.mockResolvedValue(resolvedMerge());
+        continueRepositoryOperationMock.mockRejectedValueOnce(
+          new Error("error: could not commit staged changes")
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole("button", { name: /^Continue /i }));
+        const retry = await screen.findByRole("button", { name: "Retry" });
+
+        await statusChanged(resolvedMerge({ repoOperationId: "merge-b" }));
+        fireEvent.click(retry);
+
+        await waitFor(() => expect(continueRepositoryOperationMock).toHaveBeenCalledTimes(2));
+        expect(continueRepositoryOperationMock).toHaveBeenLastCalledWith(WORKTREE_PATH, MERGE_A);
+      });
+
+      it("offers no Retry once the merge was replaced, and reads the worktree again", async () => {
+        getStagingStatusMock.mockResolvedValue(resolvedMerge());
+        continueRepositoryOperationMock.mockRejectedValueOnce(changedError());
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        const continueBtn = await screen.findByRole("button", { name: /^Continue /i });
+        const readsBefore = getStagingStatusMock.mock.calls.length;
+        fireEvent.click(continueBtn);
+
+        await screen.findByText(/restarted or replaced after you chose it/);
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        await waitFor(() =>
+          expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+        );
       });
     });
 

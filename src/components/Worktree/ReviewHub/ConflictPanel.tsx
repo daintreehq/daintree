@@ -7,6 +7,7 @@ import type {
   StagingStatus,
 } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
+import type { RepoOperationPin } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
@@ -72,8 +73,12 @@ interface ConflictPanelProps {
   onMarkResolved: (filePath: string) => Promise<void> | void;
   onOpenInEditor: (args: { path: string; line?: number }) => Promise<void> | void;
   onCheckoutOursTheirs: (filePath: string, choice: ConflictSideChoice) => Promise<void> | void;
-  onAbort: () => Promise<void>;
-  onContinue: () => Promise<void>;
+  /**
+   * Both receive the operation the panel showed when the user chose, so Main
+   * can refuse one that replaced it in the meantime (#17559).
+   */
+  onAbort: (chosen: RepoOperationPin) => Promise<void>;
+  onContinue: (chosen: RepoOperationPin) => Promise<void>;
   /**
    * `operation` (default) owns the whole pane during a merge, rebase,
    * cherry-pick or revert: the operation header, the worklist, the resolved
@@ -458,6 +463,9 @@ export function ConflictPanel({
 }: ConflictPanelProps) {
   const isWorklist = variant === "worklist";
   const [isAbortOpen, setIsAbortOpen] = useState(false);
+  // The operation on screen when Abort opened its confirm, which is the one
+  // the confirm asks about and the one its approval may end.
+  const [abortChosen, setAbortChosen] = useState<RepoOperationPin | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<{
     filePath: string;
     choice: ConflictSideChoice;
@@ -522,6 +530,22 @@ export function ConflictPanel({
   );
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
   const operationNoun = operationLabel.toLowerCase();
+  const shownOperationId = status.repoOperationId;
+
+  // A status read showing a different operation than the open abort confirm
+  // asks about closes it: its question, and any approval of it, are about an
+  // operation that is gone. An unidentified read leaves it open; Main checks
+  // the approval against the worktree anyway, and refuses a mismatch. Never
+  // mid-abort, when the operation ending is the abort itself succeeding.
+  if (
+    isAbortOpen &&
+    !isAborting &&
+    abortChosen !== null &&
+    (abortChosen.operation !== operationKey ||
+      (shownOperationId !== null && shownOperationId !== abortChosen.operationId))
+  ) {
+    setIsAbortOpen(false);
+  }
 
   // Filter optimistic resolves out of the live worklist so the row leaves the
   // list as soon as `onMarkResolved` is called. The parent status refresh
@@ -658,27 +682,33 @@ export function ConflictPanel({
   }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
+    if (abortChosen === null) return;
     const unmoved = startUnmoved();
     setIsAborting(true);
     try {
-      await onAbort();
+      await onAbort(abortChosen);
       if (unmoved()) setIsAbortOpen(false);
+    } catch {
+      // The hub's banner reports it, and the confirm stays open over it. These
+      // run from click handlers, where a rethrow is only an unhandled rejection.
     } finally {
       if (unmoved()) setIsAborting(false);
     }
-  }, [onAbort]);
+  }, [abortChosen, onAbort]);
 
   const handleContinue = useCallback(async () => {
     // `aria-disabled` keeps Continue focusable, so the veto lives here.
-    if (continueBlocked) return;
+    if (continueBlocked || operationKey === null) return;
     const unmoved = startUnmoved();
     setIsContinuing(true);
     try {
-      await onContinue();
+      await onContinue({ operation: operationKey, operationId: shownOperationId });
+    } catch {
+      // Reported by the hub's banner, as for abort.
     } finally {
       if (unmoved()) setIsContinuing(false);
     }
-  }, [continueBlocked, onContinue]);
+  }, [continueBlocked, onContinue, operationKey, shownOperationId]);
 
   // Read at the moment of intent: by the time a resolve starts, the busy row
   // has disabled the control that held focus, or a dialog holds it.
@@ -915,7 +945,11 @@ export function ConflictPanel({
             <Button
               variant="ghost-danger"
               size="xs"
-              onClick={() => setIsAbortOpen(true)}
+              onClick={() => {
+                if (operationKey === null) return;
+                setAbortChosen({ operation: operationKey, operationId: shownOperationId });
+                setIsAbortOpen(true);
+              }}
               disabled={isAborting || isContinuing}
               className="shrink-0"
               data-testid="conflict-abort"

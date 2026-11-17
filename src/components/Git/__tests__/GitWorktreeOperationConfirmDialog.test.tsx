@@ -11,6 +11,8 @@ import type {
   GitBaseIntegrationBlocker,
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
+  RepoOperationPin,
+  StagingStatus,
 } from "@shared/types/git";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -288,6 +290,7 @@ describe("GitWorktreeOperationConfirmDialog — base integration blockers (#1718
       expect(outcome.result).toEqual({
         confirmed: true,
         pinned: { branch: "feature/topic", headOid: oid("3"), baseOid: oid("2") },
+        operation: null,
       });
     });
   });
@@ -321,5 +324,114 @@ describe("GitWorktreeOperationConfirmDialog — base integration blockers (#1718
 
     expect(screen.getByTestId("git-base-integration-nothing-to-replay")).toBeTruthy();
     expect(isDisabled(confirmButton("rebase-onto-base"))).toBe(false);
+  });
+});
+
+describe("GitWorktreeOperationConfirmDialog — abort binds to the operation it read (#17559)", () => {
+  const getStagingStatus = vi.fn();
+
+  function halted(overrides: Partial<StagingStatus> = {}): StagingStatus {
+    return {
+      staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 1 }],
+      unstaged: [],
+      conflicted: ["b.ts"],
+      conflictedFiles: [{ path: "b.ts", xy: "UU", label: "both modified" }],
+      isDetachedHead: false,
+      currentBranch: "feature/topic",
+      hasRemote: false,
+      pushDestination: null,
+      pullSource: null,
+      repoState: "MERGING",
+      repoOperationId: "merge-a",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+      ...overrides,
+    };
+  }
+
+  async function openAbort(operation: RepoOperationPin["operation"]) {
+    const outcome: { result: GitWorktreeOperationConfirmResult | null } = { result: null };
+    await act(async () => {
+      void useGitWorktreeOperationConfirmStore
+        .getState()
+        .requestConfirmation({ kind: "abort-operation", cwd: "/repo", operation })
+        .then((result) => {
+          outcome.result = result;
+        });
+    });
+    return outcome;
+  }
+
+  const abortButton = (label: string) => screen.getByRole("button", { name: `Abort ${label}` });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: { git: { getStagingStatus } },
+    });
+  });
+
+  afterEach(() => {
+    if (useGitWorktreeOperationConfirmStore.getState().pendingConfirm) {
+      useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
+    }
+    cleanup();
+    vi.restoreAllMocks();
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  it("approves the operation its own read found, not the one the menu named", async () => {
+    getStagingStatus.mockResolvedValue(halted());
+    render(<GitWorktreeOperationConfirmDialog />);
+    const outcome = await openAbort("REBASING");
+
+    expect(getStagingStatus).toHaveBeenCalledWith("/repo");
+    await act(async () => {
+      abortButton("merge").click();
+    });
+    expect(outcome.result).toEqual({
+      confirmed: true,
+      pinned: null,
+      operation: { operation: "MERGING", operationId: "merge-a" },
+    });
+  });
+
+  it("holds approval when the read fails, and offers Retry", async () => {
+    getStagingStatus.mockRejectedValueOnce(new Error("index.lock exists"));
+    render(<GitWorktreeOperationConfirmDialog />);
+    const outcome = await openAbort("MERGING");
+
+    expect(isDisabled(abortButton("merge"))).toBe(true);
+    await act(async () => {
+      abortButton("merge").click();
+    });
+    expect(outcome.result).toBeNull();
+
+    getStagingStatus.mockResolvedValue(halted({ repoOperationId: "merge-b" }));
+    await act(async () => {
+      screen.getByTestId("git-abort-operation-retry").click();
+    });
+    expect(isDisabled(abortButton("merge"))).toBe(false);
+    await act(async () => {
+      abortButton("merge").click();
+    });
+    expect(outcome.result?.operation).toEqual({ operation: "MERGING", operationId: "merge-b" });
+  });
+
+  it("holds approval for an operation the read couldn't identify", async () => {
+    getStagingStatus.mockResolvedValue(halted({ repoState: "REBASING", repoOperationId: null }));
+    render(<GitWorktreeOperationConfirmDialog />);
+    const outcome = await openAbort("REBASING");
+
+    expect(screen.getByTestId("git-abort-operation-unidentified")).toBeTruthy();
+    expect(isDisabled(abortButton("rebase"))).toBe(true);
+    await act(async () => {
+      abortButton("rebase").click();
+    });
+    expect(outcome.result).toBeNull();
   });
 });

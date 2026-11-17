@@ -183,6 +183,7 @@ describe("ConflictPanel path tooltips", () => {
       pushDestination: null,
       pullSource: null,
       repoState: "MERGING",
+      repoOperationId: null,
       rebaseStep: null,
       rebaseTotalSteps: null,
       rebaseSequence: null,
