@@ -200,6 +200,24 @@ function holdSubmits() {
 }
 
 describe("HybridInputBar's fleet send", () => {
+  it("composes for the fleet when its only peer is another host's agent (#17182)", async () => {
+    useFleetArmingStore.getState().armIds(["term-1"]);
+    const remote = "host-fleet:studio:r-1";
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: remote,
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: "r-1",
+      title: "remote",
+    });
+    const fleetChrome = () => document.querySelector("[data-fleet-armed='true']");
+    await mount();
+    expect(fleetChrome()).not.toBeNull();
+
+    act(() => useFleetArmingStore.getState().disarmCrossHostTarget(remote));
+    expect(fleetChrome()).toBeNull();
+  });
+
   it("clears the draft once the broadcast has gone out", async () => {
     const { view, type, pressEnter, settle, onSend, draft } = await mount();
     await type("to everyone");
