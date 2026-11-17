@@ -490,6 +490,8 @@ describe("resources/list reads its independent categories together (#17492)", ()
       (err: unknown) => err
     );
     await settle();
+    // Both refusals have to exist for the precedence to mean anything.
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.list", {});
     worktrees.reject(new SessionBindingError(1));
 
     const err = (await outcome) as { message?: string; data?: { code?: string } } | null;
