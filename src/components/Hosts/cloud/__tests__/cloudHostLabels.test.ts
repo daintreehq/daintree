@@ -331,6 +331,20 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(canDeleteMachines(BOAT_PROVIDER)).toBe(true);
   });
 
+  it("words a stopped machine's bill as its provider does, still pointing to Delete", () => {
+    const billed = provider({ stoppedComputeBilled: true, deletion: true });
+    billed.capabilities = {
+      ...billed.capabilities,
+      persistence: {
+        ...billed.capabilities.persistence,
+        stoppedBilling: "Acme bills a stopped box in full until it's deleted.",
+      },
+    };
+    expect(stoppedBillingSentence(billed)).toBe(
+      "Acme bills a stopped box in full until it's deleted. To stop paying for it, remove the host and delete its machine."
+    );
+  });
+
   it("says a stopped machine still bills, and that deleting it is how to stop paying", () => {
     const billed = provider({ stoppedComputeBilled: true, deletion: true });
     expect(stoppedBillingSentence(billed)).toBe(

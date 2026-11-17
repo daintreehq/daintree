@@ -7,6 +7,11 @@ import { Agent37Provider } from "./agent37/Agent37Provider.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
 import { BoatProvider } from "./boat/BoatProvider.js";
 import { CloudAccountService } from "./CloudAccountService.js";
+import {
+  DigitalOceanClient,
+  resolveDigitalOceanApiUrl,
+} from "./digitalocean/DigitalOceanClient.js";
+import { DigitalOceanProvider } from "./digitalocean/DigitalOceanProvider.js";
 import { KeychainCloudCredentialVault } from "./CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsStoreBackend } from "./CloudHostStore.js";
 import { CloudHosts } from "./CloudHosts.js";
@@ -21,6 +26,19 @@ export interface CloudHostsRuntime {
   dispose(): void;
 }
 
+/** One client per API origin, made the first time an account there is used. */
+function clientCache<C>(make: (baseUrl: string) => C): (apiUrl: string) => C {
+  const clients = new Map<string, C>();
+  return (apiUrl) => {
+    let client = clients.get(apiUrl);
+    if (!client) {
+      client = make(apiUrl);
+      clients.set(apiUrl, client);
+    }
+    return client;
+  };
+}
+
 /**
  * Builds the cloud side of Remote Hosts. Costs nothing until an account is
  * connected: no request is made and no file is written before then.
@@ -33,33 +51,19 @@ export function initCloudHosts(params: {
 }): CloudHostsRuntime {
   const store = new CloudHostStore(params.backend);
   const boatUrl = resolveBoatApiUrl(app.isPackaged);
-  const clients = new Map<string, BoatClient>();
-  const boatClientFor = (apiUrl: string): BoatClient => {
-    let client = clients.get(apiUrl);
-    if (!client) {
-      client = new BoatClient({ baseUrl: apiUrl });
-      clients.set(apiUrl, client);
-    }
-    return client;
-  };
-  const agent37Clients = new Map<string, Agent37Client>();
-  const agent37ClientFor = (apiUrl: string): Agent37Client => {
-    let client = agent37Clients.get(apiUrl);
-    if (!client) {
-      client = new Agent37Client({ baseUrl: apiUrl });
-      agent37Clients.set(apiUrl, client);
-    }
-    return client;
-  };
   const providers = new CloudProviderRegistry();
-  providers.register(new BoatProvider(boatClientFor), {
+  providers.register(new BoatProvider(clientCache((baseUrl) => new BoatClient({ baseUrl }))), {
     owner: { kind: "built-in" },
     apiUrl: boatUrl,
   });
-  providers.register(new Agent37Provider(agent37ClientFor), {
-    owner: { kind: "built-in" },
-    apiUrl: resolveAgent37ApiUrl(app.isPackaged),
-  });
+  providers.register(
+    new Agent37Provider(clientCache((baseUrl) => new Agent37Client({ baseUrl }))),
+    { owner: { kind: "built-in" }, apiUrl: resolveAgent37ApiUrl(app.isPackaged) }
+  );
+  providers.register(
+    new DigitalOceanProvider(clientCache((baseUrl) => new DigitalOceanClient({ baseUrl }))),
+    { owner: { kind: "built-in" }, apiUrl: resolveDigitalOceanApiUrl(app.isPackaged) }
+  );
   const accounts = new CloudAccountService({
     store,
     vault: new KeychainCloudCredentialVault(

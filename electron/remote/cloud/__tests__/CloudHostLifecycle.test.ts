@@ -381,6 +381,39 @@ describe("CloudHostLifecycle.create", () => {
     });
   });
 
+  it("reads a create the provider turned down as refused, so Retry sends a fresh one", async () => {
+    const turnedDown = new Error("Size is not available in this region.");
+    const { lifecycle, provider, store } = await setup(
+      {},
+      {
+        adapt: (provider) => {
+          const describe = provider.describeError.bind(provider);
+          provider.describeError = (error) =>
+            error === turnedDown
+              ? { code: "refused", message: `Acme turned this down: ${turnedDown.message}`, at: 0 }
+              : describe(error);
+        },
+      }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(turnedDown);
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "refused",
+      message: "Acme turned this down: Size is not available in this region.",
+    });
+    await lifecycle.retryCreate("build");
+    const keys = vi.mocked(provider.create).mock.calls.map(([, request]) => request.idempotencyKey);
+    expect(keys[1]).not.toBe(keys[0]);
+    // Nothing was made by the refusal, so the retry doesn't go looking for it first.
+    expect(provider.list).not.toHaveBeenCalled();
+  });
+
   it("refuses a size the account can't have before anything is sent", async () => {
     const { lifecycle, provider, store } = await setup();
     await expect(

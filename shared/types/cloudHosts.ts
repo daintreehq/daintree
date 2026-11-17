@@ -19,7 +19,7 @@ import type { HostId } from "./remoteHosts.js";
 export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
 /** The providers compiled into this build; the open union keeps their names autocompleting. */
-export type BuiltInCloudProviderId = "boat" | "agent37";
+export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean";
 
 /** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
 export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
@@ -79,6 +79,12 @@ export interface CloudProviderPersistence {
    * cuts the bill to storage rather than ending it.
    */
   stoppedStorageBilled: boolean;
+  /**
+   * For one that bills a stopped machine for compute, what a stopped machine
+   * bills, as one sentence in the provider's own terms; the general wording
+   * when absent.
+   */
+  stoppedBilling?: string;
 }
 
 /**
@@ -369,7 +375,7 @@ export interface CloudCatalog {
   machineTypes: CloudMachineType[];
   /**
    * What a create may name, per dimension the provider takes; null for a
-   * dimension it doesn't. Boat takes none.
+   * dimension it doesn't. Boat takes none; DigitalOcean a region and an image.
    */
   provisioning: Record<CloudProvisioningDimension, CloudProvisioningOptions | null>;
   /** What this account's last create named on this device; null before its first. */
@@ -439,6 +445,8 @@ export type CloudHostErrorCode =
   | "outcome-unknown"
   | "unsupported"
   | "lifetime-renewal"
+  /** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
+  | "refused"
   | "failed";
 
 /**

@@ -46,7 +46,10 @@ export function stoppedBillingSentence(provider: CloudProviderTerms | null): str
     const stopPaying = provider.capabilities.deletion
       ? "remove the host and delete its machine"
       : `delete the machine in ${provider.name}'s console`;
-    return `${provider.name} keeps billing a stopped machine for compute until it's deleted. To stop paying for it, ${stopPaying}.`;
+    const bills =
+      provider.capabilities.persistence.stoppedBilling ??
+      `${provider.name} keeps billing a stopped machine for compute until it's deleted.`;
+    return `${bills} To stop paying for it, ${stopPaying}.`;
   }
   if (!provider.capabilities.persistence.stoppedStorageBilled) return null;
   const parked =

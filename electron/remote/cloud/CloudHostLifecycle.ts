@@ -161,6 +161,7 @@ const DEFINITE_REFUSALS = new Set<CloudHostError["code"]>([
   "capacity",
   "ssh-authorization",
   "unsupported",
+  "refused",
 ]);
 const LABEL_BINDING = "daintree-binding";
 
