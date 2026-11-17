@@ -197,6 +197,17 @@ interface CommitPanelProps {
   onCommit: (message: string) => Promise<void>;
   /** `target` is what the push is pinned to once the commit lands (#16790). */
   onCommitAndPush: (message: string, target: CommitPushTarget) => Promise<void>;
+  /**
+   * The branch has no commit yet, so git names no destination for its push
+   * and this panel has nothing to preview it against (#17588). Commit & push
+   * then goes to `onCommitThenReviewPush` instead of the confirm here.
+   */
+  isUnbornBranch?: boolean;
+  /**
+   * Makes the commit, then reviews its push in the standalone push confirm,
+   * which reads the destination git resolves once the branch exists.
+   */
+  onCommitThenReviewPush: (message: string) => Promise<void>;
   onFocusBlocker?: (blocker: "conflicts" | "staged-files") => void;
   isPushing: boolean;
   pushProgress: Map<string, PushProgressEvent>;
@@ -236,6 +247,8 @@ export function CommitPanel({
   onRestoreCommitSeed,
   onCommit,
   onCommitAndPush,
+  isUnbornBranch = false,
+  onCommitThenReviewPush,
   onFocusBlocker,
   isPushing,
   pushProgress,
@@ -485,12 +498,35 @@ export function CommitPanel({
     [canCommit, actionsBusy, stagedCount, onCommitAndPush]
   );
 
+  const handleCommitThenReviewPush = useCallback(async () => {
+    if (!canCommit || actionsBusy) return;
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setPendingCount(stagedCount);
+    setPendingAction("commit-push");
+    try {
+      await onCommitThenReviewPush(commitMessage);
+    } catch {
+      // Error is handled by the parent via setActionError
+    } finally {
+      setPendingAction(null);
+      actionInFlightRef.current = false;
+    }
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitThenReviewPush]);
+
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
       focusBlocker();
       return;
     }
     if (actionsBusy) return;
+    if (hasRemote && isUnbornBranch) {
+      // Nothing here can preview this push: git names no destination for a
+      // branch with no commit (#17588). The opt-out does not skip that review
+      // either, since no destination was ever on screen to opt out of.
+      void handleCommitThenReviewPush();
+      return;
+    }
     if (hasRemote) {
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
@@ -523,6 +559,8 @@ export function CommitPanel({
     isBlocked,
     actionsBusy,
     hasRemote,
+    isUnbornBranch,
+    handleCommitThenReviewPush,
     pushDestination,
     currentBranch,
     skipPushConfirm,
@@ -756,6 +794,11 @@ export function CommitPanel({
     });
   } else if (isVerifying) {
     statusContent = "Checking staged changes…";
+  } else if (hasRemote && isUnbornBranch) {
+    // Not the missing-destination warning below: nothing is misconfigured, the
+    // branch just has no commit for git to name a destination by yet.
+    statusContent = `${stagedSummary} · first commit · push is reviewed once it's made`;
+    statusTooltip = statusContent;
   } else if (hasRemote) {
     // A push with nowhere to go will be refused, so it carries the warning mark
     // the other blockers on this line do.

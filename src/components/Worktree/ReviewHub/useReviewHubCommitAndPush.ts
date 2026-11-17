@@ -235,6 +235,30 @@ export function useReviewHubCommitAndPush({
     [worktreePath]
   );
 
+  // The commit half of both Commit & push paths. A failure lands in the action
+  // banner and rethrows, so nothing after it runs.
+  const commitForPush = useCallback(
+    async (message: string): Promise<GitCommitResult> => {
+      let committed: GitCommitResult;
+      try {
+        committed = await window.electron.git.commit(worktreePath, message);
+      } catch (err) {
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
+        throw err;
+      }
+      onCommitted(worktreePath, message);
+      onHeadMoved(worktreePath);
+      // Same review reset as handleCommit — the changeset starts over.
+      useDiffViewedStore.getState().clearWorktree(worktreePath);
+      await refresh();
+      return committed;
+    },
+    [worktreePath, refresh, setActionError, onCommitted, onHeadMoved]
+  );
+
   const handleCommitAndPush = useCallback(
     async (message: string, target: CommitPushTarget) => {
       setActionError(null);
@@ -242,21 +266,7 @@ export function useReviewHubCommitAndPush({
       debouncedBgRefreshRef.current?.cancel();
       setIsCommitPushInFlight(true);
       try {
-        let committed: GitCommitResult;
-        try {
-          committed = await window.electron.git.commit(worktreePath, message);
-        } catch (err) {
-          setActionError({
-            title: "Couldn't commit changes",
-            detail: formatErrorMessage(err, "Failed to commit changes"),
-          });
-          throw err;
-        }
-        onCommitted(worktreePath, message);
-        onHeadMoved(worktreePath);
-        // Same review reset as handleCommit — the changeset starts over.
-        useDiffViewedStore.getState().clearWorktree(worktreePath);
-        await refresh();
+        const committed = await commitForPush(message);
         const review = reviewForCommittedPush(committed, target);
         if (!review) {
           withholdPush(
@@ -272,16 +282,7 @@ export function useReviewHubCommitAndPush({
         setIsCommitPushInFlight(false);
       }
     },
-    [
-      worktreePath,
-      refresh,
-      runPush,
-      withholdPush,
-      setActionError,
-      debouncedBgRefreshRef,
-      onCommitted,
-      onHeadMoved,
-    ]
+    [commitForPush, runPush, withholdPush, setActionError, debouncedBgRefreshRef]
   );
 
   const handleRetryPush = useCallback(async () => {
@@ -304,6 +305,29 @@ export function useReviewHubCommitAndPush({
     if (!result.confirmed) return;
     await runPush(result.review);
   }, [worktreePath, runPush]);
+
+  /**
+   * Commit & push on a branch with no commit yet (#17588). Git names no push
+   * destination before a branch's first commit, so there was nothing to preview
+   * the push against: the commit is made first, and the push then goes through
+   * the same review Push uses, against the destination and history git reports
+   * once the branch exists. Declining it leaves the commit, as Commit would.
+   */
+  const handleCommitThenReviewPush = useCallback(
+    async (message: string) => {
+      setActionError(null);
+      setPushError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      setIsCommitPushInFlight(true);
+      try {
+        await commitForPush(message);
+        await handlePushClean();
+      } finally {
+        setIsCommitPushInFlight(false);
+      }
+    },
+    [commitForPush, handlePushClean, setActionError, debouncedBgRefreshRef]
+  );
 
   const handlePullRebase = useCallback(
     async (review: GitPullRebaseReview) => {
@@ -414,6 +438,7 @@ export function useReviewHubCommitAndPush({
     pullRebasing,
     handleCommit,
     handleCommitAndPush,
+    handleCommitThenReviewPush,
     handleRetryPush,
     handlePushClean,
     confirmPullRebase,

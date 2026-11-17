@@ -406,6 +406,7 @@ export function ReviewHubContent({
     pullRebasing,
     handleCommit,
     handleCommitAndPush,
+    handleCommitThenReviewPush,
     handleRetryPush,
     handlePushClean,
     confirmPullRebase,
@@ -2591,6 +2592,8 @@ export function ReviewHubContent({
               onRestoreCommitSeed={restoreCommitSeed}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
+              isUnbornBranch={status.isUnbornBranch === true}
+              onCommitThenReviewPush={handleCommitThenReviewPush}
               onFocusBlocker={handleFocusBlocker}
               isPushing={isPushing}
               pushProgress={pushProgress}

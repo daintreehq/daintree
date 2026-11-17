@@ -16,6 +16,7 @@ vi.mock("@/clients/operationsClient", () => ({ mintRemoteOperationId: () => unde
 
 import { useReviewHubCommitAndPush } from "../useReviewHubCommitAndPush";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 
 const PATH = "/repo";
 const DESTINATION = { remote: "origin", branch: "feature/x" };
@@ -227,5 +228,99 @@ describe("useReviewHubCommitAndPush — tip moves (#17196)", () => {
       await result.current.confirmPullRebase();
     });
     expect(headMoved).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
+  const ROOT: GitCommitResult = { ...COMMITTED, parentOids: [] };
+  const FIRST_PUSH = {
+    branch: "main",
+    headOid: ROOT.oid!,
+    destination: { remote: "origin", branch: "main" },
+  };
+  const originalRequestConfirmation = useGitPushConfirmStore.getState().requestConfirmation;
+
+  afterEach(() => {
+    useGitPushConfirmStore.setState({ requestConfirmation: originalRequestConfirmation });
+  });
+
+  function reviewPush(result: Awaited<ReturnType<typeof originalRequestConfirmation>>) {
+    const order: string[] = [];
+    commit.mockImplementation(async () => {
+      order.push("commit");
+      return ROOT;
+    });
+    const requestConfirmation = vi.fn(async (cwd: string) => {
+      order.push(`review ${cwd}`);
+      return result;
+    });
+    useGitPushConfirmStore.setState({ requestConfirmation });
+    return { order, requestConfirmation };
+  }
+
+  it("reviews the push only once the commit has landed, and pushes what the review approved", async () => {
+    const { order } = reviewPush({ confirmed: true, review: FIRST_PUSH });
+    const { result } = renderPushHook();
+
+    await act(() => result.current.handleCommitThenReviewPush("Initial commit"));
+
+    expect(commit).toHaveBeenCalledWith(PATH, "Initial commit");
+    expect(order).toEqual(["commit", `review ${PATH}`]);
+    expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, FIRST_PUSH);
+    expect(result.current.isCommitPushInFlight).toBe(false);
+  });
+
+  it("keeps the commit and pushes nothing when the review is declined", async () => {
+    reviewPush({ confirmed: false, review: null });
+    const { result } = renderPushHook();
+
+    await act(() => result.current.handleCommitThenReviewPush("Initial commit"));
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(result.current.pushError).toBeNull();
+  });
+
+  it("asks for no review when the commit fails", async () => {
+    const { requestConfirmation } = reviewPush({ confirmed: true, review: FIRST_PUSH });
+    commit.mockRejectedValue(new Error("nothing to commit"));
+    const { result } = renderPushHook();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitThenReviewPush("Initial commit").then(
+        () => "resolved",
+        (err: unknown) => err
+      );
+    });
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  // The composer stays mounted on this flag, so a review that empties the
+  // tree must not unmount it before the push's progress has somewhere to show.
+  it("holds the composer in flight while the push review is open", async () => {
+    let approve!: (value: Awaited<ReturnType<typeof originalRequestConfirmation>>) => void;
+    commit.mockResolvedValue(ROOT);
+    useGitPushConfirmStore.setState({
+      requestConfirmation: vi.fn(() => new Promise((resolve) => (approve = resolve))),
+    });
+    const { result } = renderPushHook();
+
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    expect(result.current.isCommitPushInFlight).toBe(true);
+
+    await act(async () => {
+      approve({ confirmed: true, review: FIRST_PUSH });
+      await done;
+    });
+    expect(result.current.isCommitPushInFlight).toBe(false);
+    expect(push).toHaveBeenCalledTimes(1);
   });
 });

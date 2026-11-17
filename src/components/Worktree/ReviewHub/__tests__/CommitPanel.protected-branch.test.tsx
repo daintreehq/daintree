@@ -143,6 +143,7 @@ function renderPanel(overrides: RenderProps = {}) {
       onCommitMessageChange={vi.fn()}
       onCommit={vi.fn().mockResolvedValue(undefined)}
       onCommitAndPush={onCommitAndPush}
+      onCommitThenReviewPush={vi.fn().mockResolvedValue(undefined)}
       isPushing={false}
       pushProgress={new Map()}
       pushTargetBranch={null}
