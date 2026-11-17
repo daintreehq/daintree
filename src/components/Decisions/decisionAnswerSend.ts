@@ -6,12 +6,10 @@ import {
   type AnswerHold,
   type AnswerPhase,
   type AnswerRecord,
+  type AnswerSubmission,
 } from "@/store/decisionsAnswerStore";
 import { reviewKey, useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
-import type {
-  DecisionAnswerOutcome,
-  DecisionQuestionAnswerResult,
-} from "@shared/types/decisionsQuestion";
+import type { DecisionQuestionAnswerResult } from "@shared/types/decisionsQuestion";
 import { answerPayload, composeVerdict, isAnswerable } from "./decisionComposeModel";
 import {
   questionOf,
@@ -40,6 +38,12 @@ export function canStartAnswer(record: AnswerRecord): boolean {
   return record.submission === null || !isCommitted(record.submission.phase);
 }
 
+/** The answer one send or one recovery is about: the store's generation then, and its id. */
+interface Claim {
+  generation: number;
+  answerId: string;
+}
+
 /** Changes the record, unless Decisions was cleared since `generation`. */
 function change(
   key: string,
@@ -52,13 +56,38 @@ function change(
   return true;
 }
 
-/** Moves the submission under `answerId` on, unless another one has replaced it. */
-function setPhase(key: string, generation: number, answerId: string, phase: AnswerPhase): void {
-  change(key, generation, (record) =>
-    record.submission?.answerId === answerId
-      ? { ...record, submission: { ...record.submission, phase } }
-      : record
+/** The claimed submission, while nothing has cleared or replaced it. */
+function claimed(key: string, claim: Claim): AnswerSubmission | null {
+  const store = useDecisionsAnswerStore.getState();
+  if (store.generation !== claim.generation) return null;
+  const submission = store.records[key]?.submission ?? null;
+  return submission?.answerId === claim.answerId ? submission : null;
+}
+
+function updateClaimed(
+  key: string,
+  claim: Claim,
+  edit: (submission: AnswerSubmission, record: AnswerRecord) => AnswerRecord
+): void {
+  change(key, claim.generation, (record) =>
+    record.submission?.answerId === claim.answerId ? edit(record.submission, record) : record
   );
+}
+
+function setPhase(key: string, claim: Claim, phase: AnswerPhase): void {
+  updateClaimed(key, claim, (submission, record) => ({
+    ...record,
+    submission: { ...submission, phase },
+  }));
+}
+
+/** Lets go of an answer nothing was committed for, saying why it wasn't sent; the draft stays. */
+function drop(key: string, claim: Claim, reason: AnswerHold): void {
+  updateClaimed(key, claim, (_submission, record) => ({
+    ...record,
+    submission: null,
+    hold: reason,
+  }));
 }
 
 function hold(key: string, generation: number, reason: AnswerHold): void {
@@ -76,70 +105,101 @@ function phaseOf(result: DecisionQuestionAnswerResult): AnswerPhase {
   }
 }
 
-function settled(outcome: DecisionAnswerOutcome): AnswerPhase {
-  return { kind: "settled", outcome };
-}
-
-/** Hands the record's submission to main to sign, as it was built: same answer, same id. */
-async function submit(key: string, generation: number): Promise<void> {
-  const submission = readAnswerRecord(key).submission;
-  if (submission === null) return;
-  const { answerId } = submission;
+/**
+ * Hands the claimed submission to main to sign, as it was built: same answer,
+ * same id. Resolves `lost` when the reply never came back, so its standing
+ * has to be read by its id.
+ */
+async function submitOnce(key: string, claim: Claim): Promise<"replied" | "lost" | "gone"> {
+  const submission = claimed(key, claim);
+  if (submission === null) return "gone";
   let result: DecisionQuestionAnswerResult;
   try {
     result = await decisionsClient.answerQuestion(submission.payload);
   } catch {
-    // Main may have committed it before the reply was lost: read it by its id rather than guess.
-    setPhase(key, generation, answerId, { kind: "checking" });
-    await followAnswer(key);
-    return;
+    return "lost";
   }
-  setPhase(key, generation, answerId, phaseOf(result));
+  setPhase(key, claim, phaseOf(result));
+  return "replied";
 }
 
+/** Answers being followed now, by question and id, so two reads of one never race each other. */
+const following = new Set<string>();
+
 /**
- * Reads where the record's submission stands, by its id. One main never
- * committed is submitted again under the same id, once; after that, or when
- * the read itself fails, it waits for the person to retry.
+ * Reads where the claimed submission stands, by its id. One main never
+ * committed is sent again under the same id, once, and only while the
+ * question still takes it at the revision it was signed against; one never
+ * committed twice is let go, so the person can send it again.
  */
-export async function followAnswer(key: string): Promise<void> {
-  const generation = useDecisionsAnswerStore.getState().generation;
-  const submission = readAnswerRecord(key).submission;
-  if (submission === null) return;
-  const { answerId } = submission;
-  let read;
+async function follow(key: string, claim: Claim): Promise<void> {
+  const lock = `${key}\u0000${claim.answerId}`;
+  if (following.has(lock)) return;
+  following.add(lock);
   try {
-    read = await decisionsClient.getAnswerResult(answerId);
-  } catch {
-    setPhase(key, generation, answerId, { kind: "lost" });
-    return;
-  }
-  switch (read.result) {
-    case "read":
-      setPhase(key, generation, answerId, settled(read.outcome));
+    // Retry goes as it starts, so it can't be pressed twice.
+    if (claimed(key, claim)?.phase.kind === "lost") setPhase(key, claim, { kind: "checking" });
+    let read;
+    try {
+      read = await decisionsClient.getAnswerResult(claim.answerId);
+    } catch {
+      setPhase(key, claim, { kind: "lost" });
       return;
-    case "not-found":
-      if (submission.resubmitted) {
-        setPhase(key, generation, answerId, { kind: "lost" });
+    }
+    const submission = claimed(key, claim);
+    if (submission === null) return;
+    switch (read.result) {
+      case "read":
+        setPhase(key, claim, { kind: "settled", outcome: read.outcome });
         return;
-      }
-      change(key, generation, (record) =>
-        record.submission?.answerId === answerId
-          ? {
-              ...record,
-              submission: { ...record.submission, resubmitted: true, phase: { kind: "sending" } },
-            }
-          : record
-      );
-      await submit(key, generation);
+      case "off":
+        setPhase(key, claim, { kind: "refused", reason: "off" });
+        return;
+      case "not-running":
+        setPhase(key, claim, { kind: "lost" });
+        return;
+      case "not-found":
+        break;
+    }
+    if (submission.resubmitted) {
+      drop(key, claim, "unsent");
       return;
-    case "off":
-      setPhase(key, generation, answerId, { kind: "refused", reason: "off" });
+    }
+    let fresh;
+    try {
+      fresh = await readTargetContent(submission.target);
+    } catch {
+      fresh = null;
+    }
+    if (claimed(key, claim) === null) return;
+    if (fresh === null || fresh.result !== "read") {
+      setPhase(key, claim, { kind: "lost" });
       return;
-    case "not-running":
-      setPhase(key, generation, answerId, { kind: "lost" });
+    }
+    if (!isAnswerable(fresh.question, Date.now())) {
+      drop(key, claim, "closed");
       return;
+    }
+    if (fresh.question.revision !== submission.payload.expectedRevision) {
+      drop(key, claim, "changed");
+      return;
+    }
+    updateClaimed(key, claim, (current, record) => ({
+      ...record,
+      submission: { ...current, resubmitted: true, phase: { kind: "sending" } },
+    }));
+    if ((await submitOnce(key, claim)) === "lost") setPhase(key, claim, { kind: "lost" });
+  } finally {
+    following.delete(lock);
   }
+}
+
+/** Reads where the record's answer stands now: a queued one's progress, or a lost one's Retry. */
+export function followAnswer(key: string): Promise<void> {
+  const store = useDecisionsAnswerStore.getState();
+  const submission = store.records[key]?.submission ?? null;
+  if (submission === null) return Promise.resolve();
+  return follow(key, { generation: store.generation, answerId: submission.answerId });
 }
 
 /**
@@ -183,12 +243,23 @@ export async function sendAnswer(
     hold(key, generation, "changed");
     return;
   }
-  const answerId = crypto.randomUUID();
-  const payload = answerPayload(question, draft, reviewed, answerId);
+  const claim: Claim = { generation, answerId: crypto.randomUUID() };
+  const payload = answerPayload(question, draft, reviewed, claim.answerId);
   const placed = change(key, generation, (record) => ({
     ...record,
     preparing: false,
-    submission: { answerId, payload, phase: { kind: "sending" }, resubmitted: false },
+    submission: {
+      answerId: claim.answerId,
+      payload,
+      target,
+      phase: { kind: "sending" },
+      resubmitted: false,
+    },
   }));
-  if (placed) await submit(key, generation);
+  if (!placed) return;
+  // Main may have committed it before the reply was lost: read it by its id rather than guess.
+  if ((await submitOnce(key, claim)) === "lost") {
+    setPhase(key, claim, { kind: "checking" });
+    await follow(key, claim);
+  }
 }

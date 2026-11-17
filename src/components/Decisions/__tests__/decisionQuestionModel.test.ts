@@ -87,8 +87,10 @@ describe("decisionQuestionModel", () => {
   it("names an answer given on the computer apart from a phone's (#17102)", () => {
     const computer = threadEntryHeading(answer({ onComputer: true }));
     expect(computer).not.toBe(threadEntryHeading(answer()));
-    expect(computer).toMatch(/computer/);
-    expect(threadEntryHeading(answer({ onComputer: true, correction: true }))).not.toBe(computer);
+    expect(computer).toMatch(/^Answer .*computer/);
+    expect(threadEntryHeading(answer({ onComputer: true, correction: true }))).toMatch(
+      /^Correction .*computer/
+    );
     // A model answer is the model's wherever it was signed.
     expect(threadEntryHeading(answer({ from: "model", onComputer: true }))).toBe(
       threadEntryHeading(answer({ from: "model" }))

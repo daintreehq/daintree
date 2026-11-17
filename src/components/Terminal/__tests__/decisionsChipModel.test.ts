@@ -244,7 +244,7 @@ describe("answering here (#17102)", () => {
   it("invites an answer only while a question still waits for one", () => {
     const note = (state: PaneDecisionState, cancelling?: Set<string>) =>
       answerNote(decisionItems(state, "composer", cancelling));
-    expect(note(pane({ open: [open(1)] }))).not.toBeNull();
+    expect(note(pane({ open: [open(1)] }))).toMatch(/^Open a question to answer it here/);
     expect(note(pane({ open: [open(1, "queued")] }))).not.toBeNull();
     expect(note(pane({ open: [open(1)], waiting: [waiting(2)] }))).not.toBeNull();
     expect(note(pane({ waiting: [waiting(1)], attention: [stopped(2)] }))).toBeNull();
@@ -260,6 +260,12 @@ describe("answering here (#17102)", () => {
       expect(item.status).toMatch(/here/);
       expect(itemSentence(item)).toMatch(/here/);
     }
+    // Only a question already on the phones can be answered there.
+    expect(waitingRow!.status).toMatch(/^Waiting for an answer.*phone/);
+    expect(itemSentence(waitingRow!)).toMatch(/is waiting for an answer.*phone/);
+    expect(queuedRow!.status).toMatch(/^Queued to send/);
+    expect(queuedRow!.status).not.toMatch(/phone/);
+    expect(itemSentence(queuedRow!)).toMatch(/is queued to send/);
     expect(plain.status).not.toMatch(/answer it here|here or on your phone/);
   });
 });

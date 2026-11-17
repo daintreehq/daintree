@@ -66,7 +66,7 @@ describe("decisionsAnswerStore", () => {
     expect(isInFlight(sent)).toBe(true);
   });
 
-  it("clears everything and moves its generation on, so late replies change nothing", () => {
+  it("clears everything and moves its generation on", () => {
     const { update } = useDecisionsAnswerStore.getState();
     update("q", drafted);
     const before = useDecisionsAnswerStore.getState().generation;

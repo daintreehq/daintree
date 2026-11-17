@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   answerKey,
+  isInFlight,
   useAnswerRecord,
   useDecisionsAnswerStore,
   type AnswerRecord,
@@ -34,6 +35,8 @@ const FOCUS_TARGET =
 /** While an answer is queued, how long after one read of its standing the next starts. */
 const QUEUED_READ_MS = 2_000;
 
+const STALE_TEXT = "This question changed. Review the update before sending.";
+
 /** The longest a browser timer waits; a later expiry is checked again after this. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
@@ -46,10 +49,11 @@ function useExpiryClock(expiresAt: string | null): number {
   useEffect(() => {
     if (expiresAt === null) return;
     const at = Date.parse(expiresAt);
-    if (Number.isNaN(at)) return;
-    const delay = at - Date.now();
-    if (delay < 0) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.min(delay + 1, MAX_TIMER_MS));
+    // Nothing left to wait for once a render has seen it pass. One that passed
+    // between the render and here still moves the clock, at once.
+    if (Number.isNaN(at) || now >= at) return;
+    const delay = Math.max(0, at - Date.now()) + 1;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(delay, MAX_TIMER_MS));
     return () => clearTimeout(timer);
   }, [expiresAt, now]);
   return now;
@@ -90,6 +94,12 @@ export interface DecisionAnswerComposerProps {
   target: DecisionQuestionTarget;
   /** The question may have moved: read it again now rather than at the next change. */
   onMoved: () => void;
+}
+
+/** An answer from here whose fate isn't known yet: the question isn't offered for withdrawal meanwhile. */
+export function useAnswerInFlight(question: DecisionQuestionContent | null): boolean {
+  const record = useAnswerRecord(question === null ? "" : answerKey(question.reference));
+  return isInFlight(record);
 }
 
 /** Whether this question shows its composer rather than the plain list of its options. */
@@ -180,7 +190,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
         ? null
         : (attempt ?? (record.hold !== null ? holdText(record.hold) : null))
       : null;
-  const spoken = progress ?? closed ?? notice;
+  const spoken = progress ?? closed ?? (stale ? STALE_TEXT : notice);
 
   // Said once as it changes, never for what was already so when the view opened.
   const spokenRef = useRef(spoken);
@@ -190,15 +200,26 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
     if (spoken !== null) announce(spoken);
   }, [spoken, announce]);
 
-  // Sending takes the form away; focus that was in it goes to what replaced it.
-  const modeRef = useRef(mode);
+  // Send, Retry and the form itself go as the answer moves on; focus that was
+  // on one goes to where the answer stands rather than to the page.
+  const focusedInside = useRef(false);
+  const trackFocus = {
+    onFocus: () => {
+      focusedInside.current = true;
+    },
+    onBlur: (event: React.FocusEvent<HTMLElement>) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && !event.currentTarget.contains(next)) {
+        focusedInside.current = false;
+      }
+    },
+  };
   useEffect(() => {
-    const previous = modeRef.current;
-    modeRef.current = mode;
-    if (previous === "form" && mode !== "form" && document.activeElement === document.body) {
+    const active = document.activeElement;
+    if (focusedInside.current && (active === null || active === document.body)) {
       statusRef.current?.focus({ preventScroll: true });
     }
-  }, [mode]);
+  });
 
   const edit = (change: Partial<Omit<AnswerDraft, "revision">>) =>
     update(key, (current) => {
@@ -239,7 +260,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
   if (mode !== "form") {
     const lost = submission?.phase.kind === "lost";
     return (
-      <section className="flex flex-col gap-1.5" aria-label="Your answer">
+      <section className="flex flex-col gap-1.5" aria-label="Your answer" {...trackFocus}>
         <h3 className="text-xs font-medium text-text-secondary">Your answer</h3>
         <div
           ref={statusRef}
@@ -273,6 +294,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
       className="flex flex-col gap-3"
       aria-label="Your answer"
       data-testid="decision-answer-composer"
+      {...trackFocus}
     >
       <h3 className="text-xs font-medium text-text-secondary">Your answer</h3>
       <div ref={statusRef} tabIndex={-1} className={cn("flex flex-col gap-2", FOCUS_TARGET)}>
@@ -287,7 +309,7 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
             }
             data-testid="decision-answer-stale"
           >
-            This question changed. Review the update before sending.
+            {STALE_TEXT}
           </Callout>
         )}
         {notice !== null && (
@@ -324,7 +346,11 @@ export function DecisionAnswerComposer({ question, target, onMoved }: DecisionAn
             variant="ghost"
             size="xs"
             className="self-start"
-            onClick={() => edit({ selected: null })}
+            onClick={() => {
+              edit({ selected: null });
+              // This button goes with the choice; the answer is in the words now.
+              textRef.current?.focus({ preventScroll: true });
+            }}
           >
             Clear choice
           </Button>

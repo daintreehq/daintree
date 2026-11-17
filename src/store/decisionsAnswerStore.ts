@@ -5,6 +5,7 @@ import type {
   DecisionQuestionReference,
 } from "@shared/types/decisionsQuestion";
 import type { AnswerDraft } from "@/components/Decisions/decisionComposeModel";
+import type { DecisionQuestionTarget } from "@/components/Decisions/decisionQuestionTarget";
 
 /**
  * Where a person's answer from this view stands (#17102):
@@ -28,16 +29,19 @@ export interface AnswerSubmission {
   answerId: string;
   /** Exactly what was signed, so a retry is the same answer under the same id. */
   payload: AnswerDecisionQuestionPayload;
+  /** How the question was read, to read it again before an answer never committed goes again. */
+  target: DecisionQuestionTarget;
   phase: AnswerPhase;
   /** A `not-found` standing submits it again once, under the same id. */
   resubmitted: boolean;
 }
 
 /**
- * Why the last Send stopped before anything was signed: the question's last
- * read found it closed or changed, or it couldn't be read.
+ * Why the last Send ended with nothing sent: the question's last read found
+ * it closed or changed, or it couldn't be read; or (`unsent`) main twice
+ * reported no answer committed under its id, so it can go again under a new one.
  */
-export type AnswerHold = "closed" | "changed" | "unreadable" | "not-running" | "failed";
+export type AnswerHold = "closed" | "changed" | "unreadable" | "not-running" | "failed" | "unsent";
 
 export interface AnswerRecord {
   draft: AnswerDraft | null;

@@ -193,6 +193,11 @@ describe("composeVerdict", () => {
     expect(stale.hint).not.toBeNull();
     const closed = composeVerdict(input(content, { selected: "a", closed: true, stale: true }));
     expect(closed).toMatchObject({ canSend: false, hint: null });
+    // Closed alone holds an otherwise complete answer.
+    expect(composeVerdict(input(content, { selected: "a", closed: true }))).toMatchObject({
+      canSend: false,
+      hint: null,
+    });
   });
 });
 

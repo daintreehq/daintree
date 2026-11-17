@@ -23,6 +23,7 @@ import type {
 import {
   DecisionAnswerComposer,
   useAnswerComposerMode,
+  useAnswerInFlight,
   type AnswerComposerMode,
 } from "./DecisionAnswerComposer";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
@@ -362,7 +363,9 @@ export function DecisionQuestionDialog() {
 
   const current = tagged !== null && tagged.key === key ? tagged.read : null;
   const showSkeleton = useSkeletonGate(isOpen && current === null);
-  const answerMode = useAnswerComposerMode(current?.result === "read" ? current.question : null);
+  const readQuestion = current?.result === "read" ? current.question : null;
+  const answerMode = useAnswerComposerMode(readQuestion);
+  const answering = useAnswerInFlight(readQuestion) || answerMode === "progress";
   const reread = useCallback(() => setAttempt((n) => n + 1), []);
 
   const hasPrevious = index > 0;
@@ -429,7 +432,7 @@ export function DecisionQuestionDialog() {
     current?.result === "read" &&
     target !== null &&
     isWaiting(current.question.status) &&
-    answerMode !== "progress";
+    !answering;
   // The withdrawal asked about, while this view still shows that question.
   const cancelShown = cancel !== null && key === targetKey(cancel.target.question);
   const cancelStatus = cancelShown && current?.result === "read" ? current.question.status : null;

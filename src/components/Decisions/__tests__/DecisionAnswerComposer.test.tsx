@@ -39,6 +39,11 @@ const answerQuestion =
 const getAnswerResult =
   vi.fn<(payload: { answerId: string }) => Promise<DecisionAnswerResultRead>>();
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
+/** The view's bridge to main, as each test sets it up. */
+let decisionsBridge: Record<string, unknown> = {};
+
+/** Past one queued read's wait, so a read that would follow it has had its chance. */
+const PAST_ONE_QUEUED_READ_MS = 2_300;
 
 const REFERENCE = { hostId: "host_1", projectId: "project-1", terminalId: "t1" };
 
@@ -107,9 +112,19 @@ async function move(next: DecisionQuestionContent) {
   await act(async () => pushPane());
 }
 
+/**
+ * The composer mounts from a read that lands outside `act`, so it shows before
+ * its store subscriptions start; a click before then would go unrendered.
+ */
+async function settle() {
+  await act(async () => {});
+}
+
 async function openOn(...ids: string[]) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, ids[0]!));
-  return screen.findByTestId("decision-answer-composer");
+  const composer = await screen.findByTestId("decision-answer-composer");
+  await settle();
+  return composer;
 }
 
 function send() {
@@ -141,14 +156,15 @@ beforeEach(() => {
     outcome: { status: "sent" },
   }));
   getAnswerResult.mockReset().mockResolvedValue({ result: "not-found" });
+  decisionsBridge = {
+    getQuestionContent,
+    answerQuestion,
+    getAnswerResult,
+    getQuestionImage: () => new Promise(() => {}),
+    getQuestionSummaries: async () => ({ result: "not-running" }),
+  };
   Reflect.set(window, "electron", {
-    decisions: {
-      getQuestionContent,
-      answerQuestion,
-      getAnswerResult,
-      getQuestionImage: () => new Promise(() => {}),
-      getQuestionSummaries: async () => ({ result: "not-running" }),
-    },
+    decisions: decisionsBridge,
     events: { on: () => () => {} },
     terminal: {
       onDecisionState: (callback: (state: PaneDecisionState) => void) => {
@@ -333,7 +349,8 @@ describe("answering a question from the view (#17102)", () => {
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
     const notice = await screen.findByTestId("decision-answer-notice");
-    expect(notice.textContent).toMatch(/update/);
+    expect(notice.textContent).toMatch(/relay needs an update/);
+    expect(notice.textContent).not.toMatch(/computer that asked/);
     expect(notice.textContent).toMatch(/phone can still answer/);
     // The draft stays for when it can be sent.
     expect(option("Ship it").checked).toBe(true);
@@ -349,7 +366,8 @@ describe("answering a question from the view (#17102)", () => {
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
     const notice = await screen.findByTestId("decision-answer-notice");
-    expect(notice.textContent).toMatch(/computer that asked/);
+    expect(notice.textContent).toMatch(/computer that asked needs an update/);
+    expect(notice.textContent).not.toMatch(/relay/);
     expect(notice.textContent).toMatch(/phone can still answer/);
   });
 
@@ -359,18 +377,34 @@ describe("answering a question from the view (#17102)", () => {
       answerId: payload.answerId,
       outcome: { status: "queued" },
     }));
-    getAnswerResult.mockImplementation(async () => ({
-      result: "read",
-      questionId: "q1",
-      expectedRevision: 1,
-      outcome: { status: "sent" },
-    }));
+    // Still queued at the first read, taken at the second.
+    getAnswerResult
+      .mockResolvedValueOnce({
+        result: "read",
+        questionId: "q1",
+        expectedRevision: 1,
+        outcome: { status: "queued" },
+      })
+      .mockResolvedValue({
+        result: "read",
+        questionId: "q1",
+        expectedRevision: 1,
+        outcome: { status: "sent" },
+      });
+    // Not yet sent to the relay itself: it takes an answer all the same.
+    questions.q1 = question("q1", { status: "queued" });
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
     const answerId = answerQuestion.mock.calls[0]![0].answerId;
-    await waitFor(() => expect(getAnswerResult).toHaveBeenCalledWith({ answerId }));
+    await waitFor(() => expect(status()).toMatch(/queued/));
+    await waitFor(() => expect(getAnswerResult).toHaveBeenCalledTimes(2));
+    expect(getAnswerResult).toHaveBeenLastCalledWith({ answerId });
     await waitFor(() => expect(status()).toMatch(/^Answer sent$/));
+    // Taken: no more reads of its standing.
+    const reads = getAnswerResult.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, PAST_ONE_QUEUED_READ_MS));
+    expect(getAnswerResult).toHaveBeenCalledTimes(reads);
 
     const answered = {
       status: "human-answered" as const,
@@ -457,6 +491,168 @@ describe("answering a question from the view (#17102)", () => {
       for (const listener of onListeners) listener();
     });
     expect(useDecisionsAnswerStore.getState().records).toEqual({});
+  });
+
+  it.each([
+    ["not-owner", { result: "refused", reason: "not-owner" }, /doesn't sign answers/],
+    ["invalid", { result: "refused", reason: "invalid", detail: "x" }, /doesn't fit/],
+    ["unreadable", { result: "refused", reason: "unreadable" }, /couldn't be opened/],
+    [
+      "not-found",
+      { result: "refused", reason: "not-found" },
+      /can't be answered from this computer/,
+    ],
+    ["not-running", { result: "not-running" }, /isn't connected/],
+  ] as const)("says nothing was sent when main refuses it: %s", async (_name, refusal, words) => {
+    answerQuestion.mockResolvedValue(refusal as DecisionQuestionAnswerResult);
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    await act(async () => fireEvent.click(send()));
+    const notice = await screen.findByTestId("decision-answer-notice");
+    expect(notice.textContent).toMatch(words);
+    expect(notice.textContent).toMatch(/nothing was sent/);
+    expect(screen.queryByTestId("decision-answer-status")).toBeNull();
+    expect(option("Ship it").checked).toBe(true);
+  });
+
+  it("names a question opened by reference as its content does, whichever machine asked", async () => {
+    const remote = {
+      hostId: "host_2",
+      projectId: "project-b",
+      terminalId: "t9",
+      questionId: "qr",
+    };
+    const getQuestionContentByReference = vi.fn(async () => ({
+      result: "read" as const,
+      question: question("qr", { terminalId: "t9", reference: remote }),
+    }));
+    decisionsBridge.getQuestionContentByReference = getQuestionContentByReference;
+    act(() => useDecisionsQuestionViewStore.getState().openReference([remote], remote));
+    await screen.findByTestId("decision-answer-composer");
+    await settle();
+    fireEvent.click(option("Ship it"));
+    await act(async () => fireEvent.click(send()));
+    expect(getQuestionContent).not.toHaveBeenCalled();
+    expect(answerQuestion.mock.calls[0]![0].reference).toEqual(remote);
+  });
+
+  it("sends on Cmd+Enter on a Mac, and never mid-composition or on a held key", async () => {
+    const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+    Object.defineProperty(window.navigator, "platform", { value: "MacIntel", configurable: true });
+    try {
+      questions.q1 = question("q1", { kind: "text", options: [], allowText: true });
+      await openOn("q1");
+      const field = screen.getByTestId("decision-answer-text");
+      expect(field.getAttribute("aria-keyshortcuts")).toBe("Meta+Enter");
+      fireEvent.change(field, { target: { value: "Yes" } });
+      fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+      fireEvent.keyDown(field, { key: "Enter", metaKey: true, isComposing: true });
+      fireEvent.keyDown(field, { key: "Enter", metaKey: true, repeat: true });
+      await act(async () => {});
+      expect(answerQuestion).not.toHaveBeenCalled();
+      await act(async () => fireEvent.keyDown(field, { key: "Enter", metaKey: true }));
+      await waitFor(() => expect(answerQuestion).toHaveBeenCalledOnce());
+    } finally {
+      if (platform) Object.defineProperty(window.navigator, "platform", platform);
+      else Reflect.deleteProperty(window.navigator, "platform");
+    }
+  });
+
+  it("describes an unavailable Send by what it waits for", async () => {
+    await openOn("q1");
+    const describedBy = send().getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+    const hint = document.getElementById(describedBy!);
+    expect(hint?.textContent).toBe("Choose an option");
+    fireEvent.click(option("Ship it"));
+    expect(send().getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("moves focus from Send to where the answer stands once it goes", async () => {
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    send().focus();
+    await act(async () => fireEvent.click(send()));
+    await waitFor(() => expect(status()).toMatch(/sent/i));
+    expect(document.activeElement).toBe(screen.getByTestId("decision-answer-status"));
+  });
+
+  it("moves focus to the words when a mixed question's choice is cleared", async () => {
+    questions.q1 = question("q1", { kind: "mixed", allowText: true });
+    await openOn("q1");
+    fireEvent.click(option("Hold"));
+    const clear = screen.getByRole("button", { name: "Clear choice" });
+    clear.focus();
+    fireEvent.click(clear);
+    expect(option("Hold").checked).toBe(false);
+    expect(screen.queryByRole("button", { name: "Clear choice" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("decision-answer-text"));
+  });
+
+  it("sends nothing from a Send whose read lands after Decisions was turned off", async () => {
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    let finish: (() => void) | undefined;
+    getQuestionContent.mockImplementation(
+      ({ questionId }) =>
+        new Promise((resolve) => {
+          finish = () => resolve({ result: "read", question: questions[questionId]! });
+        })
+    );
+    fireEvent.click(send());
+    await waitFor(() => expect(finish).toBeDefined());
+    act(() => {
+      decisionsOn = false;
+      for (const listener of onListeners) listener();
+    });
+    await act(async () => finish?.());
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(useDecisionsAnswerStore.getState().records).toEqual({});
+  });
+
+  it("lets an answer main never committed go again once, then lets the person send it anew", async () => {
+    answerQuestion.mockRejectedValue(new Error("lost"));
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    await act(async () => fireEvent.click(send()));
+    // Lost, never committed, sent again under its id, and lost again.
+    await waitFor(() => expect(status()).toMatch(/Couldn't confirm/));
+    expect(answerQuestion).toHaveBeenCalledTimes(2);
+    expect(answerQuestion.mock.calls[1]![0]).toEqual(answerQuestion.mock.calls[0]![0]);
+
+    // Still never committed: let go, so a new Send goes under a new id.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    const notice = await screen.findByTestId("decision-answer-notice");
+    expect(notice.textContent).toMatch(/nothing reached the relay/);
+    expect(answerQuestion).toHaveBeenCalledTimes(2);
+    expect(option("Ship it").checked).toBe(true);
+  });
+
+  it("doesn't send a lost answer again once the question has closed", async () => {
+    answerQuestion.mockRejectedValueOnce(new Error("lost"));
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    getQuestionContent.mockImplementation(async ({ questionId }) => ({
+      result: "read",
+      question: questions[questionId]!,
+    }));
+    getAnswerResult.mockImplementation(async () => {
+      // Cancelled while main's reply was lost, and nothing was committed.
+      questions.q1 = question("q1", { status: "cancelled" });
+      return { result: "not-found" };
+    });
+    await act(async () => fireEvent.click(send()));
+    await waitFor(() => expect(status()).toMatch(/cancelled/));
+    expect(answerQuestion).toHaveBeenCalledOnce();
+  });
+
+  it("offers no withdrawal while Send reads the question again", async () => {
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    getQuestionContent.mockImplementation(() => new Promise(() => {}));
+    expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+    await act(async () => fireEvent.click(send()));
+    expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
   });
 
   it("offers no withdrawal while an answer from here is on its way", async () => {
