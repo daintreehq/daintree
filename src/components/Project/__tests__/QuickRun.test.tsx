@@ -1058,6 +1058,27 @@ describe("QuickRun", () => {
     expect(screen.getByRole("alert").textContent).toContain("cargo run");
   });
 
+  it("runs the given-back command on the next Enter, not a row lit while it was pending", async () => {
+    seedHistory("cargo run --release", "ls -la");
+    setupPendingTerminal();
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    typeAndEnter("cargo run");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    await act(async () => rejectTerminal(new Error("spawn failed")));
+    expect(screen.getByDisplayValue("cargo run")).toBe(input);
+
+    mockAddTerminal.mockResolvedValue("terminal-2");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+    expect(mockAddTerminal).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: "cargo run" })
+    );
+  });
+
   describe("when the panel registry refuses the launch", () => {
     const historyKey = "daintree_cmd_history_test-project";
     let setItem: MockInstance<Storage["setItem"]>;

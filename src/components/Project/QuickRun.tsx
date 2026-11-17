@@ -460,7 +460,12 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     const draft = item.type === "typed" && input.trim() === cmd ? input : cmd;
     const giveBack = () => {
       setInput((current) => (current === "" ? draft : current));
-      if (intent === intentRef.current) setLaunchOverride((current) => current ?? override);
+      if (intent === intentRef.current) {
+        setLaunchOverride((current) => current ?? override);
+        // A row lit while the launch was pending was lit in the unfiltered
+        // list; under the restored text the same index is another command.
+        setFocusedSuggestionIndex(-1);
+      }
     };
 
     try {
