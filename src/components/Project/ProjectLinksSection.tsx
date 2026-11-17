@@ -17,6 +17,7 @@ import {
 } from "@shared/utils/projectLinks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 const NO_LINKS: ProjectLink[] = [];
 
@@ -173,7 +174,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
   };
 
   const submitOnEnter = (action: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Enter") return;
+    if (!isEnterToSubmit(event)) return;
     event.preventDefault();
     action();
   };
