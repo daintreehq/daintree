@@ -42,6 +42,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     machineName: "feature-login-box",
     ownership: "created-by-daintree",
     createdFor: MARK,
+    worktreeCleanup: null,
     provisioning: null,
     machine: "stopped",
     rawState: "archived",

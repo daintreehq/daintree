@@ -92,6 +92,21 @@ export function useCloudHosts(): CloudHostsState & { refresh: () => Promise<void
   return { ...current, refresh };
 }
 
+const NO_SUBSCRIPTION = () => () => {};
+const getEmpty = () => EMPTY;
+
+/**
+ * The cloud picture while `active`, and nothing followed otherwise, so a
+ * surface that stays mounted while closed starts no read and no listener.
+ */
+export function useCloudHostsWhile(active: boolean): CloudHostsState {
+  return useSyncExternalStore(
+    active ? subscribe : NO_SUBSCRIPTION,
+    active ? getSnapshot : getEmpty,
+    active ? getSnapshot : getEmpty
+  );
+}
+
 /** The cloud status of one host, or null when it isn't a cloud host. */
 export function cloudStatusFor(
   snapshot: CloudHostsSnapshot,

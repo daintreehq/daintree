@@ -105,7 +105,10 @@ export class CloudHosts {
     this.lifecycle.prepareWorktreeCleanup(worktree, machines);
   }
 
-  settleWorktreeCleanup(worktree: unknown, deleted: unknown): Promise<CloudWorktreeCleanupOutcome[]> {
+  settleWorktreeCleanup(
+    worktree: unknown,
+    deleted: unknown
+  ): Promise<CloudWorktreeCleanupOutcome[]> {
     return this.lifecycle.settleWorktreeCleanup(worktree, deleted);
   }
 

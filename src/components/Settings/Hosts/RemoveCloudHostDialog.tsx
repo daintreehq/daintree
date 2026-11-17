@@ -9,8 +9,8 @@ import { systemClient } from "@/clients/systemClient";
 import {
   billsWhileStopped,
   canDeleteMachines,
-  clockTime,
   isObservationStale,
+  keepMachineDescription,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { useNow } from "@/hooks/useNow";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
@@ -35,58 +35,6 @@ function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
     ? err.userMessage
     : clientErrorText(err, fallback);
-}
-
-/** What keeping the machine means, from what was last seen of it, and when that was if it's old. */
-function keepDescription(
-  status: CloudHostStatus,
-  providerName: string,
-  billedStopped: boolean,
-  storageBilled: boolean,
-  now: number
-): string {
-  const said = keepState(status, providerName, billedStopped, storageBilled);
-  if (status.machine === "unknown" || !isObservationStale(status, now)) return said;
-  const at =
-    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
-  return `${said} That's as of ${at ?? "the last check"}; it may have changed since.`;
-}
-
-/**
- * `billedStopped`: the provider keeps billing a stopped machine for compute until it's deleted.
- * `storageBilled`: it bills a stopped machine's disk alone until then.
- */
-function keepState(
-  status: CloudHostStatus,
-  providerName: string,
-  billedStopped: boolean,
-  storageBilled: boolean
-): string {
-  const disk = storageBilled
-    ? `, where its disk keeps billing ${status.accountName} until it's deleted`
-    : "";
-  const back = status.dataExpired ? "" : " You can add it back from Add host.";
-  switch (status.machine) {
-    case "running":
-    case "starting":
-      return billedStopped
-        ? `It's running and keeps billing ${status.accountName} until it's deleted, even once it stops.${back}`
-        : `It's running and keeps billing ${status.accountName} until it stops${status.autoStopAt ? " by itself" : ` on ${providerName}`}${storageBilled ? `, and for its disk after that until it's deleted` : ""}.${back}`;
-    case "stopping":
-      return billedStopped
-        ? `It's stopping. Once stopped it stays in your account and keeps billing ${status.accountName} until it's deleted.${back}`
-        : `It's stopping. Once stopped it stays in your account${disk}.${back}`;
-    case "stopped":
-      return status.dataExpired
-        ? `It stays in your account, but ${providerName} has deleted its saved disk.${billedStopped ? ` It keeps billing ${status.accountName} until it's deleted.` : ""}`
-        : billedStopped
-          ? `It stays stopped in your account and keeps billing ${status.accountName} until it's deleted.${back}`
-          : `It stays ${status.asleep ? "asleep" : "stopped"} in your account${disk}.${back}`;
-    default:
-      return billedStopped
-        ? `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing until it's deleted.`
-        : `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing while it runs${storageBilled ? `, and for its disk until it's deleted` : ""}.`;
-  }
 }
 
 /**
@@ -224,7 +172,7 @@ export function RemoveCloudHostDialog({
         {!ready && <p className="text-sm text-text-secondary">Reading the machine&apos;s state…</p>}
         {ready && created && status && !deletable && !machineGone && (
           <p className="text-sm text-text-secondary">
-            {keepDescription(status, providerName, billedStopped, storageBilled, now)}
+            {keepMachineDescription(status, providerName, billedStopped, storageBilled, now, true)}
           </p>
         )}
         {ready && created && status && deletable && (
@@ -236,7 +184,14 @@ export function RemoveCloudHostDialog({
               disabled={busy}
               onChange={() => setChoice("keep")}
               label={`Keep it on ${providerName}`}
-              description={keepDescription(status, providerName, billedStopped, storageBilled, now)}
+              description={keepMachineDescription(
+                status,
+                providerName,
+                billedStopped,
+                storageBilled,
+                now,
+                true
+              )}
             />
             <RadioChoiceRow
               name="remove-cloud-host"

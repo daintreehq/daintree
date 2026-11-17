@@ -39,6 +39,7 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
     resourceId: null,
     ownership: "created-by-daintree",
     createdFor: LOCAL_MARK,
+    worktreeCleanup: null,
     provisioning: null,
     creation: {
       operationId: "op",
@@ -202,6 +203,71 @@ describe("CloudHostStore worktree marks", () => {
       enabled: false,
       idleSeconds: null,
     });
+  });
+});
+
+describe("CloudHostStore worktree cleanup (#17360)", () => {
+  const CLEANUP = {
+    choice: "delete" as const,
+    resourceId: "bx_23456789",
+    worktree: { hostId: null, projectId: LOCAL_MARK.projectId, worktreeId: LOCAL_MARK.worktreeId },
+    phase: "waiting" as const,
+    error: null,
+    requestedAt: 5,
+  };
+  const exists = { resourceId: "bx_23456789", creation: null };
+
+  it("keeps a choice across a restart, with a failure's error", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putBinding(binding({ ...exists, worktreeCleanup: CLEANUP }));
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toEqual(CLEANUP);
+
+    const failed = {
+      ...CLEANUP,
+      phase: "failed" as const,
+      error: { code: "failed" as const, message: "Upstream exploded", at: 9 },
+    };
+    new CloudHostStore(backend).updateBinding("cb_abcdefgh12", (current) => ({
+      ...current,
+      worktreeCleanup: failed,
+    }));
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toEqual(failed);
+  });
+
+  it("reads a binding saved before choices existed as having none", () => {
+    const backend = disk();
+    const { worktreeCleanup: _dropped, ...older } = binding(exists);
+    backend.write({ version: 1, accounts: [], bindings: [older] });
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toBeNull();
+  });
+
+  it("never reads a choice for another machine, another worktree, or a machine without the mark", () => {
+    const cases: Array<Partial<StoredCloudBinding>> = [
+      { ...exists, resourceId: "bx_99999999", worktreeCleanup: CLEANUP },
+      { ...exists, resourceId: null, worktreeCleanup: CLEANUP },
+      {
+        ...exists,
+        worktreeCleanup: {
+          ...CLEANUP,
+          worktree: { ...CLEANUP.worktree, worktreeId: "/elsewhere" },
+        },
+      },
+      {
+        ...exists,
+        worktreeCleanup: { ...CLEANUP, worktree: { ...CLEANUP.worktree, hostId: "studio" } },
+      },
+      { ...exists, createdFor: null, worktreeCleanup: CLEANUP },
+      { ...exists, ownership: "imported", worktreeCleanup: CLEANUP },
+      { ...exists, worktreeCleanup: { ...CLEANUP, choice: "keep" as never } },
+      { ...exists, worktreeCleanup: { ...CLEANUP, phase: "done" as never } },
+    ];
+    for (const overrides of cases) {
+      const backend = disk();
+      backend.write({ version: 1, accounts: [], bindings: [binding(overrides)] });
+      const read = new CloudHostStore(backend).bindings()[0];
+      expect(read?.id).toBe("cb_abcdefgh12");
+      expect(read?.worktreeCleanup).toBeNull();
+    }
   });
 });
 

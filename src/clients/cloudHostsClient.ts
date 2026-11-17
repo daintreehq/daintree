@@ -8,6 +8,9 @@ import type {
   CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudWorktreeCleanupOutcome,
+  CloudWorktreeCleanupRequest,
+  CloudWorktreeRef,
 } from "@shared/types/cloudHosts";
 
 /** Cloud accounts and cloud hosts. Credentials go in once and never come back. */
@@ -52,4 +55,19 @@ export const cloudHostsClient = {
     window.electron.cloudHosts.setLifetime({ hostId, lifetimeHours }),
   trustHostKey: (hostId: string, fingerprint: string): Promise<void> =>
     window.electron.cloudHosts.trustHostKey({ hostId, fingerprint }),
+  /** Before a worktree's delete is sent: what to do with each machine made for it. */
+  prepareWorktreeCleanup: (
+    worktree: CloudWorktreeRef,
+    machines: CloudWorktreeCleanupRequest[]
+  ): Promise<void> => window.electron.cloudHosts.prepareWorktreeCleanup({ worktree, machines }),
+  /** Once the delete settles; resolves when the machines' stops and deletes are done. */
+  settleWorktreeCleanup: (
+    worktree: CloudWorktreeRef,
+    deleted: boolean
+  ): Promise<CloudWorktreeCleanupOutcome[]> =>
+    window.electron.cloudHosts.settleWorktreeCleanup({ worktree, deleted }),
+  retryWorktreeCleanup: (hostId: string): Promise<void> =>
+    window.electron.cloudHosts.retryWorktreeCleanup({ hostId }),
+  dismissWorktreeCleanup: (hostId: string): Promise<void> =>
+    window.electron.cloudHosts.dismissWorktreeCleanup({ hostId }),
 };

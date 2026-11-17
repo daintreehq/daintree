@@ -358,6 +358,7 @@ describe("CloudAccountService", () => {
       resourceId: "bx_23456789",
       ownership: "created-by-daintree",
       createdFor: null,
+      worktreeCleanup: null,
       provisioning: null,
       creation: null,
       lifetimeSeconds: 7200,

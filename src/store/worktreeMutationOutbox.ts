@@ -16,6 +16,11 @@ import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
 import {
+  prepareWorktreeCloudCleanup,
+  settleWorktreeCloudCleanup,
+  type WorktreeCloudCleanup,
+} from "./worktreeCloudCleanup";
+import {
   mergeIssueState,
   pickIssueProvenance,
   type ManualIssueAssociation,
@@ -30,6 +35,8 @@ export interface WorktreeDeleteOptions {
   force?: boolean;
   deleteBranch?: boolean;
   closeTerminals?: boolean;
+  /** What becomes of the cloud machines made for the worktree; absent when it has none. */
+  cloudCleanup?: WorktreeCloudCleanup;
 }
 
 /**
@@ -462,7 +469,14 @@ export async function runDeleteAsync(
   // as a network error, `fix/file-upload` as a filesystem one. Once the delete
   // call is in flight we know the category without having to guess at text.
   let reachedDelete = false;
+  const cloudCleanup = options.cloudCleanup;
+  let cloudPrepared = false;
   try {
+    // First, so a choice that can't be written down closes nothing (#17360).
+    if (cloudCleanup) {
+      await prepareWorktreeCloudCleanup(cloudCleanup);
+      cloudPrepared = true;
+    }
     // A rapid retry after a prior attempt's restore must not start closing
     // terminals while that restore is still spawning panels (#11344) — wait it
     // out so this attempt sees the fully-restored set.
@@ -529,6 +543,7 @@ export async function runDeleteAsync(
     // path). Either way, no post-success bookkeeping is owned here.
     dropDeleteRestore(mutationId);
     pruneOutboxEntry(get, set, mutationId);
+    if (cloudCleanup) settleWorktreeCloudCleanup(cloudCleanup, true);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     // Logged once here, before the routing split below, so the partial-success
@@ -564,6 +579,7 @@ export async function runDeleteAsync(
       // drop the snapshots rather than relaunch them against a deleted worktree.
       dropDeleteRestore(mutationId);
       pruneOutboxEntry(get, set, mutationId);
+      if (cloudCleanup && cloudPrepared) settleWorktreeCloudCleanup(cloudCleanup, true);
       if (isBranchKeptError(message)) {
         // Not a malfunction: the safe `branch -d` refused rather than discard
         // work Git does not consider merged. A warning keeps that legible as a
@@ -588,6 +604,8 @@ export async function runDeleteAsync(
       }
       return;
     }
+    // Main looks for itself whether a worktree on this device went anyway.
+    if (cloudCleanup && cloudPrepared) settleWorktreeCloudCleanup(cloudCleanup, false);
     handleDeleteFailure(get, set, worktreeId, options, mutationId, message);
   }
 }
