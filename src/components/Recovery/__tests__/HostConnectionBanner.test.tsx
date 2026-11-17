@@ -419,7 +419,12 @@ function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
   };
 }
 
-const STARTING = { id: "op-1", kind: "starting", startedAt: 0, stage: "Starting the machine" } as const;
+const STARTING = {
+  id: "op-1",
+  kind: "starting",
+  startedAt: 0,
+  stage: "Starting the machine",
+} as const;
 
 describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
   /** A press on Start, with the start's reply held until the test lets it go. */

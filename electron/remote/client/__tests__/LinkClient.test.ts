@@ -1501,7 +1501,11 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       client.retryNow();
       client.retryNow();
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect({ opens, hellos, disposed: disposes[0] }).toEqual({ opens: 1, hellos: 1, disposed: 0 });
+      expect({ opens, hellos, disposed: disposes[0] }).toEqual({
+        opens: 1,
+        hellos: 1,
+        disposed: 0,
+      });
       expect(client.getState()).toEqual({ status: "connecting", attempt: 1 });
 
       client.retryNow({ restart: true });
