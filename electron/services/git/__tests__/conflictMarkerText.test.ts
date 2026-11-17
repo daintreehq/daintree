@@ -65,6 +65,13 @@ describe("scanConflictMarkerText", () => {
     });
   });
 
+  it("counts a bare CR as a line break, and CRLF as one", () => {
+    expect(scanConflictMarkerText("first\rsecond\r\n>>>>>>> theirs")).toMatchObject({
+      hasMarkers: true,
+      firstMarkerLine: 3,
+    });
+  });
+
   // Review Hub asks about exactly what the commit scan would refuse: a run of
   // at least seven opener, base or closer characters standing alone at a line start.
   it("matches the commit scan's reading of wider runs, dividers and glued text", () => {

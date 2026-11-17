@@ -68,12 +68,13 @@ export interface CrossWorktreeDiffResult {
 export interface ConflictMarkerScanEntry {
   /** Path relative to the worktree root (matches the request path verbatim) */
   path: string;
-  /** Count of `<<<<<<<` opening markers — one per hunk. `null` when the scan failed or the file was skipped (binary/oversized/unreadable). */
+  /** Count of `<<<<<<<` opening markers — one per hunk. `null` when the file was skipped: missing, not a regular file, past the size cap, or unreadable. */
   hunkCount: number | null;
   /**
    * Whether any marker line the commit scan refuses remains (opening, base or
    * closing; a lone `=======` divider is not one), so a closer left behind
-   * after its opener was deleted still counts. `null` when the scan failed or skipped the file.
+   * after its opener was deleted still counts. `null` when the file was
+   * skipped, as for `hunkCount`.
    */
   hasMarkers: boolean | null;
   /** 1-based line number of the first marker of any kind, or `null` when unavailable. */

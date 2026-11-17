@@ -116,21 +116,28 @@ export interface ConflictMarkerTextScan {
  */
 export function scanConflictMarkerText(content: Buffer | string): ConflictMarkerTextScan {
   const blob = typeof content === "string" ? Buffer.from(content, "utf8") : content;
-  let start = UTF8_BOM.every((byte, i) => blob[i] === byte) ? UTF8_BOM.length : 0;
-  let line = 1;
+  const bodyStart = UTF8_BOM.every((byte, i) => blob[i] === byte) ? UTF8_BOM.length : 0;
+  let start = bodyStart;
   let hunkCount = 0;
-  let firstMarkerLine: number | null = null;
+  let firstStart = -1;
   while (start < blob.length) {
     if (isMarkerLineAt(blob, start)) {
-      firstMarkerLine ??= line;
+      if (firstStart === -1) firstStart = start;
       if (blob[start] === OPENER) hunkCount++;
     }
     const lineEnd = blob.indexOf(LF, start);
     if (lineEnd === -1) break;
     start = lineEnd + 1;
-    line++;
   }
-  return { hunkCount, hasMarkers: firstMarkerLine !== null, firstMarkerLine };
+  if (firstStart === -1) return { hunkCount: 0, hasMarkers: false, firstMarkerLine: null };
+  // Markers only follow an LF, as git splits lines, but editors also end a line
+  // at a bare CR; CRLF is one break.
+  let firstMarkerLine = 1;
+  for (let i = bodyStart; i < firstStart; i++) {
+    const byte = blob[i];
+    if (byte === LF || (byte === CR && blob[i + 1] !== LF)) firstMarkerLine++;
+  }
+  return { hunkCount, hasMarkers: true, firstMarkerLine };
 }
 
 function assertNoConflictMarkers(filePath: string, blob: Buffer): void {

@@ -1763,6 +1763,8 @@ describe("ReviewHub", () => {
         await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
       );
       const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("still has 2 conflict regions");
+      expect(dialog.textContent).not.toContain("without checking");
       expect(stageFileMock).not.toHaveBeenCalled();
 
       fireEvent.click(within(dialog).getByRole("button", { name: "Mark resolved" }));
@@ -1866,6 +1868,45 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
       });
+    });
+
+    it("asks before staging a deleted-side conflict whose file still holds markers", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "UD", label: "deleted by them" }],
+        })
+      );
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 0, hasMarkers: true, firstMarkerLine: 3 },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("starting on line 3");
+      expect(stageFileMock).not.toHaveBeenCalled();
+    });
+
+    it("stages a deleted-side conflict the re-read returned nothing for, without asking", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflictedFiles: [{ path: "src/app.ts", xy: "DU", label: "deleted by us" }],
+        })
+      );
+      scanConflictMarkersMock.mockResolvedValue([]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Mark src\/app\.ts as resolved/i })
+      );
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
     });
 
     it("asks before staging a text conflict the scanner skipped (oversized, unreadable)", async () => {
