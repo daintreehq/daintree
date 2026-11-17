@@ -251,7 +251,11 @@ describe("CloudHostStore accounts", () => {
   it("keeps the credential revision across a restart and unrelated writes", () => {
     const backend = disk();
     const store = new CloudHostStore(backend);
-    store.putAccount({ ...account, credentialRevision: "0011223344556677" });
+    store.putAccount({
+      ...account,
+      credentialRevision: "0011223344556677",
+      lastProvisioning: null,
+    });
     store.putBinding(binding({ accountId: account.id }));
     store.removeBinding("cb_abcdefgh12");
     expect(new CloudHostStore(backend).account(account.id)?.credentialRevision).toBe(

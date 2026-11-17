@@ -1015,6 +1015,7 @@ describe("CloudAccountService with declared credential sets", () => {
       identity: "old-login",
       keyHint: "abcd",
       credentialRevision: null,
+      lastProvisioning: null,
       addedAt: 1,
       validation: { status: "unknown", checkedAt: null, detail: null },
     });
