@@ -89,6 +89,11 @@ export class IdleTerminalNotificationService {
    */
   private quietUntil: number | null = null;
   private wakeQuietUntil: number | null = null;
+  /**
+   * Moved by `stop()` and by a suspend, so a check whose terminal read was in
+   * flight across either drops what it read rather than acting on it after.
+   */
+  private checkGeneration = 0;
   private removeSuspendListener: (() => void) | null = null;
   private removeWakeListener: (() => void) | null = null;
   private readonly CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -221,6 +226,7 @@ export class IdleTerminalNotificationService {
 
     try {
       this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
+        this.checkGeneration++;
         if (this.checkInterval) {
           clearInterval(this.checkInterval);
           this.checkInterval = null;
@@ -246,6 +252,7 @@ export class IdleTerminalNotificationService {
   }
 
   stop(): void {
+    this.checkGeneration++;
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
@@ -397,15 +404,12 @@ export class IdleTerminalNotificationService {
 
   /**
    * Every shard's terminals, or `null` when the read can't be trusted: a shard
-   * that timed out answers `[]`, which would hide a busy agent and let an idle
-   * shell elsewhere in its project read as the whole project. Also `null` once
-   * `stop()` has cleared the client during the read.
+   * that timed out or is restarting answers nothing, which would hide a busy
+   * agent and let an idle shell elsewhere in its project read as the whole
+   * project.
    */
-  private async readTerminals(): Promise<IdleTerminalInfo[] | null> {
-    const client = this.ptyClient;
-    if (!client) return null;
+  private async readTerminals(client: PtyClient): Promise<IdleTerminalInfo[] | null> {
     const snapshot = await client.getAllTerminalsWithCompletenessAsync();
-    if (this.ptyClient !== client) return null;
     if (snapshot.degraded) {
       logInfo("idle-terminal-notify-skip-degraded-snapshot", {
         shardsFailed: snapshot.shardsFailed,
@@ -469,9 +473,13 @@ export class IdleTerminalNotificationService {
       return;
     }
 
+    const generation = this.checkGeneration;
+    const client = this.ptyClient;
+    const allTerminals = client ? await this.readTerminals(client) : null;
+    // `stop()`, a suspend or a new client overtook the read: nobody owns this check now.
+    if (generation !== this.checkGeneration || client !== this.ptyClient) return;
     // An unreadable snapshot is no evidence that any project left its idle
     // state, so the unexpired throttle entries stay as they are.
-    const allTerminals = await this.readTerminals();
     if (!allTerminals) {
       if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
       return;
@@ -515,8 +523,8 @@ export class IdleTerminalNotificationService {
       if (optedOut.has(pid)) continue;
 
       // Any remaining non-qualifying reason (no terminals, active agent, recent
-      // activity, a live Assistant) means the project has left the idle state,
-      // so its notified throttle is cleared — a later idle period then notifies fresh. The
+      // activity) means the project has left the idle state, so its notified
+      // throttle is cleared — a later idle period then notifies fresh. The
       // explicit dismissal is deliberately NOT cleared here.
       const projectTerminals = allTerminals.filter(
         (t) => t.projectId === pid && isReminderTerminal(t)
@@ -535,15 +543,15 @@ export class IdleTerminalNotificationService {
           return this.awakeSince(lastActivity) >= thresholdMs;
         });
 
-      const eligible =
-        projectTerminals.length > 0 &&
-        !hasActiveAgent &&
-        allIdle &&
-        !this.hasLiveAssistantBackend(pid);
+      const eligible = projectTerminals.length > 0 && !hasActiveAgent && allIdle;
       if (!eligible) {
         clearNotified(pid);
         continue;
       }
+
+      // Held back, but still idle, as with focus: the throttle stays so the same
+      // shells aren't reminded about again inside the cooldown once it exits.
+      if (this.hasLiveAssistantBackend(pid)) continue;
 
       // Eligible — but suppress when the user has explicitly muted the project
       // or it was already broadcast within the cooldown window. Neither path

@@ -98,16 +98,39 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
 
 vi.mock("../projectSleep.js", () => ({ sleepProject: sleepProjectMock }));
 
-/** Machine-sleep time to subtract from every awake reading, and whether it is asleep now. */
-const sleptMs = vi.hoisted(() => ({ value: 0, sleeping: false }));
+/**
+ * Machine-sleep time to subtract from every awake reading, whether it is asleep
+ * now, and whether the reading fails outright.
+ */
+const sleptMs = vi.hoisted(() => ({ value: 0, sleeping: false, throws: false }));
+const suspendListeners = vi.hoisted(() => new Set<() => void>());
 vi.mock("../SystemSleepService.js", () => ({
   getSystemSleepService: () => ({
-    onSuspend: vi.fn(() => vi.fn()),
+    onSuspend: vi.fn((callback: () => void) => {
+      suspendListeners.add(callback);
+      return () => suspendListeners.delete(callback);
+    }),
     onWake: vi.fn(() => vi.fn()),
     isSleeping: () => sleptMs.sleeping,
-    getAwakeTimeSince: (timestamp: number) => Math.max(0, Date.now() - timestamp - sleptMs.value),
+    getAwakeTimeSince: (timestamp: number) => {
+      if (sleptMs.throws) throw new Error("sleep tracking unavailable");
+      return Math.max(0, Date.now() - timestamp - sleptMs.value);
+    },
   }),
 }));
+
+/** Hold the next terminal read open until the test releases it with what it read. */
+function holdNextRead(): (terminals: unknown[]) => void {
+  let release!: (terminals: unknown[]) => void;
+  ptyManagerMock.getAllTerminalsWithCompletenessAsync.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = (terminals) =>
+          resolve({ terminals, degraded: false, shardsFailed: 0, shardsTotal: 1 });
+      })
+  );
+  return (terminals) => release(terminals);
+}
 
 const pluginWorkReader = vi.hoisted(() => vi.fn<(projectId: string) => unknown[]>(() => []));
 vi.mock("../plugin/projectPluginWork.js", () => ({
@@ -160,6 +183,8 @@ describe("IdleTerminalNotificationService", () => {
     for (const k of Object.keys(storeBacking)) delete storeBacking[k];
     sleptMs.value = 0;
     sleptMs.sleeping = false;
+    sleptMs.throws = false;
+    suspendListeners.clear();
     snapshotHealth.degraded = false;
     assistantBackends.clear();
     liveTerminalIds.clear();
@@ -426,26 +451,46 @@ describe("IdleTerminalNotificationService", () => {
 
     it("drops a read that stop() overtook", async () => {
       setup();
-      let release!: () => void;
-      ptyManagerMock.getAllTerminalsWithCompletenessAsync.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            release = () =>
-              resolve({
-                terminals: [makeTerminal()],
-                degraded: false,
-                shardsFailed: 0,
-                shardsTotal: 1,
-              });
-          })
-      );
+      const release = holdNextRead();
       const service = makeService();
       const check = runCheck(service);
       service.stop();
-      release();
+      release([makeTerminal()]);
       await check;
 
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("drops a read that a new client overtook", async () => {
+      setup();
+      const release = holdNextRead();
+      const service = makeService();
+      const check = runCheck(service);
+      service.setPtyClient({ ...ptyManagerMock } as unknown as PtyClient);
+      release([makeTerminal()]);
+      await check;
+
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // A check that began before the lid closed would otherwise land inside the
+    // post-wake quiet window.
+    it("drops a read the machine suspended through", async () => {
+      setup();
+      const service = makeService();
+      service.start();
+      (service as unknown as { quietUntil: number | null }).quietUntil = null;
+      try {
+        const release = holdNextRead();
+        const check = runCheck(service);
+        for (const listener of suspendListeners) listener();
+        release([makeTerminal()]);
+        await check;
+
+        expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      } finally {
+        service.stop();
+      }
     });
 
     it("leaves trashed terminals out of the count, the activity check and the idle time", async () => {
@@ -477,14 +522,70 @@ describe("IdleTerminalNotificationService", () => {
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
-    it("treats activity stamped after the check began as recent", async () => {
+    it("doesn't nudge when the awake clock can't be read", async () => {
       setup();
-      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
-        makeTerminal({ lastTypedInputAt: Date.now() + 60 * 1000 }),
-      ]);
+      sleptMs.throws = true;
       const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    // Typed into after the check began, then a read that stalled past the
+    // threshold: by the time it lands the stamp is old enough on the awake
+    // clock, but it is still newer than the check.
+    it("treats activity stamped after the check began as recent, however long the read took", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        setup();
+        const release = holdNextRead();
+        const service = makeService();
+        const check = runCheck(service);
+        vi.setSystemTime(Date.now() + 1000);
+        const typedAt = Date.now();
+        vi.setSystemTime(Date.now() + 2 * SIXTY_MIN_MS);
+        release([makeTerminal({ lastTypedInputAt: typedAt, lastOutputChangeAt: typedAt })]);
+        await check;
+
+        expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves an Assistant row out of a project whose Assistant has no live binding", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1" }),
+        makeTerminal({
+          id: "t-help",
+          isAssistantTerminal: true,
+          agentState: "working",
+          lastTypedInputAt: Date.now() - 5 * 60 * 1000,
+          lastOutputChangeAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].terminalCount).toBe(1);
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(119);
+    });
+
+    // A live Assistant holds the project back without ending its shells' idle
+    // period, so once it exits they aren't reminded about again in the cooldown.
+    it("keeps the project's throttle while a live Assistant holds it back", async () => {
+      setup();
+      const notifiedAt = Date.now() - 10 * 60 * 1000;
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": notifiedAt };
+      assistantBackends.set("proj-1", "t-help");
+      liveTerminalIds.add("t-help");
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      expect(storeBacking.idleTerminalNotifiedAt).toEqual({ "proj-1": notifiedAt });
     });
 
     // The reminder's Sleep would end the Assistant, and one with a wakeup or

@@ -1429,7 +1429,10 @@ describe("IdleBackgroundAutoCloseService", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         try {
           enable();
-          projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+          // Pinned, so only the visit can hold the project once the clock moves on.
+          const opened = { lastOpened: Date.now() - THIRTY_MIN_MS };
+          projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", opened)]);
+          projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, opened));
           const kill = deferred<Array<{ id: string }>>();
           ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
           const clock = makeClock();

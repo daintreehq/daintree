@@ -1663,6 +1663,29 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("reports a terminal read that skipped a booting shard as degraded", async () => {
+      // The booting shard's terminals are missing from the answer; a caller
+      // that reads "complete" as "nothing else is running" must not get it.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      // Deliberately never ready.
+
+      const promise = client.getAllTerminalsWithCompletenessAsync();
+      const defaultReq = messagesOfType(defaultShard().child, "get-all-terminals")[0];
+      defaultShard().child.emit("message", {
+        type: "all-terminals",
+        requestId: defaultReq.requestId,
+        terminals: [{ id: "t0", cwd: "/", spawnedAt: 1 }],
+      });
+
+      expect(messagesOfType(shardA.child, "get-all-terminals")).toHaveLength(0);
+      const snapshot = await promise;
+      expect(snapshot.terminals.map((t) => t.id)).toEqual(["t0"]);
+      expect(snapshot).toMatchObject({ degraded: true, shardsTotal: 2, shardsFailed: 1 });
+      client.dispose();
+    });
+
     // #13501: a fleet read must not take an unanswered inventory for an empty one.
     it("lets a strict caller tell an unanswered project inventory from an empty one", async () => {
       const client = createFabricClient();
