@@ -46,6 +46,7 @@ export function useNewWorktreeProjectSettings({
     if (!currentProject) return;
 
     const requestedProjectId = currentProject.id;
+    let current = true;
     projectClient
       .getSettings(requestedProjectId)
       .then((settings) => {
@@ -72,12 +73,15 @@ export function useNewWorktreeProjectSettings({
       })
       .catch((err) => logError("Failed to load project settings", err))
       .finally(() => {
-        if (currentProject?.id === requestedProjectId) setSettingsAnswered(true);
+        if (current) setSettingsAnswered(true);
       });
 
     if (recipes.length === 0 && currentProject?.id) {
       loadRecipes(currentProject.id).catch((err) => logError("Failed to load recipes", err));
     }
+    return () => {
+      current = false;
+    };
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
   useEffect(() => {

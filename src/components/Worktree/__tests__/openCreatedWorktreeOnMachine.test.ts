@@ -524,7 +524,7 @@ describe("openCreatedWorktreeOnMachine", () => {
       const pending = openCreatedWorktreeOnMachine(request, { clock });
       await vi.advanceTimersByTimeAsync(29_000);
       expect(worktreeClient.resourceAction).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(6 * 30_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       const outcome = await pending;
 
       expect(worktreeClient.resourceAction).toHaveBeenCalledTimes(6);

@@ -160,9 +160,9 @@ function whenViewActive(): Promise<void> {
   });
 }
 
-/** Resolves once this view's worktree port is attached, or {@link PORT_WAIT_MS} has passed. */
-function whenPortReady(): Promise<void> {
-  if (worktreeClient.isPortReady()) return Promise.resolve();
+/** Resolves once this view's worktree port is attached, or `waitMs` has passed. */
+function whenPortReady(waitMs: number): Promise<void> {
+  if (worktreeClient.isPortReady() || waitMs <= 0) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
     const finish = () => {
@@ -173,7 +173,7 @@ function whenPortReady(): Promise<void> {
       queueMicrotask(() => unsubscribe());
       resolve();
     };
-    const timer = setTimeout(finish, PORT_WAIT_MS);
+    const timer = setTimeout(finish, waitMs);
     const unsubscribe = worktreeClient.onPortReady(finish);
   });
 }
@@ -186,9 +186,12 @@ function whenPortReady(): Promise<void> {
  * that answered started, which its answer is stamped after.
  */
 async function runStatus(worktreeId: string, tracker: Tracker, clock: Clock): Promise<number> {
+  let portDeadline: number | null = null;
   for (let attempt = 0; ; attempt++) {
     await whenViewActive();
-    await whenPortReady();
+    // One wait per run once the view is shown, not one per retry.
+    portDeadline ??= Date.now() + PORT_WAIT_MS;
+    await whenPortReady(portDeadline - Date.now());
     if (!tracker.isCurrent()) throw new Gone();
     const startedAt = Date.now();
     try {
