@@ -16,6 +16,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -138,6 +139,10 @@ function FileStageRowComponent({
   renderRowMenu,
 }: FileStageRowProps) {
   const rowRef = useRef<HTMLDivElement | null>(null);
+  // The name button only lays its parts out; the directory and the file name
+  // each clip inside their own box, so each is measured where it clips.
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const config = STATUS_CONFIG[file.status] || STATUS_CONFIG.untracked;
   const { dir, base } = splitPath(file.path);
   const generated = isGeneratedFile(file.path);
@@ -234,7 +239,11 @@ function FileStageRowComponent({
           className="absolute inset-0 rounded-[var(--radius-sm)] ring-1 ring-inset ring-tint/30 pointer-events-none"
         />
       )}
-      <TruncatedTooltip content={file.path}>
+      <TruncatedTooltip
+        content={file.path}
+        isTruncated={dirTruncated || baseTruncated}
+        focusable={false}
+      >
         <button
           type="button"
           onClick={handleNameClick}
@@ -261,6 +270,7 @@ function FileStageRowComponent({
           </span>
           {dir && (
             <PathTail
+              ref={dirRef}
               data-testid="file-stage-row-dir"
               className={cn(
                 "shrink font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
@@ -274,6 +284,7 @@ function FileStageRowComponent({
             </PathTail>
           )}
           <span
+            ref={baseRef}
             data-testid="file-stage-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-[color,opacity] duration-150 ease-out",

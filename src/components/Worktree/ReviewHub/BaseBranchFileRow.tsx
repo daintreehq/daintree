@@ -7,6 +7,7 @@ import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
 interface BaseBranchFileRowProps {
@@ -27,6 +28,10 @@ export function BaseBranchFileRow({
   unresolvedDecoration,
   onBadgeClick,
 }: BaseBranchFileRowProps) {
+  // The row only lays its parts out; the directory and the file name each clip
+  // inside their own box, so each is measured where it clips.
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const config = getBaseBranchStatusConfig(file.status);
   const normalized = file.path.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
@@ -45,7 +50,12 @@ export function BaseBranchFileRow({
   const badgeLabel = unresolvedDecoration?.tooltip ?? `Unresolved review comments on ${file.path}`;
 
   return (
-    <TruncatedTooltip content={file.path}>
+    // The row's buttons are its tab stops; the path text takes none of its own.
+    <TruncatedTooltip
+      content={file.path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+    >
       <div
         className={cn(
           "group/baserow w-full flex items-center text-xs rounded-[var(--radius-md)] px-1.5 py-1.5",
@@ -75,6 +85,7 @@ export function BaseBranchFileRow({
           </span>
           {dir && (
             <PathTail
+              ref={dirRef}
               data-testid="base-branch-file-row-dir"
               className={cn(
                 "shrink font-mono text-2xs transition-colors duration-150 ease-out",
@@ -85,6 +96,7 @@ export function BaseBranchFileRow({
             </PathTail>
           )}
           <span
+            ref={baseRef}
             data-testid="base-branch-file-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-colors duration-150 ease-out",

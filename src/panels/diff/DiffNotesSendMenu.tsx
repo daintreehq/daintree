@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
 import {
   deliverDiffNotes,
@@ -171,12 +172,13 @@ function DiffNoteTargetItems({
           {target.isInputLocked ? (
             <DropdownMenuMeta>{INPUT_LOCKED_REASON}</DropdownMenuMeta>
           ) : (
-            <DropdownMenuMeta
-              className="max-w-[140px] truncate"
-              title={target.worktreeName ?? undefined}
-            >
-              {target.worktreeName ?? "No worktree"}
-            </DropdownMenuMeta>
+            // The item is the focus target and already names the worktree in
+            // full, so the cut name is a pointer disclosure only.
+            <TruncatedTooltip content={target.worktreeName ?? "No worktree"} focusable={false}>
+              <DropdownMenuMeta className="max-w-[140px] truncate">
+                {target.worktreeName ?? "No worktree"}
+              </DropdownMenuMeta>
+            </TruncatedTooltip>
           )}
         </DropdownMenuItem>
       ))}

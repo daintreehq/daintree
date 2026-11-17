@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -226,6 +227,80 @@ function splitPath(filePath: string): { dir: string; base: string } {
   const lastSlash = normalized.lastIndexOf("/");
   if (lastSlash === -1) return { dir: "", base: normalized };
   return { dir: normalized.slice(0, lastSlash), base: normalized.slice(lastSlash + 1) };
+}
+
+// Each row's wrapper only lays its parts out: the directory and the file name
+// clip inside their own boxes, so each is measured where it clips. Neither label
+// takes a tab stop; the row's buttons are its focus targets.
+
+function ConflictedFileLabel({
+  path,
+  kind,
+  hunkCount,
+}: {
+  path: string;
+  kind: string;
+  hunkCount: number | null;
+}) {
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
+  const { dir, base } = splitPath(path);
+  return (
+    <TruncatedTooltip
+      content={`${path} (${kind})`}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+    >
+      <div className="flex-1 min-w-0 flex items-baseline gap-2">
+        {/* The directory gives way first; the basename is the file's identity
+            and truncates only once the directory is gone. */}
+        <span className="min-w-0 flex items-baseline font-mono text-2xs">
+          {dir && (
+            <PathTail ref={dirRef} className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
+          )}
+          <span
+            ref={baseRef}
+            className="shrink-0 max-w-full truncate text-text-primary font-medium"
+          >
+            {base}
+          </span>
+        </span>
+        <span className="shrink-0 whitespace-nowrap text-3xs uppercase tracking-wider text-text-secondary font-mono">
+          {kind}
+        </span>
+        {hunkCount != null && hunkCount > 0 && (
+          <span
+            className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
+            data-testid={`conflict-hunk-count-${path}`}
+          >
+            {pluralize(hunkCount, "region")}
+          </span>
+        )}
+      </div>
+    </TruncatedTooltip>
+  );
+}
+
+function ResolvedFileLabel({ path }: { path: string }) {
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
+  const { dir, base } = splitPath(path);
+  return (
+    <TruncatedTooltip
+      content={path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+    >
+      <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
+        {dir && (
+          <PathTail ref={dirRef} className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
+        )}
+        <span ref={baseRef} className="shrink-0 max-w-full truncate text-text-secondary">
+          {base}
+        </span>
+      </div>
+    </TruncatedTooltip>
+  );
 }
 
 type Side = "ours" | "theirs";
@@ -665,7 +740,6 @@ export function ConflictPanel({
         {conflictCount > 0 ? (
           <ul className="px-2 py-1 flex flex-col gap-0.5" role="list" aria-label="Conflicted files">
             {liveConflicts.map((file) => {
-              const { dir, base } = splitPath(file.path);
               const isBusy = busyFile === file.path;
               const scan = scanResults.get(file.path);
               const hunkCount = scan?.hunkCount ?? null;
@@ -679,34 +753,11 @@ export function ConflictPanel({
                   className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-overlay-subtle transition-colors"
                 >
                   <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
-                  <TruncatedTooltip
-                    content={`${file.path} (${conflictKindLabel(file.label, isRebase)})`}
-                  >
-                    <div className="flex-1 min-w-0 flex items-baseline gap-2">
-                      {/* The directory gives way first; the basename is the
-                          file's identity and truncates only once the
-                          directory is gone. */}
-                      <span className="min-w-0 flex items-baseline font-mono text-2xs">
-                        {dir && (
-                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
-                        )}
-                        <span className="shrink-0 max-w-full truncate text-text-primary font-medium">
-                          {base}
-                        </span>
-                      </span>
-                      <span className="shrink-0 whitespace-nowrap text-3xs uppercase tracking-wider text-text-secondary font-mono">
-                        {conflictKindLabel(file.label, isRebase)}
-                      </span>
-                      {hunkCount != null && hunkCount > 0 && (
-                        <span
-                          className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
-                          data-testid={`conflict-hunk-count-${file.path}`}
-                        >
-                          {pluralize(hunkCount, "region")}
-                        </span>
-                      )}
-                    </div>
-                  </TruncatedTooltip>
+                  <ConflictedFileLabel
+                    path={file.path}
+                    kind={conflictKindLabel(file.label, isRebase)}
+                    hunkCount={hunkCount}
+                  />
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
                       variant="outline"
@@ -799,27 +850,15 @@ export function ConflictPanel({
               aria-label="Resolved files"
               data-testid="conflict-resolved-list"
             >
-              {status.staged.map((file) => {
-                const { dir, base } = splitPath(file.path);
-                return (
-                  <li
-                    key={`resolved-${file.path}`}
-                    className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
-                  >
-                    <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
-                    <TruncatedTooltip content={file.path}>
-                      <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
-                        {dir && (
-                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
-                        )}
-                        <span className="shrink-0 max-w-full truncate text-text-secondary">
-                          {base}
-                        </span>
-                      </div>
-                    </TruncatedTooltip>
-                  </li>
-                );
-              })}
+              {status.staged.map((file) => (
+                <li
+                  key={`resolved-${file.path}`}
+                  className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
+                >
+                  <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
+                  <ResolvedFileLabel path={file.path} />
+                </li>
+              ))}
             </ul>
           </div>
         )}
