@@ -86,6 +86,7 @@ beforeEach(() => {
     skippedPanelCount: undefined,
     lastCrashAt: undefined,
     quarantinedPanels: undefined,
+    clearStatus: {},
   });
   cleanup();
 });
@@ -387,6 +388,127 @@ describe("SafeModeBanner", () => {
     await waitFor(() => {
       expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
     });
+  });
+
+  it("keeps Restoring on next launch after the details popover closes and reopens", async () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    render(<SafeModeBanner />);
+    const trigger = screen.getByRole("button", { name: /Show details/i });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: /Restore on next launch/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    });
+
+    fireEvent.click(trigger);
+    await waitFor(() => {
+      expect(screen.queryByText(/Restoring on next launch/)).toBeNull();
+    });
+    fireEvent.click(trigger);
+
+    expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Restore on next launch/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a second clear when the popover reopens while a clear is in flight", async () => {
+    let resolveClear: (value: { cleared: boolean }) => void = () => {};
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockReturnValue(
+      new Promise<{ cleared: boolean }>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+    useSafeModeStore.setState({
+      safeMode: true,
+      skippedPanelCount: 1,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    render(<SafeModeBanner />);
+    const trigger = screen.getByRole("button", { name: /Show details/i });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: /Restore on next launch/ }));
+    expect(screen.getByText(/Clearing/)).toBeTruthy();
+
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    expect(screen.getByText(/Clearing/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Restore on next launch/ })).toBeNull();
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+
+    await act(async () => {
+      resolveClear({ cleared: true });
+    });
+    expect(screen.getByText(/Restoring on next launch/)).toBeTruthy();
+    expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("clearing an already-cleared panel again never reaches IPC or fails", async () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    clearQuarantinedPanel.mockResolvedValue({ cleared: false });
+
+    const again = await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+
+    expect(again).toEqual({ cleared: true });
+    expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
+    expect(useSafeModeStore.getState().clearStatus.p1).toBe("cleared");
+  });
+
+  it("keeps an in-flight clear deduped when safe mode is re-entered", async () => {
+    let resolveClear: (value: { cleared: boolean }) => void = () => {};
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockReturnValue(
+      new Promise<{ cleared: boolean }>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+    const panels = [{ id: "p1", kind: "terminal" as const, title: "Bad" }];
+    useSafeModeStore.getState().setSafeMode(true, { quarantinedPanels: panels });
+    const first = useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    useSafeModeStore.getState().setSafeMode(true, { quarantinedPanels: panels });
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    expect(clearQuarantinedPanel).toHaveBeenCalledTimes(1);
+
+    resolveClear({ cleared: true });
+    await first;
+    expect(useSafeModeStore.getState().clearStatus.p1).toBe("cleared");
+  });
+
+  it("ignores a clear that completes after safe mode was switched off", async () => {
+    let resolveClear: (value: { cleared: boolean }) => void = () => {};
+    clearQuarantinedPanel.mockReset();
+    clearQuarantinedPanel.mockReturnValue(
+      new Promise<{ cleared: boolean }>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+    useSafeModeStore.getState().setSafeMode(true, {
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    const pending = useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    useSafeModeStore.getState().setSafeMode(false);
+    resolveClear({ cleared: true });
+    await pending;
+    expect(useSafeModeStore.getState().clearStatus).toEqual({});
+  });
+
+  it("clears restore progress when safe mode is switched off", async () => {
+    useSafeModeStore.setState({
+      safeMode: true,
+      quarantinedPanels: [{ id: "p1", kind: "terminal", title: "Bad" }],
+    });
+    await useSafeModeStore.getState().clearQuarantinedPanel("p1");
+    useSafeModeStore.getState().setSafeMode(false);
+    expect(useSafeModeStore.getState().clearStatus).toEqual({});
   });
 
   it("uses the singular phrasing for one quarantined panel", () => {

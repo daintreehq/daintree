@@ -19,20 +19,15 @@ interface QuarantinedPanelRowProps {
 
 function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   const clearQuarantinedPanel = useSafeModeStore((s) => s.clearQuarantinedPanel);
-  const [state, setState] = useState<"idle" | "clearing" | "cleared" | "failed">("idle");
+  const status = useSafeModeStore((s) => s.clearStatus[panel.id]);
+  const state = status ?? "idle";
 
-  const handleRestore = async () => {
-    // Block only the in-flight case — a failed clear must remain retryable
+  const handleRestore = () => {
+    // The store ignores clearing/cleared panels; a failed clear stays retryable
     // (the row's Retry button calls this same handler).
-    if (state === "clearing" || state === "cleared") return;
-    setState("clearing");
-    try {
-      const result = await clearQuarantinedPanel(panel.id);
-      setState(result.cleared ? "cleared" : "failed");
-    } catch (error) {
+    clearQuarantinedPanel(panel.id).catch((error: unknown) => {
       logError("Failed to clear quarantined panel", error);
-      setState("failed");
-    }
+    });
   };
 
   const displayTitle = panel.title.trim().length > 0 ? panel.title : "Untitled panel";
