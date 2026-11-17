@@ -2776,6 +2776,101 @@ describe("CloudHostLifecycle stale inspections (#17548)", () => {
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
   });
 
+  it("resolves a refresh quietly when its not-found was overtaken by a start", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    const held = holdNextInspect();
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.startMachine("build");
+    const newer = store.binding(bindingId)!;
+
+    tick(1_000);
+    held.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    await expect(refreshing).resolves.toBeUndefined();
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lastError).toBeNull();
+  });
+
+  it("keeps a newer not-found over an older read that answers after it", async () => {
+    const { lifecycle, provider, store, bindingId, tick, pollDue } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const older = deferred<ProviderResource>();
+    vi.mocked(provider.inspect)
+      .mockClear()
+      .mockImplementationOnce(() => older.promise)
+      .mockRejectedValueOnce(
+        new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null)
+      );
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await expect(lifecycle.refresh("build")).rejects.toBeTruthy();
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("unknown");
+
+    tick(1_000);
+    older.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await polling;
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lastError?.code).toBe("not-found");
+  });
+
+  it("takes both reads when they answer in the order they were sent", async () => {
+    const { lifecycle, provider, store, bindingId, tick, pollDue } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const first = deferred<ProviderResource>();
+    const second = deferred<ProviderResource>();
+    vi.mocked(provider.inspect)
+      .mockClear()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(2));
+
+    tick(1_000);
+    first.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await polling;
+    expect(store.binding(bindingId)!.observation?.machine).toBe("stopped");
+    tick(1_000);
+    second.resolve(resource({ machine: "running" }));
+    await refreshing;
+    expect(store.binding(bindingId)!.observation).toMatchObject({
+      machine: "running",
+      observedAt: 1_000_000 + 60 * 60_000 + 2_000,
+    });
+  });
+
+  it("dials on the newer observation when the dial's own read was overtaken", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "running",
+    });
+    tick(60 * 60_000);
+    const held = holdNextInspect();
+    const dialing = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.refresh("build");
+    expect(store.binding(bindingId)!.observation?.machine).toBe("running");
+
+    held.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    const route = await dialing;
+    expect(route.target).toBe(`dtc-${bindingId}`);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(store.binding(bindingId)!.lastError).toBeNull();
+  });
+
   it("still takes a read sent after the last observation", async () => {
     const { lifecycle, provider, store, bindingId, tick } = await host({
       machine: "stopped",
