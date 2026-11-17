@@ -250,7 +250,7 @@ export function useOverlayFocusRestoreValue(
         event.preventDefault();
         const target = restoreTargetRef.current;
         if (handoff) {
-          restoreIfStranded(target, pointerSelect);
+          restoreFocusIfStranded(target, { ringless: pointerSelect });
           return;
         }
         if (!pointerClose || restoreFocusOnPointerClose) {
@@ -263,10 +263,29 @@ export function useOverlayFocusRestoreValue(
         // pointer events while one is open, so the press that dismissed it
         // never reached what was under it and focus lands on `document.body`,
         // which restarts the next Tab from the top of the document.
-        restoreIfStranded(target, true);
+        restoreFocusIfStranded(target, { ringless: true });
       },
     };
   }, [restoreFocusOnPointerClose]);
+}
+
+/**
+ * Whether focus has nowhere to be: on `document.body`, on nothing, or still
+ * inside `within`, a layer that is closing. A layer kept mounted through its
+ * exit (inert, then hidden) can go on holding focus until the browser's focus
+ * fixup runs, and a keyboard user parked there is as lost as one on the body.
+ */
+export function isFocusStranded(within?: Element | null): boolean {
+  const active = document.activeElement;
+  if (active === null || active === document.body) return true;
+  return within?.contains(active) ?? false;
+}
+
+export interface RestoreFocusIfStrandedOptions {
+  /** Focus without `:focus-visible`: the close came from a pointer. */
+  ringless: boolean;
+  /** The closing layer, where left-behind focus counts as stranded too. */
+  strandedWithin?: Element | null;
 }
 
 /**
@@ -274,10 +293,15 @@ export function useOverlayFocusRestoreValue(
  * then: the layer has torn down, and whatever was going to take focus (the
  * clicked control, the surface a handoff sent it to) has taken it. A trigger
  * that unmounted with the thing it belonged to is left alone too.
+ *
+ * Returns a cancel, for an owner that may reopen or unmount inside that task.
  */
-function restoreIfStranded(target: HTMLElement | null, ringless: boolean): void {
-  setTimeout(() => {
-    if (document.activeElement !== null && document.activeElement !== document.body) return;
+export function restoreFocusIfStranded(
+  target: HTMLElement | null,
+  { ringless, strandedWithin }: RestoreFocusIfStrandedOptions
+): () => void {
+  const handle = setTimeout(() => {
+    if (!isFocusStranded(strandedWithin)) return;
     if (!target?.isConnected) return;
     // Re-armed, not merely inherited: the arm at the top of the close handler
     // disarms on its own zero-delay timer, which was queued BEFORE this one and
@@ -286,4 +310,5 @@ function restoreIfStranded(target: HTMLElement | null, ringless: boolean): void 
     armTooltipFocusSuppression();
     target.focus(ringless ? { preventScroll: true, focusVisible: false } : { preventScroll: true });
   }, 0);
+  return () => clearTimeout(handle);
 }

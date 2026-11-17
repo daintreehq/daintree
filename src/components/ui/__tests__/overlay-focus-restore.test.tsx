@@ -3,7 +3,11 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetTooltipFocusSuppressionForTests } from "@/lib/tooltipFocusSuppression";
-import { useOverlayFocusRestore, type OverlayFocusRestore } from "../overlay-focus-restore";
+import {
+  restoreFocusIfStranded,
+  useOverlayFocusRestore,
+  type OverlayFocusRestore,
+} from "../overlay-focus-restore";
 
 /**
  * The close-time focus policy every anchored overlay now shares, driven through
@@ -669,5 +673,49 @@ describe("tooltip suppression on the restored focus", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("restoreFocusIfStranded", () => {
+  let target: HTMLButtonElement;
+  let layer: HTMLDivElement;
+  let field: HTMLInputElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    target = document.createElement("button");
+    layer = document.createElement("div");
+    field = document.createElement("input");
+    layer.appendChild(field);
+    document.body.append(target, layer);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    target.remove();
+    layer.remove();
+  });
+
+  it("counts focus left inside the closing layer as stranded", () => {
+    field.focus();
+    restoreFocusIfStranded(target, { ringless: true, strandedWithin: layer });
+    vi.runAllTimers();
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("leaves focus inside a layer it was not told about", () => {
+    field.focus();
+    restoreFocusIfStranded(target, { ringless: true });
+    vi.runAllTimers();
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("restores nothing once cancelled", () => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const focusSpy = vi.spyOn(target, "focus");
+    const cancel = restoreFocusIfStranded(target, { ringless: false });
+    cancel();
+    vi.runAllTimers();
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 });

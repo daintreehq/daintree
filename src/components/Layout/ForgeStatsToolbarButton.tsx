@@ -1353,13 +1353,7 @@ export const ForgeStatsToolbarButton = memo(
                 refreshStats();
               }
             }}
-            onOpenChange={(open) => {
-              setIssuesOpen(open);
-              if (!open) {
-                armTooltipFocusSuppression();
-                issuesButtonRef.current?.focus();
-              }
-            }}
+            onOpenChange={setIssuesOpen}
             onPointerEnter={(e) => {
               warmDropdownView("issue");
               handlePrefetchPointerEnter("issue", e);
@@ -1452,13 +1446,7 @@ export const ForgeStatsToolbarButton = memo(
                 refreshStats();
               }
             }}
-            onOpenChange={(open) => {
-              setPrsOpen(open);
-              if (!open) {
-                armTooltipFocusSuppression();
-                prsButtonRef.current?.focus();
-              }
-            }}
+            onOpenChange={setPrsOpen}
             onPointerEnter={(e) => {
               warmDropdownView("pr");
               handlePrefetchPointerEnter("pr", e);
@@ -1543,13 +1531,7 @@ export const ForgeStatsToolbarButton = memo(
           }}
           onPointerEnter={() => warmDropdownView("commit")}
           onFocus={() => warmDropdownView("commit")}
-          onOpenChange={(open) => {
-            setCommitsOpen(open);
-            if (!open) {
-              armTooltipFocusSuppression();
-              commitsButtonRef.current?.focus();
-            }
-          }}
+          onOpenChange={setCommitsOpen}
         />
         {rateLimitActive ? (
           <Tooltip

@@ -13,6 +13,8 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useUIStore } from "@/store/uiStore";
 import { OVERLAY_SIDE_OFFSET } from "./overlayMotion";
 import { useDialogOverlayZClass } from "./dialogLayer";
+import { isFocusStranded, restoreFocusIfStranded } from "./overlay-focus-restore";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 // Grace window after the dropdown opens during which overlay-count rises are
 // treated as in-flight modals (e.g. cold-start AgentSetupWizard) rather than
@@ -36,6 +38,8 @@ const OVERLAY_RACE_GRACE_MS = 300;
  */
 export const FixedDropdownVisibleContext = React.createContext<boolean>(true);
 
+type DismissReason = "escape" | "pointer-outside" | "overlay";
+
 interface FixedDropdownProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -50,6 +54,10 @@ interface FixedDropdownProps {
   // each reveal so the SWR revalidate path still runs. Costs ~one body's
   // worth of memory per dropdown — opt in only for hot paths.
   keepMounted?: boolean;
+  // Hand focus back to the anchor after the dropdown dismisses itself, but only
+  // when that close would otherwise strand it. Off by default: a consumer that
+  // already restores on its own close would restore twice.
+  restoreFocusOnClose?: boolean;
 }
 
 export function FixedDropdown({
@@ -61,6 +69,7 @@ export function FixedDropdown({
   sideOffset = OVERLAY_SIDE_OFFSET,
   persistThroughChildOverlays = false,
   keepMounted = false,
+  restoreFocusOnClose = false,
 }: FixedDropdownProps) {
   const dialogOverlayZ = useDialogOverlayZClass();
   const [mounted, setMounted] = useState(false);
@@ -175,8 +184,44 @@ export function FixedDropdown({
     };
   }, [open, updatePosition]);
 
+  // The dropdown's own dismissals, recorded for the restore below to read once
+  // the parent's close commits. The content is captured now because a dropdown
+  // that is not kept mounted can lose it before that.
+  const pendingDismissRef = useRef<{ reason: DismissReason; content: HTMLElement | null } | null>(
+    null
+  );
+  const requestClose = useCallback(
+    (reason: DismissReason) => {
+      if (restoreFocusOnClose) pendingDismissRef.current = { reason, content: contentRef.current };
+      onOpenChange(false);
+    },
+    [onOpenChange, restoreFocusOnClose]
+  );
+
+  // Something outside the dropdown may already own focus when it closes: xterm
+  // focuses its textarea from its own mousedown, before the document listener
+  // that dismisses this, and a modal rising over it takes focus as it mounts.
+  // Pulling focus back to the anchor then steals it, so the anchor gets it only
+  // when nothing else has. A press lands its focus after the document listener
+  // returns, so pointer closes look a task later; that is also when a modal has
+  // settled. Escape moves no focus of its own and restores at once, ringed like
+  // any keyboard restore. The pointer and overlay restores are ringless: neither
+  // is a keyboard move, and Chromium rings a programmatic `.focus()` anyway.
+  useLayoutEffect(() => {
+    const dismissal = pendingDismissRef.current;
+    pendingDismissRef.current = null;
+    if (open || !dismissal || !restoreFocusOnClose) return;
+    const anchor = anchorRef.current;
+    if (dismissal.reason !== "escape") {
+      return restoreFocusIfStranded(anchor, { ringless: true, strandedWithin: dismissal.content });
+    }
+    if (!anchor?.isConnected || !isFocusStranded(dismissal.content)) return;
+    armTooltipFocusSuppression();
+    anchor.focus({ preventScroll: true });
+  }, [open, restoreFocusOnClose, anchorRef]);
+
   const childOverlayActive = persistThroughChildOverlays && overlayStackLength > 0;
-  useEscapeStack(open && !childOverlayActive, () => onOpenChange(false));
+  useEscapeStack(open && !childOverlayActive, () => requestClose("escape"));
 
   useEffect(() => {
     if (!open) return;
@@ -197,7 +242,7 @@ export function FixedDropdown({
       ) {
         return;
       }
-      onOpenChange(false);
+      requestClose("pointer-outside");
     };
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -206,7 +251,7 @@ export function FixedDropdown({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("touchstart", handlePointerDown);
     };
-  }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayStackLength]);
+  }, [open, requestClose, anchorRef, persistThroughChildOverlays, overlayStackLength]);
 
   useEffect(() => {
     if (persistThroughChildOverlays || !open) return;
@@ -227,9 +272,9 @@ export function FixedDropdown({
       return;
     }
     if (overlayStackLength > baselineOverlaySizeRef.current) {
-      onOpenChange(false);
+      requestClose("overlay");
     }
-  }, [open, overlayStackLength, onOpenChange, persistThroughChildOverlays, overlayGraceActive]);
+  }, [open, overlayStackLength, requestClose, persistThroughChildOverlays, overlayGraceActive]);
 
   if (!mounted) return null;
   if (!position) return null;
