@@ -459,7 +459,9 @@ describe("ProjectPulseCard background refresh", () => {
     await fail(failed);
     expect(screen.getByTestId("pulse-last-updated")).toBe(footer);
     expect(document.activeElement).toBe(footer);
+    expect(footer.hasAttribute("aria-disabled")).toBe(false);
     expect(summaryText()).toBe("2");
+    expect(screen.getByTestId("pulse-heatmap").getAttribute("data-total")).toBe("2");
 
     const retry = nextRequest();
     fireEvent.click(footer);
@@ -488,6 +490,7 @@ describe("ProjectPulseCard background refresh", () => {
     );
     expect(summaryText()).toBe("5");
     expect(screen.getByTestId("pulse-heatmap").getAttribute("data-total")).toBe("5");
+    expect(footer.hasAttribute("aria-disabled")).toBe(false);
     expect(footer.textContent).toContain("Updated");
     expect(footer.textContent).not.toContain("Couldn't refresh");
     expect(liveRegionText()).toBe("Pulse data updated");

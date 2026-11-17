@@ -195,30 +195,50 @@ describe("ProjectPulseService history read failures", () => {
 
   it("keeps git's output in the local log only", async () => {
     const subject = "Rotate the staging credentials";
+    // simple-git folds what git printed before dying into the error.
+    const gitError = () => new Error(`abc123 ${subject}\nfatal: bad object`);
+    let failing: "recent" | "supplementary" | "heatmap" = "recent";
     const raw = vi.fn(async (args: string[]) => {
       if (args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
         return "deadbeef\n";
       }
       if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
-      // simple-git folds what git printed before dying into the error.
-      if (args[0] === "log" && args[1] === "-n")
-        throw new Error(`abc123 ${subject}\nfatal: bad object`);
-      if (isStreakLog(args)) throw new Error(`${subject}\nfatal: bad object`);
+      if (args[0] === "rev-parse" && args[1] === "--is-shallow-repository") return "false\n";
+      if (args[0] === "log" && args[1] === "-n" && failing === "recent") throw gitError();
+      if (isStreakLog(args) && failing === "supplementary") throw gitError();
+      if (args[0] === "rev-list" && failing === "supplementary") throw gitError();
+      if (isHeatmapLog(args) && failing === "heatmap") throw gitError();
       if (args[0] === "log") return HISTORY;
       return "";
     });
     const svc = await loadService(raw);
 
     await expect(svc.getPulse({ ...OPTS, includeRecentCommits: true })).rejects.toThrow();
-    // Without the list, the pulse survives and logs the streak failure.
+    failing = "supplementary";
     expect((await svc.getPulse(OPTS)).currentStreakDays).toBeUndefined();
+    failing = "heatmap";
+    await expect(svc.getPulse(OPTS)).rejects.toThrow();
 
-    const shared = JSON.stringify(logger.logError.mock.calls);
-    expect(shared).toContain("Failed to read recent commits");
-    expect(shared).toContain("Failed to get commit timestamps for full streak");
+    const messages = [
+      "Failed to read recent commits",
+      "Failed to get commit timestamps for full streak",
+      "Failed to get first commit date",
+      "Failed to read commit history",
+    ];
+    for (const message of messages) {
+      expect(logger.logError).toHaveBeenCalledWith(message, undefined, { worktreeId: "wt-1" });
+      expect(
+        logger.logLocalOnly.mock.calls.some(
+          ([level, text]) =>
+            level === "error" && String(text).includes(message) && String(text).includes(subject)
+        )
+      ).toBe(true);
+    }
+    // Errors serialised the way the logger reads them: by message.
+    const shared = JSON.stringify(logger.logError.mock.calls, (_key, value: unknown) =>
+      value instanceof Error ? value.message : value
+    );
     expect(shared).not.toContain(subject);
-    const local = logger.logLocalOnly.mock.calls.map(([, message]) => message as string);
-    expect(local.some((m) => m.includes("recent commits") && m.includes(subject))).toBe(true);
   });
 
   it("recomputes when the branch probe fails at the cached SHA instead of reading it as detached", async () => {
@@ -236,8 +256,13 @@ describe("ProjectPulseService history read failures", () => {
     });
     const svc = await loadService(raw);
 
-    expect((await svc.getPulse(OPTS)).branch).toBeUndefined();
+    const detached = await svc.getPulse(OPTS);
+    expect(detached.branch).toBeUndefined();
     const heatmapReads = raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length;
+
+    // A healthy detached probe still serves the cache.
+    expect(await svc.getPulse(OPTS)).toBe(detached);
+    expect(raw.mock.calls.filter(([args]) => isHeatmapLog(args)).length).toBe(heatmapReads);
 
     branchFails = true;
     await svc.getPulse(OPTS);
