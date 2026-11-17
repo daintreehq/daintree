@@ -32,6 +32,11 @@ interface UseReviewHubCommitAndPushArgs {
    * message must not sit in the composer as unsent while its push runs.
    */
   onCommitted: (worktreePath: string, message: string) => void;
+  /**
+   * Called once a commit or pull may have moved the branch tip, ahead of the
+   * worktree store hearing about it, for reads keyed on that tip.
+   */
+  onHeadMoved: (worktreePath: string) => void;
 }
 
 /**
@@ -46,6 +51,7 @@ export function useReviewHubCommitAndPush({
   setActionError,
   debouncedBgRefreshRef,
   onCommitted,
+  onHeadMoved,
 }: UseReviewHubCommitAndPushArgs) {
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
@@ -116,6 +122,7 @@ export function useReviewHubCommitAndPush({
       try {
         await window.electron.git.commit(worktreePath, message);
         onCommitted(worktreePath, message);
+        onHeadMoved(worktreePath);
         // A commit resets the review: anything still (or newly) changed after
         // it is a new change, so stale viewed markers must not stick to it.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
@@ -131,7 +138,7 @@ export function useReviewHubCommitAndPush({
         throw err;
       }
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, onCommitted]
+    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, onCommitted, onHeadMoved]
   );
 
   const isPushingRef = useRef(false);
@@ -246,6 +253,7 @@ export function useReviewHubCommitAndPush({
           throw err;
         }
         onCommitted(worktreePath, message);
+        onHeadMoved(worktreePath);
         // Same review reset as handleCommit — the changeset starts over.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
@@ -272,6 +280,7 @@ export function useReviewHubCommitAndPush({
       setActionError,
       debouncedBgRefreshRef,
       onCommitted,
+      onHeadMoved,
     ]
   );
 
@@ -324,11 +333,13 @@ export function useReviewHubCommitAndPush({
         // Refresh in case the rebase started and left files in conflict.
         await refresh();
       } finally {
+        // Even a failed pull may have rebased some of the way.
+        onHeadMoved(worktreePath);
         isPullRebasingRef.current = false;
         setPullRebasing(false);
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, refresh, debouncedBgRefreshRef, onHeadMoved]
   );
 
   // Confirmed through the same dialog the `git.pullRebase` action uses, so the
