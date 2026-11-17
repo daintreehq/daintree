@@ -102,3 +102,13 @@ export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationCo
     },
   })
 );
+
+/**
+ * Decline an operation whose dialog failed to render (#17204), so the action
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function declineFailedGitWorktreeOperationConfirmation(requestSeq: number): void {
+  const state = useGitWorktreeOperationConfirmStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(false);
+}

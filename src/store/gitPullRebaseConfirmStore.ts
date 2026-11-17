@@ -73,3 +73,13 @@ export const useGitPullRebaseConfirmStore = create<GitPullRebaseConfirmState>()(
     }
   },
 }));
+
+/**
+ * Decline a pull whose dialog failed to render (#17204), so the action
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function declineFailedGitPullRebaseConfirmation(requestSeq: number): void {
+  const state = useGitPullRebaseConfirmStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(false);
+}

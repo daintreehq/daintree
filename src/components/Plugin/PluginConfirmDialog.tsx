@@ -50,7 +50,12 @@ export function PluginConfirmDialog() {
 
   if (current === null) {
     return (
-      <ErrorBoundary variant="component" componentName="PluginConfirmDialog" resetKeys={[resetKey]}>
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginConfirmDialog"
+        resetKeys={[resetKey]}
+        onError={() => usePluginConfirmStore.getState().drop(resetKey)}
+      >
         <ConfirmDialog
           isOpen={false}
           title=""
@@ -70,7 +75,12 @@ export function PluginConfirmDialog() {
   const hasArgs = current.argsSummary.length > 0;
 
   return (
-    <ErrorBoundary variant="component" componentName="PluginConfirmDialog" resetKeys={[resetKey]}>
+    <ErrorBoundary
+      variant="component"
+      componentName="PluginConfirmDialog"
+      resetKeys={[resetKey]}
+      onError={() => usePluginConfirmStore.getState().drop(resetKey)}
+    >
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(current.requestId, "rejected")}

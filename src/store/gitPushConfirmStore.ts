@@ -69,3 +69,13 @@ export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) =
     }
   },
 }));
+
+/**
+ * Decline a push whose dialog failed to render (#17204), so the action
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function declineFailedGitPushConfirmation(requestSeq: number): void {
+  const state = useGitPushConfirmStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(null);
+}

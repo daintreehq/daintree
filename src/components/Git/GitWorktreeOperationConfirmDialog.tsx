@@ -19,7 +19,10 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
-import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import {
+  declineFailedGitWorktreeOperationConfirmation,
+  useGitWorktreeOperationConfirmStore,
+} from "@/store/gitWorktreeOperationConfirmStore";
 import {
   GIT_REMOTE_COMMIT_PREVIEW_MAX,
   type GitBaseIntegrationCommitPreview,
@@ -431,6 +434,7 @@ export function GitWorktreeOperationConfirmDialog() {
       variant="component"
       componentName="GitWorktreeOperationConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedGitWorktreeOperationConfirmation(requestSeq)}
     >
       <GitWorktreeOperationConfirmDialogInner />
     </ErrorBoundary>

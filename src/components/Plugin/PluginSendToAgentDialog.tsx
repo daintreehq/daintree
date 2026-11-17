@@ -11,7 +11,7 @@ import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePanelStore } from "@/store/panelStore";
@@ -443,6 +443,7 @@ export function PluginSendToAgentDialog() {
       variant="component"
       componentName="PluginSendToAgentDialog"
       resetKeys={[promptId ?? "null"]}
+      onError={() => dismissFailedUiPrompt(promptId)}
     >
       <SearchablePalette<SendToAgentRow>
         tier="command"

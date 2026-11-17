@@ -96,6 +96,7 @@ export function PluginMcpConfirmDialog() {
         variant="component"
         componentName="PluginMcpConfirmDialog"
         resetKeys={[resetKey]}
+        onError={() => usePluginMcpConfirmStore.getState().drop(resetKey)}
       >
         <ConfirmDialog
           isOpen={false}
@@ -126,6 +127,7 @@ export function PluginMcpConfirmDialog() {
       variant="component"
       componentName="PluginMcpConfirmDialog"
       resetKeys={[resetKey]}
+      onError={() => usePluginMcpConfirmStore.getState().drop(resetKey)}
     >
       <ConfirmDialog
         isOpen={true}

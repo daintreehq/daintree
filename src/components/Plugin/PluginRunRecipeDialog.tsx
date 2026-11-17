@@ -6,7 +6,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getAgentConfig } from "@/config/agents";
@@ -318,7 +318,12 @@ export function PluginRunRecipeDialog() {
 
   if (!isOpen || !recipe || !preview || !worktree) {
     return (
-      <ErrorBoundary variant="component" componentName="PluginRunRecipeDialog">
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginRunRecipeDialog"
+        resetKeys={[promptId ?? "null"]}
+        onError={() => dismissFailedUiPrompt(promptId)}
+      >
         <ConfirmDialog
           isOpen={false}
           title=""
@@ -336,6 +341,7 @@ export function PluginRunRecipeDialog() {
       variant="component"
       componentName="PluginRunRecipeDialog"
       resetKeys={[promptId ?? "null"]}
+      onError={() => dismissFailedUiPrompt(promptId)}
     >
       <ConfirmDialog
         isOpen={true}

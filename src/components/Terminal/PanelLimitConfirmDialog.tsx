@@ -3,7 +3,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { actionService } from "@/services/ActionService";
-import { usePanelLimitStore, type PanelLimitConfirmRequest } from "@/store/panelLimitStore";
+import {
+  declineFailedPanelLimitConfirmation,
+  usePanelLimitStore,
+  type PanelLimitConfirmRequest,
+} from "@/store/panelLimitStore";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -97,6 +101,7 @@ export function PanelLimitConfirmDialog() {
       variant="component"
       componentName="PanelLimitConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedPanelLimitConfirmation(requestSeq)}
     >
       <ConfirmDialog
         isOpen={true}

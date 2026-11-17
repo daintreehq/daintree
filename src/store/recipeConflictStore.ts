@@ -80,3 +80,13 @@ export const useRecipeConflictStore = create<RecipeConflictState>()((set, get) =
     }
   },
 }));
+
+/**
+ * Cancel a save whose conflict dialog failed to render (#17204), so the save
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function cancelFailedRecipeConflict(requestSeq: number): void {
+  const state = useRecipeConflictStore.getState();
+  if (state.pendingConflict === null || state.requestSeq !== requestSeq) return;
+  state.resolveConflict("cancel");
+}

@@ -65,3 +65,13 @@ export const useFileMutationConfirmStore = create<FileMutationConfirmState>()((s
     }
   },
 }));
+
+/**
+ * Decline a file change whose dialog failed to render (#17204), so the action
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function declineFailedFileMutationConfirmation(requestSeq: number): void {
+  const state = useFileMutationConfirmStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(null);
+}
