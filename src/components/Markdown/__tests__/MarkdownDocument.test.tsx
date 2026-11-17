@@ -432,9 +432,17 @@ function placeAt(element: Element, top: number): void {
   element.getBoundingClientRect = () => ({ top }) as DOMRect;
 }
 
-const TOC_PLAN = ["# Plan", "", "- [Risks](#risks)", "", "Intro.", "", "## Risks", "", "Late."].join(
-  "\n"
-);
+const TOC_PLAN = [
+  "# Plan",
+  "",
+  "- [Risks](#risks)",
+  "",
+  "Intro.",
+  "",
+  "## Risks",
+  "",
+  "Late.",
+].join("\n");
 
 describe("MarkdownDocument same-document links (#17335)", () => {
   it("gives headings GitHub's prefixed ids, numbering repeats in document order", () => {
