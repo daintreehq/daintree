@@ -67,7 +67,11 @@ beforeEach(() => {
   });
   useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
   useDictionaryLearnPromptStore.setState({ prompts: new Map() });
-  acceptSuggestion = vi.fn(async () => ({ dictionary: [], suggestedDictionary: [], conflicts: [] }));
+  acceptSuggestion = vi.fn(async () => ({
+    dictionary: [],
+    suggestedDictionary: [],
+    conflicts: [],
+  }));
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
