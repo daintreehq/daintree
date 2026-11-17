@@ -614,8 +614,9 @@ describe("host status and host figures", () => {
     expect(status.count.renders).toBe(before);
   });
 
-  it("keeps the fresher summary for a link that stayed up through the read", async () => {
-    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+  it("keeps the fresher summary only for a link that stayed up through the read", async () => {
+    const all = ["studio-01", "studio-02", "studio-03"];
+    list.mockResolvedValue(all.map(connectedHost));
     const first = renderHook(() => useHostFigures());
     await settle();
     first.unmount();
@@ -625,20 +626,32 @@ describe("host status and host figures", () => {
     const figures = renderHook(() => useHostFigures());
     await settle();
     expect(list).toHaveBeenCalledTimes(2);
-    // Pings only: both links stay up, and studio-02 reports again.
+    // Pings only: no link is heard going down.
     act(() => {
-      emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(9, 2) });
-      emit?.({ type: "connection-changed", hostId: "studio-02", connection: connected(9, 2) });
+      for (const hostId of all) {
+        emit?.({ type: "connection-changed", hostId, connection: connected(9, 2) });
+      }
+      emitMetrics({ type: "summary", summary: summary("studio-01", 2) });
       emitMetrics({ type: "summary", summary: summary("studio-02", 8) });
     });
 
+    // studio-03 was still coming up when the answer was taken, so its sample
+    // is from before that.
+    const reconnecting: HostListEntry = {
+      ...reporting("studio-03", 4),
+      connection: { status: "connecting", attempt: 1 },
+    };
     await act(async () => {
-      pending.resolve([reporting("studio-01", 4), reporting("studio-02", 4)]);
+      pending.resolve([reporting("studio-01", 4), reporting("studio-02", 4), reconnecting]);
       await pending.promise;
     });
     const hosts = figures.result.current.hosts;
-    expect(hosts.map((h) => h.connection)).toMatchObject([{ rttMs: 9 }, { rttMs: 9 }]);
-    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([4, 8]);
+    expect(hosts.map((h) => h.connection)).toMatchObject([
+      { rttMs: 9 },
+      { rttMs: 9 },
+      { rttMs: 9 },
+    ]);
+    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([4, 8, null]);
   });
 
   it("stops following while main has the view cached, though the page still reads visible", async () => {
