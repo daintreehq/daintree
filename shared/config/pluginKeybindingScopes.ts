@@ -4,7 +4,12 @@
  * `KeyScope`, so a scope the app retires stays loadable in manifests that still
  * declare it (#17245). Order matches the published JSON schemas.
  */
-export const PLUGIN_KEYBINDING_SCOPES = ["global", "portal", "worktreeGrid", "dev-preview"] as const;
+export const PLUGIN_KEYBINDING_SCOPES = [
+  "global",
+  "portal",
+  "worktreeGrid",
+  "dev-preview",
+] as const;
 
 /**
  * Scopes a manifest may still declare but that never activate for a plugin
