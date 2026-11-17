@@ -75,7 +75,7 @@ import {
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
-import { createProbeLimiter } from "../../utils/probeLimiter.js";
+import { projectIo } from "../../services/projectIoGate.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -108,10 +108,6 @@ import {
 } from "../../utils/gitPushDestination.js";
 
 const execFileAsync = promisify(execFile);
-
-// Shared by every scan, so a refresh the renderer has already superseded can't
-// stack its reads on top of the one that replaced it.
-const conflictMarkerScanLimiter = createProbeLimiter(CONFLICT_MARKER_SCAN_CONCURRENCY);
 
 function classifyGitFailure(error: unknown, formattedMessage: string) {
   const reason = classifyGitError(error);
@@ -2585,9 +2581,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       try {
         validateFilePathUnderCwd(payload.cwd, filePath);
         const absolute = path.resolve(payload.cwd, filePath);
-        const stat = await fs.promises.stat(absolute);
+        // Through the project I/O gate, so a worktree on a dead mount fails its
+        // own reads instead of holding Main's threadpool.
+        const stat = await projectIo.run(payload.cwd, () => fs.promises.stat(absolute));
         if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) return skipped(filePath);
-        const content = await fs.promises.readFile(absolute);
+        const content = await projectIo.run(payload.cwd, () => fs.promises.readFile(absolute));
         return { path: filePath, ...scanConflictMarkerText(content) };
       } catch {
         // Treat any per-file error as a degraded scan result — the UI hides
@@ -2596,15 +2594,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       }
     };
 
-    // Each scan queues at most one file per worker, so a later single-file scan
-    // waits behind a few files of a large one rather than its whole list.
+    // A few files at a time rather than the whole list, so a later scan of the
+    // same worktree queues behind a handful of this one's files at the gate.
     const filePaths = payload.filePaths;
     const results = new Array<ConflictMarkerScanEntry>(filePaths.length);
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < filePaths.length) {
         const index = next++;
-        results[index] = await conflictMarkerScanLimiter.withSlot(() => scanOne(filePaths[index]));
+        results[index] = await scanOne(filePaths[index]);
       }
     };
     await Promise.all(

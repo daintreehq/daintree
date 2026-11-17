@@ -3,8 +3,8 @@ import { readBlobs, readBlobSizes } from "./catFileBatch.js";
 
 export const STAGED_FILE_SIZE_CAP = 1_000_000;
 
-// How many conflicted working-tree files the Review Hub scan stats and reads at
-// once. The size cap bounds each read; this bounds what one scan holds open.
+// How many conflicted working-tree files one Review Hub scan holds at once. The
+// size cap bounds each read; this bounds what one scan holds open and queues.
 export const CONFLICT_MARKER_SCAN_CONCURRENCY = 8;
 
 // Bounds what one `cat-file --batch` holds in memory at once.
