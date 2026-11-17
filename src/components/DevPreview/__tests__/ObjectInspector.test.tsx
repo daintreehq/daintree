@@ -10,7 +10,7 @@ import type {
 } from "@shared/types/ipc/webviewConsole";
 import { MAX_LIVE_OBJECT_ROWS } from "@shared/config/devPreviewConsole";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ObjectInspector } from "../ObjectInspector";
+import { ObjectInspector, ObjectViewCacheContext, type ObjectViewCache } from "../ObjectInspector";
 import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 
 const getConsoleProperties =
@@ -267,6 +267,56 @@ describe("ObjectInspector released values (#17067)", () => {
 
     fireEvent.pointerMove(preview, { pointerType: "mouse" });
     expect((await screen.findByRole("tooltip")).textContent).toBeTruthy();
+    expect(getConsoleProperties).not.toHaveBeenCalled();
+  });
+});
+
+describe("ObjectInspector view cache keys (#17497)", () => {
+  const obj = (objectId: string) => ({
+    type: "object" as const,
+    objectId,
+    preview: `{${objectId}}`,
+  });
+
+  it("keeps a dotted property name apart from the same names nested", async () => {
+    const reads: Record<string, CdpPropertyDescriptor[]> = {
+      root: [prop("a.b", { value: obj("dotted") }), prop("a", { value: obj("outer") })],
+      dotted: [prop("x", { value: { type: "primitive", kind: "number", value: 1 } })],
+      outer: [prop("b", { value: obj("inner") })],
+      inner: [prop("y", { value: { type: "primitive", kind: "number", value: 2 } })],
+    };
+    getConsoleProperties.mockImplementation(async (_w, _p, _r, objectId) => ({
+      properties: reads[objectId] ?? [],
+    }));
+    const cache: ObjectViewCache = new Map();
+    const ui = (
+      <TooltipProvider delayDuration={0}>
+        <ObjectViewCacheContext value={cache}>
+          <ObjectInspector arg={obj("root")} webContentsId={7} paneId="pane-1" rowId={3} path="0" />
+        </ObjectViewCacheContext>
+      </TooltipProvider>
+    );
+    const { container, unmount } = render(ui);
+    const open = async (el: Element) => {
+      fireEvent.click(el);
+      await act(async () => {});
+    };
+    await open(screen.getByRole("button", { name: /\{root\}/ }));
+    await open(propertyRow(container, "a.b").querySelector("button")!);
+    await open(propertyRow(container, "a").querySelector("button")!);
+    await open(propertyRow(container, "b").querySelector("button")!);
+
+    const keys = Array.from(cache.keys());
+    expect(new Set(keys).size).toBe(4);
+    expect(cache.get('3:0."a.b"')?.properties?.[0]?.name).toBe("x");
+    expect(cache.get('3:0."a"."b"')?.properties?.[0]?.name).toBe("y");
+
+    // A remount (virtualized row scrolled back in) reads each branch from the cache.
+    unmount();
+    getConsoleProperties.mockClear();
+    const again = render(ui);
+    expect(again.container.textContent).toContain("x:");
+    expect(again.container.textContent).toContain("y:");
     expect(getConsoleProperties).not.toHaveBeenCalled();
   });
 });

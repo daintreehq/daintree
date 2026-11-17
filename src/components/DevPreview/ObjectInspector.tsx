@@ -144,7 +144,8 @@ function PropertyTree({
               rowId={rowId}
               isStale={isStale}
               depth={depth + 1}
-              path={`${path}.${prop.name}`}
+              // Quoted so a name containing a dot can't collide with a nested path.
+              path={`${path}.${JSON.stringify(prop.name)}`}
             />
           ) : (
             <UnreadValue {...unreadValueText(prop)} />
