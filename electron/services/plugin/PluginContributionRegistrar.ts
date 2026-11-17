@@ -59,7 +59,11 @@ import {
   unregisterPluginLayouts,
 } from "../../../shared/config/pluginLayoutRegistry.js";
 import { isPluginIconId } from "../../../shared/config/pluginIconIds.js";
-import { SEARCH_PROVIDER_DEFAULT_ICON_ID } from "../../../shared/config/pluginSearchProviders.js";
+import {
+  FILE_SEARCH_KEYWORD,
+  FILE_SEARCH_KEYWORD_HOLDER,
+  SEARCH_PROVIDER_DEFAULT_ICON_ID,
+} from "../../../shared/config/pluginSearchProviders.js";
 import {
   registerSearchProviders,
   unregisterSearchProviders,
@@ -971,6 +975,15 @@ export class PluginContributionRegistrar {
           resolveResultIcon,
           ...(runDeclarative ? { runDeclarative } : {}),
         });
+      }
+      for (const provider of registered) {
+        if (provider.keyword !== FILE_SEARCH_KEYWORD) continue;
+        this.deps.recordPluginLog(
+          plugin,
+          pluginId,
+          "warn",
+          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is ${FILE_SEARCH_KEYWORD_HOLDER}'s own file search, so the quick switcher refuses it. Choose a different keyword.`
+        );
       }
       // Reported to the refused provider's own plugin, which may be another one
       // whose keyword this plugin's reload just took back.

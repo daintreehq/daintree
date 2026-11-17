@@ -60,6 +60,7 @@ export function QuickSwitcherHost() {
             selectedIndex={quickSwitcher.selectedIndex}
             matchesById={quickSwitcher.matchesById}
             isLoading={quickSwitcher.isLoading}
+            isFiltering={quickSwitcher.isFiltering}
             close={quickSwitcher.close}
             setQuery={quickSwitcher.setQuery}
             setSelectedIndex={quickSwitcher.setSelectedIndex}
@@ -71,6 +72,9 @@ export function QuickSwitcherHost() {
             keywordProvider={quickSwitcher.keywordProvider}
             scopedStatus={quickSwitcher.scopedStatus}
             enterScope={quickSwitcher.enterScope}
+            fileScope={quickSwitcher.fileScope}
+            isFileKeyword={quickSwitcher.isFileKeyword}
+            enterFileScope={quickSwitcher.enterFileScope}
             exitScope={quickSwitcher.exitScope}
           />
         </Suspense>

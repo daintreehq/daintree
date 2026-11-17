@@ -397,7 +397,7 @@ function AppInner() {
     onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
     onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
     onOpenActionPalette: () => openPalette("action"),
-    onOpenQuickSwitcher: () => openPalette("quick-switcher"),
+    onOpenQuickSwitcher: (scope) => usePaletteStore.getState().openQuickSwitcher(scope),
     onOpenWorktreePalette: () => openPalette("worktree"),
     onOpenQuickCreatePalette: () => openPalette("quick-create"),
     onToggleWorktreeOverview: toggleWorktreeOverview,

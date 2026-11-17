@@ -23,6 +23,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    // Unbound by default: ⌘P then "files" + Tab reaches the same scope, and the
+    // nearby chords are taken. Rebindable for anyone who wants a direct key.
+    actionId: "nav.quickOpenFile",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open file by name",
+    category: "Navigation",
+  },
+  {
     actionId: "nav.focusRegion.next",
     combo: "F6",
     scope: "global",

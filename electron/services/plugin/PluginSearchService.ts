@@ -6,6 +6,8 @@ import type {
   PluginSearchResultRow,
 } from "../../../shared/types/plugin.js";
 import {
+  FILE_SEARCH_KEYWORD,
+  FILE_SEARCH_KEYWORD_HOLDER,
   SEARCH_PROVIDER_BLENDED_LIMIT,
   SEARCH_PROVIDER_DEADLINE_MS,
   SEARCH_PROVIDER_QUERY_MAX_LENGTH,
@@ -57,7 +59,8 @@ function visibleProviders(projectId: string | null): RegisteredSearchProvider[] 
 /**
  * The search providers a view of `projectId` can see (#13792), with the user's
  * "Show in quick switcher" choice and, for a provider whose keyword a shown
- * provider registered first holds, which plugin holds it. A refused or
+ * provider registered first holds, which plugin holds it. Daintree's own file
+ * search holds its keyword ahead of every plugin (#17329). A refused or
  * switched-off provider is still listed so Settings can say who answers its
  * keyword.
  */
@@ -68,7 +71,10 @@ export function listSearchProviders(
   const visible = visibleProviders(projectId);
   const refusals = searchKeywordRefusals(visible, hidden);
   return visible.map((provider) => {
-    const takenBy = refusals.get(provider.key);
+    const takenBy =
+      provider.keyword === FILE_SEARCH_KEYWORD
+        ? FILE_SEARCH_KEYWORD_HOLDER
+        : refusals.get(provider.key)?.pluginName;
     return {
       key: provider.key,
       pluginId: provider.pluginId,
@@ -79,7 +85,7 @@ export function listSearchProviders(
       blend: provider.blend,
       kind: provider.kind,
       shown: !hidden.has(provider.key),
-      ...(takenBy ? { keywordTakenBy: takenBy.pluginName } : {}),
+      ...(takenBy ? { keywordTakenBy: takenBy } : {}),
     };
   });
 }
@@ -401,6 +407,7 @@ export class PluginSearchCoordinator {
     if (request.mode === "blended" && !provider.blend) return null;
     const hidden = this.deps.hiddenProviderKeys();
     if (hidden.has(provider.key)) return null;
+    if (provider.keyword === FILE_SEARCH_KEYWORD) return null;
     const visible = visibleProviders(projectId);
     if (!visible.includes(provider)) return null;
     if (searchKeywordRefusals(visible, hidden).has(provider.key)) return null;

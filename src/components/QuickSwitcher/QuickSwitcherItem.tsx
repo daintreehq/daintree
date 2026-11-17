@@ -17,19 +17,27 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import {
   HighlightedText,
   findMatchIndices,
+  substringMatchIndices,
   wordMatchIndices,
 } from "@/components/ui/HighlightedText";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TailKeepingText } from "@/components/ui/TailKeepingText";
 import { PathTail } from "@/components/ui/PathTail";
 import { pathTail, remapPathRanges, shortenPath } from "@/lib/pathTail";
+import { isMac } from "@/lib/platform";
+import {
+  FILE_TREE_ICON_CLASS,
+  FILE_TREE_ICON_COLOR_CLASS,
+  getFileTypeIcon,
+} from "@/panels/file-browser/fileTypeIcons";
 
 export { pathTail };
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
   isSelected: boolean;
-  onSelect: (item: QuickSwitcherItemData) => void;
+  /** `modified` is the platform modifier held on the click. */
+  onSelect: (item: QuickSwitcherItemData, modified: boolean) => void;
   onHover?: () => void;
   ariaDescribedBy?: string;
   /** Fuse match ranges for this row, when it was ranked for a query. */
@@ -106,6 +114,61 @@ function WorktreeGlyph({ item }: { item: QuickSwitcherItemData }) {
 }
 
 /**
+ * A file row of the file scope (#17329), as the file pane's picker draws it:
+ * the type icon, the name, and its folder beside it giving way first. The
+ * worktree is named once, on the scope chip.
+ */
+function FileRow({
+  item,
+  isSelected,
+  onSelect,
+  onHover,
+  ariaDescribedBy,
+  query,
+}: QuickSwitcherItemProps) {
+  const { Icon } = getFileTypeIcon(item.title);
+  const relativePath = item.file?.relativePath ?? item.title;
+  return (
+    <button
+      id={`qs-option-${item.id}`}
+      type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
+      onPointerMove={onHover}
+      className={cn(
+        PALETTE_ROW_CLASS,
+        "group w-full flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] text-left",
+        "text-text-secondary"
+      )}
+      onClick={(e) => onSelect(item, isMac() ? e.metaKey : e.ctrlKey)}
+      aria-selected={isSelected}
+      aria-describedby={ariaDescribedBy}
+      // The folder is drawn after the name; the path read whole says it in order.
+      aria-label={relativePath}
+      role="option"
+    >
+      <Icon
+        className={cn("w-4 h-4 shrink-0", FILE_TREE_ICON_COLOR_CLASS, FILE_TREE_ICON_CLASS)}
+        aria-hidden="true"
+      />
+      <span className="flex flex-1 min-w-0 items-baseline gap-2">
+        <span className="shrink-0 max-w-[60%] truncate text-sm font-medium text-text-primary">
+          <HighlightedText
+            text={item.title}
+            indices={substringMatchIndices(item.title, query ?? "")}
+          />
+        </span>
+        {item.subtitle && (
+          <PathTail className="min-w-0 flex-1 font-mono text-xs text-text-secondary">
+            {item.subtitle}
+          </PathTail>
+        )}
+      </span>
+    </button>
+  );
+}
+
+/**
  * One row of the quick switcher, in the family's anatomy: a type glyph, the
  * name, the context that tells same-named rows apart beside it, a quieter detail
  * line only when there is something to add, and a trailing slot for state and
@@ -121,6 +184,18 @@ export function QuickSwitcherItem({
   query,
   showProvider = true,
 }: QuickSwitcherItemProps) {
+  if (item.type === "file") {
+    return (
+      <FileRow
+        item={item}
+        isSelected={isSelected}
+        onSelect={onSelect}
+        onHover={onHover}
+        ariaDescribedBy={ariaDescribedBy}
+        query={query}
+      />
+    );
+  }
   const isTerminal = item.type === "terminal";
   const isPlugin = item.type === "plugin";
   const providerTitle = isPlugin ? (item.pluginHit?.providerTitle ?? null) : null;
@@ -171,7 +246,7 @@ export function QuickSwitcherItem({
         hasDetail ? "py-2" : "py-1.5",
         "text-text-secondary"
       )}
-      onClick={() => onSelect(item)}
+      onClick={(e) => onSelect(item, isMac() ? e.metaKey : e.ctrlKey)}
       aria-selected={isSelected}
       aria-current={item.isCurrent ? "true" : undefined}
       aria-describedby={ariaDescribedBy}

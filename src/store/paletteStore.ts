@@ -17,6 +17,12 @@ export type PaletteId =
   | "recent-dictations"
   | "host-switcher";
 
+/**
+ * What the quick switcher is searching instead of everything: the active
+ * worktree's files (#17329), or one plugin search provider (#13792).
+ */
+export type QuickSwitcherScope = { kind: "files" } | { kind: "plugin"; key: string };
+
 interface PaletteState {
   activePaletteId: PaletteId | null;
   /**
@@ -35,7 +41,18 @@ interface PaletteState {
    * slot would name a palette nothing draws.
    */
   promptHistoryHosts: number;
+  /**
+   * The quick switcher's scope. Held here rather than in the switcher so an
+   * opener can ask for a scoped switcher in the same update that opens it: the
+   * first frame then already shows the scoped list. Every opening of any
+   * palette, and closing the switcher, drops it.
+   */
+  quickSwitcherScope: QuickSwitcherScope | null;
   openPalette: (id: PaletteId) => void;
+  /** Open the quick switcher, scoped when `scope` is given; a repeat open restarts it. */
+  openQuickSwitcher: (scope?: QuickSwitcherScope | null) => void;
+  /** Change the scope of the switcher that is already open (keyword + Tab, Backspace). */
+  setQuickSwitcherScope: (scope: QuickSwitcherScope | null) => void;
   closePalette: (id: PaletteId) => void;
   /** Counts a mounted prompt-history palette; the returned disposer uncounts it once. */
   registerPromptHistoryHost: () => () => void;
@@ -45,10 +62,27 @@ export const usePaletteStore = create<PaletteState>((set) => ({
   activePaletteId: null,
   openRequestId: 0,
   promptHistoryHosts: 0,
+  quickSwitcherScope: null,
   openPalette: (id) =>
-    set((state) => ({ activePaletteId: id, openRequestId: state.openRequestId + 1 })),
+    set((state) => ({
+      activePaletteId: id,
+      openRequestId: state.openRequestId + 1,
+      quickSwitcherScope: null,
+    })),
+  openQuickSwitcher: (scope = null) =>
+    set((state) => ({
+      activePaletteId: "quick-switcher",
+      openRequestId: state.openRequestId + 1,
+      quickSwitcherScope: scope,
+    })),
+  setQuickSwitcherScope: (scope) =>
+    set((state) =>
+      state.activePaletteId === "quick-switcher" ? { quickSwitcherScope: scope } : state
+    ),
   closePalette: (id) =>
-    set((state) => (state.activePaletteId === id ? { activePaletteId: null } : state)),
+    set((state) =>
+      state.activePaletteId === id ? { activePaletteId: null, quickSwitcherScope: null } : state
+    ),
   registerPromptHistoryHost: () => {
     set((state) => ({ promptHistoryHosts: state.promptHistoryHosts + 1 }));
     let registered = true;
