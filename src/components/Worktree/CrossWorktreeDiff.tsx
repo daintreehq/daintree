@@ -480,28 +480,32 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         setFileDiffLoading(true);
       }
 
-      // Hidden context comes from the same refs as the patch, asked for in the
-      // same breath: a whole-file diff carries the compare side's committed
-      // text. Only a file present on both sides has gaps to fill, and a failed
-      // read costs the expanders, never the diff.
+      // Hidden context comes from the same refs as the patch: a whole-file diff
+      // carries the compare side's committed text. Only a file present on both
+      // sides has gaps to fill, and a failed read costs the expanders, never
+      // the diff.
       const expandable = file.status === "M" || file.status === "R" || file.status === "C";
-      const sourceRequest = expandable
-        ? window.electron.git
-            .compareWorktrees(
-              leftPath,
-              leftBranch,
-              rightBranch,
-              file.path,
-              undefined,
-              undefined,
-              WHOLE_FILE_CONTEXT_LINES
-            )
-            .then((full) => (typeof full === "string" ? committedSourceFromFullDiff(full) : null))
-            .catch(() => null)
-        : Promise.resolve(null);
+      const readSource = () =>
+        window.electron.git
+          .compareWorktrees(
+            leftPath,
+            leftBranch,
+            rightBranch,
+            file.path,
+            undefined,
+            undefined,
+            WHOLE_FILE_CONTEXT_LINES
+          )
+          .then((full) => (typeof full === "string" ? committedSourceFromFullDiff(full) : null))
+          .catch(() => null);
 
+      // A refresh swaps the patch and its source together, so the old pair stays
+      // readable meanwhile: a source from the previous revision can pass the
+      // viewer's hunk check while the lines it would reveal have changed.
+      let diff: string | null = null;
+      let refreshedSource: string | null = null;
       try {
-        const [diff, source] = await Promise.all([
+        const [patch, source] = await Promise.all([
           window.electron.git.compareWorktrees(
             leftPath,
             leftBranch,
@@ -510,30 +514,35 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             undefined,
             ignoreWhitespaceRef.current
           ),
-          sourceRequest,
+          refresh && expandable ? readSource() : null,
         ]);
-        if (token !== fileDiffTokenRef.current) return; // stale response
         // Anything but diff text is a failure the user can retry, not a blank pane.
-        const ok = typeof diff === "string";
-        if (ok) {
-          setFileDiff(diff);
-          setFileSource(source);
-          setFileDiffError(false);
-        } else if (!refresh) {
-          setFileDiff(null);
-          setFileSource(null);
-          setFileDiffError(true);
+        if (typeof patch === "string") {
+          diff = patch;
+          refreshedSource = source;
         }
       } catch {
-        if (token !== fileDiffTokenRef.current) return;
-        if (!refresh) {
-          setFileDiff(null);
-          setFileSource(null);
-          setFileDiffError(true);
-        }
-      } finally {
-        if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
+        // A rejected read takes the same retryable failure path.
       }
+      if (token !== fileDiffTokenRef.current) return; // stale response
+      setFileDiffLoading(false);
+      if (diff === null) {
+        if (!refresh) setFileDiffError(true);
+        return;
+      }
+      setFileDiff(diff);
+      setFileDiffError(false);
+      if (refresh) {
+        setFileSource(refreshedSource);
+        return;
+      }
+
+      // A selection shows its patch without waiting on the whole-file read and
+      // asks for it only when the patch lands with the file still open, so
+      // stepping past a file never pays for it. The expanders appear with it.
+      if (!expandable || DIFF_SENTINELS.has(diff)) return;
+      const source = await readSource();
+      if (token === fileDiffTokenRef.current) setFileSource(source);
     },
     [leftPath, leftBranch, rightBranch]
   );
