@@ -9,6 +9,7 @@ export const GLOBAL_SETTINGS_TAB_IDS = [
   "terminalAppearance",
   "keyboard",
   "notifications",
+  "links",
   "privacy",
   "import-export",
   "terminal",

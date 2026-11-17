@@ -43,15 +43,12 @@ vi.mock("@/store/portalStore", () => ({
   }),
 }));
 const globalLinks = vi.hoisted(() => ({ links: [] as GlobalLink[] }));
-const restoreLink = vi.fn();
 vi.mock("@/store/globalLinksStore", () => ({
   useGlobalLinksStore: Object.assign(
     (selector: (s: typeof globalLinks) => unknown) => selector(globalLinks),
-    { getState: () => ({ ...globalLinks, restoreLink }) }
+    { getState: () => globalLinks }
   ),
 }));
-const mockNotify = vi.fn();
-vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PortalSettingsTab } from "../PortalSettingsTab";
@@ -84,16 +81,20 @@ function describedText(el: Element): string {
 
 beforeEach(() => {
   dispatch.mockReset();
-  mockNotify.mockReset();
-  restoreLink.mockReset();
   dispatch.mockResolvedValue({ ok: true, result: undefined });
   portal.links = [];
   globalLinks.links = [DOCS];
   portal.defaultNewTabUrl = null;
 });
 
-describe("PortalSettingsTab link editing", () => {
-  it("reports an invalid edit on the field being edited, not on the add form", async () => {
+const SHIPPED = DEFAULT_SYSTEM_LINKS[0]!;
+
+describe("PortalSettingsTab built-in link editing", () => {
+  beforeEach(() => {
+    portal.links = [{ ...SHIPPED }];
+  });
+
+  it("reports an invalid edit on the URL being edited and writes nothing", async () => {
     renderTab();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const url = screen.getByRole("textbox", { name: "Link URL" });
@@ -103,11 +104,7 @@ describe("PortalSettingsTab link editing", () => {
     });
 
     expect(url.getAttribute("aria-invalid")).toBe("true");
-    const message = describedText(url);
-    expect(message).not.toBe("");
-    const addUrl = screen.getByRole("textbox", { name: "New link URL" });
-    expect(addUrl.getAttribute("aria-invalid")).toBeNull();
-    expect(describedText(addUrl)).not.toContain(message);
+    expect(describedText(url)).not.toBe("");
     expect(dispatch).not.toHaveBeenCalledWith(
       "portal.links.update",
       expect.anything(),
@@ -126,8 +123,16 @@ describe("PortalSettingsTab link editing", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
 
+    expect(dispatch).toHaveBeenCalledWith(
+      "portal.links.update",
+      { id: SHIPPED.id, updates: { title: "Handbook", url: SHIPPED.url } },
+      { source: "user" }
+    );
     const name = screen.getByRole("textbox", { name: "Link name" }) as HTMLInputElement;
     expect(name.value).toBe("Handbook");
+    // A failed write is the form's problem, not a malformed field.
+    expect(describedText(name)).not.toBe("");
+    expect(name.getAttribute("aria-invalid")).toBeNull();
   });
 
   it("hands focus back to the link's Edit button when the editor closes", () => {
@@ -139,60 +144,6 @@ describe("PortalSettingsTab link editing", () => {
 
     const edit = screen.getByRole("button", { name: "Edit" });
     expect(document.activeElement).toBe(edit);
-  });
-});
-
-describe("PortalSettingsTab adding a link", () => {
-  it("keeps what was typed when the add fails", async () => {
-    dispatch.mockResolvedValue({ ok: false, error: { message: "store unavailable" } });
-    renderTab();
-    const name = screen.getByRole("textbox", { name: "New link name" }) as HTMLInputElement;
-    const url = screen.getByRole("textbox", { name: "New link URL" }) as HTMLInputElement;
-    fireEvent.change(name, { target: { value: "Linear" } });
-    fireEvent.change(url, { target: { value: "https://linear.app" } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    });
-
-    expect(name.value).toBe("Linear");
-    expect(url.value).toBe("https://linear.app");
-    // A failed write is the form's problem, not a malformed field.
-    expect(describedText(url)).not.toBe("");
-    expect(url.getAttribute("aria-invalid")).toBeNull();
-  });
-
-  it("flags the name, not the URL, when only the name is missing", async () => {
-    renderTab();
-    const name = screen.getByRole("textbox", { name: "New link name" });
-    const url = screen.getByRole("textbox", { name: "New link URL" });
-    fireEvent.change(url, { target: { value: "https://linear.app" } });
-    await act(async () => {
-      fireEvent.keyDown(url, { key: "Enter" });
-    });
-
-    expect(name.getAttribute("aria-invalid")).toBe("true");
-    expect(describedText(name)).not.toBe("");
-    expect(url.getAttribute("aria-invalid")).toBeNull();
-    expect(document.activeElement).toBe(name);
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("ignores a second submit while the first is still saving", async () => {
-    let finish: (value: unknown) => void = () => {};
-    dispatch.mockReturnValue(new Promise((resolve) => (finish = resolve)));
-    renderTab();
-    fireEvent.change(screen.getByRole("textbox", { name: "New link name" }), {
-      target: { value: "Linear" },
-    });
-    const url = screen.getByRole("textbox", { name: "New link URL" });
-    fireEvent.change(url, { target: { value: "https://linear.app" } });
-    await act(async () => {
-      fireEvent.keyDown(url, { key: "Enter" });
-      fireEvent.keyDown(url, { key: "Enter" });
-    });
-
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    await act(async () => finish({ ok: true, result: undefined }));
   });
 });
 
@@ -215,8 +166,11 @@ describe("PortalSettingsTab custom new-tab URL", () => {
 
 describe("PortalSettingsTab while a save is in flight", () => {
   it("won't open a second editor, or close the first, until the save answers", async () => {
-    const other: GlobalLink = { ...DOCS, id: "wiki", title: "Wiki", order: 1 };
-    globalLinks.links = [DOCS, other];
+    const [first, second] = DEFAULT_SYSTEM_LINKS;
+    portal.links = [
+      { ...first!, order: 0 },
+      { ...second!, order: 1 },
+    ];
     let answer: (value: unknown) => void = () => {};
     renderTab();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
@@ -234,6 +188,11 @@ describe("PortalSettingsTab while a save is in flight", () => {
     expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
 
     await act(async () => answer({ ok: true, result: undefined }));
+    expect(screen.queryByRole("textbox", { name: "Link name" })).toBeNull();
+    const [savedEdit, nextEdit] = screen.getAllByRole("button", { name: "Edit" });
+    expect(document.activeElement).toBe(savedEdit);
+    fireEvent.click(nextEdit!);
+    expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
   });
 });
 
@@ -347,56 +306,27 @@ describe("PortalSettingsTab custom new-tab URL failure", () => {
   });
 });
 
-describe("PortalSettingsTab removing a link", () => {
-  const HANDBOOK: GlobalLink = { ...DOCS, id: "handbook", title: "Handbook", order: 1 };
-
-  it("removes at once and offers Undo rather than asking first", async () => {
-    portal.links = [...DEFAULT_SYSTEM_LINKS];
-    globalLinks.links = [DOCS, HANDBOOK];
+describe("PortalSettingsTab and the person's own links", () => {
+  it("manages only the built-in links, while still offering the person's as new-tab choices", () => {
+    portal.links = [{ ...SHIPPED }];
+    globalLinks.links = [DOCS];
     renderTab();
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit" }).at(-2)!);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
-    });
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: SHIPPED.title })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(1);
+    expect(screen.queryByText(DOCS.url)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "New link URL" })).toBeNull();
+    const select = screen.getByRole("combobox", { name: "New tabs open" }) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toContain(DOCS.title);
+  });
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+  it("sends the person to the Links page to manage them", () => {
+    renderTab();
+    fireEvent.click(screen.getByRole("button", { name: "Open Links settings" }));
     expect(dispatch).toHaveBeenCalledWith(
-      "portal.links.remove",
-      { id: "docs" },
+      "app.settings.openTab",
+      { tab: "links", sectionId: "global-links" },
       { source: "user" }
     );
-    expect(mockNotify).toHaveBeenCalledTimes(1);
-    const payload = mockNotify.mock.calls[0]![0] as {
-      action: { label: string; onClick: () => void };
-    };
-    expect(payload.action.label).toBe("Undo");
-    payload.action.onClick();
-    expect(restoreLink).toHaveBeenCalledWith(DOCS, { order: ["docs", "handbook"] });
-  });
-
-  it("moves focus to the next custom link's Edit button", async () => {
-    globalLinks.links = [DOCS, HANDBOOK];
-    const { rerender } = renderTab();
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
-    });
-    globalLinks.links = [HANDBOOK];
-    rerender(
-      <TooltipProvider>
-        <PortalSettingsTab />
-      </TooltipProvider>
-    );
-    expect(document.activeElement?.getAttribute("data-portal-edit")).toBe("handbook");
-  });
-
-  it("offers no Undo when the removal failed", async () => {
-    dispatch.mockResolvedValue({ ok: false, error: { message: "store unavailable" } });
-    renderTab();
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
-    });
-    expect(mockNotify).not.toHaveBeenCalled();
   });
 });

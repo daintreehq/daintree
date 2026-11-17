@@ -159,6 +159,14 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       });
     },
   },
+  links: {
+    content: async (window) => {
+      await expect(window.locator("#global-links")).toBeVisible({ timeout: T_SHORT });
+      await expect(window.getByRole("textbox", { name: "New link URL" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   privacy: {
     content: async (window) => {
       await expect(window.locator("text=No data is collected").first()).toBeVisible({
