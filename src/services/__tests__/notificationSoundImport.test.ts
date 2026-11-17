@@ -64,12 +64,26 @@ describe("notificationSoundImport", () => {
   });
 
   it("averages every channel into one", () => {
-    expect(Array.from(downmixToMono(decodedAudio([[1, 0.5], [0, -0.5]])))).toEqual([0.5, 0]);
+    expect(
+      Array.from(
+        downmixToMono(
+          decodedAudio([
+            [1, 0.5],
+            [0, -0.5],
+          ])
+        )
+      )
+    ).toEqual([0.5, 0]);
     expect(Array.from(downmixToMono(decodedAudio([[0.25, -1]])))).toEqual([0.25, -1]);
   });
 
   it("decodes at 44.1 kHz and encodes the canonical mono WAV", async () => {
-    decodeAudioData.mockResolvedValue(decodedAudio([[0.5, 0.5], [-0.5, 0.5]]));
+    decodeAudioData.mockResolvedValue(
+      decodedAudio([
+        [0.5, 0.5],
+        [-0.5, 0.5],
+      ])
+    );
 
     const payload = await encodeImportedSound(audioFile("Door bell.mp3"));
 

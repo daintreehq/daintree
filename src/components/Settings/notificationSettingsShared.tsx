@@ -15,7 +15,10 @@ import {
   type CustomNotificationSound,
   type CustomNotificationSoundEntry,
 } from "@shared/types/ipc/notificationSounds";
-import { importNotificationSound, soundImportErrorMessage } from "@/services/notificationSoundImport";
+import {
+  importNotificationSound,
+  soundImportErrorMessage,
+} from "@/services/notificationSoundImport";
 import { SettingsRow } from "./SettingsGroup";
 
 /**

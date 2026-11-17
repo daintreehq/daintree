@@ -126,16 +126,19 @@ describe("customNotificationSounds", () => {
     expect(listCustomSounds()).toEqual([{ ...imported, available: false }]);
   });
 
-  it.skipIf(process.platform === "win32")("refuses a stored file replaced by a symlink", async () => {
-    const imported = await importCustomSound({ label: "x", wav: validWav() });
-    const filePath = resolveCustomSoundPath(imported.id)!;
-    const outside = path.join(userData.dir, "outside.wav");
-    fs.writeFileSync(outside, validWav());
-    fs.rmSync(filePath);
-    fs.symlinkSync(outside, filePath);
+  it.skipIf(process.platform === "win32")(
+    "refuses a stored file replaced by a symlink",
+    async () => {
+      const imported = await importCustomSound({ label: "x", wav: validWav() });
+      const filePath = resolveCustomSoundPath(imported.id)!;
+      const outside = path.join(userData.dir, "outside.wav");
+      fs.writeFileSync(outside, validWav());
+      fs.rmSync(filePath);
+      fs.symlinkSync(outside, filePath);
 
-    expect(resolveCustomSoundPath(imported.id)).toBeNull();
-  });
+      expect(resolveCustomSoundPath(imported.id)).toBeNull();
+    }
+  );
 
   it("ignores malformed and duplicate entries in the stored list", () => {
     const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";

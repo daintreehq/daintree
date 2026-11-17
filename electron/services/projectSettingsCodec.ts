@@ -95,10 +95,7 @@ function decodeNotificationOverrides(raw: unknown): Partial<NotificationSettings
     isSelectableNotificationSound(obj.completedSoundFile)
   ) {
     result.completedSoundFile = obj.completedSoundFile;
-  } else if (
-    typeof obj.soundFile === "string" &&
-    isSelectableNotificationSound(obj.soundFile)
-  ) {
+  } else if (typeof obj.soundFile === "string" && isSelectableNotificationSound(obj.soundFile)) {
     // Legacy alias from a previous settings shape.
     result.completedSoundFile = obj.soundFile;
   }

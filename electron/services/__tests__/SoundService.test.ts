@@ -57,7 +57,8 @@ const customSoundsMock = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({
   store: {
-    get: (key: string) => (key === "notificationSettings" ? notificationSettings.current : undefined),
+    get: (key: string) =>
+      key === "notificationSettings" ? notificationSettings.current : undefined,
   },
 }));
 

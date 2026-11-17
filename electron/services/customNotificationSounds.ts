@@ -11,7 +11,10 @@ import {
   type CustomNotificationSound,
   type CustomNotificationSoundEntry,
 } from "../../shared/types/ipc/notificationSounds.js";
-import { isNotificationWav, notificationSoundLabel } from "../../shared/utils/notificationSoundWav.js";
+import {
+  isNotificationWav,
+  notificationSoundLabel,
+} from "../../shared/utils/notificationSoundWav.js";
 
 const FALLBACK_LABEL = "Custom sound";
 

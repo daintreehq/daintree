@@ -19,7 +19,11 @@ async function handleList(): Promise<CustomNotificationSoundEntry[]> {
 async function handleImportSound(
   payload: ImportNotificationSoundPayload
 ): Promise<CustomNotificationSound> {
-  checkRateLimit(NOTIFICATION_SOUNDS_METHOD_CHANNELS.importSound, IMPORT_MAX_CALLS, IMPORT_WINDOW_MS);
+  checkRateLimit(
+    NOTIFICATION_SOUNDS_METHOD_CHANNELS.importSound,
+    IMPORT_MAX_CALLS,
+    IMPORT_WINDOW_MS
+  );
   const { importCustomSound } = await import("../../services/customNotificationSounds.js");
   return importCustomSound(payload);
 }

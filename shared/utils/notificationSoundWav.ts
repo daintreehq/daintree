@@ -13,7 +13,12 @@ function writeTag(view: DataView, offset: number, tag: string): void {
 }
 
 function readTag(bytes: Uint8Array, offset: number): string {
-  return String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+  return String.fromCharCode(
+    bytes[offset],
+    bytes[offset + 1],
+    bytes[offset + 2],
+    bytes[offset + 3]
+  );
 }
 
 /** Encode mono float samples (-1..1) as a 16-bit PCM WAV at the custom sound rate. */
