@@ -678,9 +678,10 @@ describe("DigitalOceanProvider", () => {
     };
     // Each region has a size the others lack: offer the regions the widest size covers.
     expect(
-      await catalogWith([size("a", ["nyc3", "ams3"]), size("b", ["sgp1"]), size("c", ["nyc3"])])
+      await catalogWith([size("b", ["sgp1"]), size("a", ["nyc3", "ams3"]), size("c", ["nyc3"])])
     ).toEqual({ regions: ["ams3", "nyc3"], sizes: ["a"] });
-    // Nothing usable at all: nothing offered, not every size against no region.
+    // Sizes only where no image is: no region, and so no size either.
+    expect(await catalogWith([size("d", ["lon1"])])).toEqual({ regions: [], sizes: [] });
     expect(await catalogWith([])).toEqual({ regions: [], sizes: [] });
   });
 

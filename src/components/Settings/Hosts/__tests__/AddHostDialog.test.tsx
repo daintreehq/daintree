@@ -1135,6 +1135,27 @@ describe("AddHostDialog", () => {
       expect(remoteHosts.probe).toHaveBeenCalledTimes(121);
     });
 
+    it("leaves an ssh host being set up to the person", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({ reachable: false, sshError: "Connection timed out" })
+      );
+      render(
+        <AddHostDialog
+          isOpen
+          onClose={() => {}}
+          existing={{
+            hostId: "studio",
+            name: "studio",
+            connection: { kind: "ssh", target: "greg@studio" },
+            intent: "setup",
+          }}
+        />
+      );
+      await advance(0);
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+    });
+
     it("leaves a host that isn't newly made to the person", async () => {
       remoteHosts.probe!.mockImplementation(async () => turnedAway());
       const notNew = {

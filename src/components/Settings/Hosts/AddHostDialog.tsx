@@ -828,7 +828,10 @@ export function AddHostDialog({
       (result) => {
         if (!result.reachable) noteFailure(result.sshError ?? `Couldn't reach ${hostLabel}`);
         // In: a later check that fails (after an install, say) is the person's, not first boot's.
-        else setLoginRechecks(null);
+        else {
+          setLoginRechecks(null);
+          setCheckAfterTrust(false);
+        }
         setProbe(result);
         setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setApplying(null);
@@ -847,12 +850,16 @@ export function AddHostDialog({
   });
   const unreachable = probe !== null && !probe.reachable;
   const awaitingLogin = loginRechecks !== null && loginRechecks > 0 && unreachable;
-  const stoppedAwaitingLogin = loginRechecks === 0 && unreachable;
+  // Said once the last check has answered, not while it runs.
+  const stoppedAwaitingLogin = loginRechecks === 0 && unreachable && !busy;
   useEffect(() => {
-    if (!isOpen || busy || !(checkAfterTrust || awaitingLogin)) return undefined;
+    // Only from the check itself: never pulls setup back once it has moved on to an install.
+    if (!isOpen || busy || step !== "check" || !(checkAfterTrust || awaitingLogin)) {
+      return undefined;
+    }
     const timer = setTimeout(() => recheckForLogin(), checkAfterTrust ? 0 : LOGIN_RECHECK_MS);
     return () => clearTimeout(timer);
-  }, [isOpen, busy, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
+  }, [isOpen, busy, step, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
   const trustedHostKey = () => {
     setLoginRechecks(LOGIN_RECHECKS);
     setCheckAfterTrust(true);

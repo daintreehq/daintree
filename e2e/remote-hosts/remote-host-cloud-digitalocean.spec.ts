@@ -199,16 +199,25 @@ test.describe.serial("Cloud hosts: a DigitalOcean Droplet as a Remote Host", () 
   });
 
   test.afterAll(async () => {
-    try {
-      if (run.b?.app) await closeApp(run.b.app);
-    } finally {
-      if (run.a?.app) await closeApp(run.a.app);
-      await run.api?.stop();
-      await run.sshd?.stop();
-      run.hostProject?.cleanup();
-      run.localProject?.cleanup();
-      if (run.root) removePathSync(run.root);
+    // Every step runs whatever an earlier one threw; the first failure is still reported.
+    const steps: Array<() => unknown> = [
+      () => run.b?.app && closeApp(run.b.app),
+      () => run.a?.app && closeApp(run.a.app),
+      () => run.api?.stop(),
+      () => run.sshd?.stop(),
+      () => run.hostProject?.cleanup(),
+      () => run.localProject?.cleanup(),
+      () => run.root && removePathSync(run.root),
+    ];
+    const failures: unknown[] = [];
+    for (const step of steps) {
+      try {
+        await step();
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    if (failures.length > 0) throw failures[0];
   });
 
   test("1. connects a DigitalOcean team with a token that is checked before it's saved", async () => {

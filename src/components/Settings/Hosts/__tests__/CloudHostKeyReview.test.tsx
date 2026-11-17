@@ -123,7 +123,7 @@ describe("CloudSetupHostKey", () => {
     render(<CloudSetupHostKey hostId="droplet" onTrusted={onTrusted} />);
     expect(screen.getByTestId("cloud-host-key-review").textContent).toContain(REVIEW.fingerprint);
     expect(screen.getByTestId("cloud-host-key-review").textContent).toContain(
-      "DigitalOcean's console"
+      "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub prints in DigitalOcean's console"
     );
     fireEvent.click(screen.getByRole("button", { name: "Trust this key" }));
     await waitFor(() => expect(onTrusted).toHaveBeenCalledTimes(1));
