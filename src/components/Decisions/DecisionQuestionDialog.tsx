@@ -286,7 +286,8 @@ function StepButton({
  * is read on demand from the machine that owns the pane; one opened by its
  * reference (#17229), from this computer for any of its windows. Held in
  * memory only; it steps through the questions it was opened with without
- * closing, and a question still waiting can be withdrawn from here.
+ * closing, and a question still waiting can be answered (#17102) or
+ * withdrawn from here.
  */
 export function DecisionQuestionDialog() {
   const isOpen = useDecisionsQuestionViewStore((state) => state.isOpen);
