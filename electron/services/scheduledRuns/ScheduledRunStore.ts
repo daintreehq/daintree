@@ -240,18 +240,42 @@ export class ScheduledRunStore {
     );
   }
 
-  /** Newest first; runs registered in the same millisecond keep their registration order. */
-  listByProject(projectId: string): ScheduledRun[] {
-    return this.decodeAll(
-      this.sqlite
-        .prepare(
-          "SELECT id, record FROM scheduled_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC"
-        )
-        .all(projectId) as RunRow[]
-    );
+  /**
+   * Each schedule's newest run that still parses, newest first as
+   * {@link listBySchedule}. A schedule's rows are read newest first and only
+   * until one decodes, so its older history never leaves SQLite.
+   */
+  latestByProject(projectId: string): ScheduledRun[] {
+    // One transaction, so the reads see one snapshot, as a single query would.
+    return this.transaction(() => {
+      const scheduleIds = this.sqlite
+        .prepare("SELECT DISTINCT schedule_id FROM scheduled_runs WHERE project_id = ?")
+        .pluck()
+        .all(projectId) as string[];
+      // `+project_id` keeps the planner on the schedule index: on the project
+      // index, reaching a quiet schedule's newest row walks every busier one's.
+      const newestFirst = this.sqlite.prepare(
+        `SELECT rowid AS seq, created_at AS createdAt, id, record FROM scheduled_runs
+         WHERE schedule_id = ? AND +project_id = ? ORDER BY created_at DESC, rowid DESC`
+      );
+      const latest: Array<{ run: ScheduledRun; createdAt: number; seq: number }> = [];
+      for (const scheduleId of scheduleIds) {
+        const rows = newestFirst.iterate(scheduleId, projectId) as IterableIterator<
+          RunRow & { seq: number; createdAt: number }
+        >;
+        for (const row of rows) {
+          const run = this.decode(row);
+          if (!run) continue;
+          latest.push({ run, createdAt: row.createdAt, seq: row.seq });
+          break;
+        }
+      }
+      latest.sort((a, b) => b.createdAt - a.createdAt || b.seq - a.seq);
+      return latest.map((entry) => entry.run);
+    });
   }
 
-  /** Newest first, as {@link listByProject}. */
+  /** Newest first; runs registered in the same millisecond keep their registration order. */
   listBySchedule(scheduleId: string): ScheduledRun[] {
     return this.decodeAll(
       this.sqlite

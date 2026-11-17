@@ -696,8 +696,8 @@ export class ScheduledRunRecorder {
     return this.store.evaluationPoint(scheduleId);
   }
 
-  listByProject(projectId: string): ScheduledRun[] {
-    return this.store.listByProject(projectId);
+  latestByProject(projectId: string): ScheduledRun[] {
+    return this.store.latestByProject(projectId);
   }
 
   listBySchedule(scheduleId: string): ScheduledRun[] {

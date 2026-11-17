@@ -92,7 +92,8 @@ describe("ScheduledRunStore", () => {
     // Run-now runs carry no occurrence, so any number of them can be registered.
     store.insert(run("run-4"));
     store.insert(run("run-5"));
-    expect(store.listByProject("project-1")).toHaveLength(5);
+    expect(store.listBySchedule("schedule-1")).toHaveLength(4);
+    expect(store.listBySchedule("schedule-2")).toHaveLength(1);
   });
 
   it("moves a schedule's evaluation point with each occurrence's run, never back", () => {
@@ -171,26 +172,53 @@ describe("ScheduledRunStore", () => {
     expect(store.evaluationPoint("schedule-3")).toBe(T0);
   });
 
-  it("lists newest first, keeping registration order within a millisecond", () => {
+  it("lists a schedule's history newest first, keeping registration order within a millisecond", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(run("older", { createdAt: T0 - 1 }));
     store.insert(run("first", { createdAt: T0 }));
     store.insert(run("second", { createdAt: T0 }));
-    store.insert(run("same-project", { createdAt: T0, scheduleId: "schedule-2" }));
-    store.insert(run("elsewhere", { createdAt: T0 + 1, projectId: "project-2", scheduleId: "s2" }));
+    store.insert(run("other-schedule", { createdAt: T0, scheduleId: "schedule-2" }));
 
     expect(store.listBySchedule("schedule-1").map((r) => r.id)).toEqual([
       "second",
       "first",
       "older",
     ]);
-    expect(store.listByProject("project-1").map((r) => r.id)).toEqual([
-      "same-project",
+  });
+
+  it("reads each schedule's newest run once, newest first, keeping registration order within a millisecond", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(run("older", { createdAt: T0 - 1 }));
+    store.insert(run("first", { createdAt: T0 }));
+    store.insert(run("second", { createdAt: T0 }));
+    store.insert(run("tied-schedule", { createdAt: T0, scheduleId: "schedule-2" }));
+    store.insert(run("stale-schedule", { createdAt: T0 - 5, scheduleId: "schedule-3" }));
+    store.insert(run("elsewhere", { createdAt: T0 + 1, projectId: "project-2" }));
+
+    expect(store.latestByProject("project-1").map((r) => r.id)).toEqual([
+      "tied-schedule",
       "second",
-      "first",
-      "older",
+      "stale-schedule",
     ]);
-    expect(store.listByProject("project-2").map((r) => r.id)).toEqual(["elsewhere"]);
+    expect(store.latestByProject("project-2").map((r) => r.id)).toEqual(["elsewhere"]);
+    expect(store.latestByProject("project-3")).toEqual([]);
+  });
+
+  it("falls back past a newest row that no longer parses, and never decodes older history", () => {
+    const warn = vi.fn();
+    const store = new ScheduledRunStore(sqlite, warn);
+    const insertRaw = sqlite.prepare(
+      "INSERT INTO scheduled_runs (id, project_id, schedule_id, live, created_at, record) VALUES (?, 'project-1', ?, 0, ?, ?)"
+    );
+    store.insert(run("fallback", { createdAt: T0 - 2 }));
+    insertRaw.run("broken-head", "schedule-1", T0, "{not json");
+    insertRaw.run("buried", "schedule-2", T0 - 10, '{"id":"buried"}');
+    store.insert(run("head", { createdAt: T0, scheduleId: "schedule-2" }));
+    insertRaw.run("only-invalid", "schedule-3", T0, '{"id":"only-invalid"}');
+
+    expect(store.latestByProject("project-1").map((r) => r.id)).toEqual(["head", "fallback"]);
+    const skipped = warn.mock.calls.map(([message]) => String(message).split(" ").at(-1)).sort();
+    expect(skipped).toEqual(["broken-head", "only-invalid"]);
   });
 
   it("finds a schedule's run for an occurrence by its key alone", () => {
@@ -345,7 +373,7 @@ describe("ScheduledRunStore", () => {
     insertRaw.run("invalid", '{"id":"invalid"}');
     insertRaw.run("unreadable", "{not json");
 
-    expect(store.listByProject("project-1").map((r) => r.id)).toEqual(["good"]);
+    expect(store.listBySchedule("schedule-1").map((r) => r.id)).toEqual(["good"]);
     expect(warn).toHaveBeenCalledTimes(2);
   });
 });
