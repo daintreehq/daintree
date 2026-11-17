@@ -417,6 +417,19 @@ describe("CloudHostLifecycle.create", () => {
     expect(lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
   });
 
+  it("keeps looking for a lost create's machine when a retry is turned down", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create)
+      .mockRejectedValueOnce(new BoatApiError("timeout", "slow", null, null, null))
+      .mockRejectedValueOnce(new BoatApiError("payment-required", "limit", 402, null, null));
+    const request = { accountId: store.accounts()[0]!.id, name: "build", machineType: "default" };
+    await lifecycle.create({ ...request, lifetimeHours: 2 });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    await lifecycle.retryCreate("build").catch(() => {});
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(store.bindings()[0]?.creation?.sentAt).not.toBeNull();
+  });
+
   it("refuses a size the account can't have before anything is sent", async () => {
     const { lifecycle, provider, store } = await setup();
     await expect(

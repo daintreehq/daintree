@@ -906,21 +906,26 @@ export class CloudHostLifecycle {
       // Only the provider's own refusal proves nothing was made; anything else (lost answer,
       // cancellation, an unreadable reply, a create still being minted) may have.
       const refused = !signal.aborted && DEFINITE_REFUSALS.has(described.code);
+      // Turning down a retry says nothing of an earlier send, whose machine may still exist.
+      const earlier = refused && creation.sentAt !== null;
       this.recordError(bindingId, {
         ...described,
-        code: refused ? described.code : "outcome-unknown",
-        message: refused
-          ? described.message
-          : provider.createReplay === "lookup-only"
-            ? `${nameOf(provider)} didn't confirm the machine. Retry looks for it, and never asks for another.`
-            : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
+        code: refused && !earlier ? described.code : "outcome-unknown",
+        message: earlier
+          ? `${described.message} An earlier request may still have made the machine: Retry and removal look for it first.`
+          : refused
+            ? described.message
+            : provider.createReplay === "lookup-only"
+              ? `${nameOf(provider)} didn't confirm the machine. Retry looks for it, and never asks for another.`
+              : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
       });
       if (refused) {
+        const sentAt = earlier ? creation.sentAt : null;
         // Nothing was made: a retry needs a fresh key, or the provider replays this refusal.
         this.deps.store.updateBinding(bindingId, (current) => ({
           ...current,
           creation: current.creation
-            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt: null }
+            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt }
             : null,
         }));
       }
