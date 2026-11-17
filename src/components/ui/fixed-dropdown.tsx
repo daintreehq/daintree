@@ -38,7 +38,7 @@ const OVERLAY_RACE_GRACE_MS = 300;
  */
 export const FixedDropdownVisibleContext = React.createContext<boolean>(true);
 
-type DismissReason = "escape" | "pointer-outside" | "overlay";
+type DismissReason = "escape" | "pointer-outside";
 
 interface FixedDropdownProps {
   open: boolean;
@@ -54,9 +54,10 @@ interface FixedDropdownProps {
   // each reveal so the SWR revalidate path still runs. Costs ~one body's
   // worth of memory per dropdown — opt in only for hot paths.
   keepMounted?: boolean;
-  // Hand focus back to the anchor after the dropdown dismisses itself, but only
-  // when that close would otherwise strand it. Off by default: a consumer that
-  // already restores on its own close would restore twice.
+  // Hand focus back to the anchor after the dropdown dismisses itself on Escape
+  // or a press outside, but only when that close would otherwise strand it.
+  // Off by default: a consumer that already restores on its own close would
+  // restore twice.
   restoreFocusOnClose?: boolean;
 }
 
@@ -186,13 +187,20 @@ export function FixedDropdown({
 
   // The dropdown's own dismissals, recorded for the restore below to read once
   // the parent's close commits. The content is captured now because a dropdown
-  // that is not kept mounted can lose it before that.
+  // that is not kept mounted can lose it before that. Each request also bumps a
+  // counter the restore depends on, so a close the parent refuses (or undoes in
+  // the same batch) is still consumed instead of lingering for a later close
+  // the parent made on its own.
   const pendingDismissRef = useRef<{ reason: DismissReason; content: HTMLElement | null } | null>(
     null
   );
+  const [dismissRequest, setDismissRequest] = useState(0);
   const requestClose = useCallback(
     (reason: DismissReason) => {
-      if (restoreFocusOnClose) pendingDismissRef.current = { reason, content: contentRef.current };
+      if (restoreFocusOnClose) {
+        pendingDismissRef.current = { reason, content: contentRef.current };
+        setDismissRequest((n) => n + 1);
+      }
       onOpenChange(false);
     },
     [onOpenChange, restoreFocusOnClose]
@@ -200,25 +208,26 @@ export function FixedDropdown({
 
   // Something outside the dropdown may already own focus when it closes: xterm
   // focuses its textarea from its own mousedown, before the document listener
-  // that dismisses this, and a modal rising over it takes focus as it mounts.
-  // Pulling focus back to the anchor then steals it, so the anchor gets it only
-  // when nothing else has. A press lands its focus after the document listener
-  // returns, so pointer closes look a task later; that is also when a modal has
-  // settled. Escape moves no focus of its own and restores at once, ringed like
-  // any keyboard restore. The pointer and overlay restores are ringless: neither
-  // is a keyboard move, and Chromium rings a programmatic `.focus()` anyway.
+  // that dismisses this. Pulling focus back to the anchor then steals it, so
+  // the anchor gets it only when nothing else has. A press lands its focus after
+  // the document listener returns, so a pointer close looks a task later, and
+  // restores ringless: it is no keyboard move, and Chromium rings a
+  // programmatic `.focus()` anyway. Escape moves no focus of its own and
+  // restores at once, ringed like any keyboard restore.
   useLayoutEffect(() => {
     const dismissal = pendingDismissRef.current;
     pendingDismissRef.current = null;
-    if (open || !dismissal || !restoreFocusOnClose) return;
+    if (open || !dismissal || !restoreFocusOnClose) return undefined;
     const anchor = anchorRef.current;
-    if (dismissal.reason !== "escape") {
+    if (dismissal.reason === "pointer-outside") {
       return restoreFocusIfStranded(anchor, { ringless: true, strandedWithin: dismissal.content });
     }
-    if (!anchor?.isConnected || !isFocusStranded(dismissal.content)) return;
-    armTooltipFocusSuppression();
-    anchor.focus({ preventScroll: true });
-  }, [open, restoreFocusOnClose, anchorRef]);
+    if (anchor?.isConnected && isFocusStranded(dismissal.content)) {
+      armTooltipFocusSuppression();
+      anchor.focus({ preventScroll: true });
+    }
+    return undefined;
+  }, [open, dismissRequest, restoreFocusOnClose, anchorRef]);
 
   const childOverlayActive = persistThroughChildOverlays && overlayStackLength > 0;
   useEscapeStack(open && !childOverlayActive, () => requestClose("escape"));
@@ -272,9 +281,15 @@ export function FixedDropdown({
       return;
     }
     if (overlayStackLength > baselineOverlaySizeRef.current) {
-      requestClose("overlay");
+      // No focus restore for this close, and an earlier dismissal's record goes
+      // with it. The surface that rose over the dropdown owns focus, and it may
+      // take it a frame later (AppDialog focuses in a rAF): anything handed to
+      // the anchor in the meantime sits behind the modal, where a keypress
+      // reopens this dropdown under it.
+      pendingDismissRef.current = null;
+      onOpenChange(false);
     }
-  }, [open, overlayStackLength, requestClose, persistThroughChildOverlays, overlayGraceActive]);
+  }, [open, overlayStackLength, onOpenChange, persistThroughChildOverlays, overlayGraceActive]);
 
   if (!mounted) return null;
   if (!position) return null;

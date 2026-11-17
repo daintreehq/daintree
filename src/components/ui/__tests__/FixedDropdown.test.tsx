@@ -986,14 +986,15 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
     document.body.innerHTML = "";
   });
 
-  // A parent that commits every close the dropdown asks for, like a real one.
+  // A parent that commits every close the dropdown asks for, like a real one,
+  // unless told to refuse them.
   function Controlled({
-    restore = true,
-    onClose,
+    restore,
+    refuse = false,
     openRef,
   }: {
     restore?: boolean;
-    onClose?: () => void;
+    refuse?: boolean;
     openRef?: { current: ((open: boolean) => void) | null };
   }) {
     const [open, setOpen] = useState(true);
@@ -1001,18 +1002,20 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
       if (openRef) openRef.current = setOpen;
     });
     return (
-      <FixedDropdown
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) onClose?.();
-        }}
-        anchorRef={anchorRef}
-        restoreFocusOnClose={restore}
-        keepMounted
-      >
-        <input data-testid="inside" />
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={open}
+          onOpenChange={(next) => {
+            if (!refuse) setOpen(next);
+          }}
+          anchorRef={anchorRef}
+          restoreFocusOnClose={restore}
+          keepMounted
+        >
+          <input data-testid="inside" />
+        </FixedDropdown>
+      </>
     );
   }
 
@@ -1031,7 +1034,7 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
   }
 
   it("does nothing unless the consumer opts in", () => {
-    render(<Controlled restore={false} />);
+    render(<Controlled />);
     act(() => inside().focus());
     const focusSpy = vi.spyOn(anchor, "focus");
 
@@ -1043,16 +1046,13 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
     expect(focusSpy).not.toHaveBeenCalled();
   });
 
-  it("returns focus ringless when a modal rose over it and took none", () => {
-    const { rerender } = render(<Controlled />);
+  it("returns focus ringless a task after a press outside left it stranded", () => {
+    render(<Controlled restore />);
     act(() => inside().focus());
-    act(() => {
-      vi.advanceTimersByTime(GRACE_MS + 1);
-    });
     const focusSpy = vi.spyOn(anchor, "focus");
 
-    setOverlayStackLength(1);
-    rerender(<Controlled />);
+    pressOutside();
+    expect(focusSpy).not.toHaveBeenCalled();
     act(() => {
       vi.advanceTimersByTime(1);
     });
@@ -1060,9 +1060,55 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
     expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
   });
 
+  it("leaves focus to a modal that rose over it, even before the modal takes it", () => {
+    const { rerender } = render(<Controlled restore />);
+    act(() => inside().focus());
+    act(() => {
+      vi.advanceTimersByTime(GRACE_MS + 1);
+    });
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    setOverlayStackLength(1);
+    rerender(<Controlled restore />);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(document.querySelector('[data-testid="inside"]')).not.toBeNull();
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("restores nothing for Escape once the anchor has left the document", () => {
+    render(<Controlled restore />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+    anchor.remove();
+
+    pressEscape();
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("forgets a close the parent refused", () => {
+    const openRef: { current: ((open: boolean) => void) | null } = { current: null };
+    const { rerender } = render(<Controlled restore refuse openRef={openRef} />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressEscape();
+    rerender(<Controlled restore openRef={openRef} />);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => openRef.current?.(false));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
   it("cancels the deferred restore when the dropdown reopens inside the task", () => {
     const openRef: { current: ((open: boolean) => void) | null } = { current: null };
-    render(<Controlled openRef={openRef} />);
+    render(<Controlled restore openRef={openRef} />);
     act(() => inside().focus());
     const focusSpy = vi.spyOn(anchor, "focus");
 
@@ -1076,7 +1122,7 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
   });
 
   it("cancels the deferred restore on unmount", () => {
-    const { unmount } = render(<Controlled />);
+    const { unmount } = render(<Controlled restore />);
     act(() => inside().focus());
     const focusSpy = vi.spyOn(anchor, "focus");
 
@@ -1091,9 +1137,12 @@ describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
 
   it("restores nothing for a close the parent made on its own", () => {
     const openRef: { current: ((open: boolean) => void) | null } = { current: null };
-    render(<Controlled openRef={openRef} />);
+    render(<Controlled restore openRef={openRef} />);
     act(() => inside().focus());
     const focusSpy = vi.spyOn(anchor, "focus");
+    // Stranded on the body, so a restore on every close would show.
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
 
     act(() => openRef.current?.(false));
     act(() => {

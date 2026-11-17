@@ -98,12 +98,20 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
-    isVisible: isOpen,
-    shouldRender: isOpen,
-  }),
-}));
+// The exit animation outlasts every task these tests flush, so once opened a
+// panel stays rendered, the way a closing one does for its 120ms exit. Commits
+// isn't kept mounted, and without this its field would vanish (and focus fall
+// to the body) at the close itself.
+vi.mock("@/hooks/useAnimatedPresence", async () => {
+  const { useState } = await import("react");
+  return {
+    useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => {
+      const [opened, setOpened] = useState(isOpen);
+      if (isOpen && !opened) setOpened(true);
+      return { isVisible: isOpen, shouldRender: isOpen || opened };
+    },
+  };
+});
 
 vi.mock("../ForgeStatusIndicator", () => ({
   ForgeStatusIndicator: () => null,
@@ -222,6 +230,7 @@ describe.each<Kind>(["issues", "prs", "commits"])("closing the %s dropdown", (ki
     // No blur: a browser that has not run its focus fixup yet leaves focus on
     // the inert field.
     fireEvent.mouseDown(outside<HTMLDivElement>("div"));
+    expect(document.activeElement).toBe(field(kind));
     flushTask();
 
     expect(document.activeElement).toBe(trigger);
@@ -254,14 +263,12 @@ describe.each<Kind>(["issues", "prs", "commits"])("closing the %s dropdown", (ki
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
-    flushTask();
 
+    // At once, not a task later: nothing else is going to take it.
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
-    expect(focusSpy).toHaveBeenCalled();
-    for (const [options] of focusSpy.mock.calls) {
-      expect(options).not.toMatchObject({ focusVisible: false });
-    }
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it("leaves focus where it is on Escape when it already left the panel", () => {
@@ -291,6 +298,7 @@ describe.each<Kind>(["prs", "commits"])("a modal rising over the open %s dropdow
     act(() => {
       vi.advanceTimersByTime(OVERLAY_GRACE_MS + 1);
     });
+    const focusSpy = vi.spyOn(pill(kind), "focus");
     const modalField = outside<HTMLInputElement>("input");
 
     act(() => {
@@ -301,21 +309,26 @@ describe.each<Kind>(["prs", "commits"])("a modal rising over the open %s dropdow
 
     expect(pill(kind).getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(modalField);
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 
-  it("keeps the focus a modal claims after the close", () => {
+  it("hands the pill nothing while a modal has yet to take focus", () => {
     render(<Harness />);
     openWithFocusInside(kind);
     act(() => {
       vi.advanceTimersByTime(OVERLAY_GRACE_MS + 1);
     });
+    const focusSpy = vi.spyOn(pill(kind), "focus");
     const modalField = outside<HTMLInputElement>("input");
 
     act(() => {
       useUIStore.getState().addOverlayClaim("test-modal");
     });
-    act(() => modalField.focus());
+    expect(pill(kind).getAttribute("aria-expanded")).toBe("false");
+    // AppDialog focuses its field a frame after it mounts, later than a task.
     flushTask();
+    expect(focusSpy).not.toHaveBeenCalled();
+    act(() => modalField.focus());
 
     expect(document.activeElement).toBe(modalField);
   });
