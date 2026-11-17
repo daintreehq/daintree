@@ -22,8 +22,19 @@ const project = (hostId: string): HostProjectRef => ({
   name: "app",
   path: "/srv/app",
 });
-const worktree = (hostId: string) =>
-  ({ hostId, projectId: `${hostId}-app`, worktreeId: "wt", name: "main" }) as HostWorktreeEntry;
+const worktree = (hostId: string): HostWorktreeEntry => ({
+  hostId,
+  projectId: `${hostId}-app`,
+  projectName: "app",
+  worktreeId: "wt",
+  name: "main",
+  branch: "main",
+  path: "/srv/app",
+  isMainWorktree: true,
+  modifiedCount: 0,
+  lastActivityAt: null,
+  observed: null,
+});
 
 function renderCatalogue() {
   return renderHook(() => ({

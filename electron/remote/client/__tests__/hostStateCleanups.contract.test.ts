@@ -9,37 +9,31 @@ import ts from "typescript";
 
 const FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../initClient.ts");
 
-function cleanupSteps(): { name: string; node: ts.ObjectLiteralExpression }[] {
+function findCleanups(node: ts.Node): ts.ArrayLiteralExpression | undefined {
+  if (
+    ts.isVariableDeclaration(node) &&
+    ts.isIdentifier(node.name) &&
+    node.name.text === "HOST_STATE_CLEANUPS" &&
+    node.initializer &&
+    ts.isArrayLiteralExpression(node.initializer)
+  ) {
+    return node.initializer;
+  }
+  return ts.forEachChild(node, findCleanups);
+}
+
+function cleanupSteps(): ts.ObjectLiteralExpression[] {
   const source = ts.createSourceFile(
     FILE,
     fs.readFileSync(FILE, "utf8"),
     ts.ScriptTarget.Latest,
     true
   );
-  let list: ts.ArrayLiteralExpression | undefined;
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "HOST_STATE_CLEANUPS" &&
-      node.initializer &&
-      ts.isArrayLiteralExpression(node.initializer)
-    ) {
-      list = node.initializer;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return (list?.elements ?? []).filter(ts.isObjectLiteralExpression).map((node) => {
-    const name = node.properties.find(
-      (p): p is ts.PropertyAssignment =>
-        ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "name"
-    );
-    return {
-      name: name && ts.isStringLiteral(name.initializer) ? name.initializer.text : "",
-      node,
-    };
-  });
+  const steps: ts.ObjectLiteralExpression[] = [];
+  for (const element of findCleanups(source)?.elements ?? []) {
+    if (ts.isObjectLiteralExpression(element)) steps.push(element);
+  }
+  return steps;
 }
 
 function calls(root: ts.Node, method: string): boolean {
@@ -56,8 +50,8 @@ function calls(root: ts.Node, method: string): boolean {
 describe("a forgotten host's cleanups", () => {
   it("drop its load history before its views hear it was forgotten", () => {
     const steps = cleanupSteps();
-    const history = steps.findIndex((step) => calls(step.node, "forgetHistory"));
-    const told = steps.findIndex((step) => step.node.getText().includes('type: "host-forgotten"'));
+    const history = steps.findIndex((step) => calls(step, "forgetHistory"));
+    const told = steps.findIndex((step) => step.getText().includes('type: "host-forgotten"'));
 
     expect(history).toBeGreaterThanOrEqual(0);
     expect(told).toBeGreaterThanOrEqual(0);
