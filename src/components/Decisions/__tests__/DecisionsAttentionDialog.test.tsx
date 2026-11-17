@@ -562,6 +562,45 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
   });
 
+  it("leaves focus in a confirmation opened while the opening's read was out", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // An assistive technology's press activates a control without focusing it.
+    fireEvent.click(markButton(3));
+    const asking = await screen.findByRole("alertdialog");
+    const cancel = within(asking).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    await landReads();
+    await listedRows(2);
+
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it("reopened while open, lands on the new pane's answer though the window hands focus back to the old one", async () => {
+    listed = [makeItem(3)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(1);
+    const old = firstAction(3);
+    await waitFor(() => expect(document.activeElement).toBe(old));
+
+    listed = [makeItem(3), makeItem(4)];
+    holdReads();
+    openFor("pane-4");
+    await waitFor(() => expect(held).toHaveLength(1));
+    // Coming back to the window, the browser fires focus at what already held it.
+    act(() => {
+      old.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
   it("waits for the opening's latest read, not one a later read superseded", async () => {
     const { rerender } = render(tree(false));
     await closeAfterFirstOpening(rerender);

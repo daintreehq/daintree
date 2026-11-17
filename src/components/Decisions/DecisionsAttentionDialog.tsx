@@ -592,17 +592,20 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     }
     const seq = request.seq;
     if (readFor !== seq) {
-      // Only a control in this modal counts as the person's move. Its own
-      // surface taking focus as it opens, the list's place taking it from a
-      // click on no control, the element focused as the opening began coming
-      // back with the window, and focus behind the modal (a popover handing it
-      // back to the chip that opened the list) are not.
-      const atOpening = document.activeElement;
+      // A control in a modal, this one or a confirmation over it, is the
+      // person's move. This one's surface taking focus as it opens, the list's
+      // place taking it from a click on no control, the element already
+      // holding focus taking it again as the window comes back, and focus
+      // behind every modal (a popover handing it back to the chip that opened
+      // the list) are not.
+      let holder: EventTarget | null = document.activeElement;
       const onFocusIn = (event: FocusEvent) => {
         const { target } = event;
+        const replayed = target === holder;
+        holder = target;
         const body = bodyRef.current;
-        if (!(target instanceof Node) || body === null || target === atOpening) return;
-        if (target.contains(body) || !body.closest('[aria-modal="true"]')?.contains(target)) return;
+        if (replayed || !(target instanceof Element) || body === null) return;
+        if (target.contains(body) || target.closest('[aria-modal="true"]') === null) return;
         focusMovedFor.current = seq;
       };
       document.addEventListener("focusin", onFocusIn, true);
