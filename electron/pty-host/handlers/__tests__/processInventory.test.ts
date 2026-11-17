@@ -8,6 +8,7 @@ vi.mock("../../../services/TerminalLineageLedger.js", () => ({
 
 import {
   buildProcessInventory,
+  findPidOwners,
   killClosedTerminalProcesses,
   listClosedTerminalProcesses,
 } from "../processInventory.js";
@@ -18,6 +19,7 @@ import type { HostContext } from "../types.js";
 interface FakeTerminal {
   id: string;
   projectId?: string;
+  worktreeId?: string;
   kind?: string;
   title?: string;
   cwd: string;
@@ -70,6 +72,74 @@ function makeCtx(
   } as unknown as HostContext;
   return { ctx, getTreeResourceSummary };
 }
+
+describe("findPidOwners", () => {
+  const processes = [
+    // zsh (100) → npm (200) → node/vite (300), and a daemon re-parented to init.
+    { pid: 200, ppid: 100, comm: "npm", command: "npm run dev" },
+    { pid: 300, ppid: 200, comm: "node", command: "vite" },
+    { pid: 400, ppid: 1, comm: "postgres", command: "postgres" },
+    // A loop the census can't really hold, which must not hang the walk.
+    { pid: 500, ppid: 501, comm: "a", command: "a" },
+    { pid: 501, ppid: 500, comm: "b", command: "b" },
+  ];
+  const terminals = [
+    {
+      id: "agent",
+      projectId: "p1",
+      worktreeId: "/repo/wt-b",
+      cwd: "/repo/wt-b",
+      spawnedAt: 1,
+      ptyProcess: { pid: 100 },
+    },
+    {
+      id: "gone",
+      projectId: "p1",
+      worktreeId: "/repo/wt-c",
+      cwd: "/repo/wt-c",
+      spawnedAt: 1,
+      isExited: true,
+      ptyProcess: { pid: 200 },
+    },
+  ];
+
+  it("names the live terminal whose tree holds each listener", () => {
+    const { ctx } = makeCtx(terminals, { processes });
+    expect(findPidOwners(ctx, [300])).toEqual([
+      { pid: 300, terminalId: "agent", projectId: "p1", worktreeId: "/repo/wt-b" },
+    ]);
+  });
+
+  it("skips an exited terminal and leaves out a process in nobody's tree", () => {
+    const { ctx } = makeCtx(terminals, { processes });
+    // 200's own terminal has exited; its parent still sits under the live one.
+    expect(findPidOwners(ctx, [200, 400, 500, 999]).map((owner) => owner.terminalId)).toEqual([
+      "agent",
+    ]);
+  });
+
+  it("refuses malformed and excess pids", () => {
+    const { ctx } = makeCtx(terminals, { processes });
+    expect(findPidOwners(ctx, ["300", -1, 1.5, null])).toEqual([]);
+    expect(findPidOwners(ctx, new Array(40).fill(300))).toHaveLength(16);
+  });
+
+  it("answers through the host's request handler", () => {
+    const { ctx } = makeCtx(terminals, { processes });
+    const sendEvent = vi.fn();
+    const handlers = createStateConfigHandlers({ ...ctx, sendEvent } as unknown as HostContext);
+    handlers["find-pid-owners"]({ requestId: "r1", pids: [300] });
+    handlers["find-pid-owners"]({ requestId: "r2", pids: "not-an-array" });
+    expect(sendEvent.mock.calls.map(([event]) => event)).toEqual([
+      {
+        type: "pid-owners",
+        requestId: "r1",
+        owners: [{ pid: 300, terminalId: "agent", projectId: "p1", worktreeId: "/repo/wt-b" }],
+      },
+      { type: "pid-owners", requestId: "r2", owners: [] },
+    ]);
+  });
+});
 
 describe("buildProcessInventory (#13175)", () => {
   it("lists live PTYs of every kind, including trashed, hidden and assistant ones", () => {

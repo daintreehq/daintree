@@ -611,6 +611,67 @@ describe("preview binding", () => {
     expect(host.calls("openWorkspace")).toHaveLength(0);
   });
 
+  describe("in a browser panel", () => {
+    beforeEach(() => {
+      usePanelStore.setState({
+        panelsById: {
+          "preview-1": {
+            id: "preview-1",
+            kind: "browser",
+            location: "grid",
+            browserUrl: "http://localhost:5173/",
+          },
+        } as never,
+      });
+    });
+
+    it("tells main which local port the page is served from, and no server directory", async () => {
+      await mountBound();
+      await waitFor(() =>
+        expect(host.calls("openWorkspace").at(-1)).toEqual({
+          panelId: "preview-1",
+          worktreeId: "wt-1",
+          previewOrigin: "http://localhost:5173",
+          listenerPort: 5173,
+        })
+      );
+    });
+
+    it("won't trace a page another worktree's terminal serves, and names that worktree", async () => {
+      host.openWith = () => ({
+        status: "unavailable",
+        reason: "other-worktree",
+        serverWorktreeId: "/repo/wt-b",
+      });
+      await mountBound();
+      await screen.findAllByText(/served from another worktree/);
+      expect(screen.getByText("/repo/wt-b")).toBeTruthy();
+      expect(session().getSnapshot().workspace).toEqual({
+        status: "failed",
+        reason: "served-elsewhere",
+        message: "/repo/wt-b",
+      });
+    });
+
+    it("says only that another project serves it when the terminal is that project's", async () => {
+      host.openWith = () => ({ status: "unavailable", reason: "other-worktree" });
+      await mountBound();
+      await screen.findByText(/a terminal of another project/);
+    });
+
+    it("asks about no port in a window attached to another machine", async () => {
+      const global = window as unknown as { __DAINTREE_HOST_ID__?: { id: string } };
+      global.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        await mountBound();
+        await waitFor(() => expect(host.calls("openWorkspace").length).toBeGreaterThan(0));
+        expect(host.calls("openWorkspace").at(-1)).not.toHaveProperty("listenerPort");
+      } finally {
+        delete global.__DAINTREE_HOST_ID__;
+      }
+    });
+  });
+
   it("traces and offers the agent on an app the compiler was never tested against", async () => {
     host.describeWith = () =>
       sveltekitProject({
