@@ -2942,6 +2942,100 @@ describe("useProjectSwitcherPalette", () => {
       expect(asProject(result.current.results[1]).activeAgentCount).toBe(3);
     });
 
+    it("opens the action palette's `/` as a fresh, held modal after the toolbar dropdown opened and closed", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      // Both openings fetch bulk stats; answering with the store's own counts
+      // keeps the dropdown's fetch from erasing the wait before the modal opens.
+      answerBulkStatsLikeTheStore({ zeroFillRequested: true });
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+      // The toolbar dropdown, opened and dismissed. Closing it leaves the
+      // shared controller in dropdown mode, where the store slot alone opens
+      // nothing.
+      act(() => {
+        result.current.open("dropdown");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+      act(() => {
+        result.current.close();
+      });
+      expect(result.current.mode).toBe("dropdown");
+      expect(result.current.isOpen).toBe(false);
+
+      // What `/` in the action palette reaches: `onSearchProjects("")`, which
+      // the modal layer binds to this controller's modal `open`.
+      act(() => {
+        result.current.open("modal", { query: "" });
+      });
+
+      expect(result.current.mode).toBe("modal");
+      expect(result.current.isOpen).toBe(true);
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
+
+      // And the order is frozen for this session like any other opening's,
+      // while the rows' counts stay live.
+      act(() => {
+        projectStatsState.stats = {
+          waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          idle: { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+        };
+        rerender();
+      });
+      expect(result.current.results.map((p) => p.id)).toEqual(["waiting", "idle"]);
+      expect(asProject(result.current.results[0]).section).toBe("attention");
+      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
+      expect(asProject(result.current.results[1]).waitingAgentCount).toBe(2);
+    });
+
+    it("starts the action palette's `/` on the opening's own row, not one a slot takeover left highlighted", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      answerBulkStatsLikeTheStore({ zeroFillRequested: true });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      act(() => {
+        result.current.hoverRow("idle");
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("idle");
+
+      // The action palette takes the slot (its own chord), which closes the
+      // switcher without `close()`, so the highlight is still on `idle`.
+      act(() => {
+        usePaletteStore.getState().openPalette("action");
+      });
+      expect(result.current.isOpen).toBe(false);
+
+      // `/` from there: the controller's opening, which picks its own row.
+      act(() => {
+        result.current.open("modal", { query: "" });
+      });
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
+    });
+
     it("regroups a project that registers while the session is still a guess", async () => {
       const first = base("first");
       const late = base("late");

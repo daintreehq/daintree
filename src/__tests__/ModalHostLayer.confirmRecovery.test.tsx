@@ -10,6 +10,9 @@ import { lazy, type ComponentProps, type ComponentType } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const actionPaletteHostProps = vi.hoisted(() => ({
+  current: null as { onSearchProjects: (query: string) => void } | null,
+}));
 const chunks = vi.hoisted(() => ({
   impl: new Map<string, ComponentType>(),
   loads: new Map<string, number>(),
@@ -78,7 +81,10 @@ vi.mock("../PaletteHosts", () => {
     ResumeSessionsPaletteHost: Null,
     RecentDictationsPaletteHost: Null,
     LogLevelPaletteHost: Null,
-    ActionPaletteHost: Null,
+    ActionPaletteHost: (props: { onSearchProjects: (query: string) => void }) => {
+      actionPaletteHostProps.current = props;
+      return null;
+    },
     WorktreeOverviewHost: Null,
   };
 });
@@ -638,5 +644,28 @@ describe("ModalHostLayer confirm hosts whose chunk fails", () => {
     expect(await confirm).toBe(true);
     await flush();
     expect(await quickPick).toBeUndefined();
+  });
+});
+
+describe("ModalHostLayer action palette wiring", () => {
+  it("hands the action palette's project search, its `/` included, to the switcher's modal opening", () => {
+    const open = vi.fn();
+    function LayerWithSwitcher() {
+      const keys = useModalResetKeys();
+      return (
+        <ModalHostLayer
+          {...BASE_PROPS}
+          {...keys}
+          projectSwitcherPalette={{ open } as unknown as LayerProps["projectSwitcherPalette"]}
+        />
+      );
+    }
+    render(<LayerWithSwitcher />);
+
+    act(() => actionPaletteHostProps.current!.onSearchProjects(""));
+    expect(open).toHaveBeenCalledWith("modal", { query: "" });
+
+    act(() => actionPaletteHostProps.current!.onSearchProjects("repos/api"));
+    expect(open).toHaveBeenLastCalledWith("modal", { query: "repos/api" });
   });
 });

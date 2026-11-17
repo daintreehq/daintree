@@ -138,8 +138,10 @@ function makePaletteState(activePaletteId: PaletteId | null) {
   return {
     activePaletteId,
     openRequestId: 0,
+    promptHistoryHosts: 0,
     openPalette: vi.fn(),
     closePalette: vi.fn(),
+    registerPromptHistoryHost: vi.fn(() => () => {}),
   };
 }
 

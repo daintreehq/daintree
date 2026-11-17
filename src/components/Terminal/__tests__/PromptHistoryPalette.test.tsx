@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 import type { PromptHistoryItem } from "@/hooks/usePromptHistoryPalette";
@@ -98,6 +99,35 @@ describe("PromptHistoryPalette", () => {
   afterEach(() => {
     cleanup();
     act(() => usePaletteStore.getState().closePalette("prompt-history"));
+  });
+
+  it("counts itself as a host for the action palette's `:` for as long as it is mounted", () => {
+    const hosts = () => usePaletteStore.getState().promptHistoryHosts;
+    expect(hosts()).toBe(0);
+
+    // Closed: a mounted palette can answer an opening, which is all `:` asks.
+    // StrictMode replays the effect, which must not leave a second count.
+    const view = render(
+      <StrictMode>
+        <TooltipProvider>
+          <PromptHistoryPalette terminalId="t1" projectId={PROJECT} />
+        </TooltipProvider>
+      </StrictMode>
+    );
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
+    expect(hosts()).toBe(1);
+
+    view.rerender(
+      <StrictMode>
+        <TooltipProvider>
+          <PromptHistoryPalette terminalId="t1" projectId={OTHER} />
+        </TooltipProvider>
+      </StrictMode>
+    );
+    expect(hosts()).toBe(1);
+
+    view.unmount();
+    expect(hosts()).toBe(0);
   });
 
   it("finds a word that sits deep inside a long prompt", async () => {
