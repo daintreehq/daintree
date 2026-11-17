@@ -350,20 +350,23 @@ describe("WindowsStoreNotifierService", () => {
     });
 
     it("treats a body Chromium ends as a plain abort at the deadline as a timeout", async () => {
+      const bodyAborted = vi.fn();
       netMock.fetch
         .mockImplementationOnce(async (_url: string, init: FetchInit) => ({
           ...makeResponse({ etag: null }),
           text: () =>
             new Promise<string>((_resolve, reject) => {
-              init.signal?.addEventListener("abort", () =>
-                reject(new DOMException("The operation was aborted.", "AbortError"))
-              );
+              init.signal?.addEventListener("abort", () => {
+                bodyAborted();
+                reject(new DOMException("The operation was aborted.", "AbortError"));
+              });
             }),
         }))
         .mockResolvedValueOnce(makeResponse({ status: 304 }));
       void windowsStoreNotifierService._checkNowForTest();
 
       await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS);
+      expect(bodyAborted).toHaveBeenCalledTimes(1);
       expect(console.error).toHaveBeenCalledTimes(1);
       expect(vi.mocked(console.error).mock.calls[0][1]).toBeInstanceOf(TimeoutError);
 
@@ -386,6 +389,20 @@ describe("WindowsStoreNotifierService", () => {
 
       await vi.advanceTimersByTimeAsync(2 * 60_000);
       expect(netMock.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("a channel read that throws resets the retry ladder", async () => {
+      netMock.fetch.mockResolvedValueOnce(makeResponse({ status: 503 }));
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(vi.getTimerCount()).toBe(1);
+
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "updateChannel") throw new Error("store unreadable");
+        return undefined;
+      });
+      await windowsStoreNotifierService._checkNowForTest();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(netMock.fetch).toHaveBeenCalledTimes(1);
     });
 
     it("a resume trigger joins a pending check instead of sending a second request", async () => {
