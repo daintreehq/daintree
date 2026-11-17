@@ -885,6 +885,24 @@ describe("the Canopy host picker", () => {
     expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
   });
 
+  it("asks nothing of a host picked again until its link comes back again", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    resync("studio");
+    await settle();
+    act(() => useCanopyStore.getState().setHostId(ALL_HOSTS_ID));
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    // Its last recovery was asked about when it happened.
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
+  });
+
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });

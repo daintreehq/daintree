@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -143,25 +143,30 @@ export function useCanopyInboxData({
   const hostProjects = useHostProjectLists(
     everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
   );
-  // The link came back: its project names may have changed while it was away.
-  const hostEpochs = everyHost
-    ? remoteIds.map((id) => `${id}:${remotes.states.get(id)?.epoch ?? 0}`).join(" ")
-    : "";
   const recoveries = everyHost
     ? [...remotes.states.values()].reduce((sum, state) => sum + state.epoch, 0)
     : remote.epoch;
+  // The link came back: its project names may have changed while it was away.
+  // Each host is asked once per recovery, and alone: another host's list, on
+  // its way or still fresh, stays as it is.
+  const handledEpochs = useRef<{ scope: HostId | null; epochs: ReadonlyMap<HostId, number> }>({
+    scope: null,
+    epochs: new Map(),
+  });
   useEffect(() => {
-    if (hostId === null || recoveries === 0) return;
-    if (!everyHost) {
-      retryHostProjects(hostId);
-      return;
+    const epochs = new Map<HostId, number>();
+    if (everyHost) for (const id of remoteIds) epochs.set(id, remotes.states.get(id)?.epoch ?? 0);
+    else if (hostId !== null) epochs.set(hostId, remote.epoch);
+    const handled = handledEpochs.current;
+    handledEpochs.current = { scope: hostId, epochs };
+    // A host picked again can still show the epoch it was left at, a recovery
+    // already asked about; every host read together counts afresh from zero.
+    if (handled.scope !== hostId && !everyHost) return;
+    const before = handled.scope === hostId ? handled.epochs : null;
+    for (const [id, epoch] of epochs) {
+      if (epoch > 0 && epoch !== (before?.get(id) ?? 0)) retryHostProjects(id);
     }
-    // Said again for exactly the hosts whose link came back.
-    for (const entry of hostEpochs.split(" ")) {
-      const cut = entry.lastIndexOf(":");
-      if (cut > 0 && Number(entry.slice(cut + 1)) > 0) retryHostProjects(entry.slice(0, cut));
-    }
-  }, [hostId, everyHost, recoveries, hostEpochs]);
+  }, [hostId, everyHost, remoteIds, remotes.states, remote.epoch]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
