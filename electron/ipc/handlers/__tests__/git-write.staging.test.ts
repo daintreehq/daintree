@@ -34,6 +34,8 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 // A git dir read that never settles, as on a stalled network mount.
 const stallGitDirRead = vi.hoisted(() => ({ on: false }));
+// A `rev-parse` that exits non-zero with nothing on stderr, as a killed one can.
+const silentRevParseFailure = { on: false };
 
 vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/gitUtils.js")>();
@@ -112,6 +114,9 @@ beforeAll(async () => {
     if (Array.isArray(args[1])) spawned.push(args[1] as string[]);
     if (silentStatusFailure.on && subcommand(args[1] as string[]) === "status") {
       args = [process.execPath, ["-e", "process.exit(1)"], args[2]];
+    }
+    if (silentRevParseFailure.on && subcommand(args[1] as string[]) === "rev-parse") {
+      return originalSpawn(process.execPath, ["-e", "process.exit(1)"], args[2] as never);
     }
     return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
   }) as typeof originalSpawn;
@@ -214,6 +219,33 @@ describe("git-write staging handlers (real git)", () => {
     } finally {
       vi.useRealTimers();
       stallGitDirRead.on = false;
+    }
+  });
+
+  it("reads a probe that fails silently as a commit, so several files unstage without a deletion", async () => {
+    commitFiles({ "a.txt": "one\n", "b.txt": "one\n" });
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), "two\n");
+    git(repo, "add", ".");
+
+    stallGitDirRead.on = true;
+    silentRevParseFailure.on = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const mark = spawned.length;
+      const run = handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
+        cwd: repo,
+        filePaths: ["a.txt", "b.txt"],
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      vi.useRealTimers();
+      await run;
+      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
+      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+      expect(git(repo, "ls-files")).toBe("a.txt\nb.txt\n");
+    } finally {
+      vi.useRealTimers();
+      stallGitDirRead.on = false;
+      silentRevParseFailure.on = false;
     }
   });
 
@@ -484,6 +516,34 @@ describe("git-write staging handlers (real git)", () => {
       expect(indexed("ls-files")).toEqual([...decoys].sort());
       expect(fs.existsSync(path.join(repo, selection[0]!))).toBe(true);
       expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages both halves of a staged rename in one batch", async () => {
+      const selection = longSelection();
+      writeAll(selection, "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll(selection.slice(1), "changed\n");
+      git(repo, "add", ".");
+      const from = selection[0]!;
+      const to = `${from}.moved`;
+      git(repo, "mv", from, to);
+      expect(git(repo, "status", "--porcelain=v1", "--", from, to)).toContain("R  ");
+
+      const mark = spawned.length;
+      // The rename's row goes by its destination, and its source isn't asked for.
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
+        cwd: repo,
+        filePaths: [to, ...selection.slice(1)],
+      });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([]);
+      const resets = spawnedSince(mark).filter((args) => subcommand(args) === "reset");
+      expect(resets.length).toBeGreaterThanOrEqual(3);
+      const withRename = resets.filter((args) => args.includes(to));
+      expect(withRename).toHaveLength(1);
+      expect(withRename[0]).toContain(from);
+      expectEveryCommandLineFits(resets);
     });
 
     it("says how many paths were staged when a later batch fails", async () => {

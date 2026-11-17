@@ -1346,16 +1346,35 @@ describe("ReviewHub", () => {
         stageFilesMock.mockRejectedValueOnce(
           new Error("Staged at least 1 of 3 files before Git stopped: index.lock exists")
         );
-        getStagingStatusMock.mockResolvedValue(
-          makeStatus({
-            staged: [...STAGED, row("src/x.ts", "deleted")],
-            unstaged: [row("src/y.ts"), row("src/z.ts")],
-          })
+        const afterFailure = makeStatus({
+          staged: [...STAGED, row("src/x.ts", "deleted")],
+          unstaged: [row("src/y.ts"), row("src/z.ts")],
+        });
+        let releaseRead!: () => void;
+        getStagingStatusMock.mockImplementationOnce(
+          () =>
+            new Promise<StagingStatus>((resolve) => {
+              releaseRead = () => resolve(afterFailure);
+            })
         );
+        getStagingStatusMock.mockResolvedValue(afterFailure);
+        const readsBefore = getStagingStatusMock.mock.calls.length;
         fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
 
+        // No banner, and no Retry, while the read that shows what landed is out.
+        await waitFor(() =>
+          expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+        );
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(screen.queryByText("Couldn't stage selected files")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+        await act(async () => {
+          releaseRead();
+        });
         await screen.findByText("Couldn't stage selected files");
-        // The banner waits for the read, so what landed is already drawn.
         expect(inSection(stagedSection, "src/x.ts")).toBe(true);
         expect(inSection(unstagedSection, "src/x.ts")).toBe(false);
         expect(screen.getByText(/Staged at least 1 of 3 files before Git stopped/)).toBeTruthy();

@@ -156,18 +156,23 @@ const PATHSPEC_ARGV_CHAR_BUDGET = 16_000;
 
 /** Split `paths` into runs whose pathspec arguments fit one git command line. */
 export function batchPathsForArgv(paths: readonly string[]): string[][] {
+  return batchPathGroupsForArgv(paths.map((path) => [path]));
+}
+
+/** Split `groups` into runs that fit one git command line, never splitting a group. */
+export function batchPathGroupsForArgv(groups: readonly (readonly string[])[]): string[][] {
   const batches: string[][] = [];
   let current: string[] = [];
   let chars = 0;
-  for (const path of paths) {
-    // +3: separating space plus quotes Windows may add around the argument.
-    const cost = path.length + 3;
+  for (const group of groups) {
+    // +3 a path: separating space plus quotes Windows may add around the argument.
+    const cost = group.reduce((sum, path) => sum + path.length + 3, 0);
     if (current.length > 0 && chars + cost > PATHSPEC_ARGV_CHAR_BUDGET) {
       batches.push(current);
       current = [];
       chars = 0;
     }
-    current.push(path);
+    current.push(...group);
     chars += cost;
   }
   if (current.length > 0) batches.push(current);
