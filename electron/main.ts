@@ -51,6 +51,7 @@ import {
   resolveLaunchIntent,
   resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
+  stripLaunchTargets,
   type LaunchIntent,
   type LaunchIntentSignals,
 } from "./lifecycle/launchIntent.js";
@@ -69,6 +70,10 @@ import {
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
 import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
 import { registerShutdownHandler, routeLastWindowCloseThroughQuit } from "./lifecycle/shutdown.js";
+import {
+  isKeepingAgentsRunning,
+  keepAgentsRunningWithoutWindows,
+} from "./lifecycle/backgroundAgents.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
 import {
@@ -172,7 +177,9 @@ import {
   clearPendingWindowRecreation,
   createWindowHoldingRecord,
   enableOpenWindowsSaves,
+  holdOpenWindowsSaves,
   initOpenWindowsTracker,
+  releaseOpenWindowsHold,
   resumeOpenWindowsSaves,
   saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
@@ -556,6 +563,18 @@ if (!gotTheLock) {
   const dueScheduleLaunch = isDueScheduleCheckRequested(process.argv);
   // Set by that launch until the first request to see the app.
   let initialWindowRequest: InitialWindowRequest | null = null;
+  // Bumped when Keep Agents Running closes every window, so a restore still
+  // opening windows from before stops instead of bringing them back.
+  let launchWindowsGeneration = 0;
+  // A launch whose manifest stays read-only until a clean fleet restore (a
+  // windowless launch, a crash recovery bringing its fleet back) owes that
+  // release. Keep Agents Running can abandon the restore; the reopen that
+  // replaces it pays it instead.
+  let owesSavesRelease = false;
+  function releaseLaunchSaves(): void {
+    owesSavesRelease = false;
+    enableOpenWindowsSaves();
+  }
   const listenForHandedOffHostMode = (): void => {
     // A handoff arriving mid-quit would start listening just before the stop.
     if (getActiveShutdown() !== null) return;
@@ -1129,15 +1148,46 @@ if (!gotTheLock) {
     };
   }
 
+  // The next request to see the app (a Dock click, a relaunch) opens the
+  // windows a launch would, read when asked: a folder queued, a crash state,
+  // or what the request named since decides it. For a launch that started
+  // windowless, and after Keep Agents Running closed every window.
+  function armLaunchWindowRequest(
+    argv: string[],
+    options: LaunchWindowsOptions & { onOpen?: () => void }
+  ): void {
+    const { onOpen, ...launchOptions } = options;
+    initialWindowRequest = createInitialWindowRequest({
+      openLaunchWindows: (request) => {
+        onOpen?.();
+        const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
+          { ...readLaunchSignals(), argv },
+          request,
+          readLastActiveProjectIdSync()
+        );
+        return openLaunchWindows(intent, fallbackProjectId, launchOptions);
+      },
+      createWindow: () => createWindow().then(() => {}),
+      isShuttingDown: () => getActiveShutdown() !== null,
+    });
+  }
+
+  interface LaunchWindowsOptions {
+    /** The manifest was kept from saves until now; lets them go once a clean restore has replaced it. */
+    releaseHeldSaves?: () => void;
+    /** These are the windows Keep Agents Running closed, Canopy's included. */
+    afterKeepAgentsRunning?: boolean;
+  }
+
   // The windows a launch opens: the restored fleet, a folder's window, or the
   // recovery window. At startup, or for a launch that started windowless, at
-  // the first request to see the app. `savesHeld` is a launch whose manifest
-  // stayed read-only until then.
+  // the first request to see the app.
   async function openLaunchWindows(
     launchIntent: LaunchIntent,
     fallbackProjectId: string | undefined,
-    { savesHeld }: { savesHeld: boolean }
+    { releaseHeldSaves, afterKeepAgentsRunning = false }: LaunchWindowsOptions = {}
   ): Promise<void> {
+    const generation = launchWindowsGeneration;
     const {
       hadManifest,
       records: restoreRecords,
@@ -1200,12 +1250,13 @@ if (!gotTheLock) {
     const isProjectOwned = (projectId: string): boolean =>
       findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
     const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+    const isAbandoned = (): boolean => isShuttingDown() || generation !== launchWindowsGeneration;
     // Open at the last quit: back beside the focused window, not after the
     // whole fleet, which can take minutes.
     const reopenCanopyWindow = (): void => {
-      if (isShuttingDown()) return;
+      if (isAbandoned()) return;
       try {
-        restoreCanopyWindow();
+        restoreCanopyWindow({ afterKeepAgentsRunning });
       } catch (error) {
         console.warn("[MAIN] Restoring the Canopy window failed:", error);
       }
@@ -1220,14 +1271,14 @@ if (!gotTheLock) {
       resumeSaves: (persistNow) => {
         // A launch that held the manifest until now keeps it from a clean
         // restore on; a recovery leaves that to the crash restore.
-        if (savesHeld && persistNow && launchIntent !== "recovery" && !isShuttingDown()) {
-          enableOpenWindowsSaves();
+        if (releaseHeldSaves && persistNow && launchIntent !== "recovery" && !isAbandoned()) {
+          releaseHeldSaves();
         }
         resumeOpenWindowsSaves(persistNow);
       },
       onBackgroundWindowFailed,
       isProjectOwned,
-      isShuttingDown,
+      isShuttingDown: isAbandoned,
       // With no host set up, nothing starts early: a launch with none does
       // no remote work before the restore has settled.
       onRemoteHostsNeeded: (hostIds) =>
@@ -1240,8 +1291,9 @@ if (!gotTheLock) {
     // IPC decides whether this crash is a single one that earns the whole
     // window set back (#12801); safe mode and loops never trigger it.
     if (launchIntent === "recovery") {
-      setCrashFleetRestorer((requesterWebContentsId) =>
-        restoreFleetAfterCrash({
+      setCrashFleetRestorer((requesterWebContentsId) => {
+        owesSavesRelease = true;
+        return restoreFleetAfterCrash({
           startupRestore,
           waitForRequesterHydrated: async () => {
             const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
@@ -1280,12 +1332,12 @@ if (!gotTheLock) {
           createWindow: createRestoredWindow,
           suppressSaves: suppressOpenWindowsSaves,
           resumeSaves: resumeOpenWindowsSaves,
-          enableSaves: enableOpenWindowsSaves,
+          enableSaves: releaseLaunchSaves,
           onBackgroundWindowFailed,
           isProjectOwned,
-          isShuttingDown,
-        })
-      );
+          isShuttingDown: isAbandoned,
+        });
+      });
     }
 
     await startupRestore;
@@ -1298,7 +1350,11 @@ if (!gotTheLock) {
     windowRegistry,
     onLastWindowClose: routeLastWindowCloseThroughQuit,
     keepsRunningWithoutWindows: () =>
-      hostModeLaunch || hostModeHandedOff || isHostModeEnabled() || dueScheduleLaunch,
+      hostModeLaunch ||
+      hostModeHandedOff ||
+      isHostModeEnabled() ||
+      dueScheduleLaunch ||
+      isKeepingAgentsRunning(),
     isLaunchSettled: () => launchSettled,
     canOpenWindows: () => !headlessOzone,
     onHostModeRequested: isRemoteHostSupported()
@@ -1452,6 +1508,32 @@ if (!gotTheLock) {
     setStopDiskSpaceMonitor,
     windowRegistry,
     stopRemoteHosts: () => remoteHostsLaunch?.stop() ?? Promise.resolve(),
+    keepAgentsRunning: () => {
+      launchWindowsGeneration += 1;
+      // Once the reopen has begun restoring the held set, only a clean restore
+      // lets the hold go: one that fails partway must not replace the set.
+      let reopening = false;
+      keepAgentsRunningWithoutWindows({
+        holdOpenWindows: holdOpenWindowsSaves,
+        releaseOpenWindows: () => {
+          if (!reopening) releaseOpenWindowsHold();
+        },
+        // The launch's own argv may name a folder it was opened on; reopening
+        // brings back the windows just closed, not that folder.
+        armReopen: () =>
+          armLaunchWindowRequest(stripLaunchTargets(process.argv), {
+            releaseHeldSaves: () => {
+              if (owesSavesRelease) releaseLaunchSaves();
+              releaseOpenWindowsHold();
+            },
+            afterKeepAgentsRunning: true,
+            onOpen: () => {
+              reopening = true;
+            },
+          }),
+      });
+    },
+    canShowDialogs: () => !headlessOzone,
   });
 
   // Before whenReady so the eagerly created persist:daintree / persist:portal
@@ -1550,27 +1632,15 @@ if (!gotTheLock) {
             : "[MAIN] Due-schedule launch — starting without a window"
         );
         if (windowsDeferred) {
-          initialWindowRequest = createInitialWindowRequest({
-            // Read when asked: a folder queued, a crash state, or what the
-            // request named since the start decides it.
-            openLaunchWindows: (request) => {
-              const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
-                readLaunchSignals(),
-                request,
-                readLastActiveProjectIdSync()
-              );
-              return openLaunchWindows(intent, fallbackProjectId, { savesHeld: true });
-            },
-            createWindow: () => createWindow().then(() => {}),
-            isShuttingDown: () => getActiveShutdown() !== null,
-          });
+          owesSavesRelease = true;
+          armLaunchWindowRequest(process.argv, { releaseHeldSaves: releaseLaunchSaves });
         }
         appLifecycle.onStartedWindowless();
         if ((await startHostRuntime({ windowRegistry })) === "exit-requested") return;
         ensurePowerMonitor();
         ensureFocusThrottle();
       } else {
-        await openLaunchWindows(launchIntent, fallbackProjectId, { savesHeld: false });
+        await openLaunchWindows(launchIntent, fallbackProjectId);
       }
       launchSettled = true;
       appLifecycle.onLaunchSettled();

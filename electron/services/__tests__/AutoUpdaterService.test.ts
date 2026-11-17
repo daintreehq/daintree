@@ -130,7 +130,7 @@ vi.mock("electron", () => ({
 
 const updateWarningMock = vi.hoisted(() => ({
   showUpdateWarning: vi.fn(),
-  getActiveAgentCount: vi.fn(() => 0),
+  getActiveAgents: vi.fn(() => ({ activeAgents: 0, awaitingApproval: 0 })),
 }));
 vi.mock("../../utils/quitWarning.js", () => updateWarningMock);
 const agentStoreMock = vi.hoisted(() => ({ store: { id: "agent-availability" } }));
@@ -2258,7 +2258,7 @@ describe("AutoUpdaterService", () => {
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
 
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
-          { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+          { activeAgents: 0, awaitingApproval: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
           expect.anything(),
           windowMock
         );
@@ -2317,12 +2317,15 @@ describe("AutoUpdaterService", () => {
         )![1] as (event: unknown) => void;
 
       beforeEach(() => {
-        updateWarningMock.getActiveAgentCount.mockReturnValue(2);
+        updateWarningMock.getActiveAgents.mockReturnValue({ activeAgents: 2, awaitingApproval: 0 });
         downloadedHandler({ version: "2.0.0" });
       });
 
       afterEach(() => {
-        updateWarningMock.getActiveAgentCount.mockImplementation(() => 0);
+        updateWarningMock.getActiveAgents.mockImplementation(() => ({
+          activeAgents: 0,
+          awaitingApproval: 0,
+        }));
         updateWarningMock.showUpdateWarning.mockReset();
         setAttachedShellsProvider(null);
       });
@@ -2332,9 +2335,9 @@ describe("AutoUpdaterService", () => {
 
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
 
-        expect(updateWarningMock.getActiveAgentCount).toHaveBeenCalledWith(agentStoreMock.store);
+        expect(updateWarningMock.getActiveAgents).toHaveBeenCalledWith(agentStoreMock.store);
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
-          { activeAgents: 2, attachedShells: [] },
+          { activeAgents: 2, awaitingApproval: 0, attachedShells: [] },
           expect.anything(),
           windowMock
         );
@@ -2351,6 +2354,20 @@ describe("AutoUpdaterService", () => {
         expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).toHaveBeenCalledTimes(1);
       });
 
+      it("asks about agents waiting for permission too, and stays staged when cancelled", async () => {
+        updateWarningMock.getActiveAgents.mockReturnValue({ activeAgents: 1, awaitingApproval: 1 });
+        updateWarningMock.showUpdateWarning.mockResolvedValue(false);
+
+        await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
+
+        expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
+          { activeAgents: 1, awaitingApproval: 1, attachedShells: [] },
+          expect.anything(),
+          windowMock
+        );
+        expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
       it("asks once about both agents and attached Shells", async () => {
         setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
         updateWarningMock.showUpdateWarning.mockResolvedValue(false);
@@ -2359,7 +2376,7 @@ describe("AutoUpdaterService", () => {
 
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledTimes(1);
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
-          { activeAgents: 2, attachedShells: [{ clientName: "MacBook Pro" }] },
+          { activeAgents: 2, awaitingApproval: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
           expect.anything(),
           windowMock
         );
@@ -2389,7 +2406,7 @@ describe("AutoUpdaterService", () => {
         );
 
         const first = autoUpdaterService.confirmAndQuitAndInstall();
-        updateWarningMock.getActiveAgentCount.mockReturnValue(0);
+        updateWarningMock.getActiveAgents.mockReturnValue({ activeAgents: 0, awaitingApproval: 0 });
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
         quitHandler()(TRUSTED_SENDER);
         answer(false);
@@ -2436,7 +2453,7 @@ describe("AutoUpdaterService", () => {
       });
 
       it("restarts straight away once nothing is working", async () => {
-        updateWarningMock.getActiveAgentCount.mockReturnValue(0);
+        updateWarningMock.getActiveAgents.mockReturnValue({ activeAgents: 0, awaitingApproval: 0 });
 
         quitHandler()(TRUSTED_SENDER);
 

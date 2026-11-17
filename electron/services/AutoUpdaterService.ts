@@ -12,7 +12,7 @@ import {
   isExitConfirmationPending,
   setExitConfirmationPending,
 } from "../lifecycle/attachedShells.js";
-import { getActiveAgentCount, showUpdateWarning, type QuitImpact } from "../utils/quitWarning.js";
+import { getActiveAgents, showUpdateWarning, type QuitImpact } from "../utils/quitWarning.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -523,7 +523,7 @@ class AutoUpdaterService {
    */
   private restartImpact(): QuitImpact | null {
     const impact = {
-      activeAgents: getActiveAgentCount(getAgentAvailabilityStore()),
+      ...getActiveAgents(getAgentAvailabilityStore()),
       attachedShells: getAttachedShells(),
     };
     return impact.activeAgents > 0 || impact.attachedShells.length > 0 ? impact : null;
