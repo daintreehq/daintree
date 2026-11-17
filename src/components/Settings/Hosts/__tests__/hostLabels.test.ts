@@ -112,6 +112,26 @@ describe("connectionLabel", () => {
     );
   });
 
+  it("leads with an unusable connection's own words, and says them once", () => {
+    const unusable = (message: string, detail: string | null) =>
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail,
+        stoppedRetrying: true,
+        blocker: { kind: "unusable", message },
+      });
+    expect(unusable("WSL isn't available on this PC", null)).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect"
+    );
+    expect(unusable("WSL isn't available on this PC", "spawn wsl.exe ENOENT")).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect · spawn wsl.exe ENOENT"
+    );
+    expect(unusable("The cloud machine was deleted.", "The cloud machine was deleted.")).toBe(
+      "The cloud machine was deleted · never seen · not retrying until you connect"
+    );
+  });
+
   it("names the WSL distribution it couldn't find", () => {
     expect(
       connectionLabel({

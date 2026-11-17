@@ -15,27 +15,37 @@ export function parkedLinkError(
   switch (blocker?.kind) {
     case "ssh-access":
       return sshAccessDenied(hostName, detail);
-    case "wsl-distro-missing":
+    case "wsl-distro-missing": {
+      const subject =
+        blocker.distro === hostName ? blocker.distro : `${blocker.distro} for ${hostName}`;
       return new AppError({
         code: "HOST_CONNECTION_UNUSABLE",
         message: `WSL has no distribution named ${blocker.distro}`,
-        userMessage: `WSL couldn't find ${blocker.distro}. Restore it under that name, then try again.`,
+        userMessage: `WSL couldn't find ${subject}. Restore it under that name, then try again.`,
       });
-    case "unusable":
-      return new AppError({
-        code: "HOST_CONNECTION_UNUSABLE",
-        message: `${hostName} can't be reached as set up`,
-        userMessage: `Couldn't connect to ${hostName}. ${sentence(blocker.message)}`,
-      });
-    default:
-      return new AppError({
-        code: "HOST_CONNECTION_UNUSABLE",
-        message: `${hostName} stopped retrying`,
-        userMessage: `Couldn't connect to ${hostName}, and automatic retries have stopped.`,
-      });
+    }
+    case "unusable": {
+      const said = sentence(blocker.message);
+      if (said) {
+        return new AppError({
+          code: "HOST_CONNECTION_UNUSABLE",
+          message: `${hostName} can't be reached as set up`,
+          userMessage: `Couldn't connect to ${hostName}. ${said}`,
+        });
+      }
+      break;
+    }
   }
+  return new AppError({
+    code: "HOST_CONNECTION_UNUSABLE",
+    message: `${hostName} stopped retrying`,
+    userMessage: `Couldn't connect to ${hostName}, and automatic retries have stopped.`,
+  });
 }
 
+/** A transport's message as a sentence, or "" when it has no words. */
 function sentence(text: string): string {
-  return /[.!?]$/.test(text) ? text : `${text}.`;
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }

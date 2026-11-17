@@ -274,7 +274,10 @@ export function describeHostMenuState(
           case "ssh-access":
             return { state: "Can't log in", note: null };
           case "wsl-distro-missing":
-            return { state: "Not found", note: `WSL couldn't find ${connection.blocker.distro}` };
+            return {
+              state: "Distro not found",
+              note: `WSL couldn't find ${connection.blocker.distro}`,
+            };
           default:
             return { state: "Unavailable", note: null };
         }
@@ -474,7 +477,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "access-denied":
       return "can't log in";
     case "wsl-distro-missing":
-      return "not found";
+      return "distro not found";
     case "connection-unavailable":
       return "unavailable";
     case "version-mismatch":

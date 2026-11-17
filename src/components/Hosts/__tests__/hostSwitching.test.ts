@@ -25,7 +25,7 @@ import {
 } from "@/components/HostSwitch/hostProjectPickerRequests";
 import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
-import { notifyHostSwitchFailure, switchToHost } from "../hostSwitching";
+import { hostSwitchRecovery, notifyHostSwitchFailure, switchToHost } from "../hostSwitching";
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 import type { PendingHostSwitch } from "@shared/types/ipc/remoteHosts";
 
@@ -222,6 +222,42 @@ describe("switchToHost", () => {
     expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "h1" });
     const opened = m.dispatchEvent.mock.calls.at(-1)![0] as CustomEvent;
     expect(opened.detail).toEqual({ tab: "hosts" });
+  });
+
+  it("offers the host's settings, never an ssh hint, when a WSL distribution is gone", async () => {
+    m.hosts = [
+      studio({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "There is no distribution with the supplied name.",
+        stoppedRetrying: true,
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      }),
+    ];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_CONNECTION_UNUSABLE",
+        "WSL has no distribution named Ubuntu-24.04",
+        "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then try again."
+      )
+    );
+    const recovery = hostSwitchRecovery(
+      "h1",
+      new ClientAppError("HOST_CONNECTION_UNUSABLE", "gone"),
+      vi.fn()
+    );
+    expect(recovery).toMatchObject({ kind: "settings", label: "Settings…" });
+    expect(recovery.hint).not.toMatch(/ssh/i);
+    await switchToHost("h1", false);
+    const toast = m.notify.mock.calls[0]![0] as {
+      message: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    expect(toast.message).toBe(
+      "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then try again."
+    );
+    toast.actions[0]!.onClick();
+    expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "h1" });
   });
 
   it("titles a failure as its caller asks, keeping the same recovery", () => {

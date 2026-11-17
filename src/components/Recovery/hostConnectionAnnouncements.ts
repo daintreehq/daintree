@@ -1,7 +1,7 @@
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { olderBuildSide } from "@/components/Hosts/hostModel";
-import { asSentence } from "./recoveryCopy";
+import { asSentence, wslMissingSubject } from "./recoveryCopy";
 import type { HostConnectionBlocker } from "@shared/types/remoteHosts";
 import {
   HOST_LINK_SETTLE_MS,
@@ -94,12 +94,14 @@ export function hostLinkAnnouncement(
       return `Couldn't log in to ${hostName} over ssh.`;
     case "wsl-distro-missing": {
       const distro = blocker?.kind === "wsl-distro-missing" ? blocker.distro : hostName;
-      return `WSL couldn't find ${distro}. Restore it under that name, then retry.`;
+      return `WSL couldn't find ${wslMissingSubject(distro, hostName)}. Restore it under that name, then retry.`;
     }
-    case "connection-unavailable":
-      return blocker?.kind === "unusable"
-        ? `Couldn't connect to ${hostName}. ${asSentence(blocker.message)}`
+    case "connection-unavailable": {
+      const reason = blocker?.kind === "unusable" ? asSentence(blocker.message) : "";
+      return reason
+        ? `Couldn't connect to ${hostName}. ${reason}`
         : `Couldn't connect to ${hostName}.`;
+    }
     case "version-mismatch":
       // The banner's diagnosis and its one action, said together.
       if (olderSide === "local") {
@@ -119,11 +121,26 @@ export function hostLinkAnnouncement(
  * layout that runs the watcher is replaced once the view's state has loaded,
  * and a fresh watcher must not say the same outage again.
  */
-let said: { hostId: string | null; episode: HostLinkEpisode; lostFromUp: boolean } = {
-  hostId: null,
-  episode: "up",
-  lostFromUp: false,
-};
+let said: {
+  hostId: string | null;
+  episode: HostLinkEpisode;
+  lostFromUp: boolean;
+  blocker: HostConnectionBlocker | null;
+} = { hostId: null, episode: "up", lostFromUp: false, blocker: null };
+
+function blockerIn(state: ReturnType<typeof useHostConnectionStore.getState>) {
+  return state.connection?.status === "unreachable" ? (state.connection.blocker ?? null) : null;
+}
+
+/**
+ * What tells one unusable connection from another: a Retry that gets past one
+ * refusal (a cloud account) to the next (a host key to confirm) is news.
+ */
+function episodeNote(episode: HostLinkEpisode, blocker: HostConnectionBlocker | null) {
+  return episode === "connection-unavailable" && blocker?.kind === "unusable"
+    ? blocker.message
+    : null;
+}
 
 /**
  * Say each change of this view's host link once, through the app's one
@@ -136,14 +153,21 @@ let said: { hostId: string | null; episode: HostLinkEpisode; lostFromUp: boolean
 export function watchHostConnectionAnnouncements(hostId: string): () => void {
   const store = useHostConnectionStore;
   // A view that opens onto a link already down says so, once the gate passes.
-  if (said.hostId !== hostId) said = { hostId, episode: "up", lostFromUp: false };
+  if (said.hostId !== hostId) said = { hostId, episode: "up", lostFromUp: false, blocker: null };
   // Before the store is bound to this host, or has heard the link's state,
   // nothing is known: that is no news, not a link that came back.
   const episodeOf = (state: ReturnType<typeof store.getState>, from: HostLinkEpisode) =>
     state.hostId !== hostId || state.connection === null
       ? null
       : hostLinkEpisode(selectHostBannerVariant(state), from);
-  let current: HostLinkEpisode = episodeOf(store.getState(), said.episode) ?? said.episode;
+  const opening = episodeOf(store.getState(), said.episode);
+  let current: HostLinkEpisode = opening ?? said.episode;
+  // Taken with the state that settled the episode: by the time it is said, a
+  // Retry may have the link dialling again, with no blocker on it.
+  let blocker = opening === null ? said.blocker : blockerIn(store.getState());
+  const alreadySaid = () =>
+    current === said.episode &&
+    episodeNote(current, blocker) === episodeNote(said.episode, said.blocker);
   let timer: ReturnType<typeof setTimeout> | null = null;
   let downSince: number | null = current === "up" ? null : Date.now();
 
@@ -152,7 +176,7 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
     timer = null;
     if (current === "up") downSince = null;
     else downSince ??= Date.now();
-    if (current === said.episode) return;
+    if (alreadySaid()) return;
     const dropFromUp = isDrop(current) && said.episode === "up" && store.getState().everConnected;
     const delay =
       dropFromUp && downSince !== null
@@ -160,7 +184,7 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
         : UI_DOHERTY_THRESHOLD;
     timer = setTimeout(() => {
       timer = null;
-      if (current === said.episode) return;
+      if (alreadySaid()) return;
       const state = store.getState();
       const previous = said.episode;
       // Up before this loss: the link this view had, not one it never got.
@@ -173,7 +197,7 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
         state.connection?.status === "version-mismatch"
           ? olderBuildSide(state.connection.mismatch)
           : null,
-        state.connection?.status === "unreachable" ? (state.connection.blocker ?? null) : null
+        blocker
       );
       said = {
         hostId,
@@ -181,6 +205,7 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
         lostFromUp: isDrop(current)
           ? (previous === "up" && state.everConnected) || (isDrop(previous) && said.lostFromUp)
           : false,
+        blocker,
       };
       if (message) useAnnouncerStore.getState().announce(message, "polite");
     }, delay);
@@ -189,9 +214,13 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
   settle();
   const unsubscribe = store.subscribe((state) => {
     const next = episodeOf(state, current);
-    if (next === null || next === current) return;
+    if (next === null) return;
+    const nextBlocker = blockerIn(state);
+    const changed =
+      next !== current || episodeNote(next, nextBlocker) !== episodeNote(current, blocker);
     current = next;
-    settle();
+    blocker = nextBlocker;
+    if (changed) settle();
   });
 
   return () => {
@@ -202,5 +231,5 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
 }
 
 export function _resetHostConnectionAnnouncementsForTesting(): void {
-  said = { hostId: null, episode: "up", lostFromUp: false };
+  said = { hostId: null, episode: "up", lostFromUp: false, blocker: null };
 }

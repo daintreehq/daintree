@@ -167,13 +167,13 @@ export function getHostConnectionBannerCopy(
       // wsl.exe's own answer: no distribution by the name this host was saved with.
       const distro = blocker?.kind === "wsl-distro-missing" ? blocker.distro : hostName;
       return {
-        title: `WSL couldn't find ${distro}`,
+        title: `WSL couldn't find ${wslMissingSubject(distro, hostName)}`,
         description:
           "Automatic retries have stopped. Restore it under that name in WSL, then retry.",
       };
     }
     case "connection-unavailable": {
-      const said = blocker?.kind === "unusable" ? asSentence(blocker.message) : null;
+      const said = blocker?.kind === "unusable" ? asSentence(blocker.message) : "";
       return {
         title: `Couldn't connect to ${hostName}`,
         description: said
@@ -211,10 +211,16 @@ export function getHostConnectionBannerCopy(
   }
 }
 
-/** A transport's message as a sentence: some end with a full stop and some don't. */
+/** A transport's message as a sentence (some end with a full stop, some don't); "" when it has none. */
 export function asSentence(text: string): string {
   const trimmed = text.trim();
+  if (!trimmed) return "";
   return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/** The missing distribution, and the host it belongs to when that has a name of its own. */
+export function wslMissingSubject(distro: string, hostName: string): string {
+  return distro === hostName ? distro : `${distro} for ${hostName}`;
 }
 
 /**

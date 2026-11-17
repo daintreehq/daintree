@@ -147,6 +147,20 @@ export function hostSwitchRecovery(
   if (isClientAppError(error) && error.code === "HOST_MODE_OFF" && neverReached(hostId)) {
     return { kind: "setup", label: "Set up…", run: () => runHostUpdate("host", hostId) };
   }
+  // The link stopped for something only the person can change (a WSL
+  // distribution that's gone, a cloud host key to confirm): the host's
+  // details show what was seen. Retrying first would only fail the same way.
+  if (isClientAppError(error) && error.code === "HOST_CONNECTION_UNUSABLE") {
+    return {
+      kind: "settings",
+      label: "Settings…",
+      run: () => {
+        requestHostSettings({ kind: "detail", hostId });
+        openHostsSettingsTab();
+      },
+      hint: `Settings has ${hostName(hostId)}'s connection details.`,
+    };
+  }
   // ssh couldn't log in: fixed outside Daintree, and the host's details show
   // everything ssh said. Retrying first would only fail the same way.
   if (isClientAppError(error) && error.code === "HOST_SSH_ACCESS_DENIED") {

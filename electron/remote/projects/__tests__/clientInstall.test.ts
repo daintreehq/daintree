@@ -114,7 +114,8 @@ describe("createHostSwitchService", () => {
     });
     await expect(service.pickerRoots({ toHostId: "wsl-ubuntu" })).rejects.toMatchObject({
       code: "HOST_CONNECTION_UNUSABLE",
-      userMessage: "WSL couldn't find Ubuntu-24.04. Restore it under that name, then try again.",
+      userMessage:
+        "WSL couldn't find Ubuntu-24.04 for Ubuntu. Restore it under that name, then try again.",
     });
   });
 

@@ -48,6 +48,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostConnectionBanner } from "../HostConnectionBanner";
 import { getHostConnectionBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore, type HostBannerVariant } from "@/store/hostConnectionStore";
+import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 
 const HANDSHAKE = {
   version: "1.0.0",
@@ -347,12 +348,22 @@ describe("HostConnectionBanner", () => {
     });
     render(<HostConnectionBanner />);
     const banner = screen.getByRole("status");
-    expect(screen.getByText("WSL couldn't find Ubuntu-24.04")).toBeTruthy();
+    expect(screen.getByText("WSL couldn't find Ubuntu-24.04 for studio-01")).toBeTruthy();
     expect(banner.textContent).toContain("Restore it under that name in WSL, then retry.");
     expect(banner.textContent?.toLowerCase()).not.toMatch(/ssh|log ?in/);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
     expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it.each([
+    ["a missing WSL distribution", { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" }],
+    ["an unusable connection", { kind: "unusable", message: "WSL isn't available on this PC" }],
+  ] as const)("opens the host's details from %s", (_what, blocker) => {
+    seed({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true, blocker });
+    render(<HostConnectionBanner />);
+    fireEvent.click(screen.getByRole("button", { name: "Host details…" }));
+    expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "studio-01" });
   });
 
   it("says a connection that can't be used in the transport's words", () => {

@@ -1522,7 +1522,8 @@ describe("RemoteHostsClient", () => {
         .catch((e: unknown) => e);
       expect(error).toMatchObject({
         code: "HOST_CONNECTION_UNUSABLE",
-        userMessage: "WSL couldn't find Ubuntu-24.04. Restore it under that name, then try again.",
+        userMessage:
+          "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then try again.",
       });
       expect((error as { userMessage: string }).userMessage).not.toMatch(/ssh/i);
       expect(bindings.get(1)).toBe("local");

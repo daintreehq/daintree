@@ -347,17 +347,23 @@ describe("hostChipStatus", () => {
       blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
     };
     expect(hostChipStatus(false, missing, null)).toBe("wsl-distro-missing");
-    expect(hostChipStatusText("wsl-distro-missing")).toBe("not found");
+    expect(hostChipStatusText("wsl-distro-missing")).toBe("distro not found");
     expect(hostChipStatus(false, unusable, null)).toBe("connection-unavailable");
     expect(hostChipStatus(false, parked, null)).toBe("connection-unavailable");
     expect(hostChipStatusText("connection-unavailable")).toBe("unavailable");
     const [, row] = rowsFor([entry("h1", "Ubuntu", missing)]);
     expect(describeHostMenuState(row!)).toEqual({
-      state: "Not found",
+      state: "Distro not found",
       note: "WSL couldn't find Ubuntu-24.04",
     });
     const [, other] = rowsFor([entry("h1", "Ubuntu", unusable)]);
     expect(describeHostMenuState(other!)).toEqual({ state: "Unavailable", note: null });
+    const [, unsaid] = rowsFor([entry("h1", "Ubuntu", parked)]);
+    expect(describeHostMenuState(unsaid!)).toEqual({ state: "Unavailable", note: null });
+    const [, refused] = rowsFor([
+      entry("h1", "studio-01", { ...parked, blocker: { kind: "ssh-access" } }),
+    ]);
+    expect(describeHostMenuState(refused!)).toEqual({ state: "Can't log in", note: null });
   });
 
   it("reports a lease held elsewhere only while the link is up", () => {

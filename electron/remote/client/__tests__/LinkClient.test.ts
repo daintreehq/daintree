@@ -623,7 +623,7 @@ describe("LinkClient backoff", () => {
       async open(): Promise<never> {
         transport.opens++;
         throw new WslDistroMissingError(
-          "Ubuntu-24.04",
+          "Debian-dev",
           "There is no distribution with the supplied name."
         );
       },
@@ -640,10 +640,40 @@ describe("LinkClient backoff", () => {
     expect(client.getState()).toMatchObject({
       retryAt: null,
       detail: "There is no distribution with the supplied name.",
-      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      blocker: { kind: "wsl-distro-missing", distro: "Debian-dev" },
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(transport.opens).toBe(1);
+  });
+
+  it("drops the blocker once a retry fails in a way trying again can change", async () => {
+    let missing = true;
+    const transport = {
+      async open(): Promise<never> {
+        if (missing) throw new WslDistroMissingError("Ubuntu", "no such distribution");
+        throw new TransportError("Couldn't reach Ubuntu through WSL", "timed out");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "win32" },
+      backoff: { initialMs: 60_000, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      retryAt: null,
+      blocker: { kind: "wsl-distro-missing" },
+    });
+    missing = false;
+    client.retryNow();
+    await waitFor(() => {
+      const state = client!.getState();
+      return state.status === "unreachable" && state.retryAt !== null;
+    });
+    expect(client.getState()).not.toHaveProperty("blocker");
   });
 
   it("stops retrying a connection this machine can't use, in the transport's words", async () => {
