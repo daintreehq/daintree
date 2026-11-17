@@ -639,12 +639,12 @@ describe("worktree.openFileBrowserPanel", () => {
   });
 
   describe("unsaved drafts in a reused browser (#17197)", () => {
-    function seedDirtyDraft(panelId: string) {
+    function seedDirtyDraft(panelId: string, dirty = true) {
       useFileDocumentStore.getState().setFileDocument(panelId, {
         identityKey: `doc:${panelId}`,
         fileName: "notes.md",
-        draftText: "edited",
-        dirty: true,
+        draftText: dirty ? "edited" : null,
+        dirty,
         conflict: false,
         save: vi.fn(async () => ({ status: "saved" as const })),
         discard: vi.fn(async () => {}),
@@ -739,7 +739,7 @@ describe("worktree.openFileBrowserPanel", () => {
         panelsMock.byId = [
           browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
         ];
-        if (dirty) seedDirtyDraft("fb-existing");
+        seedDirtyDraft("fb-existing", dirty);
         const guard = vi.fn(async () => "cancel" as const);
         registerPanelCloseGuard("fb-existing", guard);
         const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
@@ -850,6 +850,30 @@ describe("worktree.openFileBrowserPanel", () => {
         .catch((e: unknown) => e);
 
       expect(guard).toHaveBeenCalledTimes(1);
+      expect(error).toBeInstanceOf(UnactionableTargetError);
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a browser whose close was approved while the reveal's prompt was up", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const { replaceClosingIds } = await import("@/services/terminal/optimisticPanelCloseIds");
+      registerPanelCloseGuard("fb-existing", async () => {
+        replaceClosingIds(new Set(["fb-existing"]));
+        return "proceed";
+      });
+      const error = await getAction()
+        .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "user",
+        } as ActionContext)
+        .catch((e: unknown) => e)
+        .finally(() => replaceClosingIds(new Set()));
+
       expect(error).toBeInstanceOf(UnactionableTargetError);
       expect(setFileBrowserViewMock).not.toHaveBeenCalled();
       expect(activateTerminalMock).not.toHaveBeenCalled();
