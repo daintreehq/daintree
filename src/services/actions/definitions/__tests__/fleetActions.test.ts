@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -78,6 +79,7 @@ const { registerFleetActions } = await import("../fleetActions");
 // The run bodies load on first dispatch; load them here, under the mocks above.
 await import("../fleetActions.impl");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
+const { ActionService } = await import("@/services/ActionService");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -416,6 +418,63 @@ describe("fleet actions — threshold confirmation", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.interrupt");
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["full"]);
+  });
+});
+
+describe("fleet confirmations never arm a replay past their prompt (#17205)", () => {
+  let service: InstanceType<typeof ActionService>;
+
+  beforeAll(async () => {
+    service = new ActionService();
+    const registry = await buildRegistry();
+    for (const factory of registry.values()) service.register(factory() as ActionDefinition);
+  });
+
+  beforeEach(() => {
+    resetStores();
+    vi.clearAllMocks();
+  });
+
+  // What `action.repeatLast` does with whatever the service recorded.
+  async function repeatLast(): Promise<void> {
+    const last = service.getLastAction();
+    if (last) await service.dispatch(last.actionId, last.args, { source: "keybinding" });
+  }
+
+  it.each([
+    { id: "fleet.reject", count: 5, agentState: "waiting" as const },
+    { id: "fleet.interrupt", count: 3, agentState: "working" as const },
+  ])("$id confirmed in the fleet bar can't be replayed", async ({ id, count, agentState }) => {
+    const agents = Array.from({ length: count }, (_, i) => makeAgent(`a${i}`, { agentState }));
+    seedPanels(agents);
+    useFleetArmingStore.getState().armIds(agents.map((a) => a.id));
+
+    await service.dispatch(id as ActionId, undefined, { source: "keybinding" });
+    expect(useFleetPendingActionStore.getState().pending).not.toBeNull();
+    // The fleet bar clears its confirmation before re-dispatching as the person.
+    useFleetPendingActionStore.getState().clear();
+    const confirmed = await service.dispatch(id as ActionId, { confirmed: true }, { source: "user" });
+    expect(confirmed.ok).toBe(true);
+    const sent =
+      (terminalClient.write as ReturnType<typeof vi.fn>).mock.calls.length +
+      (terminalClient.batchDoubleEscape as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(sent).toBeGreaterThan(0);
+    vi.clearAllMocks();
+
+    await repeatLast();
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(terminalClient.batchDoubleEscape).not.toHaveBeenCalled();
+  });
+
+  it("fleet.accept doesn't arm a replay into whichever agents are waiting later", async () => {
+    seedPanels([makeAgent("a")]);
+    useFleetArmingStore.getState().armIds(["a"]);
+    await service.dispatch("fleet.accept" as ActionId, undefined, { source: "keybinding" });
+    expect(terminalClient.write).toHaveBeenCalledWith("a", "y\r");
+    vi.clearAllMocks();
+
+    await repeatLast();
+    expect(terminalClient.write).not.toHaveBeenCalled();
   });
 });
 

@@ -365,6 +365,9 @@ export function registerTerminalSpawnActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // Opens the new-worktree dialog, so there's nothing to repeat: a replay
+    // would pop the dialog again for whichever panel is focused by then.
+    nonRepeatable: true,
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
