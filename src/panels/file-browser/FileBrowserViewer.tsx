@@ -104,6 +104,7 @@ import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
+import { useFileBrowserDraftReviewStore } from "@/store/fileBrowserDraftReviewStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { FileViewMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
@@ -389,6 +390,26 @@ export function FileBrowserViewer({
   // Source without being written back, so paging from a changed file in Diff to
   // a clean one and on to another changed file lands back in Diff.
   const [explicitRenderMode, setExplicitRenderMode] = useState<FileViewMode | null>(null);
+  // "Review draft" (#17197): a request for this panel's open file reads as an
+  // Edit choice from the first render it is seen in, so the draft's recovery
+  // banner is what appears rather than a frame of the default mode, and the
+  // effect below makes it the reader's own choice from then on. It waits for
+  // the file to actually be on screen: a filter can hide the selection while
+  // the pane still names it.
+  const draftReview = useFileBrowserDraftReviewStore((store) => store.byPanelId[panelId]);
+  const draftReviewSeq =
+    draftReview !== undefined &&
+    filePath !== null &&
+    relativePath !== null &&
+    draftReview.path === relativePath
+      ? draftReview.seq
+      : null;
+  const chosenMode: FileViewMode | null = draftReviewSeq !== null ? "edit" : explicitRenderMode;
+  useEffect(() => {
+    if (draftReviewSeq === null) return;
+    setExplicitRenderMode("edit");
+    useFileBrowserDraftReviewStore.getState().settleReview(panelId, draftReviewSeq);
+  }, [panelId, draftReviewSeq]);
   const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
   const isHtml = filePath !== null && isHtmlFilePath(filePath);
   const isRenderable = isMarkdown || isHtml;
@@ -408,13 +429,13 @@ export function FileBrowserViewer({
     !!editorContext &&
     !!editor &&
     pluginKnown &&
-    (explicitRenderMode === "edit" ||
+    (chosenMode === "edit" ||
       draftText !== null ||
       (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
   // While another screen drives the project, only what is already open keeps
   // Edit (see useFileEditLock).
   const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
-    editable && explicitRenderMode === "edit",
+    editable && chosenMode === "edit",
     draftText !== null
   );
   const canEdit = editable && mayEdit;
@@ -458,7 +479,7 @@ export function FileBrowserViewer({
     ...(canEdit ? (["edit"] as const) : []),
   ];
   const requestedMode =
-    explicitRenderMode ?? (filePath !== null ? defaultFileViewMode(filePath) : "source");
+    chosenMode ?? (filePath !== null ? defaultFileViewMode(filePath) : "source");
   const renderMode: FileViewMode = availableModes.includes(requestedMode)
     ? requestedMode
     : "source";

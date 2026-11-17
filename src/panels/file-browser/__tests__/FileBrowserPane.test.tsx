@@ -3599,6 +3599,41 @@ describe("file browser document navigation guards", () => {
         });
     }
   );
+
+  it.each([
+    ["keeps", true],
+    ["drops", false],
+  ] as const)(
+    "%s a deleted file in the viewer when the draft over it is dirty: %s",
+    async (_verb, dirty) => {
+      // The tree loses the row the moment the file is deleted, but a dirty
+      // draft still stands on it, and only the editor in the viewer can save
+      // it somewhere else (#17197). A clean file goes back to the summary.
+      const { useFileDocumentStore } = await import("@/store/fileDocumentStore");
+      treeState.rows = [];
+      mockPanel.browserSelectedPath = "docs/notes.md";
+      // A clean projection stands in the other case: holding a document is not
+      // enough, only unsaved edits are.
+      useFileDocumentStore.getState().setFileDocument("fb-1", {
+        identityKey: "notes",
+        fileName: "notes.md",
+        draftText: dirty ? "draft" : null,
+        dirty,
+        conflict: false,
+        save: async () => ({ status: "saved" as const }),
+        discard: async () => {},
+      });
+      renderPane();
+
+      if (dirty) {
+        await waitFor(() => expect(readMock).toHaveBeenCalled());
+        expect(readMock.mock.calls[0]?.[0]).toMatchObject({ path: "/repo/docs/notes.md" });
+      } else {
+        await screen.findByText("Pick a file to read");
+        expect(readMock).not.toHaveBeenCalled();
+      }
+    }
+  );
 });
 
 describe("closing the viewer's subject (#13194)", () => {
