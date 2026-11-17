@@ -191,7 +191,8 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     openPopover();
     const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
     expect(trigger.textContent).toContain("2");
-    expect(trigger.className).toContain("text-text-primary");
+    expect(trigger.classList.contains("text-text-primary")).toBe(true);
+    expect(trigger.classList.contains("text-text-secondary")).toBe(false);
   });
 });
 
@@ -659,7 +660,7 @@ describe("WorktreeFilterPopover trigger surface states", () => {
       it("rests without a pressed fill and steps up on hover and open", () => {
         render(<WorktreeFilterPopover appearance={appearance} />);
         const cls = trigger().className;
-        expect(cls).toContain("text-text-secondary");
+        expect(trigger().classList.contains("text-text-secondary")).toBe(true);
         expect(cls).not.toMatch(/bg-tint|(^|\s)bg-overlay-(soft|hover)(\s|$)/);
         expect(cls).toContain("hover:bg-overlay-hover");
         expect(cls).toContain("aria-expanded:bg-overlay-hover");
@@ -670,7 +671,8 @@ describe("WorktreeFilterPopover trigger surface states", () => {
         render(<WorktreeFilterPopover appearance={appearance} />);
         const el = trigger();
         expect(el.textContent).toContain("1");
-        expect(el.className).toContain("text-text-primary");
+        expect(el.classList.contains("text-text-primary")).toBe(true);
+        expect(el.classList.contains("text-text-secondary")).toBe(false);
         expect(el.className).not.toMatch(/bg-tint|(^|\s)bg-overlay-(soft|hover)(\s|$)/);
         expect(el.className).toContain("hover:bg-overlay-hover");
       });
