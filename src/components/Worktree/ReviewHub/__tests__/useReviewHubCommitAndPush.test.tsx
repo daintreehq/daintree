@@ -516,7 +516,7 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
 
     // Rethrown with its reason readable, so the composer can tell a refused
     // review from any other failed commit.
-    expect((rethrown as { gitReason?: string }).gitReason).toBe("commit-review-stale");
+    expect(rethrown).toHaveProperty("gitReason", "commit-review-stale");
     expect(push).not.toHaveBeenCalled();
     expect(onCommitted).not.toHaveBeenCalled();
     expect(headMoved).not.toHaveBeenCalled();
@@ -554,6 +554,39 @@ describe("useReviewHubCommitAndPush — held to the staged changes the confirm l
     );
     await act(() => result.current.handleRetryPush());
     expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a push main refused as stale after a clean commit as withheld", async () => {
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(
+      new Error(
+        "[GitError|push-review-stale||feature%2Fx] The branch changed since this push was reviewed: 'feature/x' moved to a different commit. Nothing was pushed."
+      )
+    );
+    const { result } = renderPushHook();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
+
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(outcome).toBe("withheld");
+    expect(result.current.pushError?.reason).toBe("push-review-stale");
+  });
+
+  it("reports an ordinary push failure after a clean commit as nothing special", async () => {
+    commit.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: REVIEWED_STAGED });
+    push.mockRejectedValueOnce(networkDown());
+    const { result } = renderPushHook();
+
+    let outcome: unknown = "unset";
+    await act(async () => {
+      outcome = await result.current.handleCommitAndPush("feat: x", CONFIRMED);
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(result.current.pushError?.reason).toBe("network-unavailable");
   });
 
   it("pushes nothing when a host answers a reviewed commit without saying what it holds", async () => {

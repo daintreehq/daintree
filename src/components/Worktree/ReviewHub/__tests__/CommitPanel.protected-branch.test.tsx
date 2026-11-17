@@ -567,7 +567,7 @@ describe("CommitPanel — push confirm", () => {
     ],
     ["the push is held back", () => Promise.resolve("withheld" as const)],
   ])(
-    "records no opt-out when %s because what was confirmed moved (#17563)",
+    "turns confirms back on when %s because what was confirmed moved (#17563)",
     async (_label, outcome) => {
       const onCommitAndPush = vi.fn(outcome);
       const { onSetSkipPushConfirm } = renderPanel({
@@ -579,7 +579,9 @@ describe("CommitPanel — push confirm", () => {
       await confirmWhenReady(/Push to origin\/feature\/x/);
 
       expect(onCommitAndPush).toHaveBeenCalledTimes(1);
-      expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
+      // Never the checked box: the next click must confirm again.
+      expect(onSetSkipPushConfirm).toHaveBeenCalledTimes(1);
+      expect(onSetSkipPushConfirm).toHaveBeenCalledWith(false);
     }
   );
 

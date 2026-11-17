@@ -621,10 +621,12 @@ export function CommitPanel({
       // The opt-out stands however the push goes — a preference about the
       // confirm, orthogonal to network or rejection failures — except when
       // what was confirmed moved under it and nothing it approved ran
-      // (#17563). That outcome asks for a fresh review, and an opt-out
-      // recorded here would answer the next click with a commit and push
-      // nobody reviewed.
-      if (outcome !== "review-stale") onSetSkipPushConfirm(skipNextConfirm);
+      // (#17563). That outcome asks for a fresh review, so confirms stay on:
+      // an opt-out left standing would answer the next click with a commit and
+      // push nobody reviewed, including one recorded before a missing
+      // destination forced this confirm open.
+      const stale = outcome === "review-stale" && !isProtected;
+      onSetSkipPushConfirm(stale ? false : skipNextConfirm);
     });
   }, [
     currentBranch,

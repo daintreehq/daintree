@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
 import type {
   GitCommitResult,
   GitCommitReview,
@@ -176,9 +177,10 @@ export function useReviewHubCommitAndPush({
     setPushError({ reason: "push-review-stale", rawMessage, summary, branchName });
   }, []);
 
+  /** Resolves to the reason a push failed, or `undefined` when it landed or never started. */
   const runPush = useCallback(
-    async (review: GitPushReview) => {
-      if (isPushingRef.current) return;
+    async (review: GitPushReview): Promise<GitOperationReason | undefined> => {
+      if (isPushingRef.current) return undefined;
       isPushingRef.current = true;
       lastPushReviewRef.current = review;
       setIsPushing(true);
@@ -217,6 +219,7 @@ export function useReviewHubCommitAndPush({
         );
         setPushError(null);
         setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
+        return undefined;
       } catch (err) {
         // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
         // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -228,8 +231,9 @@ export function useReviewHubCommitAndPush({
         const rawMessage = isRateLimited
           ? "Too many push attempts in a short window — wait a moment and try again."
           : formatErrorMessage(err, "Failed to push");
+        const reason = errFields.gitReason ?? classifyGitError(rawMessage);
         setPushError({
-          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          reason,
           rawMessage,
           leaseSha: errFields.leaseSha,
           branchName: errFields.branchName,
@@ -244,6 +248,7 @@ export function useReviewHubCommitAndPush({
           branchName: errFields.branchName,
           leaseSha: errFields.leaseSha,
         });
+        return reason;
       } finally {
         cleanup();
         setIsPushing(false);
@@ -284,7 +289,11 @@ export function useReviewHubCommitAndPush({
   );
 
   const handleCommitAndPush = useCallback(
-    /** Resolves to "withheld" when the commit landed but its push was held back unrun. */
+    /**
+     * Resolves to "withheld" when the commit landed but its push never ran as
+     * approved: held back here, or refused by main because the branch moved
+     * past the commit before the push.
+     */
     async (message: string, target: CommitPushTarget): Promise<"withheld" | undefined> => {
       setActionError(null);
       setPushError(null);
@@ -307,8 +316,7 @@ export function useReviewHubCommitAndPush({
           withholdPush(push.withheld, target.branch);
           return "withheld";
         }
-        await runPush(push.review);
-        return undefined;
+        return (await runPush(push.review)) === "push-review-stale" ? "withheld" : undefined;
       } finally {
         setIsCommitPushInFlight(false);
       }
