@@ -1,6 +1,5 @@
 import { app } from "electron";
 import path from "node:path";
-import type { CloudProviderId } from "../../../shared/types/cloudHosts.js";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import { registerRemoteService } from "../runtime.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
@@ -9,12 +8,14 @@ import { CloudAccountService } from "./CloudAccountService.js";
 import { KeychainCloudCredentialVault } from "./CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsStoreBackend } from "./CloudHostStore.js";
 import { CloudHosts } from "./CloudHosts.js";
-import type { CloudProvider } from "./provider.js";
+import { CloudProviderRegistry } from "./CloudProviderRegistry.js";
 
 export interface CloudHostsRuntime {
   cloudHosts: CloudHosts;
   store: CloudHostStore;
   accounts: CloudAccountService;
+  /** Providers register and leave at runtime; a stored account outlives its provider. */
+  providers: CloudProviderRegistry;
   dispose(): void;
 }
 
@@ -38,22 +39,18 @@ export function initCloudHosts(params: {
     }
     return client;
   };
-  // Each provider is an adapter behind CloudProvider; adding one to CloudProviderId
-  // makes both of these refuse to compile until it has an adapter and an API URL.
-  const adapters: Record<CloudProviderId, CloudProvider> = {
-    boat: new BoatProvider(boatClientFor),
-  };
-  const apiUrls: Record<CloudProviderId, string> = { boat: boatUrl };
-  const providers = new Map<CloudProviderId, CloudProvider>(
-    Object.entries(adapters) as Array<[CloudProviderId, CloudProvider]>
-  );
+  const providers = new CloudProviderRegistry();
+  providers.register(new BoatProvider(boatClientFor), {
+    owner: { kind: "built-in" },
+    apiUrl: boatUrl,
+  });
   const accounts = new CloudAccountService({
     store,
     vault: new KeychainCloudCredentialVault(
       path.join(app.getPath("userData"), "cloud-credentials.json")
     ),
     providers,
-    apiUrlFor: (providerId) => apiUrls[providerId],
+    apiUrlFor: (providerId) => providers.apiUrlFor(providerId),
     onAccountRemoved: params.onAccountRemoved,
   });
   const cloudHosts = new CloudHosts({
@@ -61,6 +58,7 @@ export function initCloudHosts(params: {
     store,
     emit: (snapshot) => params.emit({ type: "cloud-changed", snapshot }),
   });
+  const stopWatchingProviders = providers.onChange(() => cloudHosts.providersChanged());
   const unregister = registerRemoteService("cloudHosts", cloudHosts);
   // Views that read before this started got the empty answer; tell them what there is.
   cloudHosts.changed();
@@ -68,7 +66,9 @@ export function initCloudHosts(params: {
     cloudHosts,
     store,
     accounts,
+    providers,
     dispose() {
+      stopWatchingProviders();
       unregister();
       cloudHosts.dispose();
     },

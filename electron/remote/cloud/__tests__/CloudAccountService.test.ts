@@ -27,12 +27,29 @@ function fakeProvider(overrides: Partial<CloudProvider> = {}): CloudProvider {
       apiKeyUrl: "",
       dashboardUrl: "",
       docsUrl: "",
+      credentialFields: [
+        {
+          id: "apiKey",
+          label: "API key",
+          secret: true,
+          input: "single-line",
+          required: true,
+          help: null,
+        },
+      ],
       capabilities: {
-        persistence: { kept: "Files", lost: "memory", retentionDays: null, saveRetryBilled: true },
+        persistence: {
+          kept: "Files",
+          lost: "memory",
+          retentionDays: null,
+          saveRetryBilled: true,
+          stoppedComputeBilled: false,
+        },
         typicalStartSeconds: null,
-        lifetimeGuard: true,
-        route: "direct-ssh",
-        pinnedHostKey: true,
+        lifetime: { kind: "renewable" },
+        sshTrust: "pinned-from-api",
+        transport: "direct",
+        provisioning: { location: "none", image: "none", network: "none", sshKey: "after-create" },
         deletion: true,
       },
       unsupportedReason: platform === "win32" ? "not on windows" : null,
@@ -263,14 +280,38 @@ describe("CloudAccountService", () => {
 
 describe("CloudHostStore", () => {
   it("skips records it can't read without failing the rest", () => {
+    const account = {
+      id: "ca_ijklmnop",
+      providerId: "agent37",
+      displayName: "Agent 37",
+      identity: null,
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://api.agent37.test",
+      keyHint: null,
+      addedAt: 1,
+      validation: { status: "valid", checkedAt: 1 },
+    };
+    const binding = {
+      id: "cb_ijklmnop34",
+      accountId: "ca_ijklmnop",
+      providerId: "acme.clouds.ec2",
+    };
     const store = new CloudHostStore(
       memoryBackend({
         version: 1,
-        accounts: [{ id: "nope" }, null],
-        bindings: [{ id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "agent37" }],
+        accounts: [{ id: "nope" }, null, account],
+        // "agent37" reads (a provider this build may not have is still kept); "Agent 37" has neither shape.
+        bindings: [
+          { id: "cb_abcdefgh12", accountId: "ca_abcdefgh", providerId: "Agent 37" },
+          binding,
+        ],
       })
     );
-    expect(store.accounts()).toEqual([]);
-    expect(store.bindings()).toEqual([]);
+    expect(store.accounts().map((entry) => [entry.id, entry.providerId])).toEqual([
+      ["ca_ijklmnop", "agent37"],
+    ]);
+    expect(store.bindings().map((entry) => [entry.id, entry.providerId])).toEqual([
+      ["cb_ijklmnop34", "acme.clouds.ec2"],
+    ]);
   });
 });

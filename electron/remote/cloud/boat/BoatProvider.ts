@@ -93,17 +93,34 @@ export class BoatProvider implements CloudProvider {
       apiKeyUrl: "https://boat.dev/dashboard?tab=api-keys",
       dashboardUrl: "https://boat.dev/dashboard",
       docsUrl: "https://docs.boat.dev",
+      credentialFields: [
+        {
+          id: "apiKey",
+          label: "API key",
+          secret: true,
+          input: "single-line",
+          required: true,
+          help: null,
+        },
+      ],
       capabilities: {
         persistence: {
           kept: "Files in its home folder",
           lost: "/tmp, caches and memory",
           retentionDays: 14,
           saveRetryBilled: false,
+          stoppedComputeBilled: false,
         },
         typicalStartSeconds: 60,
-        lifetimeGuard: true,
-        route: "direct-ssh",
-        pinnedHostKey: true,
+        lifetime: { kind: "renewable" },
+        sshTrust: "pinned-from-api",
+        transport: "direct",
+        provisioning: {
+          location: "none",
+          image: "none",
+          network: "none",
+          sshKey: "after-create",
+        },
         deletion: true,
       },
       unsupportedReason:

@@ -36,6 +36,7 @@ export interface CloudHostsDeps {
 export class CloudHosts {
   private readonly stopWatching: () => void;
   private emitQueued = false;
+  private disposed = false;
   private lifecycleRef: CloudHostLifecycle | null = null;
 
   constructor(private readonly deps: CloudHostsDeps) {
@@ -105,12 +106,18 @@ export class CloudHosts {
 
   /** Coalesces a burst of store writes into one event. */
   changed(): void {
-    if (this.emitQueued) return;
+    if (this.emitQueued || this.disposed) return;
     this.emitQueued = true;
     queueMicrotask(() => {
       this.emitQueued = false;
-      this.deps.emit(this.snapshot());
+      if (!this.disposed) this.deps.emit(this.snapshot());
     });
+  }
+
+  /** A provider registered or left: what its accounts and hosts can do changed with it. */
+  providersChanged(): void {
+    this.lifecycleRef?.providersChanged();
+    this.changed();
   }
 
   checkAccountKey(providerId: unknown, apiKey: unknown): Promise<CloudAccountCheckResult> {
@@ -146,6 +153,7 @@ export class CloudHosts {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.stopWatching();
   }
 }

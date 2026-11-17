@@ -30,6 +30,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
     hostId: "build",
     providerId: "boat",
+    providerUnavailable: null,
     accountId: "ca_0123456789",
     accountName: "Personal",
     resourceId: null,
