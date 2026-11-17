@@ -178,6 +178,11 @@ export interface DiffViewerProps {
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
   searchQuery?: string;
   onRetry?: () => void;
+  /**
+   * Set when the diff was read with whitespace changes ignored. An empty one
+   * then offers the way back instead of reading as an unchanged file.
+   */
+  onShowWhitespaceChanges?: () => void;
   /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal, each staged batch of a large file), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
   /** Fired after each commit of a file's token pass (highlighting, search marks) — the signal that .diff-search-match spans are scannable. A large file's pass lands in batches; the last call has every row highlighted. */
@@ -515,7 +520,10 @@ function sourceMatchesHunks(newLines: string[], hunks: HunkData[]): boolean {
  * `expandFromRawCode` expects) from the new-side file content. Unchanged
  * regions are byte-identical between revisions, differing only by the running
  * insert/delete offset — and expansion only ever reads unchanged regions, so
- * positions inside hunks can stay empty.
+ * positions inside hunks can stay empty. A diff read with whitespace ignored
+ * keeps that offset (git prints its context from the new side and counts a
+ * reindented line as unchanged), but its gaps are equal only up to whitespace,
+ * so both columns show the new side's.
  */
 function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[] | null {
   if (!hunks.length) return null;
@@ -582,6 +590,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     wrapLines = false,
     searchQuery,
     onRetry,
+    onShowWhitespaceChanges,
     onToggleCollapse,
     onTokensRendered,
     annotations,
@@ -704,7 +713,16 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           variant="zero-data"
           scale="canvas"
           icon={<FileDiffIcon />}
-          title="No changes detected"
+          title={
+            onShowWhitespaceChanges ? "No changes with whitespace ignored" : "No changes detected"
+          }
+          action={
+            onShowWhitespaceChanges && (
+              <Button variant="outline" size="sm" onClick={onShowWhitespaceChanges}>
+                Show whitespace changes
+              </Button>
+            )
+          }
           instant
         />
       </div>

@@ -79,6 +79,7 @@ export {
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
+  Pilcrow, // ignore whitespace changes in a diff — the mark for the invisible characters a reindent or reformat touches
   Play, // start a schedule's run now, outside its cadence
   Power, // start a stopped cloud machine — a machine being switched on, not media playing
   PowerOff, // stop a running cloud machine (its programs end; its disk is kept)

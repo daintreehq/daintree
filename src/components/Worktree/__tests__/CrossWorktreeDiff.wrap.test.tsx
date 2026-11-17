@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
@@ -30,6 +30,10 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 // leaking a persisted value into the next one.
 const preferences = {
   diffIgnoreWhitespace: false,
+  // Writes through, so the dialog's next render reads what the click stored.
+  setDiffIgnoreWhitespace: vi.fn((value: boolean) => {
+    preferences.diffIgnoreWhitespace = value;
+  }),
   diffWrapLines: null as boolean | null,
   setDiffWrapLines: vi.fn(),
   diffViewType: "split",
@@ -98,6 +102,8 @@ beforeEach(() => {
   mockCompareWorktrees.mockReset();
   preferences.diffWrapLines = null;
   preferences.setDiffWrapLines.mockReset();
+  preferences.diffIgnoreWhitespace = false;
+  preferences.setDiffIgnoreWhitespace.mockClear();
   Object.defineProperty(window, "electron", {
     value: { git: { compareWorktrees: mockCompareWorktrees } },
     configurable: true,
@@ -117,11 +123,7 @@ async function setupComparison(files: { path: string; status: string }[]) {
     )
   );
 
-  render(
-    <TooltipProvider>
-      <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId={null} />
-    </TooltipProvider>
-  );
+  const view = render(dialogElement());
   fireEvent.click(screen.getByText("Base"));
   fireEvent.click(screen.getByText("Compare"));
 
@@ -133,6 +135,15 @@ async function setupComparison(files: { path: string; status: string }[]) {
   await waitFor(() => {
     expect(screen.getByTestId("diff-viewer")).toBeTruthy();
   });
+  return view;
+}
+
+function dialogElement() {
+  return (
+    <TooltipProvider>
+      <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId={null} />
+    </TooltipProvider>
+  );
 }
 
 function wrapButton(): HTMLElement {
@@ -235,6 +246,93 @@ describe("CrossWorktreeDiff wrap toggle (#12170)", () => {
     expect(document.activeElement).toBe(button);
     expect(button.tabIndex).toBe(0);
     expect(screen.getByLabelText("Next file").tabIndex).toBe(-1);
+  });
+});
+
+describe("CrossWorktreeDiff ignore whitespace toggle (#17325)", () => {
+  const LABEL = "Ignore whitespace changes";
+
+  /** Patch requests (not the whole-file context read), by the whitespace flag they carried. */
+  function patchRequests(): unknown[] {
+    return mockCompareWorktrees.mock.calls
+      .filter((call) => call[3] !== undefined && call[6] === undefined)
+      .map((call) => call[5]);
+  }
+
+  function listRequests(): number {
+    return mockCompareWorktrees.mock.calls.filter((call) => call[3] === undefined).length;
+  }
+
+  /** Holds the whitespace-ignoring patch back until the test settles it. */
+  function deferIgnoringPatch() {
+    let settle!: { resolve: (diff: string) => void; reject: (error: Error) => void };
+    const pending = new Promise<string>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+    const fallback = mockCompareWorktrees.getMockImplementation()!;
+    mockCompareWorktrees.mockImplementation((...args: unknown[]) =>
+      args[3] !== undefined && args[5] === true && args[6] === undefined
+        ? pending
+        : fallback(...args)
+    );
+    return settle;
+  }
+
+  it("sits beside Wrap long lines, pressed with the preference", async () => {
+    await setupComparison([{ path: "src/a.ts", status: "M" }]);
+
+    const toggle = screen.getByRole("button", { name: LABEL });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle.previousElementSibling).toBe(wrapButton());
+    expect(patchRequests().at(-1)).toBe(false);
+  });
+
+  it("reloads only the open file, in the foreground, with whitespace ignored", async () => {
+    await setupComparison([{ path: "src/a.ts", status: "M" }]);
+    const listsBefore = listRequests();
+    const settle = deferIgnoringPatch();
+
+    fireEvent.click(screen.getByRole("button", { name: LABEL }));
+
+    expect(preferences.setDiffIgnoreWhitespace).toHaveBeenCalledWith(true);
+    expect(patchRequests().at(-1)).toBe(true);
+    // The other mode's patch leaves the screen while the new one loads.
+    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+
+    await act(async () => {
+      settle.resolve("diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-old\n+ignoring");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("diff-viewer").textContent).toContain("ignoring");
+    });
+    expect(screen.getByRole("button", { name: LABEL }).getAttribute("aria-pressed")).toBe("true");
+    expect(listRequests()).toBe(listsBefore);
+  });
+
+  it("shows a failed reload instead of keeping the other mode's patch", async () => {
+    await setupComparison([{ path: "src/a.ts", status: "M" }]);
+    const settle = deferIgnoringPatch();
+
+    fireEvent.click(screen.getByRole("button", { name: LABEL }));
+    await act(async () => {
+      settle.reject(new Error("git failed"));
+    });
+
+    expect(await screen.findByText("Couldn't load this diff")).toBeTruthy();
+    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+  });
+
+  it("reloads when the preference changes under the open dialog", async () => {
+    const view = await setupComparison([{ path: "src/a.ts", status: "M" }]);
+    const listsBefore = listRequests();
+
+    preferences.diffIgnoreWhitespace = true;
+    view.rerender(dialogElement());
+
+    await waitFor(() => {
+      expect(patchRequests().at(-1)).toBe(true);
+    });
+    expect(listRequests()).toBe(listsBefore);
   });
 });
 
