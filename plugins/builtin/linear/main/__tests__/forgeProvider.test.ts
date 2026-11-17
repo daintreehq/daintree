@@ -575,6 +575,176 @@ describe("assignment Undo", () => {
   });
 });
 
+describe("assignment Undo history", () => {
+  const GRACE = { id: "user-2", name: "Grace", displayName: "grace", avatarUrl: null };
+  const LIN = { id: "user-9", name: "Lin", displayName: "lin", avatarUrl: null };
+  const USERS = [VIEWER, GRACE, LIN];
+
+  type User = typeof GRACE;
+  /** Each issue's assignee in Linear, by number. */
+  let assignees: Record<number, User | null>;
+  let failNextWrite: boolean;
+  let writeGate: Promise<void> | null;
+  let writes: Array<string | null>;
+
+  beforeEach(() => {
+    assignees = { 42: GRACE, 43: LIN };
+    failNextWrite = false;
+    writeGate = null;
+    writes = [];
+    fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
+      const { query, variables } = JSON.parse(String(init.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      if (query.includes("viewer {")) return gql({ viewer: VIEWER });
+      if (query.includes("issueUpdate")) {
+        if (writeGate) await writeGate;
+        const number = Number(String(variables.id).replace("issue-uuid-", ""));
+        const assigneeId = (variables.input as { assigneeId: string | null }).assigneeId;
+        writes.push(assigneeId);
+        if (failNextWrite) {
+          failNextWrite = false;
+          return new Response("", { status: 503 });
+        }
+        assignees[number] = USERS.find((user) => user.id === assigneeId) ?? null;
+        return gql({ issueUpdate: { success: true, issue: { assignee: assignees[number] } } });
+      }
+      const number = ((variables.filter as { number: { eq: number } }).number ?? {}).eq;
+      return gql({
+        issues: {
+          nodes: [
+            issueNode({
+              id: `issue-uuid-${number}`,
+              identifier: `ENG-${number}`,
+              number,
+              assignee: assignees[number],
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  const assign = (number = 42) => linearForgeProvider.assignIssue(REPO, number, "ada");
+  const undo = async (number = 42) =>
+    (await linearForgeProvider.unassignIssue(REPO, number, "ada")).map((user) => user.login);
+
+  it("still knows who to hand the issue back to after a failed Undo", async () => {
+    await assign();
+    failNextWrite = true;
+    await expect(undo()).rejects.toThrow(/HTTP 503/);
+    expect(assignees[42]).toBe(VIEWER);
+    await expect(undo()).resolves.toEqual(["grace"]);
+    expect(assignees[42]).toBe(GRACE);
+  });
+
+  it("keeps each worktree's Undo when two are made from one issue", async () => {
+    await assign();
+    // The second finds the issue already the viewer's.
+    await assign();
+    await expect(undo()).resolves.toEqual(["ada"]);
+    expect(assignees[42]).toBe(VIEWER);
+    await expect(undo()).resolves.toEqual(["grace"]);
+    expect(assignees[42]).toBe(GRACE);
+    expect(writes).toEqual(["user-1", "user-2"]);
+  });
+
+  it("leaves a later reassignment alone through every Undo", async () => {
+    await assign();
+    await assign();
+    assignees[42] = LIN;
+    await expect(undo()).resolves.toEqual(["lin"]);
+    await expect(undo()).resolves.toEqual(["lin"]);
+    expect(assignees[42]).toBe(LIN);
+    expect(writes).toEqual(["user-1"]);
+  });
+
+  it("uses up only its own record when someone else has the issue", async () => {
+    await assign();
+    await assign();
+    assignees[42] = LIN;
+    await expect(undo()).resolves.toEqual(["lin"]);
+    // Back with the viewer: the other worktree's Undo still knows who had it first.
+    assignees[42] = VIEWER;
+    await expect(undo()).resolves.toEqual(["grace"]);
+    expect(assignees[42]).toBe(GRACE);
+  });
+
+  it("lets one assignment to an issue finish before another reads it", async () => {
+    let release: () => void = () => undefined;
+    writeGate = new Promise((resolve) => (release = resolve));
+    const first = assign();
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    const second = assign();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reads = () =>
+      fetchMock().mock.calls.filter((call) =>
+        String((call[1] as RequestInit).body).includes("issues(filter")
+      );
+    expect(reads()).toHaveLength(1);
+    writeGate = null;
+    release();
+    await Promise.all([first, second]);
+    expect(reads()).toHaveLength(2);
+    // The second found the issue already the viewer's, so its Undo writes nothing.
+    await expect(undo()).resolves.toEqual(["ada"]);
+    await expect(undo()).resolves.toEqual(["grace"]);
+  });
+
+  it("keeps every Undo of many assignments, handing the issue back only at the last", async () => {
+    for (let i = 0; i < 12; i++) await assign();
+    for (let i = 0; i < 11; i++) await expect(undo()).resolves.toEqual(["ada"]);
+    await expect(undo()).resolves.toEqual(["grace"]);
+    expect(writes).toEqual(["user-1", "user-2"]);
+  });
+
+  it("goes back to who had the issue first after it changes hands many times", async () => {
+    assignees[42] = null;
+    // Each round the viewer takes the issue and someone else takes it back.
+    for (let i = 0; i < 12; i++) {
+      await assign();
+      assignees[42] = i % 2 ? GRACE : LIN;
+    }
+    const undone: string[][] = [];
+    for (let i = 0; i < 10; i++) {
+      assignees[42] = VIEWER;
+      undone.push(await undo());
+    }
+    // Only the latest hand-overs are kept, and the first: nobody had it.
+    expect(undone).toEqual([
+      ...Array.from({ length: 9 }, (_, i) => (i % 2 ? ["grace"] : ["lin"])),
+      [],
+    ]);
+    expect(assignees[42]).toBeNull();
+  });
+
+  it("remembers nothing from an assignment Linear refused", async () => {
+    failNextWrite = true;
+    await expect(assign()).rejects.toThrow(/HTTP 503/);
+    expect(assignees[42]).toBe(GRACE);
+    // Assigned in Linear instead: an unassign now only takes it off the viewer.
+    assignees[42] = VIEWER;
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees[42]).toBeNull();
+  });
+
+  it("remembers each issue's previous assignee separately", async () => {
+    await assign(42);
+    await assign(43);
+    await expect(undo(42)).resolves.toEqual(["grace"]);
+    await expect(undo(43)).resolves.toEqual(["lin"]);
+    expect(assignees).toEqual({ 42: GRACE, 43: LIN });
+  });
+
+  it("doesn't carry what it remembers over to a new key", async () => {
+    await assign();
+    linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees[42]).toBeNull();
+  });
+});
+
 describe("search scoping", () => {
   it("doesn't read another team's key as this team's number", async () => {
     fetchMock().mockResolvedValueOnce(
