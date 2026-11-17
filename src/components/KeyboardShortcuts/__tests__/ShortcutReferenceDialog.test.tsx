@@ -64,8 +64,20 @@ function seed(): void {
     binding("nav.toggleSidebar", "Toggle sidebar", "Navigation", "Cmd+B"),
     binding("help.shortcuts", "Open keyboard shortcuts reference", "Help", "Cmd+K Cmd+S"),
     binding("help.shortcutsAlt", "Open keyboard shortcuts reference", "Help", "Cmd+/"),
-    binding("devPreview.reloadPreview", "Reload dev preview", "Dev preview", "Cmd+R", "dev-preview"),
-    binding("devPreview.toggleElementPicker", "Pick an element", "Dev preview", "Cmd+E", "dev-preview"),
+    binding(
+      "devPreview.reloadPreview",
+      "Reload dev preview",
+      "Dev preview",
+      "Cmd+R",
+      "dev-preview"
+    ),
+    binding(
+      "devPreview.toggleElementPicker",
+      "Pick an element",
+      "Dev preview",
+      "Cmd+E",
+      "dev-preview"
+    ),
     binding("app.settings", "Open settings", "System", "Cmd+,"),
     binding("plugin.thing", "Do the plugin thing", "Acme plugin", "Cmd+Alt+Y"),
   ];

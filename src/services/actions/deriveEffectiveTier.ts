@@ -54,10 +54,7 @@ export function deriveEffectiveTier(
   actionId: "worktree.delete",
   ctx: WorktreeDeleteTierCtx
 ): DestructiveTier;
-export function deriveEffectiveTier(
-  actionId: string,
-  ctx: WorktreeDeleteTierCtx
-): DestructiveTier {
+export function deriveEffectiveTier(actionId: string, ctx: WorktreeDeleteTierCtx): DestructiveTier {
   if (actionId === "worktree.delete") {
     // Every input is conditioned on `force`, and that is sound because a
     // backend invariant stands behind each: `git worktree remove` refuses a

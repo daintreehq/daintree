@@ -339,7 +339,6 @@ export function AppDialog({
     );
   }, []);
 
-
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
   // changed identity (e.g. a caller passing an inline function), the cleanup

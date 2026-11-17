@@ -1657,7 +1657,9 @@ describe("toolbarPreferencesStore", () => {
       expect(layout.pinnedButtons).toEqual({ "copy-tree": false, "acme.thing": true });
 
       store.getState().toggleButtonVisibility("copy-tree", "right");
-      const written = JSON.parse(storageMock.getItem(STORAGE_KEY)!) as { state: { layout: object } };
+      const written = JSON.parse(storageMock.getItem(STORAGE_KEY)!) as {
+        state: { layout: object };
+      };
       expect(JSON.stringify(written.state.layout)).not.toContain("portal-toggle");
     });
 
