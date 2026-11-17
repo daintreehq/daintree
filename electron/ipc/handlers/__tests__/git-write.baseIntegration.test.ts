@@ -1302,7 +1302,12 @@ describe("abort and continue check the operation they were chosen for (#17559)",
 
     it("refuses a malformed pin before reading the worktree, never treating it as none", async () => {
       const { handler, gitRan } = setup(channel, "MERGING", "merge-a");
-      for (const pin of [null, {}, { operation: "CLEAN", operationId: "x" }, { operation: "MERGING", operationId: "" }]) {
+      for (const pin of [
+        null,
+        {},
+        { operation: "CLEAN", operationId: "x" },
+        { operation: "MERGING", operationId: "" },
+      ]) {
         await expect(handler(null, CWD, pin)).rejects.toThrow(/Invalid repository operation pin/);
       }
       expect(detectRepoOperationStateMock).not.toHaveBeenCalled();

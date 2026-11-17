@@ -460,7 +460,10 @@ describe("git.abortRepositoryOperation", () => {
     // The dialog can't approve without one; if anything ever did, aborting
     // whatever is in progress is the fallback #17559 removed.
     const { run, git } = setupActions();
-    const pending = run("git.abortRepositoryOperation", { worktreeId: WT_ID, operation: "MERGING" });
+    const pending = run("git.abortRepositoryOperation", {
+      worktreeId: WT_ID,
+      operation: "MERGING",
+    });
     await settleConfirm(true);
     await pending;
     expect(git.abortRepositoryOperation).not.toHaveBeenCalled();
@@ -471,7 +474,10 @@ describe("git.abortRepositoryOperation", () => {
     git.abortRepositoryOperation.mockRejectedValue(
       gitError("repo-operation-changed", "The rebase in progress was restarted or replaced")
     );
-    const pending = run("git.abortRepositoryOperation", { worktreeId: WT_ID, operation: "REBASING" });
+    const pending = run("git.abortRepositoryOperation", {
+      worktreeId: WT_ID,
+      operation: "REBASING",
+    });
     await settleConfirm(true, undefined, REBASE_A);
     await expect(pending).rejects.toThrow();
 
