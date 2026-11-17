@@ -46,6 +46,8 @@ type RowFeedback =
   | { kind: "copy-failed" };
 
 const TRANSIENT_FEEDBACK_MS = 4000;
+/** The row states a refused copy itself, so the button stays quiet about it. */
+const reportedByRow = () => undefined;
 
 export type PatchLineKind = "file" | "hunk" | "add" | "del" | "context" | "meta";
 
@@ -419,13 +421,19 @@ function ArtifactItem({
   const [pending, setPending] = useState<"copy" | "save" | null>(null);
 
   // The write goes through `onCopy`, which owns the clipboard call, the
-  // in-progress lock and the error log; a refusal rejects so the button
-  // reports it.
+  // in-progress lock and the error log. The row's feedback is settled here
+  // rather than from the button's callbacks: collapsing the row unmounts the
+  // button, which would drop them while the write is still in flight.
   const writeCopy = useCallback(async () => {
     setPending("copy");
     const success = await onCopy(artifact).finally(() => setPending(null));
-    if (!success) throw new Error("The clipboard rejected the write.");
-  }, [artifact, onCopy]);
+    if (success) {
+      setFeedback(null);
+      return;
+    }
+    setFeedback({ kind: "copy-failed" });
+    throw new Error("The clipboard rejected the write.");
+  }, [artifact, onCopy, setFeedback]);
 
   const handleSave = useCallback(async () => {
     setPending("save");
@@ -536,8 +544,7 @@ function ArtifactItem({
               size="sm"
               text={artifact.content}
               write={writeCopy}
-              onCopied={() => setFeedback(null)}
-              onCopyError={() => setFeedback({ kind: "copy-failed" })}
+              onCopyError={reportedByRow}
               disabled={isProcessing || pending === "save"}
               loading={pending === "copy"}
             />

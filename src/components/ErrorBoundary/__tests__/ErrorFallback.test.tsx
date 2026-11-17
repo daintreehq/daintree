@@ -384,21 +384,24 @@ describe("ErrorFallback description and details", () => {
     }
   });
 
-  it("keeps Copy details at a constant name and width while it confirms", async () => {
-    installClipboardMock();
-    render(<ErrorFallback error={error} resetError={vi.fn()} variant="component" />);
-    const button = screen.getByTestId("error-fallback-copy-details");
-    expect(button.getAttribute("aria-label")).toBe("Copy details");
+  it.each(["component", "section", "fullscreen"] as const)(
+    "keeps Copy details at a constant name and width while it confirms (%s)",
+    async (variant) => {
+      installClipboardMock();
+      render(<ErrorFallback error={error} resetError={vi.fn()} variant={variant} />);
+      const button = screen.getByTestId("error-fallback-copy-details");
+      expect(button.getAttribute("aria-label")).toBe("Copy details");
 
-    fireEvent.click(button);
+      fireEvent.click(button);
 
-    await waitFor(() => expect(button.textContent).toContain("Copied"));
-    expect(button.getAttribute("aria-label")).toBe("Copy details");
-    const sizers = Array.from(button.querySelectorAll("[data-label]")).map((el) =>
-      el.getAttribute("data-label")
-    );
-    expect(sizers).toEqual(expect.arrayContaining(["Copy details", "Copied"]));
-  });
+      await waitFor(() => expect(button.textContent).toContain("Copied"));
+      expect(button.getAttribute("aria-label")).toBe("Copy details");
+      const sizers = Array.from(button.querySelectorAll("[data-label]")).map((el) =>
+        el.getAttribute("data-label")
+      );
+      expect(sizers).toEqual(expect.arrayContaining(["Copy details", "Copied"]));
+    }
+  );
 
   it("says the terminals keep running wherever the copy is not the raw dev message", () => {
     vi.stubEnv("DEV", false);

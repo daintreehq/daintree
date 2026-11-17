@@ -10,6 +10,7 @@ import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenter
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -41,6 +42,8 @@ const getVersionInfoMock = vi.hoisted(() =>
 vi.mock("@/clients/appClient", () => ({
   appClient: { getVersionInfo: getVersionInfoMock },
 }));
+
+const originalAnnounce = useAnnouncerStore.getState().announce;
 
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", async (importOriginal) => {
@@ -820,26 +823,37 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     expect(writeText).toHaveBeenCalledWith("corr-copy-1");
   });
 
-  it("confirms the correlation ID copy with one polite announcement", async () => {
+  it("confirms the correlation ID copy with one announcement and one flash", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    useAnnouncerStore.setState({ polite: null, assertive: null });
+    const announce = vi.fn();
+    useAnnouncerStore.setState({ announce });
+    _resetCopyFlashForTests();
 
     render(
       <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-2" })} />
     );
     await openMenu();
+    expect(getCopyFlash()).toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByText("Copy correlation ID"));
     });
 
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Correlation ID copied");
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Correlation ID copied", "polite");
+    expect(getCopyFlash()).not.toBeNull();
+    useAnnouncerStore.setState({ announce: originalAnnounce });
   });
 
-  it("reports a refused correlation ID copy as an error toast with Retry", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+  it("reports a refused correlation ID copy as an error toast whose Retry copies again", async () => {
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     notifyMock.mockClear();
+    notifyMock.mockReturnValue("toast-1");
+    _resetCopyFlashForTests();
 
     render(
       <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-3" })} />
@@ -849,13 +863,26 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(screen.getByText("Copy correlation ID"));
     });
 
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Couldn't copy correlation ID",
-        action: expect.objectContaining({ label: "Retry" }),
-      })
-    );
+    expect(getCopyFlash()).toBeNull();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const toast = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      action: { label: string; onClick: () => void };
+    };
+    expect(toast).toMatchObject({
+      type: "error",
+      title: "Couldn't copy correlation ID",
+      action: { label: "Retry" },
+    });
+
+    await act(async () => {
+      toast.action.onClick();
+    });
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(writeText).toHaveBeenLastCalledWith("corr-copy-3");
+    expect(getCopyFlash()).not.toBeNull();
+    notifyMock.mockReset();
   });
 
   it("opens the prefilled GitHub URL when Report on GitHub is selected", async () => {
