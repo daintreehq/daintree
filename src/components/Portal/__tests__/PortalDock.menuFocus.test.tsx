@@ -109,6 +109,15 @@ describe("PortalDock — context menu over the native page view", () => {
     });
   });
 
+  it("marks the tab menu's external-browser item with the ExternalLink glyph", () => {
+    renderDock();
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "A" }));
+    const item = screen.getByRole("menuitem", { name: "Open in external browser" });
+    const icon = item.querySelector("svg[data-menu-icon]");
+    expect(icon?.getAttribute("class")).toContain("lucide-external-link");
+    expect(icon?.getAttribute("class")).not.toContain("lucide-globe");
+  });
+
   it("claims an overlay while open so the page view hides instead of covering it", async () => {
     renderDock();
     expect(useUIStore.getState().overlayStack).toEqual([]);

@@ -31,7 +31,7 @@ export function WorkspaceTile({
   if (group.kind !== "project") {
     const Glyph = group.kind === "scratch" ? FileText : CircleHelp;
     return (
-      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-text-secondary")}>
         <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
     );
