@@ -314,6 +314,31 @@ describe("RemoveCloudHostDialog for a provider without deletion, as its machine 
     expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
   });
 
+  it("forgets an unanswered create's host once its provider registers as unable to delete", async () => {
+    const creating = status({
+      createdFor: null,
+      resourceId: null,
+      machine: "not-created",
+      operation: { id: "op", kind: "creating", startedAt: 0, stage: "Asking Acme" },
+    });
+    const view = openWith(creating, null, "the provider");
+    // Opened able to delete: an unanswered create goes the delete way.
+    expect(screen.getByRole("button", { name: "Delete machine" })).toBeTruthy();
+    view.rerender(
+      <RemoveCloudHostDialog
+        hostId="build"
+        name="Login box"
+        status={creating}
+        providerName="Acme"
+        provider={consoleOnly}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+  });
+
   it("still says a kept machine bills when its saved disk has expired", () => {
     openWith(
       status({ createdFor: null, dataExpired: true }),
