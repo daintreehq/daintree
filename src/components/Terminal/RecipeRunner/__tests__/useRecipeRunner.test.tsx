@@ -1931,4 +1931,23 @@ describe("useRecipeRunner — pin and unpin", () => {
       expect(notifyMock).toHaveBeenCalledTimes(1);
     }
   );
+
+  it("offers another Retry when the retried save fails too", async () => {
+    recipes.push(makeRecipe({ id: "r1", name: "Build" }));
+    updateRecipeMock.mockRejectedValue(new Error("disk full"));
+    const { result } = renderRunner();
+
+    act(() => {
+      result.current.handlePin("r1");
+    });
+    await flush();
+    act(() => {
+      notifyMock.mock.calls[0]![0].action?.onClick();
+    });
+    await flush();
+
+    expect(updateRecipeMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(notifyMock.mock.calls[1]![0].action?.label).toBe("Retry");
+  });
 });
