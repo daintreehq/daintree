@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   CLOUD_LIFETIME_CHOICES,
+  type CloudHostCreatedFor,
   type CloudHostCreateRequest,
   type CloudHostError,
   type CloudHostErrorCode,
@@ -12,6 +13,7 @@ import {
 } from "../../../shared/types/cloudHosts.js";
 import {
   cloudConnection,
+  isLocalHostId,
   type HostConnection,
   type HostDescriptor,
   type HostId,
@@ -19,10 +21,11 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
-import type {
-  CloudHostStore,
-  StoredCloudBinding,
-  StoredCloudObservation,
+import {
+  readCreatedFor,
+  type CloudHostStore,
+  type StoredCloudBinding,
+  type StoredCloudObservation,
 } from "./CloudHostStore.js";
 import type { CloudSshFiles, CloudSshRoute } from "./CloudSshFiles.js";
 import { hostKeyFingerprint, formatSshEndpoint } from "./sshEndpoint.js";
@@ -122,6 +125,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 function observationOf(resource: ProviderResource, at: number): StoredCloudObservation {
   return {
     machine: resource.machine,
+    name: resource.name || null,
     rawState: resource.rawState,
     machineType: resource.machineType,
     vcpu: resource.vcpu,
@@ -134,6 +138,14 @@ function observationOf(resource: ProviderResource, at: number): StoredCloudObser
     dataExpired: resource.dataExpired,
     observedAt: at,
   };
+}
+
+/** A mark given by main code, checked as strictly as one read back from disk. */
+function checkedCreatedFor(raw: CloudHostCreatedFor): CloudHostCreatedFor {
+  const local = raw && typeof raw === "object" && isLocalHostId(raw.hostId);
+  const mark = readCreatedFor(local ? { ...raw, hostId: null } : raw);
+  if (!mark) throw invalid("The worktree this machine is for is missing its project or path.");
+  return mark;
 }
 
 function machineOf(binding: StoredCloudBinding): CloudMachineState {
@@ -220,7 +232,9 @@ export class CloudHostLifecycle {
           accountId: binding.accountId,
           accountName: account?.displayName ?? "Disconnected account",
           resourceId: binding.resourceId,
+          machineName: observation?.name ?? binding.creation?.name ?? null,
           ownership: binding.ownership,
+          createdFor: binding.createdFor,
           machine: machineOf(binding),
           rawState: observation?.rawState ?? null,
           machineType,
@@ -293,9 +307,18 @@ export class CloudHostLifecycle {
    * Adds a cloud host and creates its machine. The binding and the create's
    * idempotency key are saved before the request goes out; the host is in the
    * list at once (as "Creating"), and the machine comes up in the background.
+   *
+   * `createdFor` marks the machine as made for a worktree, in that first write
+   * so the mark holds through the create and any restart. It is a parameter of
+   * its own, never read off the request: Settings → Hosts sends the request
+   * over IPC and must never mark a machine.
    */
-  async create(request: CloudHostCreateRequest): Promise<{ hostId: HostId }> {
+  async create(
+    request: CloudHostCreateRequest,
+    createdFor: CloudHostCreatedFor | null = null
+  ): Promise<{ hostId: HostId }> {
     if (!request || typeof request !== "object") throw invalid("Missing machine details.");
+    const mark = createdFor === null ? null : checkedCreatedFor(createdFor);
     const account = this.deps.accounts.requireAccount(request.accountId);
     this.deps.accounts.requireSupported(account.providerId);
     const name = typeof request.name === "string" ? request.name.trim() : "";
@@ -322,6 +345,7 @@ export class CloudHostLifecycle {
       providerId: account.providerId,
       resourceId: null,
       ownership: "created-by-daintree",
+      createdFor: mark,
       creation: {
         operationId: crypto.randomUUID(),
         idempotencyKey: crypto.randomUUID(),
@@ -498,6 +522,7 @@ export class CloudHostLifecycle {
       providerId: account.providerId,
       resourceId: null,
       ownership: "imported",
+      createdFor: null,
       creation: null,
       lifetimeSeconds: null,
       intent: null,

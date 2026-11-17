@@ -3,6 +3,7 @@ import {
   isValidCloudBindingId,
   type CloudAccountValidation,
   type CloudBillingScope,
+  type CloudHostCreatedFor,
   type CloudHostError,
   type CloudProviderId,
 } from "../../../shared/types/cloudHosts.js";
@@ -52,6 +53,8 @@ export interface StoredSshAccess {
 
 export interface StoredCloudObservation {
   machine: string;
+  /** The machine's name in the provider's account. */
+  name: string | null;
   rawState: string;
   machineType: string | null;
   vcpu: number | null;
@@ -73,6 +76,8 @@ export interface StoredCloudBinding {
   providerId: CloudProviderId;
   resourceId: string | null;
   ownership: "created-by-daintree" | "imported";
+  /** The worktree this machine was created for; kept after its create is settled. */
+  createdFor: CloudHostCreatedFor | null;
   creation: StoredCreationIntent | null;
   /** The lifetime a start and every renewal sets, in seconds; null for none. */
   lifetimeSeconds: number | null;
@@ -164,6 +169,7 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
   const stop = value.stop as { status?: unknown; error?: unknown } | null | undefined;
   return {
     machine: value.machine,
+    name: str(value.name),
     rawState: str(value.rawState) ?? "",
     machineType: str(value.machineType),
     vcpu: num(value.vcpu),
@@ -196,6 +202,34 @@ function readCreation(raw: unknown): StoredCreationIntent | null {
   };
 }
 
+function nonEmpty(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** A mark missing any part of the worktree's identity is no mark at all. */
+export function readCreatedFor(raw: unknown): CloudHostCreatedFor | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const projectId = nonEmpty(value.projectId);
+  const worktreeId = nonEmpty(value.worktreeId);
+  const projectName = nonEmpty(value.projectName);
+  const worktreeName = nonEmpty(value.worktreeName);
+  if (!projectId || !worktreeId || !projectName || !worktreeName) return null;
+  let hostId: HostId | null;
+  if (value.hostId === null) hostId = null;
+  else if (typeof value.hostId === "string" && isValidRemoteHostId(value.hostId))
+    hostId = value.hostId;
+  else return null;
+  return {
+    hostId,
+    projectId,
+    worktreeId,
+    projectName,
+    worktreeName,
+    hostName: hostId === null ? null : (nonEmpty(value.hostName) ?? hostId),
+  };
+}
+
 function readError(raw: unknown): CloudHostError | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || typeof value.code !== "string" || typeof value.message !== "string") return null;
@@ -213,13 +247,16 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
   if (!isValidCloudAccountId(value.accountId)) return null;
   const hostId =
     typeof value.hostId === "string" && isValidRemoteHostId(value.hostId) ? value.hostId : null;
+  const ownership = value.ownership === "imported" ? "imported" : "created-by-daintree";
   return {
     id: value.id,
     hostId,
     accountId: value.accountId,
     providerId: value.providerId,
     resourceId: str(value.resourceId),
-    ownership: value.ownership === "imported" ? "imported" : "created-by-daintree",
+    ownership,
+    // An imported machine was never created for anything, whatever a hand edit says.
+    createdFor: ownership === "imported" ? null : readCreatedFor(value.createdFor),
     creation: readCreation(value.creation),
     lifetimeSeconds: value.lifetimeSeconds === null ? null : (num(value.lifetimeSeconds) ?? null),
     intent: value.intent === "run" || value.intent === "stop" ? value.intent : null,

@@ -190,6 +190,28 @@ export type CloudHostErrorCode =
   | "failed";
 
 /**
+ * The worktree a machine was created for, written down with its create so it
+ * holds while the machine is still coming up. `hostId`, `projectId` and
+ * `worktreeId` name the worktree where it lives (a worktree id is its root
+ * path, so only the host makes it unique); the names are labels as they were
+ * then, for display only. Imported machines, and ones created from Settings →
+ * Hosts, never carry one.
+ */
+export interface CloudHostCreatedFor {
+  /** The host the worktree lives on; null for this device. */
+  hostId: HostId | null;
+  /** The project's id on that host, never a Shell's host-scoped key. */
+  projectId: string;
+  /** The worktree's root path on that host. */
+  worktreeId: string;
+  projectName: string;
+  /** Its branch, or its name when it has none. */
+  worktreeName: string;
+  /** The host's name then; null for this device. */
+  hostName: string | null;
+}
+
+/**
  * One cloud host's lifecycle, joined to its Remote Host by `hostId`.
  * Observations, with the time they were made: a stale one says so rather
  * than passing for current.
@@ -201,7 +223,11 @@ export interface CloudHostStatus {
   accountName: string;
   /** Null before the machine exists (a saved draft or a create still under way). */
   resourceId: string | null;
+  /** The machine's name in the provider's account, as last reported or as asked for. */
+  machineName: string | null;
   ownership: "created-by-daintree" | "imported";
+  /** The worktree it was created for; null for every other machine. */
+  createdFor: CloudHostCreatedFor | null;
   machine: CloudMachineState;
   rawState: string | null;
   machineType: string | null;
