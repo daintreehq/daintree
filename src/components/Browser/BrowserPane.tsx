@@ -546,6 +546,7 @@ export function BrowserPane({
     if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
     const url = pendingNavigationRef.current;
     pendingNavigationRef.current = null;
+    lastSetUrlRef.current = url;
     loadWebviewUrl(webviewElement, url);
   }, [isWebviewReady, webviewElement]);
 
@@ -568,12 +569,12 @@ export function BrowserPane({
       );
       setIsLoading(true);
       setLoadError(null);
-      lastSetUrlRef.current = url;
 
       // No <webview> yet (its first page couldn't be forwarded): this URL
       // needs no forward or has one now, so it attaches with it.
       if (hostForwardRef.current !== "ready") {
         pendingNavigationRef.current = null;
+        lastSetUrlRef.current = url;
         setHostForward("ready");
         return;
       }
@@ -583,13 +584,17 @@ export function BrowserPane({
       const webview = webviewRef.current;
       if (webview && isWebviewReadyRef.current) {
         pendingNavigationRef.current = null;
+        lastSetUrlRef.current = url;
         loadWebviewUrl(webview, url);
       } else if (webview) {
+        // Loaded once the guest is ready. Until then its own first page still
+        // commits, and must read as the page it was given, not a new one.
         pendingNavigationRef.current = url;
       } else {
         // The next guest attaches at the page the history now holds; loading
         // it again once ready would be a second full load.
         pendingNavigationRef.current = null;
+        lastSetUrlRef.current = url;
       }
     },
     [setHostForward]
@@ -855,9 +860,14 @@ export function BrowserPane({
 
   const stoppedLoadFocus = useStoppedLoadFocus();
   const handleCancelLoad = useCallback(() => {
-    // A page still waiting on its host forward is cancelled with the load. The
-    // panel's first page isn't: nothing would ever attach without it.
-    if (hostForwardRef.current === "ready") ++navigationGenRef.current;
+    // A page still waiting on its host forward is cancelled with the load.
+    ++navigationGenRef.current;
+    if (hostForwardRef.current !== "ready") {
+      // Nothing is attached yet: Reload forwards the panel's page again, as
+      // Retry does after a failed forward.
+      failedNavigationRef.current = { url: history.present };
+      setHostForward("failed");
+    }
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -872,7 +882,7 @@ export function BrowserPane({
       }
     }
     setLoadError({ kind: "cancelled", message: STOPPED_LOAD_MESSAGE });
-  }, []);
+  }, [history.present, setHostForward]);
 
   const handleRetryFromError = useCallback(() => {
     // A host page whose forward failed is forwarded again, not reloaded.

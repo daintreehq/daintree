@@ -511,6 +511,52 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(webview.loadURL).not.toHaveBeenCalled();
     });
 
+    it("drops a page still being forwarded when stopped before anything attached, and Reload forwards the panel's page", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      let release4000!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release4000 = resolve;
+      });
+      const forward = vi.fn(
+        async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => {
+          if (remotePort === 4000) await gate;
+          return {
+            forwardId: `f${remotePort}`,
+            hostId,
+            remotePort,
+            localPort: remotePort,
+            origin: "browser-panel",
+            label: null,
+            createdAt: 1,
+          };
+        }
+      );
+      forward.mockRejectedValueOnce(new Error("host gone"));
+      Reflect.set(window.electron, "portForwards", { forward });
+      const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url: "http://localhost:4000/" },
+          })
+        );
+      });
+      expect(forward).toHaveBeenLastCalledWith(expect.objectContaining({ remotePort: 4000 }));
+
+      const toolbar: { onStop: () => void } = browserToolbarPropsSpy.mock.calls.at(-1)![0];
+      act(() => toolbar.onStop());
+      await act(async () => release4000());
+      expect(container.querySelector("webview")).toBeNull();
+
+      await act(async () => {
+        getByRole("button", { name: /reload/i }).click();
+      });
+      await act(async () => {});
+      expect(forward).toHaveBeenLastCalledWith(expect.objectContaining({ remotePort: 5173 }));
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
     it("says the port is taken here instead of showing the page at another address", async () => {
       window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -871,9 +917,21 @@ describe("BrowserPane webview lifecycle regression", () => {
         await act(async () => gate.resolve());
         // Not yet attached: a loadURL now would throw.
         expect(replacement.loadURL).not.toHaveBeenCalled();
-        act(() => emitWebviewEvent(replacement, "dom-ready"));
+        // Its own first page still commits first, and is the page it was given.
+        act(() => {
+          emitWebviewEvent(replacement, "did-navigate", { url: "http://localhost:5173/" });
+          emitWebviewEvent(replacement, "dom-ready");
+        });
         expect(replacement.loadURL).toHaveBeenCalledTimes(1);
         expect(replacement.loadURL).toHaveBeenCalledWith("http://localhost:4000/");
+        act(() => {
+          emitWebviewEvent(replacement, "did-navigate", { url: "http://localhost:4000/" });
+        });
+        expect(terminalStoreState.setBrowserHistory.mock.calls.at(-1)![1]).toEqual({
+          past: [],
+          present: "http://localhost:4000/",
+          future: ["http://localhost:5173/"],
+        });
       });
     });
   });
