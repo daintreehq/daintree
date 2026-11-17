@@ -1393,7 +1393,6 @@ export function ReviewHubContent({
   const handleContinueOperation = useCallback(
     (chosen: RepoOperationPin): Promise<void> => {
       const continueOperation = async (): Promise<void> => {
-        if (!isOpenPath(worktreePath)) return;
         setActionError(null);
         debouncedBgRefreshRef.current?.cancel();
         try {
