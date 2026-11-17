@@ -369,11 +369,17 @@ describe("DecisionQuestionDialog", () => {
 
   describe("one read at a time (#17564)", () => {
     let pending: Array<(result: DecisionQuestionContentResult) => void>;
+    let failing: Array<(error: Error) => void>;
 
     function holdReads() {
       pending = [];
+      failing = [];
       getQuestionContent.mockImplementation(
-        () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
+        () =>
+          new Promise<DecisionQuestionContentResult>((resolve, reject) => {
+            pending.push(resolve);
+            failing.push(reject);
+          })
       );
     }
 
@@ -398,6 +404,8 @@ describe("DecisionQuestionDialog", () => {
         vi.useFakeTimers();
       });
       afterEach(() => {
+        // Unmount on the clock that armed the timers.
+        cleanup();
         vi.useRealTimers();
       });
 
@@ -432,7 +440,10 @@ describe("DecisionQuestionDialog", () => {
         await advance(2_000);
         await land(1, "Follow-up notes");
         expect(pending).toHaveLength(2);
-        await advance(15_000);
+        // One poll, measured from the follow-up's landing.
+        await advance(14_000);
+        expect(pending).toHaveLength(2);
+        await advance(1_000);
         expect(pending).toHaveLength(3);
       });
 
@@ -482,10 +493,64 @@ describe("DecisionQuestionDialog", () => {
         expect(pending).toHaveLength(3);
       });
 
+      it("keeps the newer read's deadline when a stalled read lands first", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        await advance(61_000);
+        await land(0, "Stalled notes");
+        expect(pending).toHaveLength(2);
+        // The newer read started at 60s, so its own deadline is at 120s.
+        await advance(58_000);
+        expect(pending).toHaveLength(2);
+        await advance(2_000);
+        expect(pending).toHaveLength(3);
+      });
+
+      it("starts nothing when a stalled read lands after the newer one failed, and polls on from there", async () => {
+        holdReads();
+        openView(["qa"], "qa");
+        await advance(181_000);
+        expect(pending).toHaveLength(2);
+
+        await act(async () => failing[1]!(new Error("unreachable")));
+        expect(screen.getByTestId("decision-question-unavailable")).toBeTruthy();
+        await land(0, "Stalled notes");
+        // Older than the failure on screen, and the newer read already armed the poll.
+        expect(screen.queryByTestId("decision-question-content")).toBeNull();
+        expect(pending).toHaveLength(2);
+        await advance(15_000);
+        expect(pending).toHaveLength(3);
+        // Both earlier reads have landed, so a stall of this one has room beside it.
+        await advance(61_000);
+        expect(pending).toHaveLength(4);
+      });
+
       it("starts nothing more for a read still out when it closed", async () => {
         holdReads();
         openView(["qa"], "qa");
         act(() => useDecisionsQuestionViewStore.getState().close());
+        await advance(180_000);
+        expect(getQuestionContent).toHaveBeenCalledTimes(1);
+      });
+
+      it("starts nothing for a move delivered to a listener already removed", async () => {
+        openView(["qa"], "qa");
+        await act(async () => {});
+        // The event bus calls the listeners it snapshotted, even one removed mid-dispatch.
+        const removed = [...paneListeners];
+        act(() => useDecisionsQuestionViewStore.getState().close());
+        expect(paneListeners).toHaveLength(0);
+        act(() => {
+          for (const listener of removed) {
+            listener({
+              terminalId: "t1",
+              openQuestions: [],
+              waitingAnswers: [],
+              needsAttention: [],
+              revision: 3,
+            });
+          }
+        });
         await advance(180_000);
         expect(getQuestionContent).toHaveBeenCalledTimes(1);
       });
