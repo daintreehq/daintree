@@ -312,7 +312,7 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
   // One agent on another host is still a fleet worth messaging: this field is
   // the only way to reach it from here. A pane here has its own composer.
   const minimum = targets.every(isHostQualifiedTargetId) ? 1 : 2;
-  if (text.length === 0 || targets.length < minimum) return false;
+  if (text.trim().length === 0 || targets.length < minimum) return false;
   const result = await runManagedFleetBroadcast(text, targets);
   applyFleetBroadcastOutcome(text, result);
   return result.successCount > 0;

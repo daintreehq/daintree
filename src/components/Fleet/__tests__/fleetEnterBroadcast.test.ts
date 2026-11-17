@@ -551,6 +551,20 @@ describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
     expect(submitMock).not.toHaveBeenCalled();
   });
 
+  it("sends the ribbon's text untouched and refuses whitespace-only input", async () => {
+    arm(["a", "b"]);
+
+    expect(await sendDraftToFleet("    indented()\n")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[1])).toEqual([
+      "    indented()\n",
+      "    indented()\n",
+    ]);
+
+    submitMock.mockClear();
+    expect(await sendDraftToFleet(" \n\t ")).toBe(false);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the failure dot of a pane locked while a large broadcast runs", async () => {
     const ids = Array.from({ length: 7 }, (_, i) => `p${i}`);
     arm(ids);
