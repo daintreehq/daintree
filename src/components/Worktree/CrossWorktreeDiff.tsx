@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 import {
   GitCompare,
   ChevronLeft,
@@ -25,6 +26,7 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -142,9 +144,17 @@ interface CrossWorktreeFileRowProps {
   roving: RowRoving;
 }
 
-type RowRoving = Pick<UseRovingRowsResult, "tabStopKey" | "onRowFocus" | "rowRef">;
+type RowRoving = Pick<
+  UseRovingRowsResult,
+  "tabStopKey" | "onRowFocus" | "rowRef" | "reportTabStopMounted"
+>;
 
 const fileKey = (file: CrossWorktreeFile) => `${file.status}:${file.path}`;
+
+/** The band names fewer segments than the directory has. */
+function isDirectoryShortened(dir: string): boolean {
+  return dir !== "" && formatDiffDir(dir) !== dir;
+}
 
 function CrossWorktreeFileRow({
   file,
@@ -158,6 +168,15 @@ function CrossWorktreeFileRow({
   const status = statusDisplay(file.status);
   const insertions = file.insertions ?? 0;
   const deletions = file.deletions ?? 0;
+  const isTabStop = roving.tabStopKey === key;
+  const { reportTabStopMounted } = roving;
+  // A windowed shelf has to know when the one row holding the tab stop has
+  // scrolled out of the DOM, so the list itself can stand in for it.
+  useEffect(() => {
+    if (!isTabStop) return;
+    reportTabStopMounted(true);
+    return () => reportTabStopMounted(false);
+  }, [isTabStop, reportTabStopMounted]);
 
   return (
     <TruncatedTooltip content={file.path} isTruncated={isTruncated || directoryHidden}>
@@ -167,7 +186,7 @@ function CrossWorktreeFileRow({
         ref={roving.rowRef(key)}
         data-roving-row=""
         // One tab stop for the shelf; the arrow keys move it.
-        tabIndex={roving.tabStopKey === key ? 0 : -1}
+        tabIndex={isTabStop ? 0 : -1}
         onFocus={() => roving.onRowFocus(key)}
         aria-current={isSelected || undefined}
         // A list-detail row, not a listbox option: `aria-current` for AT and
@@ -198,51 +217,68 @@ function CrossWorktreeFileRow({
   );
 }
 
-function FileGroupSection({
-  group,
-  selectedFile,
-  onOpen,
-  roving,
-}: {
-  group: FileGroup;
-  selectedFile: CrossWorktreeFile | null;
-  onOpen: (file: CrossWorktreeFile) => void;
-  roving: RowRoving;
-}) {
+/**
+ * The directory band above each run of files. Sticky on the windowed path, so
+ * it carries the shelf's own fill over the rows scrolling under it.
+ *
+ * Whether the band is clipped is measured here but read by every row under it,
+ * and on the windowed path the band and its rows are separate items, so the
+ * measurement goes up to the shelf through `onClipped`.
+ */
+function FileGroupHeader({ dir, onClipped }: { dir: string; onClipped: (dir: string) => void }) {
   const { ref, isTruncated } = useTruncationDetection();
-  const label = formatDiffDir(group.dir);
-  const directoryHidden = isTruncated || (group.dir !== "" && label !== group.dir);
+  const label = formatDiffDir(dir);
+  useEffect(() => {
+    if (isTruncated) onClipped(dir);
+  }, [isTruncated, dir, onClipped]);
   return (
-    <div className="mb-1.5">
-      <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
-        <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
-        {/* Cut from its start like the file paths, so the folder the files sit
-            in survives; the whole path is disclosed whenever any of it is hidden. */}
-        <TruncatedTooltip
-          content={group.dir}
-          contentClassName="font-mono [overflow-wrap:anywhere]"
-          isTruncated={directoryHidden}
-          focusable={false}
-        >
-          <PathTail ref={ref} className="min-w-0 font-mono">
-            {label}
-          </PathTail>
-        </TruncatedTooltip>
-      </div>
-      <div className="flex flex-col gap-px">
-        {group.files.map((file) => (
-          <CrossWorktreeFileRow
-            key={fileKey(file)}
-            roving={roving}
-            file={file}
-            isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
-            directoryHidden={directoryHidden}
-            onClick={() => onOpen(file)}
-          />
-        ))}
-      </div>
+    <div className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary">
+      <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
+      {/* Cut from its start like the file paths, so the folder the files sit
+          in survives; the whole path is disclosed whenever any of it is hidden. */}
+      <TruncatedTooltip
+        content={dir}
+        contentClassName="font-mono [overflow-wrap:anywhere]"
+        isTruncated={isTruncated || isDirectoryShortened(dir)}
+        focusable={false}
+      >
+        <PathTail ref={ref} className="min-w-0 font-mono">
+          {label}
+        </PathTail>
+      </TruncatedTooltip>
     </div>
   );
+}
+
+/**
+ * How the windowed shelf lays the groups out for the virtualizer. Its handle
+ * and item keys speak SLOT indices, which count a header ahead of every
+ * directory's files, so the nth drawn file is not slot n: `slotByPosition`
+ * is the bridge from the order the stepper and the roving keys use.
+ */
+interface ShelfLayout {
+  counts: number[];
+  /** Position of each group's first file in the drawn order. */
+  starts: number[];
+  keysBySlot: string[];
+  slotByPosition: number[];
+}
+
+function layoutShelf(groups: FileGroup[]): ShelfLayout {
+  const counts: number[] = [];
+  const starts: number[] = [];
+  const keysBySlot: string[] = [];
+  const slotByPosition: number[] = [];
+  for (const group of groups) {
+    counts.push(group.files.length);
+    starts.push(slotByPosition.length);
+    keysBySlot.push(`group:${group.dir || "(root)"}`);
+    for (const file of group.files) {
+      slotByPosition.push(keysBySlot.length);
+      keysBySlot.push(`file:${fileKey(file)}`);
+    }
+  }
+  return { counts, starts, keysBySlot, slotByPosition };
 }
 
 function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
@@ -643,16 +679,40 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
   const groups = useMemo(() => (result ? groupComparisonFiles(result.files) : null), [result]);
-  const rovingKeys = useMemo(
-    () => groups?.flatMap((group) => group.files.map(fileKey)) ?? [],
-    [groups]
+  // Stepping walks the list in the order it is drawn, not git's output order.
+  const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
+  const rovingKeys = useMemo(() => files?.map(fileKey) ?? [], [files]);
+  const shelfLayout = useMemo(() => (groups ? layoutShelf(groups) : null), [groups]);
+  // A branch-wide move can change thousands of files; past the threshold the
+  // shelf mounts only the rows near its viewport. Totals, stepping and the
+  // roving keys all read `files`, never the DOM, so they still see every file.
+  const windowed = files !== null && shouldVirtualizeFileList(files.length);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
+  const revealRovingRow = useCallback(
+    (position: number) => {
+      const slot = shelfLayout?.slotByPosition[position];
+      if (slot === undefined) return;
+      virtuosoRef.current?.scrollIntoView({ index: slot, behavior: "auto" });
+    },
+    [shelfLayout]
   );
   const roving = useRovingRows({
     keys: rovingKeys,
     preferredKey: selectedFile ? fileKey(selectedFile) : null,
+    reveal: revealRovingRow,
+    windowed,
+    containerRef: listRef,
   });
-  // Stepping walks the list in the order it is drawn, not git's output order.
-  const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
+
+  // Measured once per band and kept: the shelf's width is fixed, so a band
+  // that was clipped stays clipped when it scrolls out of the window and back.
+  const [clippedDirs, setClippedDirs] = useState<ReadonlySet<string>>(() => new Set());
+  const markDirClipped = useCallback((dir: string) => {
+    setClippedDirs((current) => (current.has(dir) ? current : new Set(current).add(dir)));
+  }, []);
+  const directoryHidden = (dir: string) => isDirectoryShortened(dir) || clippedDirs.has(dir);
   // `null` means auto — prose wraps, code doesn't. Derived from the file on
   // screen during render so the diff is already wrapped on first paint (#12170).
   const effectiveWrapLines =
@@ -709,17 +769,42 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     };
   }, [isOpen, files, navigateFile]);
 
+  // Bumped the first time each mounted virtualizer reports a rendered range,
+  // the first moment it has measured anything: until then its scroll is a
+  // no-op, and measurement alone re-runs no effect. Without it a shelf put
+  // away and brought back mid-list would come up at the top.
+  const [measuredGeneration, setMeasuredGeneration] = useState(0);
+  const awaitingMeasureRef = useRef(true);
+  const setVirtuoso = useCallback((handle: GroupedVirtuosoHandle | null) => {
+    virtuosoRef.current = handle;
+    if (!handle) awaitingMeasureRef.current = true;
+  }, []);
+  const handleRangeChanged = useCallback(() => {
+    if (!awaitingMeasureRef.current) return;
+    awaitingMeasureRef.current = false;
+    setMeasuredGeneration((current) => current + 1);
+  }, []);
+
   // Keep the open file's row in view while stepping with the keyboard.
-  const listRef = useRef<HTMLDivElement | null>(null);
+  // Windowed, the row may not exist to be queried, so the virtualizer is asked
+  // for its slot instead; either way a row already in view is left alone.
+  const selectedSlot =
+    windowed && selectedFileIndex >= 0 ? shelfLayout?.slotByPosition[selectedFileIndex] : undefined;
   useEffect(() => {
-    if (!selectedFile || !listRef.current) return;
+    if (!selectedFile) return;
+    if (windowed) {
+      if (selectedSlot === undefined) return;
+      virtuosoRef.current?.scrollIntoView({ index: selectedSlot, behavior: "auto" });
+      return;
+    }
+    if (!listRef.current) return;
     const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-file-path]")).find(
       (el) => el.dataset.filePath === selectedFile.path
     );
     if (typeof row?.scrollIntoView === "function") {
       row.scrollIntoView({ behavior: "instant", block: "nearest" });
     }
-  }, [selectedFile]);
+  }, [selectedFile, windowed, selectedSlot, measuredGeneration]);
 
   // Gated and floored: a fast comparison shows nothing, a slow one shows a
   // skeleton that stays long enough to read as one.
@@ -886,6 +971,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     if (diffHeaderShown) refocusLabelRef.current = null;
   }, [canvasElement, diffHeaderShown, selectedFile, fileDiff]);
 
+  // One row for both shelf paths, so the windowed one cannot drift.
+  const renderFileRow = (file: CrossWorktreeFile, dir: string) => (
+    <CrossWorktreeFileRow
+      key={fileKey(file)}
+      roving={roving}
+      file={file}
+      isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
+      directoryHidden={directoryHidden(dir)}
+      onClick={() => void fetchFileDiff(file)}
+    />
+  );
+
   let canvas: ReactNode = null;
   if (blocker) {
     const copy = blockedCopy(
@@ -1013,9 +1110,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             <div
-              ref={listRef}
               onKeyDown={roving.onKeyDown}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
+              {...roving.containerProps}
+              ref={listRef}
+              className={cn(
+                "min-h-0 flex-1 overscroll-contain px-2 py-1.5",
+                // The virtualizer brings its own scroller; two nested ones
+                // would give the shelf two scrollbars.
+                windowed ? "overflow-hidden" : "overflow-y-auto"
+              )}
             >
               {showListSkeleton && (
                 <Skeleton label="Comparing files" className="flex flex-col gap-1 py-1">
@@ -1028,14 +1131,50 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 </Skeleton>
               )}
               {listReady &&
-                groups?.map((group) => (
-                  <FileGroupSection
-                    key={group.dir || "(root)"}
-                    group={group}
-                    selectedFile={selectedFile}
-                    onOpen={(file) => void fetchFileDiff(file)}
-                    roving={roving}
+                groups &&
+                files &&
+                shelfLayout &&
+                (windowed ? (
+                  <GroupedVirtuoso
+                    ref={setVirtuoso}
+                    groupCounts={shelfLayout.counts}
+                    style={{ height: "100%" }}
+                    rangeChanged={handleRangeChanged}
+                    groupContent={(groupIndex) => (
+                      <FileGroupHeader
+                        dir={groups[groupIndex]?.dir ?? ""}
+                        onClipped={markDirClipped}
+                      />
+                    )}
+                    itemContent={(position, groupIndex) => {
+                      const file = files[position];
+                      const group = groups[groupIndex];
+                      if (!file || !group) return null;
+                      const lastInGroup =
+                        position ===
+                        (shelfLayout.starts[groupIndex] ?? 0) + group.files.length - 1;
+                      // The static path spaces rows with `gap-px` and groups
+                      // with `mb-1.5`; the virtualizer places items itself and
+                      // never sees either, so the space rides inside the item.
+                      return (
+                        <div className={lastInGroup ? "pb-1.5" : "pb-px"}>
+                          {renderFileRow(file, group.dir)}
+                        </div>
+                      );
+                    }}
+                    computeItemKey={(slot) => shelfLayout.keysBySlot[slot] ?? slot}
+                    increaseViewportBy={200}
+                    skipAnimationFrameInResizeObserver
                   />
+                ) : (
+                  groups.map((group) => (
+                    <div key={group.dir || "(root)"} className="mb-1.5">
+                      <FileGroupHeader dir={group.dir} onClipped={markDirClipped} />
+                      <div className="flex flex-col gap-px">
+                        {group.files.map((file) => renderFileRow(file, group.dir))}
+                      </div>
+                    </div>
+                  ))
                 ))}
             </div>
           </div>
