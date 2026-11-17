@@ -71,7 +71,6 @@ function originOf(url: string | null | undefined): string | null {
  * rows hydrate. A failed ask falls back to a browser pane.
  */
 async function findServingDevPreview(
-  panelsById: Readonly<Record<string, PanelInstance>>,
   worktreeId: string | null,
   origin: string
 ): Promise<PanelInstance | undefined> {
@@ -82,6 +81,8 @@ async function findServingDevPreview(
     logError(`${LOG_PREFIX} Failed to read the dev servers`, error);
     return undefined;
   }
+  // Read after the ask: a preview closed while it was out is in the trash now.
+  const { panelsById } = usePanelStore.getState();
   let best: PanelInstance | undefined;
   let bestUsedAt = -1;
   for (const session of sessions) {
@@ -130,11 +131,25 @@ export function openUrlExternally(url: string, logPrefix: string): void {
 }
 
 /**
+ * `url` parsed as an absolute http(s) URL, in canonical form: a saved
+ * `http:localhost:5173` (which URL parsing accepts) reads as the address it
+ * names. Undefined for anything else, a bare host included.
+ */
+function absoluteWebUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The address `url` opens at in a panel: a loopback http(s) address, which the
  * strict browser rule accepts and nothing else does. Undefined for the rest.
  */
 function panelAddress(url: string): string | undefined {
-  const local = normalizeBrowserUrl(url);
+  const local = normalizeBrowserUrl(absoluteWebUrl(url) ?? url);
   return local.url !== undefined && isLocalhostUrl(local.url) ? local.url : undefined;
 }
 
@@ -146,23 +161,15 @@ function panelAddress(url: string): string | undefined {
  */
 function externalAddress(url: string): string | undefined {
   const trimmed = url.trim();
-  const isWeb = (candidate: string) => {
-    const { protocol } = new URL(candidate);
-    return protocol === "http:" || protocol === "https:";
-  };
+  if (absoluteWebUrl(trimmed) !== undefined) return trimmed;
   try {
-    const { protocol } = new URL(trimmed);
-    if (protocol === "http:" || protocol === "https:") return trimmed;
-    if (!protocol.includes(".")) return undefined;
+    // Any other parsed scheme is refused, unless it is a bare host's name.
+    if (!new URL(trimmed).protocol.includes(".")) return undefined;
   } catch {
     // Not absolute: a bare host, tried below.
   }
   const withScheme = `https://${trimmed}`;
-  try {
-    return isWeb(withScheme) ? withScheme : undefined;
-  } catch {
-    return undefined;
-  }
+  return absoluteWebUrl(withScheme) !== undefined ? withScheme : undefined;
 }
 
 function linkRefused(message: string): void {
@@ -208,21 +215,16 @@ export async function openLinkUrl(url: string): Promise<void> {
   }
 
   const worktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
-  const store = usePanelStore.getState();
   const origin = originOf(target);
-  const preview =
-    origin === null ? undefined : await findServingDevPreview(store.panelsById, worktreeId, origin);
-  // Re-read after the ask: the panels may have moved on while it was out.
-  const current = usePanelStore.getState();
-  const existing =
-    (preview && current.panelsById[preview.id] ? preview : undefined) ??
-    pickReusableBrowser(current.panelIds, current.panelsById, worktreeId);
+  const preview = origin === null ? undefined : await findServingDevPreview(worktreeId, origin);
+  const store = usePanelStore.getState();
+  const existing = preview ?? pickReusableBrowser(store.panelIds, store.panelsById, worktreeId);
   if (existing) {
     showPanelAt(existing.id, target, LOG_PREFIX);
     return;
   }
   // The store raises its own notice when the panel limit refuses the pane.
-  await current.addPanel({
+  await store.addPanel({
     kind: "browser",
     browserUrl: target,
     worktreeId: worktreeId ?? undefined,

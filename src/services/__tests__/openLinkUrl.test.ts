@@ -277,6 +277,35 @@ describe("openLinkUrl for a loopback address", () => {
     expect(activateTerminal).toHaveBeenCalledWith("b1");
   });
 
+  it("passes over a preview closed while main was answering", async () => {
+    withPanels(preview("p1"), browser("b1"));
+    serving("p1");
+    let answer: (sessions: unknown[]) => void = () => {};
+    devServers.getAllSessions.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    const opening = openLinkUrl("http://localhost:5173/");
+    // Closing a pane trashes it; its record stays.
+    withPanels(preview("p1", { location: "trash" }), browser("b1"));
+    answer(devServers.sessions);
+    await opening;
+    expect(activateTerminal).toHaveBeenCalledWith("b1");
+    expect(activateTerminal).not.toHaveBeenCalledWith("p1");
+  });
+
+  it("reads a loopback address saved without slashes as the address it names", async () => {
+    withPanels(browser("b1"));
+    await openLinkUrl("http:localhost:5173/settings");
+    expect(setBrowserUrl).toHaveBeenCalledWith("b1", "http://localhost:5173/settings");
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("falls back to a browser pane when main can't list the dev servers", async () => {
     withPanels(preview("p1"), browser("b1"));
     devServers.getAllSessions.mockRejectedValue(new Error("host gone"));
