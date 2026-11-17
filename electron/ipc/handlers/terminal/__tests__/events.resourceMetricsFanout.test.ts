@@ -217,18 +217,27 @@ describe("terminal resource-metrics fan-out", () => {
     for (const k of keys.slice(1)) expect(k).toEqual(["gone-t0"]);
   });
 
-  it("still sends an empty slice to views with no sampled terminals", () => {
-    // Each batch is one tick of the renderer's leak detector, which also
-    // re-evaluates entries a batch omits.
+  it("sends nothing to views with no sampled terminals (#17194)", () => {
+    // Each pty-host shard reports its own terminals on its own tick; a view
+    // none of them belong to has nothing to evaluate.
     ptyClient.emit("resource-metrics", { "p2-t0": { cpuPercent: 1 } }, 1);
 
-    const sizes = registry.views.map(
-      (v) => Object.keys((v.sends[0]?.args[0] as { metrics: object }).metrics).length
-    );
-    expect(sizes).toEqual([0, 0, 1, 0, 0, 0]);
+    expect(registry.views.map((v) => v.sends.length)).toEqual([0, 0, 1, 0, 0, 0]);
+    expect(registry.views[2]!.sends[0]!.args[0]).toEqual({
+      metrics: { "p2-t0": { cpuPercent: 1 } },
+      timestamp: 1,
+    });
   });
 
-  it("sends a frozen cached view nothing, empty slice or not, until it thaws (#17038)", () => {
+  it("sends an empty batch to nobody, with or without project views", () => {
+    ptyClient.emit("resource-metrics", {}, 1);
+    registry.projectViewsRegistered = false;
+    ptyClient.emit("resource-metrics", {}, 2);
+
+    expect(registry.views.every((v) => v.sends.length === 0)).toBe(true);
+  });
+
+  it("sends a frozen cached view nothing until it thaws (#17038)", () => {
     // p0's view is active, so a freeze it may still be leaving never holds it.
     for (const view of registry.views) frozenIds.add(view.id);
     const batch = { "p0-t0": { cpuPercent: 1 }, "p1-t0": { cpuPercent: 2 } };
@@ -239,7 +248,7 @@ describe("terminal resource-metrics fan-out", () => {
 
     frozenIds.clear();
     ptyClient.emit("resource-metrics", batch, 9);
-    expect(registry.views.map((v) => v.sends.length)).toEqual([6, 1, 1, 1, 1, 1]);
+    expect(registry.views.map((v) => v.sends.length)).toEqual([6, 1, 0, 0, 0, 0]);
     expect(registry.views[1]!.sends[0]!.args[0]).toEqual({
       metrics: { "p1-t0": { cpuPercent: 2 } },
       timestamp: 9,

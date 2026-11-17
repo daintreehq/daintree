@@ -553,6 +553,39 @@ describe("broadcastSlicedToProjectRenderers with remote endpoints", () => {
     });
   });
 
+  it("sends nothing to a view or remote whose project has no entries (#17194)", () => {
+    const sampled = localView(1);
+    const idle = localView(2);
+    hasProjectViewsMock.mockReturnValue(true);
+    registeredViewsMock.mockReturnValue([
+      { webContents: sampled, projectId: "proj-1" },
+      { webContents: idle, projectId: "proj-2" },
+    ]);
+    const idleRemote = endpoint(-1, "proj-2");
+    const sampledRemote = endpoint(-2, "proj-1");
+    getEndpointRegistry().add(idleRemote);
+    getEndpointRegistry().add(sampledRemote);
+
+    broadcastSlicedToProjectRenderers("terminal:resource-metrics", { a: 1 }, () => "proj-1", wrap);
+
+    expect(sampled.send).toHaveBeenCalledWith("terminal:resource-metrics", { slice: { a: 1 } });
+    expect(idle.send).not.toHaveBeenCalled();
+    expect(sampledRemote.send).toHaveBeenCalledTimes(1);
+    expect(idleRemote.send).not.toHaveBeenCalled();
+  });
+
+  it("sends an empty batch to nobody", () => {
+    const view = localView(1);
+    localViews.push(view);
+    const unbound = endpoint(-1, null);
+    getEndpointRegistry().add(unbound);
+
+    broadcastSlicedToProjectRenderers("terminal:resource-metrics", {}, () => null, wrap);
+
+    expect(view.send).not.toHaveBeenCalled();
+    expect(unbound.send).not.toHaveBeenCalled();
+  });
+
   it("withholds the batch from a local view bound to a remote host", () => {
     const shown = localView(1);
     const bound = localView(2);

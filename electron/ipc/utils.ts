@@ -691,9 +691,10 @@ function deliverToLocalProjectViews(
  * per-terminal resource samples). Each project view — cached ones included, as
  * in {@link broadcastToProjectRenderers} — gets `wrap()` of its own project's
  * entries plus every entry whose project is unknown or has no resident view,
- * since those used to reach every renderer and still must reach some. Every
- * view gets a payload each call, even an empty one, so per-batch consumers keep
- * their cadence. With no live project views, every renderer gets the whole batch.
+ * since those used to reach every renderer and still must reach some. A view
+ * whose slice is empty gets nothing: each PTY host shard reports on its own, so
+ * most batches touch few projects. With no live project views, every renderer
+ * gets the whole batch.
  *
  * A frozen cached view gets nothing: it can't run a per-batch consumer, and
  * every sample queued for it would run at once on thaw, inside the warm paint
@@ -705,6 +706,7 @@ export function broadcastSlicedToProjectRenderers<T>(
   ownerOf: (key: string) => string | null,
   wrap: (slice: Record<string, T>) => unknown
 ): void {
+  if (Object.keys(entries).length === 0) return;
   const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
   const registry = getEndpointRegistry();
   // Remote views are always bound to one project (or none), so they get their
@@ -723,12 +725,14 @@ export function broadcastSlicedToProjectRenderers<T>(
     const slice = owner === null ? undefined : byProject.get(owner);
     (slice ?? shared)[key] = value;
   }
-  const payloads = new Map<string | null, unknown>();
-  const payloadFor = (projectId: string | null): unknown => {
+  // `null` marks a project whose slice is empty, so it is sent nothing.
+  const payloads = new Map<string | null, { value: unknown } | null>();
+  const payloadFor = (projectId: string | null): { value: unknown } | null => {
     let payload = payloads.get(projectId);
     if (payload === undefined) {
       const own = projectId === null ? undefined : byProject.get(projectId);
-      payload = wrap({ ...own, ...shared });
+      const slice = { ...own, ...shared };
+      payload = Object.keys(slice).length === 0 ? null : { value: wrap(slice) };
       payloads.set(projectId, payload);
     }
     return payload;
@@ -750,17 +754,20 @@ export function broadcastSlicedToProjectRenderers<T>(
     for (const { webContents, projectId } of views) {
       if (isFrozenCachedView(webContents)) continue;
       const payload = payloadFor(projectId);
-      if (isWithheldFromView(webContents.id, channel, [payload])) continue;
+      if (payload === null) continue;
+      if (isWithheldFromView(webContents.id, channel, [payload.value])) continue;
       try {
-        webContents.send(channel, payload);
+        webContents.send(channel, payload.value);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
       }
     }
   }
   for (const endpoint of remotes) {
+    const payload = payloadFor(endpoint.projectId);
+    if (payload === null) continue;
     try {
-      endpoint.send({ type: "event", channel, args: [payloadFor(endpoint.projectId)] });
+      endpoint.send({ type: "event", channel, args: [payload.value] });
     } catch {
       // A closing link must not break delivery to the remaining endpoints.
     }
