@@ -25,6 +25,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { cleanupProjectSettingsStore, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { invalidateProjectSettingsCache, projectClient } from "@/clients/projectClient";
 import type { Project, ProjectSettings } from "@shared/types/project";
+import type { SystemOpenInEditorFallback } from "@shared/types/ipc/system";
 
 const {
   getConfigMock,
@@ -275,16 +276,17 @@ describe("EditorIntegrationTab", () => {
       expect(screen.queryByTestId("editor-terminal-only-note")).toBeNull();
     });
 
-    it("reports a saved Neovim's test as a failure, leaving the explanation to the note", async () => {
+    it("reports a saved Neovim's test as a failure and announces why", async () => {
       getConfigMock.mockResolvedValue({
         preferredEditor: { id: "neovim" },
         discoveredEditors: [{ id: "neovim", available: true, executablePath: "/usr/bin/nvim" }],
       });
-      openInEditorMock.mockResolvedValue({
+      const fallback = {
         outcome: "needs-terminal",
         editorName: "Neovim",
         command: "nvim",
-      });
+      } satisfies SystemOpenInEditorFallback;
+      openInEditorMock.mockResolvedValue(fallback);
       const testButton = await renderTabForTestButton();
       expect(screen.getByTestId("editor-terminal-only-note")).toBeTruthy();
 
@@ -292,17 +294,6 @@ describe("EditorIntegrationTab", () => {
 
       await waitFor(() => expect(screen.getByText("Failed to open")).toBeDefined());
       expect(screen.queryByText("Open requested")).toBeNull();
-      expect(announceMock).not.toHaveBeenCalled();
-    });
-
-    it("still announces a copied host path, which the page says nothing about", async () => {
-      const fallback = { outcome: "copied-host-path", path: "/srv/repo", hostName: "box" };
-      openInEditorMock.mockResolvedValue(fallback);
-      const testButton = await renderTabForTestButton();
-
-      fireEvent.click(testButton);
-
-      await waitFor(() => expect(screen.getByText("Failed to open")).toBeDefined());
       expect(announceMock).toHaveBeenCalledWith(fallback);
     });
   });

@@ -340,10 +340,10 @@ export function EditorIntegrationTab() {
         path: activeProjectPath,
         projectId: activeProjectId,
       });
-      // A remote window copies the host path when no editor here can open it: not a pass.
-      // A terminal-only editor is already explained by the note beside this button, which
-      // the tested editor is always the selection for, so its notice would only repeat it.
-      if (fallback?.outcome !== "needs-terminal") announceOpenInEditorFallback(fallback);
+      // A remote window copies the host path when no editor here can open it, and a
+      // terminal-only editor launches nothing: neither is a pass. The notice always fires,
+      // since the selection can change, here or in another window, before main answers.
+      announceOpenInEditorFallback(fallback);
       if (!isMountedRef.current) return;
       setTestResult(fallback ? "error" : "ok");
     } catch {
@@ -668,7 +668,7 @@ export function EditorIntegrationTab() {
                 )}
               </span>
             ) : (
-              "Not saved yet — Daintree uses the first editor it finds"
+              "Not saved yet — Daintree picks an editor automatically"
             )
           }
         >
