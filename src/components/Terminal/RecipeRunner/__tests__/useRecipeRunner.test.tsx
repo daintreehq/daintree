@@ -1392,20 +1392,14 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     }
   });
 
-  it("replaces a retry's banners, whose terminals belong to the old recipe", async () => {
-    const origin = { kind: "plugin" as const, pluginId: "acme.pair", contributionId: "pair" };
+  it("leaves a refused retry to the failure banner, which withdraws Retry (#17446)", async () => {
     recipes.push(
       makeRecipe({
         id: "r1",
         name: "Pair",
-        origin,
         terminals: [
           { type: "terminal", env: {} },
-          {
-            type: "claude-code",
-            env: {},
-            initialPrompt: "review pr {{pr_number}} with {{plugin.notes}}",
-          },
+          { type: "claude-code", env: {}, initialPrompt: "review pr {{pr_number}}" },
         ],
       })
     );
@@ -1413,40 +1407,37 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
       spawned: [{ index: 0, terminalId: "t-0" }],
       failed: [{ index: 1, error: "Panel limit reached" }],
     });
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
     );
     act(() => {
       result.current.handleRun("r1");
     });
     await answer(true);
-    expect(result.current.spawnFailureSummary).not.toBeNull();
-    expect(result.current.unresolvedVars).toEqual(["plugin.notes"]);
+    expect(result.current.canRetryFailed).toBe(true);
 
     refuseChangedRecipes();
     act(() => {
       result.current.handleRetryFailed();
     });
-    recipes.splice(
-      0,
-      1,
+    recipeStoreState.recipes = [
       makeRecipe({
         id: "r1",
         name: "Pair",
-        origin,
         terminals: [
           { type: "terminal", env: {} },
-          { type: "codex", env: {}, initialPrompt: "review pr {{pr_number}} {{plugin.notes}}" },
+          { type: "codex", env: {}, initialPrompt: "review pr {{pr_number}}" },
         ],
-      })
-    );
+      }),
+    ];
     await answer(true);
+    rerender();
 
-    expect(result.current.spawnFailureSummary).toBeNull();
-    expect(result.current.unresolvedVars).toEqual([]);
+    // One explanation, not two: the failures still happened and say why Retry went.
+    expect(result.current.changedRecipe).toBeNull();
+    expect(result.current.spawnFailureSummary?.recipeName).toBe("Pair");
+    expect(result.current.canRetryFailed).toBe(false);
     expect(result.current.isRetryingFailed).toBe(false);
-    expect(result.current.changedRecipe).toMatchObject({ recipeId: "r1", recipeName: "Pair" });
-    expect(logErrorMock).not.toHaveBeenCalled();
   });
 
   it("drops the launched-empty notice, since nothing launched", async () => {
@@ -1528,61 +1519,6 @@ describe("useRecipeRunner — a confirmed recipe that changed before it started 
     });
 
     expect(result.current.changedRecipe).toBeNull();
-  });
-
-  it("drops a retry's refusal that lands after the worktree changed", async () => {
-    recipes.push(
-      makeRecipe({
-        id: "r1",
-        name: "Pair",
-        terminals: [
-          { type: "terminal", env: {} },
-          { type: "claude-code", env: {}, initialPrompt: "review pr {{pr_number}}" },
-        ],
-      })
-    );
-    runRecipeWithResultsMock.mockResolvedValueOnce({
-      spawned: [{ index: 0, terminalId: "t-0" }],
-      failed: [{ index: 1, error: "Panel limit reached" }],
-    });
-    const { result, rerender } = renderHook(
-      ({ wt }: { wt: string }) => useRecipeRunner({ activeWorktreeId: wt, defaultCwd: "/tmp" }),
-      { initialProps: { wt: "wt-1" } }
-    );
-    act(() => {
-      result.current.handleRun("r1");
-    });
-    await answer(true);
-    expect(result.current.spawnFailureSummary).not.toBeNull();
-
-    let reject!: (error: unknown) => void;
-    runRecipeWithResultsMock.mockImplementationOnce(
-      () =>
-        new Promise((_resolve, rej) => {
-          reject = rej;
-        })
-    );
-    act(() => {
-      result.current.handleRetryFailed();
-    });
-    await answer(true);
-    expect(result.current.isRetryingFailed).toBe(true);
-
-    rerender({ wt: "wt-2" });
-    // Still held: the retry hasn't settled, so nothing else starts behind it.
-    act(() => {
-      result.current.handleRun("r1");
-    });
-    expect(pending()).toBeNull();
-    await act(async () => {
-      reject(new RecipeChangedSinceShownError());
-      await Promise.resolve();
-    });
-
-    expect(result.current.changedRecipe).toBeNull();
-    expect(result.current.spawnFailureSummary).toBeNull();
-    expect(result.current.isRetryingFailed).toBe(false);
-    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
   });
 
   it("logs any other store error without calling it a change", async () => {

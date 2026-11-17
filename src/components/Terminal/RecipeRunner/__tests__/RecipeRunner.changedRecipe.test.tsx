@@ -119,7 +119,8 @@ describe("RecipeRunner — a confirmed recipe that changed before it started (#1
         other,
       ]);
 
-      expect(within(banner).getByRole("alert").textContent).toMatch(/'Review'/);
+      expect(banner.getAttribute("role")).toBe("alert");
+      expect(banner.textContent).toMatch(/'Review'/);
       expect(banner.textContent).toMatch(/changed.*confirmation/i);
       fireEvent.click(reviewButton(banner)!);
       expect(opened).toEqual(["r1"]);
