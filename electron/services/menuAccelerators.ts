@@ -1,4 +1,5 @@
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
+import { isRetiredBuiltInActionId } from "../../shared/config/retiredActionIds.js";
 import { getValidatedOverrides } from "./keybindingOverridesStore.js";
 
 /**
@@ -163,7 +164,8 @@ export function isAcceleratorClaimedByKeybinding(accelerator: string): boolean {
   const overrides = getValidatedOverrides();
   const actionIds = new Set([
     ...getDefaultKeybindingsForPlatform().map((b) => b.actionId),
-    ...Object.keys(overrides),
+    // A saved key for a retired action claims nothing: the renderer drops it.
+    ...Object.keys(overrides).filter((id) => !isRetiredBuiltInActionId(id)),
   ]);
   for (const actionId of actionIds) {
     const combos =

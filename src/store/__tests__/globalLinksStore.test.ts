@@ -110,14 +110,17 @@ describe("globalLinksStore", () => {
       expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
     });
 
-    it("removes the Portal's payload on a launch after an earlier release already moved the links", async () => {
+    it("removes the Portal's payload on a launch after an earlier one already moved the links", async () => {
       const moved = JSON.stringify({
         state: { links: [{ ...portalLink("user-a", "user"), type: undefined }] },
         version: 0,
       });
       const backing = installLocalStorage({
         [KEY]: moved,
-        [PORTAL_KEY]: portalPayload([portalLink("user-a", "user"), portalLink("user-b", "user")]),
+        [PORTAL_KEY]: portalPayload([
+          portalLink("system-claude", "system"),
+          portalLink("user-a", "user"),
+        ]),
       });
 
       const { useGlobalLinksStore } = await loadStore();
@@ -125,6 +128,58 @@ describe("globalLinksStore", () => {
       expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
       expect(backing.has(PORTAL_KEY)).toBe(false);
       expect(stored(backing)).toMatchObject({ state: { links: [{ id: "user-a" }] } });
+    });
+
+    it("keeps the Portal's payload while the list on disk lacks one of its links", async () => {
+      const legacy = portalPayload([portalLink("user-a", "user"), portalLink("user-b", "user")]);
+      const backing = installLocalStorage({
+        [KEY]: JSON.stringify({ state: { links: [portalLink("user-a", "user")] }, version: 0 }),
+        [PORTAL_KEY]: legacy,
+      });
+
+      const { useGlobalLinksStore } = await loadStore();
+
+      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.get(PORTAL_KEY)).toBe(legacy);
+    });
+
+    it("keeps the Portal's payload when the list on disk can't be read back", async () => {
+      const legacy = portalPayload([portalLink("user-a", "user")]);
+      const backing = installLocalStorage({ [KEY]: "{not json", [PORTAL_KEY]: legacy });
+
+      await loadStore();
+
+      expect(backing.get(PORTAL_KEY)).toBe(legacy);
+    });
+
+    it("never lets an edit after a move that couldn't read the Portal's payload cost its links", async () => {
+      const legacy = portalPayload([portalLink("user-a", "user")]);
+      const backing = installLocalStorage({ [PORTAL_KEY]: legacy });
+      const realGet = globalThis.localStorage.getItem.bind(globalThis.localStorage);
+      vi.spyOn(globalThis.localStorage, "getItem").mockImplementation((key) => {
+        if (key === PORTAL_KEY) throw new Error("storage unavailable");
+        return realGet(key);
+      });
+
+      const first = await loadStore();
+      first.useGlobalLinksStore.getState().addLink({ title: "New", url: "https://new.test/" });
+      expect(backing.has(KEY)).toBe(true);
+
+      vi.restoreAllMocks();
+      await loadStore();
+      expect(backing.get(PORTAL_KEY)).toBe(legacy);
+    });
+
+    it("takes the Portal's backup when its live copy holds no link list", async () => {
+      const backing = installLocalStorage({
+        [PORTAL_KEY]: "null",
+        [`${PORTAL_KEY}.__bak`]: portalPayload([portalLink("user-a", "user")]),
+      });
+
+      const { useGlobalLinksStore } = await loadStore();
+
+      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
+      expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
     });
 
     it("moves links once: a second launch neither duplicates them nor brings back a removed one", async () => {
@@ -311,13 +366,13 @@ describe("globalLinksStore", () => {
 
     it("removes a backup left behind after an earlier launch already moved the links", async () => {
       const backing = installLocalStorage({
-        [KEY]: JSON.stringify({ state: { links: [] }, version: 0 }),
+        [KEY]: JSON.stringify({ state: { links: [portalLink("user-a", "user")] }, version: 0 }),
         [`${PORTAL_KEY}.__bak`]: portalPayload([portalLink("user-a", "user")]),
       });
 
       const { useGlobalLinksStore } = await loadStore();
 
-      expect(useGlobalLinksStore.getState().links).toEqual([]);
+      expect(useGlobalLinksStore.getState().links.map((l) => l.id)).toEqual(["user-a"]);
       expect(backing.has(`${PORTAL_KEY}.__bak`)).toBe(false);
     });
 

@@ -77,33 +77,72 @@ export type LegacyPortalPayload =
   | { readonly kind: "unreadable" }
   | { readonly kind: "read"; readonly envelope: unknown };
 
-/**
- * The Portal's persisted envelope, or its last-good backup when the live copy
- * is corrupt or already gone. A read that throws is `unreadable`, never an
- * empty list: the move is then left for a later launch, with both copies kept.
- */
-export function readLegacyPortalPayload(): LegacyPortalPayload {
-  let live: string | null;
-  let backup: string | null;
+/** A key and its backup as real localStorage holds them, or null when a read throws. */
+function readWithBackup(key: string): { live: string | null; backup: string | null } | null {
   try {
     const ls = globalThis.localStorage;
-    // storage-key: portal-storage
-    live = ls.getItem(LEGACY_PORTAL_STORAGE_KEY);
-    // storage-key: portal-storage
-    backup = ls.getItem(backupKeyFor(LEGACY_PORTAL_STORAGE_KEY));
+    // storage-key: portal-storage daintree-global-links
+    const live = ls.getItem(key);
+    // storage-key: portal-storage daintree-global-links
+    const backup = ls.getItem(backupKeyFor(key));
+    return { live, backup };
   } catch {
-    return { kind: "unreadable" };
+    return null;
   }
-  if (live === null && backup === null) return { kind: "absent" };
+}
+
+/** The `state.links` list an envelope holds, or null when it holds none. */
+function linksIn(envelope: unknown): unknown[] | null {
+  if (!envelope || typeof envelope !== "object") return null;
+  const state = field(envelope, "state");
+  if (!state || typeof state !== "object") return null;
+  const links = field(state, "links");
+  return Array.isArray(links) ? links : null;
+}
+
+/**
+ * The Portal's persisted envelope: its live copy when that holds a link list,
+ * else its last-good backup when that does, which also covers a live copy
+ * already gone. A read that throws is `unreadable`, never an empty list, so
+ * the move waits for a later launch with both copies kept.
+ */
+export function readLegacyPortalPayload(): LegacyPortalPayload {
+  const stored = readWithBackup(LEGACY_PORTAL_STORAGE_KEY);
+  if (!stored) return { kind: "unreadable" };
+  if (stored.live === null && stored.backup === null) return { kind: "absent" };
   const context = { store: "globalLinksStore", key: LEGACY_PORTAL_STORAGE_KEY };
-  const parsed = safeJSONParse<unknown>(live, context, undefined);
-  if (parsed !== undefined) return { kind: "read", envelope: parsed };
-  return { kind: "read", envelope: safeJSONParse<unknown>(backup, context, null) };
+  const live = safeJSONParse<unknown>(stored.live, context, null);
+  if (linksIn(live)) return { kind: "read", envelope: live };
+  const backup = safeJSONParse<unknown>(stored.backup, context, null);
+  return { kind: "read", envelope: linksIn(backup) ? backup : live };
+}
+
+/**
+ * Whether the global list on disk holds every one of `links`, read as its
+ * hydration reads it: the live copy, or its backup when the live one is
+ * corrupt. False when it can't be read or holds no list, so the Portal's copy
+ * is never let go for a list that doesn't carry its links.
+ */
+export function globalListOnDiskHolds(links: readonly GlobalLink[]): boolean {
+  const stored = readWithBackup(GLOBAL_LINKS_STORAGE_KEY);
+  if (!stored || stored.live === null) return false;
+  const context = { store: "globalLinksStore", key: GLOBAL_LINKS_STORAGE_KEY };
+  const live = safeJSONParse<unknown>(stored.live, context, undefined);
+  const envelope = live !== undefined ? live : safeJSONParse<unknown>(stored.backup, context, null);
+  const list = linksIn(envelope);
+  if (!list) return false;
+  const ids = new Set<string>();
+  for (const entry of list) {
+    const link = sanitizeGlobalLink(entry, 0);
+    if (link) ids.add(link.id);
+  }
+  return links.every((link) => ids.has(link.id));
 }
 
 /**
  * Removes the Portal's payload and its backup. Called only once the global
- * list is on disk; a removal that fails is retried on the next launch.
+ * list on disk holds the links it kept; a removal that fails is retried on the
+ * next launch.
  */
 export function removeLegacyPortalPayload(): void {
   let ls: Storage;
@@ -117,7 +156,7 @@ export function removeLegacyPortalPayload(): void {
     try {
       ls.removeItem(key);
     } catch {
-      // Retried on the next launch, which finds the global list on disk.
+      // Retried on the next launch, which finds the links on disk again.
     }
   }
 }

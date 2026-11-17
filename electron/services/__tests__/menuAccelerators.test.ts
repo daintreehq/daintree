@@ -137,6 +137,13 @@ describe("isAcceleratorClaimedByKeybinding", () => {
   it("leaves an unbound key free", () => {
     expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(false);
   });
+
+  it("leaves a key free that only a retired action's saved override holds", () => {
+    storeMock.get.mockReturnValue({ "panel.togglePortal": ["Cmd+Alt+Shift+F12"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(false);
+    storeMock.get.mockReturnValue({ "fleet.armAll": ["Cmd+Alt+Shift+F12"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(true);
+  });
 });
 
 describe("findActionForInput", () => {

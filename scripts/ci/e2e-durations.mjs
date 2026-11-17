@@ -122,8 +122,10 @@ export function isSummary(report) {
 export function summarizeReports(reports, { drop = [] } = {}) {
   const dropped = new Set(drop);
   const specs = new Map();
+  // Keyed by the row it writes, so a file-less suite and its own summary row
+  // (written with file "") land on one row whichever input comes first.
   const entryFor = (platform, project, file) => {
-    const key = JSON.stringify([platform, project, file]);
+    const key = JSON.stringify([platform, project, file ?? ""]);
     let entry = specs.get(key);
     if (!entry) {
       entry = { platform, project, file: file ?? "", ...emptyBucket() };
@@ -136,7 +138,7 @@ export function summarizeReports(reports, { drop = [] } = {}) {
     if (isSummary(report)) {
       for (const row of report.specs) {
         if (dropped.has(row.file)) continue;
-        mergeBucket(entryFor(row.platform ?? null, row.project ?? "", row.file ?? null), row);
+        mergeBucket(entryFor(row.platform ?? null, row.project ?? "", row.file), row);
       }
       continue;
     }

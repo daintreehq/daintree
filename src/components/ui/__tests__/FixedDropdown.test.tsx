@@ -675,6 +675,12 @@ describe("FixedDropdown right-edge anchor (issue #6800)", () => {
     // sibling of <main>, not an overlay — it doesn't cover the toolbar, so
     // --right-obstruction-offset would shift dropdowns left by its width for
     // nothing, which is the bug from #6800.
+    // A button near the window's right edge, closer to it than the Assistant is wide.
+    const right = window.innerWidth - 20;
+    const anchor = anchorRef.current;
+    if (!anchor) throw new Error("anchor not created");
+    const rect = { x: right - 32, y: 0, top: 0, right, bottom: 40, left: right - 32 };
+    anchor.getBoundingClientRect = () => ({ ...rect, width: 32, height: 40, toJSON: () => rect });
     document.documentElement.style.setProperty("--right-obstruction-offset", "400px");
     render(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
@@ -684,7 +690,7 @@ describe("FixedDropdown right-edge anchor (issue #6800)", () => {
 
     const panel = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
     expect(panel).not.toBeNull();
-    expect(panel?.style.right).toBe(`${window.innerWidth - 100}px`);
+    expect(panel?.style.right).toBe("20px");
   });
 });
 

@@ -162,6 +162,20 @@ describe("summarizeReports over an earlier summary", () => {
     ]);
   });
 
+  it("merges a summary and a report into one row for a file-less suite, in either order", () => {
+    const shard = {
+      suites: [{ specs: [{ tests: [{ projectName: "core", results: [{ duration: 5 }] }] }] }],
+    };
+    const earlier = summarizeReports([{ report: shard }]);
+    const forward = summarizeReports([{ report: earlier }, { report: shard }]);
+    const backward = summarizeReports([{ report: shard }, { report: earlier }]);
+    expect(forward).toEqual(backward);
+    expect(forward.specs).toEqual([
+      expect.objectContaining({ file: "", tests: 2, durationMs: 10 }),
+    ]);
+    expect(forward.projects).toEqual([expect.objectContaining({ specs: 1, tests: 2 })]);
+  });
+
   it("drops a spec file from a Playwright report too", () => {
     const pruned = summarizeReports([{ report: fixture, platform: "linux" }], {
       drop: ["full/terminal/b.spec.ts"],

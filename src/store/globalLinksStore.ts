@@ -9,10 +9,12 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import {
   GLOBAL_LINKS_STORAGE_KEY,
+  globalListOnDiskHolds,
   readLegacyPortalPayload,
   readLegacyUserLinks,
   removeLegacyPortalPayload,
   sanitizeGlobalLink,
+  type LegacyPortalPayload,
 } from "./persistence/globalLinksMigration";
 
 export { GLOBAL_LINKS_STORAGE_KEY };
@@ -173,28 +175,40 @@ function isStored(key: string): boolean | null {
 }
 
 /**
+ * Removes the Portal's payload, which nothing else reads since the dock went
+ * (#17256), once the global list on disk holds every link it kept. A payload
+ * that couldn't be read stays, and so does one whose links the list lacks: a
+ * move that couldn't read it, followed by an edit that wrote the list, must
+ * not cost the person the links it never carried over.
+ */
+function retireLegacyPortalPayload(legacy: LegacyPortalPayload): void {
+  if (legacy.kind !== "read") return;
+  if (globalListOnDiskHolds(readLegacyUserLinks(legacy.envelope))) removeLegacyPortalPayload();
+}
+
+/**
  * Carries the links a person added to the Portal into this store, once: only
  * while the key has never been written, and writing it even when nothing came
  * over, so its presence is the record that the move happened. The Portal's
- * payload, which nothing else reads since the dock went (#17256), is removed
- * with its backup once this store's key is on disk, on the launch that made
- * the move or any later one. Returns what it moved, or null when there was
- * nothing to do or storage couldn't be read, which leaves the move for later.
+ * payload is removed once the list on disk holds its links, on the launch that
+ * made the move or any later one. Returns what it moved, or null when there
+ * was nothing to do or storage couldn't be read, which leaves the move for later.
  */
 export function migrateLegacyGlobalLinks(): GlobalLink[] | null {
   const migrated = isStored(GLOBAL_LINKS_STORAGE_KEY);
-  if (migrated !== false) {
-    if (migrated) removeLegacyPortalPayload();
+  if (migrated === null) return null;
+  const legacy = readLegacyPortalPayload();
+  if (migrated) {
+    retireLegacyPortalPayload(legacy);
     return null;
   }
-  const legacy = readLegacyPortalPayload();
   // A read that failed is not an empty Portal list: leave the move for later.
   if (legacy.kind === "unreadable") return null;
   const links = legacy.kind === "read" ? readLegacyUserLinks(legacy.envelope) : [];
   storage.setItem(GLOBAL_LINKS_STORAGE_KEY, { state: { links }, version: PERSIST_VERSION });
-  // A write storage refused (quota, or the in-memory fallback) leaves the
-  // Portal's copy for the launch that does get the move onto disk.
-  if (isStored(GLOBAL_LINKS_STORAGE_KEY) === true) removeLegacyPortalPayload();
+  // A write storage refused (quota, or the in-memory fallback) leaves the list
+  // off disk, and with it the Portal's copy for a later launch.
+  retireLegacyPortalPayload(legacy);
   return links;
 }
 

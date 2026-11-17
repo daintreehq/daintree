@@ -86,6 +86,28 @@ describe("runValidate", () => {
     );
   });
 
+  it("accepts a contribution naming a retired built-in action but warns it is dropped (#17256)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+6" },
+          { actionId: "panel.togglePortal", combo: "Cmd+Shift+7" },
+        ],
+        menuItems: [{ label: "Open chat", actionId: "portal.openUrl", location: "view" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const retired = result.warnings.filter((w) => w.includes("no longer has"));
+    expect(retired).toEqual([
+      expect.stringMatching(/^menuItems\[0\] names "portal\.openUrl"/),
+      expect.stringMatching(/^keybindings\[1\] names "panel\.togglePortal"/),
+    ]);
+  });
+
   it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
     await writeManifest({
       name: "acme.demo",

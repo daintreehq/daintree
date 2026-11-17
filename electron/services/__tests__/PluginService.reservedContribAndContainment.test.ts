@@ -667,6 +667,37 @@ describe("reserved contribution point warnings", () => {
       expect(trackPluginExpression).not.toHaveBeenCalledWith("acme.retired-scope", "modalOpen");
     });
 
+    it("loads a plugin naming a retired built-in action, dropping only that contribution (#17256)", async () => {
+      await writePlugin("retired-action", {
+        name: "acme.retired-action",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          keybindings: [
+            { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+8" },
+            { actionId: "portal.closeTab", combo: "Cmd+Shift+7", scope: "global" },
+          ],
+          menuItems: [{ label: "Open chat", actionId: "portal.toggle", location: "view" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-action");
+      const registered = getPluginKeybindings()
+        .filter((entry) => entry.pluginId === "acme.retired-action")
+        .map((entry) => entry.item.combo);
+      expect(registered).toEqual(["Cmd+Shift+8"]);
+      expect(registerPluginMenuItem).not.toHaveBeenCalled();
+      const lines =
+        service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.retired-action")
+          ?.logLines ?? [];
+      expect(
+        lines.filter((l) => l.level === "warn" && l.message.includes("no longer has"))
+      ).toHaveLength(2);
+    });
+
     it("loads a plugin whose only binding is retired, registering nothing", async () => {
       await writePlugin("retired-only", {
         name: "acme.retired-only",

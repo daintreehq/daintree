@@ -1625,43 +1625,49 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
-    it("drops the retired Portal toggle from both sides and the pin map, closing the gap (#17256)", async () => {
-      const blob = (withPortal: boolean) =>
-        JSON.stringify({
-          state: {
-            layout: {
-              leftButtons: ["terminal", ...(withPortal ? ["portal-toggle"] : []), "acme.thing"],
-              rightButtons: ["settings", ...(withPortal ? ["portal-toggle"] : []), "problems"],
-              pinnedButtons: {
-                ...(withPortal ? { "portal-toggle": true } : {}),
-                "copy-tree": false,
-                "acme.thing": true,
+    it.each(["left", "right"] as const)(
+      "drops a retired Portal toggle saved on the %s side and in the pin map, closing the gap (#17256)",
+      async (side) => {
+        const blob = (withPortal: boolean) => {
+          const portal = withPortal ? ["portal-toggle"] : [];
+          return JSON.stringify({
+            state: {
+              layout: {
+                leftButtons:
+                  side === "left"
+                    ? ["terminal", ...portal, "acme.thing"]
+                    : ["terminal", "acme.thing"],
+                rightButtons:
+                  side === "right" ? ["settings", ...portal, "problems"] : ["settings", "problems"],
+                pinnedButtons: {
+                  ...(withPortal ? { "portal-toggle": true } : {}),
+                  "copy-tree": false,
+                  "acme.thing": true,
+                },
               },
+              launcher: { alwaysShowDevServer: false },
             },
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 14,
-        });
+            version: 14,
+          });
+        };
 
-      storageMock.setItem(STORAGE_KEY, blob(false));
-      const without = (await loadStore()).getState().layout;
+        storageMock.setItem(STORAGE_KEY, blob(false));
+        const without = (await loadStore()).getState().layout;
 
-      vi.resetModules();
-      storageMock.setItem(STORAGE_KEY, blob(true));
-      const store = await loadStore();
-      const { layout } = store.getState();
+        vi.resetModules();
+        storageMock.setItem(STORAGE_KEY, blob(true));
+        const store = await loadStore();
+        const { layout } = store.getState();
 
-      expect(store.persist.hasHydrated()).toBe(true);
-      expect(layout.leftButtons).toEqual(without.leftButtons);
-      expect(layout.rightButtons).toEqual(without.rightButtons);
-      expect(layout.pinnedButtons).toEqual({ "copy-tree": false, "acme.thing": true });
+        expect(store.persist.hasHydrated()).toBe(true);
+        expect(layout.leftButtons).toEqual(without.leftButtons);
+        expect(layout.rightButtons).toEqual(without.rightButtons);
+        expect(layout.pinnedButtons).toEqual({ "copy-tree": false, "acme.thing": true });
 
-      store.getState().toggleButtonVisibility("copy-tree", "right");
-      const written = JSON.parse(storageMock.getItem(STORAGE_KEY)!) as {
-        state: { layout: object };
-      };
-      expect(JSON.stringify(written.state.layout)).not.toContain("portal-toggle");
-    });
+        store.getState().toggleButtonVisibility("copy-tree", "right");
+        expect(storageMock.getItem(STORAGE_KEY)).not.toContain("portal-toggle");
+      }
+    );
 
     it("drops a hidden Portal toggle carried through the v7→v8 pin migration (#17256)", async () => {
       storageMock.setItem(
