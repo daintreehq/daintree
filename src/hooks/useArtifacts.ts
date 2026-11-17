@@ -89,11 +89,12 @@ function appendArtifacts(terminalId: string, artifacts: Artifact[]): boolean {
 
 /**
  * Drop the per-terminal entry from the module-level artifact store and notify
- * any still-mounted listeners with an empty array. Called from the `panelIds` and `trashedTerminals`
- * subscribers in `rendererStoreOrchestrator.ts` so force-removed panels
- * (browser/dev-preview, worktree teardown shrinking `panelIds` without a
- * PTY exit, and the user-close trash path that doesn't shrink `panelIds`)
- * do not leak their content strings for the lifetime of the renderer.
+ * any still-mounted listeners with an empty array. Called from the `panelIds`
+ * and `trashedTerminals` subscribers in `rendererStoreOrchestrator.ts` so
+ * force-removed panels (browser/dev-preview, worktree teardown shrinking
+ * `panelIds` without a PTY exit, and the user-close trash path that doesn't
+ * shrink `panelIds`) do not leak their content strings for the lifetime of
+ * the renderer.
  * Safe to call for unknown ids (`Map.delete` is a no-op) and safe to call
  * twice. Mirrors the shape of `unregisterInputController` and
  * `useResourceMonitoringStore.removePanel` so the orchestrator's teardown
