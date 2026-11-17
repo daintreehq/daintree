@@ -219,6 +219,7 @@ function useTerminalReach(
   const [found, setFound] = useState<{ key: string; open: boolean } | null>(null);
   // Rises when a click finds the terminal gone: the looks in flight are older, and are dropped.
   const [epoch, setEpoch] = useState(0);
+  const looks = useRef(0);
 
   useEffect(() => {
     if (!active || remote || here || key === null || terminalId === null || projectId === null) {
@@ -226,10 +227,11 @@ function useTerminalReach(
     }
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const mine = looks.current;
     // One look at a time, so an older answer never lands after a newer one.
     const look = () => {
       const settle = (open: boolean) => {
-        if (!live) return;
+        if (!live || mine !== looks.current) return;
         setFound({ key, open });
         timer = setTimeout(look, REACH_RECHECK_MS);
       };
@@ -243,6 +245,7 @@ function useTerminalReach(
   }, [active, remote, here, key, terminalId, projectId, epoch]);
 
   const markGone = useCallback((gone: string) => {
+    looks.current += 1;
     setFound({ key: gone, open: false });
     setEpoch((n) => n + 1);
   }, []);
